@@ -1,6 +1,7 @@
 # ADR-0013 — Sans-I/O domain core, async ports, static dispatch
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
+**Amended by** [ADR-0026](0026-port-shapes.md) — three ports do not follow the async rule stated here
 
 **Context.** Three requirements collide. Adapters are inherently asynchronous — sqlx, NATS,
 reqwest and axum are all async-native. `pos-core` and `pos-ports` may depend only on `std`,

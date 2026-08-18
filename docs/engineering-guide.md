@@ -164,6 +164,7 @@ Recorded so far:
 | 0014 | Date, time, and timezone library for business-date derivation |
 | 0021 | Corrected sixteen-port list, superseding 0006 |
 | 0024 | `PROTOCOL_VERSION` negotiation on the wire |
+| 0026 | Port shapes: the shared failure type, the transaction handle, and three corrections to 0013 |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 

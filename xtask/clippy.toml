@@ -26,4 +26,13 @@ allow-panic-in-tests  = true
 allow-print-in-tests  = true
 allow-dbg-in-tests    = false
 
+doc-valid-idents = [
+    "SQLite", "PostgreSQL", "JetStream", "NATS", "ULID", "ESC/POS", "ICU",
+    "TOTP", "WebP", "SolidJS", "mDNS", "SNTP", "Argon2", "JSONB", "SemVer",
+    "OpenAPI", "PostgreSQL", "MessageFormat",
+    # Product and vendor names that appear in port documentation as prose.
+    "MinIO", "ShopeeFood", "GrabFood", "DPAPI", "ShiftJIS",
+    "..",
+]
+
 too-many-arguments-threshold = 8

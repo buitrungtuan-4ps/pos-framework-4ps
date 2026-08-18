@@ -36,3 +36,60 @@
 
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
+
+pub mod blob_store;
+pub mod config_store;
+pub mod delivery;
+pub mod dynamic;
+pub mod erp;
+pub mod error;
+pub mod event_store;
+pub mod fiscalization;
+pub mod key_vault;
+pub mod message_link;
+pub mod metrics_sink;
+pub mod order_in;
+pub mod payment;
+pub mod printer;
+pub mod shipping;
+pub mod signer;
+pub mod tx;
+
+pub use blob_store::{BlobKey, BlobKeyError, BlobStore};
+pub use config_store::{ConfigDelta, ConfigDocument, ConfigSnapshot, ConfigStore, ConfigUpdate};
+pub use delivery::{BusyMode, DeliveryVendor, PendingDecision, PrepTime, VendorOrderRef};
+pub use dynamic::{
+    BoxFuture, DynDeliveryVendor, DynErpSink, DynFiscalization, DynPaymentTerminal,
+    DynPrinterDriver,
+};
+pub use erp::{AccountCode, ErpBatch, ErpLine, ErpPostingRef, ErpSink};
+pub use error::{PortError, PortName};
+pub use event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+pub use fiscalization::{
+    Fiscalization, InvoiceBuyer, InvoiceLine, InvoiceNumber, InvoiceRange, InvoiceRequest,
+    IssuedInvoice, ReconciliationReport,
+};
+pub use key_vault::{KeyVault, Secret, SecretName};
+pub use message_link::{LinkCapacity, MessageLink, PublishOutcome};
+pub use metrics_sink::{
+    MetricLabel, MetricLabelValue, MetricName, MetricNameError, MetricSample, MetricUnit,
+    MetricsSink,
+};
+pub use order_in::{ExternalReference, InboundOrder, InboundOrderLine, OrderAcceptance, OrderIn};
+pub use payment::{PaymentAttempt, PaymentReference, PaymentRequest, PaymentTerminal};
+pub use printer::{
+    CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
+    PrinterDriver, PrinterStatus, TextStyle,
+};
+pub use shipping::{
+    CourierJobRef, DeliveryContact, DeliveryRequest, Shipment, ShipmentUpdate, ShippingDispatch,
+};
+pub use signer::{KeyId, PublicKey, Signature, Signer};
+pub use tx::{Transactional, TxContext};
+
+/// The two synchronous ports, re-exported so the sixteen-port list has one definition of
+/// each rather than two that can drift.
+///
+/// They are defined in `pos-proto` because `pos-core` needs them and must not depend on this
+/// crate — see [ADR-0013](../../../docs/adr/0013-async-strategy.md).
+pub use pos_proto::determinism::{ClockSource, IdGenerator};

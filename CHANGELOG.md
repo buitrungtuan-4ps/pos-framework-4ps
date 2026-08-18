@@ -26,7 +26,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   store, with an exit criterion per phase and no calendar dates.
 - ADR-0013 (sans-I/O domain core, async ports, static dispatch), ADR-0014 (date, time and
   timezone library), ADR-0021 (the sixteen ports, superseding 0006), ADR-0024
-  (`PROTOCOL_VERSION` negotiation).
+  (`PROTOCOL_VERSION` negotiation), ADR-0026 (port shapes: one `PortError`,
+  `Transactional`/`TxContext`, outbox cursor ordering, fault injection on the harness, and
+  three corrections to ADR-0013).
+- `pos-ports`: all sixteen ports from ADR-0021. `PortError` carries an AIP-193 status and the
+  `PortName` that produced it, so retry policy and the error mailbox need no per-port
+  translation. `Transactional` is a supertrait of `EventStore` and `ConfigStore`, so an
+  adapter implementing both has exactly one transaction type and "the outbox row commits with
+  the state change" is the only thing that type-checks. Object-safe mirrors
+  (`DynPrinterDriver` and four others) cover the families selected by configuration rather
+  than at compile time.
 - `pos-spec.md`: tax is per item class and keyed by sales channel, not a flat store rate;
   a table has exactly one open order; one open shift per cashier device; queue numbers
   reset daily and are not the receipt counter.

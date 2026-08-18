@@ -249,6 +249,7 @@ version = "0.1.0"
 dependencies = [
  "pos-proto",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

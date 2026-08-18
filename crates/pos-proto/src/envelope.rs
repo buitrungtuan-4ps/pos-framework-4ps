@@ -39,7 +39,12 @@ use crate::time::{BusinessDate, Timestamp};
 /// The envelope carried by every event, on every channel.
 ///
 /// `D` is the payload: [`RawPayload`] on receipt, a typed value after decoding.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// `PartialEq` is derived rather than hand-written, so comparing two envelopes compares
+/// their payloads by whatever rule `D` defines. For [`RawPayload`] that is a textual
+/// comparison of the JSON — see that type's implementation, which explains why it is not
+/// semantic.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct EventEnvelope<D> {
     /// A ULID, which **doubles as the receiver's idempotency key**.

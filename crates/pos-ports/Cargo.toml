@@ -9,8 +9,14 @@ publish.workspace      = true
 repository.workspace   = true
 
 [dependencies]
-pos-proto = { path = "../pos-proto" }
-serde.workspace = true
+pos-proto  = { path = "../pos-proto" }
+serde.workspace      = true
+# Configuration documents cross this boundary uninterpreted, so the port needs a JSON
+# value type but no JSON schema. `raw_value` is the whole reason it is here.
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true
