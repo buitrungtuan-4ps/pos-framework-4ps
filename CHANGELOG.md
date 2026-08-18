@@ -45,6 +45,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `RESOURCE_EXHAUSTED`, and `tests/contract.rs` running every suite against them. `pos-core`'s tests
   will run against these fakes, so this is what stops the domain suite resting on an unchecked
   assumption about how the real store behaves.
+- ADR-0027 and `pos-country`: a country module is a **bundle** — a `Fiscalization` implementation, a
+  locale pack, tax-code format validation, a default retention period — living at `countries/<cc>/`
+  rather than filed among the adapters. Selection is a Cargo feature per country, so a fork serving
+  one country edits one line, deletes nothing, and compiles nothing else. `pos-proto` gained
+  `CountryCode`, `TaxRate` in basis points, the channel-keyed `TaxRateTable` and `LocalePack`.
+- `countries/zz/`: a reference country module that **passes the whole `Fiscalization` contract
+  suite**, so a real country fills in a proven shape. `cargo xtask countries` fails a module that is
+  misnamed, absent from the workspace, or wired into no binary's features.
+
+### Changed
+- `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
+  `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
+  implementation of one port when it is five things, and it hid the unit a fork adds or removes.
 - `pos-spec.md`: tax is per item class and keyed by sales channel, not a flat store rate;
   a table has exactly one open order; one open shift per cashier device; queue numbers
   reset daily and are not the receipt counter.

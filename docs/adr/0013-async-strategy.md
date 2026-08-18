@@ -2,6 +2,7 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
 **Amended by** [ADR-0026](0026-port-shapes.md) — three ports do not follow the async rule stated here
+**Amended by** [ADR-0027](0027-country-modules.md) — the runtime-registry rule below applies to vendor families, not to countries
 
 **Context.** Three requirements collide. Adapters are inherently asynchronous — sqlx, NATS,
 reqwest and axum are all async-native. `pos-core` and `pos-ports` may depend only on `std`,

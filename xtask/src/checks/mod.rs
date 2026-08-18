@@ -8,6 +8,7 @@
 //! one broken rule does not hide the next.
 
 pub mod actions_pinned;
+pub mod countries;
 pub mod deps_rule;
 pub mod links;
 pub mod lint_config;

@@ -118,6 +118,7 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0022 | Events partition strategy (see D7). | P7 | Open |
 | 0025 | Receipt-number authority as configuration, not a fixed guarantee. | P3 | Open |
 | 0026 | Port shapes — one `PortError`, `Transactional`/`TxContext`, outbox cursor ordering, fault injection on the harness, and three corrections to ADR-0013. | P2 | **Merged** |
+| 0027 | Country modules — a bundle at `countries/<cc>/`, selected by Cargo feature so a fork compiles only the countries it needs. Amends 0005 and 0013. | P2 | **Merged** |
 | 0023 | ~~Tenant hostname and slug-uniqueness model~~ — **resolved without a new ADR.** ADR-0011 is Accepted and canonical; the archive is frozen and explicitly non-authoritative, so ADR-0011's mechanism stands. | P7 | **Closed** |
 | 0024 | `PROTOCOL_VERSION` negotiation — where the version rides on the wire, and reject behaviour. | P1 | **Merged** |
 
@@ -351,6 +352,14 @@ system's only natural hard stop on selling.
 **Exit:** an invoice issues offline against a pre-allocated range and submits successfully on
 reconnect; `Fiscalization` contract tests pass; `examples/fiscal-skeleton` lets someone start
 a second country from the repo alone.
+
+**Partly done already, deliberately** — `countries/zz/` landed in P2 as a working reference module
+that passes the whole `Fiscalization` suite, and `pos-country` carries the feature-selected registry
+(ADR-0027). That was pulled forward because the mechanism for *selecting* countries is the thing a
+fork depends on most, and discovering it was wrong at P10 — with a tax authority waiting — would be
+the expensive moment to find out. `examples/fiscal-skeleton` is therefore superseded by
+`countries/zz/`, which is compiled and contract-tested rather than an example nobody runs. What
+remains for P10 is `countries/vn/` itself, blocked on A2 (#3).
 
 #### P11 · Integration surface — *XL, parallelisable per adapter*
 `OrderIn` first, since marketplaces, `POST /v1/orders` and QR ordering all reuse it — that

@@ -71,6 +71,7 @@ actions-pinned:
 
 links:
     cargo run -q -p xtask -- links
+    cargo run -q -p xtask -- countries
 
 # Regenerate the committed snapshots from the code that owns them.
 snapshot:

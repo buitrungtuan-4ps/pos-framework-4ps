@@ -1,0 +1,16 @@
+[package]
+name        = "pos-country"
+version     = "0.1.0"
+description = "What a country module is, and how a fork selects the ones it needs."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+
+[lints]
+workspace = true

@@ -25,6 +25,7 @@ cargo xtask <check>
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
+  countries       every country module is named, wired into the workspace, and selectable
 ";
 
 fn main() -> ExitCode {
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
+        "countries" => checks::countries::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "-h" | "--help" | "help" => {

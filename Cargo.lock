@@ -254,6 +254,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-country"
+version = "0.1.0"
+dependencies = [
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
+name = "pos-country-zz"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-country",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
 name = "pos-fakes"
 version = "0.1.0"
 dependencies = [

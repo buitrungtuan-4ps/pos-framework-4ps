@@ -45,6 +45,8 @@ jobs:
         run: cargo run -q -p xtask -- actions-pinned
       - name: internal documentation links resolve
         run: cargo run -q -p xtask -- links
+      - name: every country module is named, wired in, and selectable
+        run: cargo run -q -p xtask -- countries
       - name: nothing removed from a committed snapshot
         run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
 

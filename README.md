@@ -16,7 +16,7 @@ One store runs entirely on its own hardware. The cloud manages configuration, fl
 | **A store never stops selling** | All sales logic runs on a local binary with a local database. Network loss changes nothing except cloud-only features. |
 | **Plug and play** | Fork the repo, set 4–6 GitHub Secrets, click *Run workflow*. ~15 minutes later you have a running cloud and an admin UI. |
 | **Light and fast** | Two static Rust binaries. A store server idles below 1% CPU; a touch-to-persist operation costs 1–4 ms. |
-| **Multi-country** | Country-specific obligations (tax invoices, locale, vendors) are plug-in crates. The core never changes when you add a country. |
+| **Multi-country** | Country-specific obligations (tax invoices, locale, vendors) live in `countries/<cc>/` and are selected by a Cargo feature. The core never changes when you add a country, and a fork that needs two countries out of five compiles only two — see [ADR-0027](docs/adr/0027-country-modules.md). |
 | **Cross-platform** | Store server runs on Windows and Linux. Clients are browsers: POS terminals, tablets, phones, kitchen displays. |
 | **Easy to maintain** | One monorepo, one CI, machine-enforced rules. Upgrades and rollbacks are the same button. |
 
@@ -62,11 +62,16 @@ pos-framework/
 │   │   ├── printer-escpos/    PrinterDriver
 │   │   ├── payment-*/         PaymentTerminal per acquirer
 │   │   ├── vendor-*/          DeliveryVendor per marketplace
-│   │   ├── shipping-*/        ShippingDispatch per courier
-│   │   └── fiscal-vn/         Fiscalization for Vietnam (first country module)
+│   │   └── shipping-*/        ShippingDispatch per courier
+│   ├── pos-country/           What a country module is; the feature-selected registry
+│   ├── pos-contract-tests/    The suite every implementation of every port must pass
+│   ├── pos-fakes/             In-memory implementations; passes every suite
 │   ├── pos-edge/              Store binary: wires adapters into core
 │   ├── pos-cloud/             Cloud binary: wires adapters into core
 │   └── pos-simulator/         Virtual fleet for load and OTA testing
+├── countries/                 One directory per country. Add or remove yours here.
+│   ├── zz/                    Reference module — copy this to start a country
+│   └── vn/                    Vietnam (arrives in P10)
 ├── ui/                        SolidJS + Tailwind, embedded into binaries
 ├── deploy/                    compose.yml, Caddyfile, bootstrap.sh, k8s/
 ├── examples/                  Runnable examples (built by CI)

@@ -1,6 +1,7 @@
 # ADR-0005 — Country-neutral core, fiscalization plug-ins
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
+**Amended by** [ADR-0027](0027-country-modules.md) — where a country module lives, what else it carries, and how a fork selects a subset
 
 **Context.** Invoice numbering, tax rules and reporting obligations differ by country and change by legislation. Baking Vietnamese rules into the core would make every other market a rewrite.
 

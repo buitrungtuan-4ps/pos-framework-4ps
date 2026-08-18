@@ -33,6 +33,7 @@ pub mod envelope;
 pub mod error;
 pub mod events;
 pub mod ids;
+pub mod locale;
 pub mod money;
 pub mod pii;
 pub mod protocol;
@@ -56,6 +57,9 @@ pub use ids::{
     IngredientId, MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId,
     ShipmentId, StationId, StockLedgerEntryId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
     VoucherId,
+};
+pub use locale::{
+    CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,
 };
 pub use money::{CurrencyCode, Money, MoneyError, Ratio, Rounding, div_round};
 pub use pii::NoPii;

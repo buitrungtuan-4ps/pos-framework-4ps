@@ -4,6 +4,8 @@ members = [
     "crates/pos-proto",
     "crates/pos-core",
     "crates/pos-ports",
+    "crates/pos-country",
+    "countries/zz",
     "crates/pos-contract-tests",
     "crates/pos-fakes",
     "xtask",
