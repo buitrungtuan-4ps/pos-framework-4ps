@@ -179,6 +179,9 @@ hard, not just documented.
 deserialises to `*_UNSPECIFIED` instead of failing; the naming linter passes over the event
 registry; a CI test proves the last two protocol versions are both understood.
 
+**Done** — `321fdb8`, `da7026a`, `8c81a2b`. 49 event types: the 38 declared, plus 11
+additions tabulated against the rule each serves in `pos-spec.md` §18.
+
 #### P2 · `pos-ports` + contract harness + fakes — *L*
 All 16 ports (ADR-0021), small and role-shaped. The contract suites are the deliverable
 that makes "swappable" verified rather than claimed — `EventStore`'s stated contract is
@@ -190,6 +193,13 @@ what `examples/minimal-edge` is built from.
 
 **Exit:** every port has a contract suite; the fakes crate passes all of them; the
 dependency allowlist test still green; ADR-0013 merged.
+
+**Done** — `e4b8c21`, `c45ac37`. Sixteen ports, 104 contract cases, all green against the
+fakes. ADR-0026 records the shapes the traits forced: one `PortError`, `Transactional` as a
+supertrait so an adapter implementing two storage ports has one transaction type, the outbox
+cursor ordered by commit rather than by identifier, and fault injection on a harness trait so
+no production adapter ships a way to corrupt itself. This also settles the *outbox cursor and
+ack protocol* half of D10; the outbox table structure stays P4's.
 
 #### P3 · `pos-core` — the domain — *XL, and the largest block in the project*
 The archive is blunt that the biggest lump of work is not infrastructure but table-service
