@@ -1,0 +1,15 @@
+[package]
+name        = "pos-proto"
+version     = "0.1.0"
+description = "Wire types, value types, the event envelope, and PROTOCOL_VERSION."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

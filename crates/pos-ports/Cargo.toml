@@ -1,0 +1,16 @@
+[package]
+name        = "pos-ports"
+version     = "0.1.0"
+description = "The sixteen boundaries the framework owns. Traits only, no implementations."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-proto = { path = "../pos-proto" }
+serde.workspace = true
+
+[lints]
+workspace = true

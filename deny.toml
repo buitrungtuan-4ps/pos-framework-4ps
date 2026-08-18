@@ -1,0 +1,79 @@
+# Licence and advisory policy. One of the two checks that turn architecture into
+# law: nobody can accidentally introduce copyleft into a shipped binary.
+#
+# ADR-0009 keeps this repository proprietary, and deliberately keeps the dependency
+# tree free of copyleft anyway, so that publishing the source later is a licence
+# decision rather than a dependency-untangling project.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+all-features = true
+# "Copyleft is blocked inside binaries" — dev-dependencies are not linked into a
+# shipped artifact, so dropping them from the graph is what makes the rule mean
+# what it says.
+exclude-dev = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Every entry needs an expiry date in a comment. An ignore with no end date is a
+# vulnerability with a note attached.
+ignore = []
+
+[licenses]
+# NOTE: the v2 schema has no per-licence "warn" level — a licence is either in
+# `allow` or it fails the build. So `engineering-guide.md`'s "warn on MPL-2.0" is
+# implemented by leaving MPL-2.0 out of `allow` and enumerating each MPL crate
+# under `exceptions`. That is stricter than a warning, and deliberately so: it
+# forces one reviewed entry per crate, where a warning in CI output is a warning
+# nobody reads. The only MPL crate the design anticipates is the serial-port
+# crate, which ADR-0007 already schedules for replacement.
+version = 2
+confidence-threshold = 0.93
+# Our own crates carry `LicenseRef-Proprietary`, which is not an SPDX identifier by
+# design (ADR-0009). They are `publish = false`, so skip them: this policy is about
+# what third-party code we link, not about our own licence.
+private = { ignore = true }
+# Keep the allow-list broader than today's tree. Warning on an allowed licence that
+# nothing currently uses would make the list churn with every dependency change,
+# and the list is a policy statement rather than an inventory.
+unused-allowed-license = "allow"
+
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "Unicode-3.0",
+]
+# AGPL-3.0, GPL-*, and SSPL-1.0 are absent from `allow`, so they are a hard
+# failure. Do not add them.
+exceptions = []
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+# Intra-workspace `path` dependencies have no version requirement and do not need
+# one: they are resolved by the workspace, not by the registry.
+allow-wildcard-paths = true
+deny = [
+    { crate = "openssl-sys", reason = "use rustls; there is no system OpenSSL to maintain on a thousand unattended store machines" },
+    { crate = "chrono", reason = "ADR-0014 chose jiff; chrono's Local pulls iana-time-zone, which reads the filesystem" },
+]
+# Every skip needs a reason and a review date, and the nightly job reports the
+# size of this list so it ratchets down instead of growing quietly. Zero skips is
+# achievable now and will not stay achievable once tokio, sqlx and the windows-*
+# family arrive — that is the moment to start curating, not to give up.
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

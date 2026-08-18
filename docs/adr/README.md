@@ -18,7 +18,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0010](0010-naming-standard.md) | snake_case everywhere; deviations from Google AIP | Accepted |
 | [0011](0011-country-in-hostname.md) | Country lives in the hostname; redirect, never proxy | Accepted |
 | [0012](0012-qr-ordering-via-cloud.md) | QR ordering is a cloud module reusing `OrderIn` | Accepted |
-| [0013](0013-async-strategy.md) | Sans-I/O domain core; async ports; static dispatch | Accepted |
+| [0013](0013-async-strategy.md) | Sans-I/O domain core; `pos-core` and `pos-ports` as siblings; async ports | Accepted |
 | [0014](0014-datetime-library.md) | Date, time, and timezone library | Accepted |
 | [0021](0021-corrected-port-list.md) | The sixteen ports, superseding 0006 | Accepted |
 | [0024](0024-protocol-version-negotiation.md) | `PROTOCOL_VERSION` negotiation | Accepted |
