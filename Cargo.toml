@@ -40,6 +40,13 @@ repository   = "https://github.com/buitrungtuan-4ps/pos-framework-4ps"
 # enforcer; adding a name here without adding it to tools/backbone-allowlist.toml
 # does nothing.
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+thiserror = { version = "2", default-features = false }
+# ADR-0014. `default-features = false` is MANDATORY: the defaults include
+# tz-system and tzdb-zoneinfo, which read $TZ and /usr/share/zoneinfo — filesystem
+# and environment access inside the crate whose allow-list forbids exactly that.
+# pos-proto needs no timezone data at all (it carries instants and civil dates);
+# the bundled tzdb is added by pos-core, which derives business dates.
+jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
 
 # ---------------------------------------------------------------------------
 # Lints — read this before changing it.

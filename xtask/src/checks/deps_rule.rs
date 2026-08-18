@@ -18,8 +18,32 @@
 //!
 //! Development dependencies are excluded on purpose: `proptest` and `insta` are
 //! not shipped, and are governed by `dev-allow` in the allow-list.
+//!
+//! # Two data sources, because neither alone is right
+//!
+//! The declared layer reads `cargo metadata`, which is the only place that reports
+//! *which features a manifest asks for* — needed to catch `jiff` with its default
+//! features on.
+//!
+//! The closure layer needs **both** sources, because each is missing something the
+//! other has.
+//!
+//! `cargo metadata`'s resolve graph has the structure — who depends on whom, and
+//! which packages are procedural macros — but it lists every **optional** dependency
+//! edge whether or not it is activated. Reading it alone reported `log`, `defmt` and
+//! `bitflags` behind `jiff`, none of which this workspace links.
+//!
+//! `cargo tree -e normal --target all` reports exactly what is activated, but as a
+//! flat list, so it cannot distinguish a runtime dependency from `syn` — which is
+//! reached only through a derive macro and runs inside the compiler.
+//!
+//! So the walk uses the metadata graph, follows an edge only when the target is in
+//! the `cargo tree` set, and stops at procedural macros. What survives is the set of
+//! crates actually linked into a binary, which is what the rule is about.
+//! `--target all` is deliberate: the store binary ships for Windows as well as
+//! Linux, so a dependency present on only one of them still ships.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -44,7 +68,39 @@ const FORBIDDEN_EDGES: [(&str, &str, &str); 1] = [(
 #[derive(Deserialize)]
 pub struct Metadata {
     pub packages: Vec<Package>,
+    #[serde(default)]
     pub resolve: Resolve,
+}
+
+/// The dependency graph as Cargo resolved it.
+#[derive(Deserialize, Default)]
+pub struct Resolve {
+    #[serde(default)]
+    pub nodes: Vec<Node>,
+}
+
+/// One package's outgoing edges.
+#[derive(Deserialize)]
+pub struct Node {
+    pub id: String,
+    #[serde(default)]
+    pub deps: Vec<NodeDep>,
+}
+
+/// One edge.
+#[derive(Deserialize)]
+pub struct NodeDep {
+    pub pkg: String,
+    #[serde(default)]
+    pub dep_kinds: Vec<DepKind>,
+}
+
+/// Whether an edge is normal, `dev`, or `build`.
+#[derive(Deserialize)]
+pub struct DepKind {
+    /// `null` means a normal dependency — the only kind that ships.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,32 +150,6 @@ pub struct Dependency {
     pub features: Vec<String>,
 }
 
-#[derive(Deserialize)]
-pub struct Resolve {
-    pub nodes: Vec<Node>,
-}
-
-#[derive(Deserialize)]
-pub struct Node {
-    pub id: String,
-    #[serde(default)]
-    pub deps: Vec<NodeDep>,
-}
-
-#[derive(Deserialize)]
-pub struct NodeDep {
-    pub pkg: String,
-    #[serde(default)]
-    pub dep_kinds: Vec<DepKind>,
-}
-
-#[derive(Deserialize)]
-pub struct DepKind {
-    /// `null` means a normal dependency — the only kind that ships.
-    #[serde(default)]
-    pub kind: Option<String>,
-}
-
 // ---------------------------------------------------------------------------
 // The allow-list.
 // ---------------------------------------------------------------------------
@@ -146,12 +176,13 @@ impl Allowlist {
 // The check, as a pure function so it can be tested against fixtures.
 // ---------------------------------------------------------------------------
 
+/// Crate names `cargo tree` reports as activated, keyed by backbone crate name.
+pub type Closures = BTreeMap<String, BTreeSet<String>>;
+
 /// Evaluates the rule. Pure: no filesystem, no subprocess, no clock.
 #[must_use]
-pub fn check(meta: &Metadata, allow: &Allowlist) -> Vec<Finding> {
+pub fn check(meta: &Metadata, allow: &Allowlist, closures: &Closures) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let by_id: BTreeMap<&str, &Package> =
-        meta.packages.iter().map(|p| (p.id.as_str(), p)).collect();
 
     for name in BACKBONE {
         let Some(pkg) = meta.packages.iter().find(|p| p.name == name) else {
@@ -226,30 +257,24 @@ pub fn check(meta: &Metadata, allow: &Allowlist) -> Vec<Finding> {
             }
         }
 
-        // -- Layer 2: the resolved normal-dependency closure. ---------------
-        for reached in closure(meta, &pkg.id, &by_id) {
-            let Some(dep_pkg) = by_id.get(reached.as_str()) else {
-                continue;
-            };
-            if dep_pkg.name == name || dep_pkg.is_proc_macro() {
+        // -- Layer 2: what is actually linked. ------------------------------
+        let empty = BTreeSet::new();
+        let activated = closures.get(name).unwrap_or(&empty);
+        for reached in linked_closure(meta, &pkg.id, activated) {
+            if reached == name {
                 continue;
             }
-            if !allow.permits(&dep_pkg.name) {
+            if !allow.permits(&reached) {
                 findings.push(
                     Finding::new(
                         &manifest,
                         "dependency-rule",
-                        format!(
-                            "`{name}` reaches `{}` through its resolved dependency graph, \
-                             and it is not allow-listed",
-                            dep_pkg.name
-                        ),
+                        format!("`{name}` links `{reached}`, which is not allow-listed"),
                     )
-                    .with_hint(
-                        "this edge may come from feature unification rather than from this \
-                         manifest — check `cargo tree -p {name} -e normal --invert` on the \
-                         offending crate",
-                    ),
+                    .with_hint(format!(
+                        "find the path with `cargo tree -p {name} -e normal --target all \
+                         --invert {reached}`"
+                    )),
                 );
             }
         }
@@ -265,10 +290,9 @@ pub fn check(meta: &Metadata, allow: &Allowlist) -> Vec<Finding> {
         } else {
             relative(&pkg.manifest_path)
         };
-        let reaches = closure(meta, &pkg.id, &by_id)
-            .iter()
-            .filter_map(|id| by_id.get(id.as_str()))
-            .any(|p| p.name == to);
+        let empty = BTreeSet::new();
+        let activated = closures.get(from).unwrap_or(&empty);
+        let reaches = linked_closure(meta, &pkg.id, activated).contains(to);
         if reaches {
             findings.push(Finding::new(
                 &manifest,
@@ -283,41 +307,112 @@ pub fn check(meta: &Metadata, allow: &Allowlist) -> Vec<Finding> {
     findings
 }
 
-/// Every package reachable from `root` through normal dependencies only.
+/// The activated normal-dependency closure of one crate, via `cargo tree`.
 ///
-/// Traversal stops at procedural macros: they execute in the compiler, so what
-/// they pull in is never linked into a running binary.
-fn closure(meta: &Metadata, root: &str, by_id: &BTreeMap<&str, &Package>) -> BTreeSet<String> {
+/// `cargo tree` reports what is actually built, which `cargo metadata`'s resolve
+/// graph does not — see the module documentation.
+fn activated_closure(root: &std::path::Path, crate_name: &str) -> Result<BTreeSet<String>, Error> {
+    let output = std::process::Command::new(cargo_binary())
+        .args([
+            "tree",
+            "--package",
+            crate_name,
+            "--edges",
+            "normal",
+            "--target",
+            "all",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+            "--locked",
+        ])
+        .current_dir(root)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo tree failed for {crate_name}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| !name.is_empty() && *name != "(*)")
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Crate names linked into a binary built from `root`.
+///
+/// Walks the resolve graph, following a normal edge only when `activated` contains
+/// the target, and never traversing into a procedural macro. See the module
+/// documentation for why both filters are needed.
+fn linked_closure(
+    meta: &Metadata,
+    root_id: &str,
+    activated: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let by_id: BTreeMap<&str, &Package> =
+        meta.packages.iter().map(|p| (p.id.as_str(), p)).collect();
     let nodes: BTreeMap<&str, &Node> = meta
         .resolve
         .nodes
         .iter()
         .map(|n| (n.id.as_str(), n))
         .collect();
-    let mut seen = BTreeSet::new();
-    let mut queue = VecDeque::from([root.to_owned()]);
+
+    let mut linked = BTreeSet::new();
+    let mut queue = std::collections::VecDeque::from([root_id.to_owned()]);
+    let mut visited = BTreeSet::from([root_id.to_owned()]);
 
     while let Some(id) = queue.pop_front() {
         let Some(node) = nodes.get(id.as_str()) else {
             continue;
         };
-        for dep in &node.deps {
+        for edge in &node.deps {
             // An empty dep_kinds list means an older metadata format that did not
             // distinguish kinds; treat it as normal so the check errs strict.
             let is_normal =
-                dep.dep_kinds.is_empty() || dep.dep_kinds.iter().any(|k| k.kind.is_none());
-            if !is_normal || !seen.insert(dep.pkg.clone()) {
+                edge.dep_kinds.is_empty() || edge.dep_kinds.iter().any(|kind| kind.kind.is_none());
+            if !is_normal {
                 continue;
             }
-            let is_proc_macro = by_id
-                .get(dep.pkg.as_str())
-                .is_some_and(|p| p.is_proc_macro());
-            if !is_proc_macro {
-                queue.push_back(dep.pkg.clone());
+            let Some(package) = by_id.get(edge.pkg.as_str()) else {
+                continue;
+            };
+            // Not activated for any target we ship: the edge exists in the manifest
+            // but nothing turns it on.
+            if !activated.contains(&package.name) {
+                continue;
+            }
+            linked.insert(package.name.clone());
+            // A procedural macro runs in the compiler, so nothing beneath it is
+            // linked. Record it and stop.
+            if package.is_proc_macro() {
+                continue;
+            }
+            if visited.insert(edge.pkg.clone()) {
+                queue.push_back(edge.pkg.clone());
             }
         }
     }
-    seen
+    // Proc macros themselves are recorded above so the walk terminates cleanly, but
+    // they are build-time and must not be reported.
+    linked
+        .into_iter()
+        .filter(|name| {
+            !meta
+                .packages
+                .iter()
+                .any(|p| p.name == *name && p.is_proc_macro())
+        })
+        .collect()
+}
+
+fn cargo_binary() -> String {
+    std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
 }
 
 fn relative(path: &str) -> String {
@@ -336,13 +431,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
     let root = repo_root();
     let output =
         std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .args([
-                "metadata",
-                "--format-version",
-                "1",
-                "--all-features",
-                "--locked",
-            ])
+            .args(["metadata", "--format-version", "1", "--locked"])
             .current_dir(&root)
             .output()?;
     if !output.status.success() {
@@ -356,7 +445,14 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
     let meta: Metadata = serde_json::from_slice(&output.stdout)?;
     let allow_text = std::fs::read_to_string(root.join("tools/backbone-allowlist.toml"))?;
     let allow: Allowlist = toml::from_str(&allow_text)?;
-    Ok(check(&meta, &allow))
+
+    let mut closures = Closures::new();
+    for name in BACKBONE {
+        if meta.packages.iter().any(|p| p.name == name) {
+            closures.insert(name.to_owned(), activated_closure(&root, name)?);
+        }
+    }
+    Ok(check(&meta, &allow, &closures))
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +465,9 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Allowlist, Metadata, check};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::{Allowlist, Closures, Metadata, check};
 
     fn allowlist() -> Allowlist {
         toml::from_str(
@@ -385,82 +483,203 @@ mod tests {
         .expect("fixture allow-list parses")
     }
 
-    /// Builds metadata for one backbone crate with the given normal dependencies.
-    fn metadata(core_deps: &[(&str, bool, &[&str])], extra_packages: &[(&str, bool)]) -> Metadata {
-        let declared: Vec<String> = core_deps
-            .iter()
-            .map(|(name, defaults, feats)| {
-                let feats = feats
-                    .iter()
-                    .map(|f| format!("\"{f}\""))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!(
-                    r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{feats}]}}"#
-                )
-            })
-            .collect();
-        let node_deps: Vec<String> = core_deps
-            .iter()
-            .map(|(name, _, _)| format!(r#"{{"pkg":"{name}-id","dep_kinds":[{{"kind":null}}]}}"#))
-            .collect();
-        let packages: Vec<String> = core_deps
-            .iter()
-            .map(|(name, _, _)| (*name, false))
-            .chain(extra_packages.iter().copied())
-            .map(|(name, is_pm)| {
-                let kind = if is_pm { "proc-macro" } else { "lib" };
-                format!(
-                    r#"{{"id":"{name}-id","name":"{name}","manifest_path":"","dependencies":[],
-                        "targets":[{{"kind":["{kind}"]}}]}}"#
-                )
-            })
-            .collect();
+    /// A hand-built `cargo metadata` document rooted at `pos-core`.
+    struct Fixture {
+        /// `pos-core`'s own manifest entries: name, uses-default-features, features.
+        declared: Vec<(String, bool, Vec<String>)>,
+        /// Every non-root package: name and whether it is a procedural macro.
+        packages: Vec<(String, bool)>,
+        /// Resolve-graph edges, by package name.
+        edges: Vec<(String, String)>,
+    }
 
-        let json = format!(
-            r#"{{
-              "packages":[
-                {{"id":"pos-core-id","name":"pos-core",
-                  "manifest_path":"","dependencies":[{}],
-                  "targets":[{{"kind":["lib"]}}]}}
-                {}{}
-              ],
-              "resolve":{{"nodes":[
-                {{"id":"pos-core-id","deps":[{}]}}
-              ]}}
-            }}"#,
-            declared.join(","),
-            if packages.is_empty() { "" } else { "," },
-            packages.join(","),
-            node_deps.join(","),
-        );
-        serde_json::from_str(&json).expect("fixture metadata parses")
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                declared: Vec::new(),
+                packages: Vec::new(),
+                edges: Vec::new(),
+            }
+        }
+
+        /// Adds a normal dependency to `pos-core`'s manifest, and the matching edge.
+        fn declares(mut self, name: &str, default_features: bool, features: &[&str]) -> Self {
+            self.declared.push((
+                name.to_owned(),
+                default_features,
+                features.iter().map(|f| (*f).to_owned()).collect(),
+            ));
+            self.edges.push(("pos-core".to_owned(), name.to_owned()));
+            self = self.package(name, false);
+            self
+        }
+
+        fn package(mut self, name: &str, is_proc_macro: bool) -> Self {
+            if !self.packages.iter().any(|(existing, _)| existing == name) {
+                self.packages.push((name.to_owned(), is_proc_macro));
+            }
+            self
+        }
+
+        fn proc_macro(self, name: &str) -> Self {
+            self.package(name, true)
+        }
+
+        fn edge(mut self, from: &str, to: &str) -> Self {
+            self.edges.push((from.to_owned(), to.to_owned()));
+            self = self.package(to, false);
+            self
+        }
+
+        fn metadata(&self) -> Metadata {
+            let deps: Vec<String> = self
+                .declared
+                .iter()
+                .map(|(name, defaults, features)| {
+                    let features = features
+                        .iter()
+                        .map(|f| format!("\"{f}\""))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{features}]}}"#
+                    )
+                })
+                .collect();
+
+            let mut packages = vec![format!(
+                r#"{{"id":"pos-core-id","name":"pos-core","manifest_path":"",
+                     "dependencies":[{}],"targets":[{{"kind":["lib"]}}]}}"#,
+                deps.join(",")
+            )];
+            for (name, is_proc_macro) in &self.packages {
+                let kind = if *is_proc_macro { "proc-macro" } else { "lib" };
+                packages.push(format!(
+                    r#"{{"id":"{name}-id","name":"{name}","manifest_path":"",
+                         "dependencies":[],"targets":[{{"kind":["{kind}"]}}]}}"#
+                ));
+            }
+
+            let mut by_source: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for (from, to) in &self.edges {
+                by_source.entry(from).or_default().push(to);
+            }
+            let mut nodes = Vec::new();
+            for (name, _) in
+                core::iter::once(&("pos-core".to_owned(), false)).chain(self.packages.iter())
+            {
+                let empty = Vec::new();
+                let targets = by_source.get(name.as_str()).unwrap_or(&empty);
+                let deps: Vec<String> = targets
+                    .iter()
+                    .map(|to| format!(r#"{{"pkg":"{to}-id","dep_kinds":[{{"kind":null}}]}}"#))
+                    .collect();
+                nodes.push(format!(
+                    r#"{{"id":"{name}-id","deps":[{}]}}"#,
+                    deps.join(",")
+                ));
+            }
+
+            let json = format!(
+                r#"{{"packages":[{}],"resolve":{{"nodes":[{}]}}}}"#,
+                packages.join(","),
+                nodes.join(",")
+            );
+            serde_json::from_str(&json).expect("fixture metadata parses")
+        }
+
+        /// Everything `cargo tree` would report as activated: by default, all of it.
+        fn all_activated(&self) -> Closures {
+            let mut activated: BTreeSet<String> =
+                self.packages.iter().map(|(name, _)| name.clone()).collect();
+            activated.insert("pos-core".to_owned());
+            BTreeMap::from([("pos-core".to_owned(), activated)])
+        }
+
+        /// As `all_activated`, minus the named packages — the shape of an optional
+        /// dependency that nothing turns on.
+        fn activated_without(&self, excluded: &[&str]) -> Closures {
+            let mut closures = self.all_activated();
+            if let Some(set) = closures.get_mut("pos-core") {
+                for name in excluded {
+                    set.remove(*name);
+                }
+            }
+            closures
+        }
     }
 
     #[test]
     fn accepts_an_allow_listed_dependency() {
-        let meta = metadata(&[("serde", false, &["derive"])], &[]);
-        let findings = check(&meta, &allowlist());
+        let fixture = Fixture::new().declares("serde", false, &["derive"]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(findings.is_empty(), "clean fixture rejected: {findings:?}");
     }
 
     #[test]
-    fn rejects_tokio_in_the_domain() {
-        let meta = metadata(&[("tokio", false, &[])], &[]);
-        let findings = check(&meta, &allowlist());
+    fn rejects_tokio_declared_in_the_manifest() {
+        let fixture = Fixture::new().declares("tokio", false, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(
-            findings.iter().any(|f| f.message.contains("tokio")),
-            "the check did not fire on tokio in pos-core: {findings:?}"
+            findings
+                .iter()
+                .any(|f| f.message.contains("declares `tokio`")),
+            "the declared layer did not fire: {findings:?}"
         );
         assert_eq!(findings[0].file, "crates/pos-core/Cargo.toml");
     }
 
     #[test]
+    fn rejects_an_infrastructure_crate_reached_only_transitively() {
+        // The case the declared layer cannot see: nothing in pos-core's manifest
+        // mentions tokio, but something it depends on pulls it in.
+        let fixture = Fixture::new()
+            .declares("serde", false, &[])
+            .edge("serde", "tokio");
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.iter().any(|f| f.message.contains("links `tokio`")),
+            "the closure layer did not fire: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_an_optional_edge_that_nothing_activates() {
+        // `cargo metadata` lists every optional dependency edge whether or not it is
+        // turned on. jiff carries edges to `log` and `defmt` this way, and neither is
+        // ever linked, so flagging them would be a false positive.
+        let fixture = Fixture::new()
+            .declares("jiff", false, &[])
+            .edge("jiff", "log");
+        let findings = check(
+            &fixture.metadata(),
+            &allowlist(),
+            &fixture.activated_without(&["log"]),
+        );
+        assert!(
+            findings.is_empty(),
+            "an inactive optional edge was reported: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn reports_an_optional_edge_once_something_activates_it() {
+        let fixture = Fixture::new()
+            .declares("jiff", false, &[])
+            .edge("jiff", "log");
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.iter().any(|f| f.message.contains("links `log`")),
+            "an activated optional edge was missed: {findings:?}"
+        );
+    }
+
+    #[test]
     fn rejects_the_pos_core_to_pos_ports_edge() {
-        // ADR-0013: the domain performing no I/O is a property of the graph, so
-        // this edge must fail even though pos-ports is itself a backbone crate.
-        let meta = metadata(&[("pos-ports", false, &[])], &[]);
-        let findings = check(&meta, &allowlist());
+        // ADR-0013: the domain performing no I/O is a property of the graph, so this
+        // edge must fail even though pos-ports is itself a backbone crate.
+        let fixture = Fixture::new().declares("pos-ports", false, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(
             findings
                 .iter()
@@ -470,11 +689,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_forbidden_feature_on_an_allowed_crate() {
-        // jiff is allow-listed, but its default features read $TZ and
-        // /usr/share/zoneinfo, which is filesystem access inside the domain.
-        let meta = metadata(&[("jiff", true, &[])], &[]);
-        let findings = check(&meta, &allowlist());
+    fn rejects_default_features_on_an_allow_listed_crate() {
+        // jiff is allow-listed, but its defaults read $TZ and /usr/share/zoneinfo,
+        // which is filesystem access inside the domain (ADR-0014).
+        let fixture = Fixture::new().declares("jiff", true, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(
             findings
                 .iter()
@@ -485,8 +704,8 @@ mod tests {
 
     #[test]
     fn rejects_a_named_forbidden_feature() {
-        let meta = metadata(&[("jiff", false, &["tzdb-zoneinfo"])], &[]);
-        let findings = check(&meta, &allowlist());
+        let fixture = Fixture::new().declares("jiff", false, &["tzdb-zoneinfo"]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(
             findings
                 .iter()
@@ -496,72 +715,21 @@ mod tests {
     }
 
     #[test]
-    fn ignores_proc_macro_dependencies() {
-        // serde's `derive` feature pulls serde_derive, and through it syn and
-        // quote. They expand in the compiler and are never linked, so they are
-        // not what the rule is about. Written out explicitly because this case is
-        // about package *kinds*, which the helper above does not model.
-        let meta: Metadata = serde_json::from_str(
-            r#"{
-              "packages": [
-                {"id":"pos-core-id","name":"pos-core","manifest_path":"",
-                 "dependencies":[{"name":"serde","kind":null,"features":["derive"]}],
-                 "targets":[{"kind":["lib"]}]},
-                {"id":"serde-id","name":"serde","manifest_path":"","dependencies":[],
-                 "targets":[{"kind":["lib"]}]},
-                {"id":"serde_derive-id","name":"serde_derive","manifest_path":"",
-                 "dependencies":[],"targets":[{"kind":["proc-macro"]}]},
-                {"id":"syn-id","name":"syn","manifest_path":"","dependencies":[],
-                 "targets":[{"kind":["lib"]}]}
-              ],
-              "resolve": {"nodes": [
-                {"id":"pos-core-id","deps":[{"pkg":"serde-id","dep_kinds":[{"kind":null}]}]},
-                {"id":"serde-id","deps":[{"pkg":"serde_derive-id","dep_kinds":[{"kind":null}]}]},
-                {"id":"serde_derive-id","deps":[{"pkg":"syn-id","dep_kinds":[{"kind":null}]}]}
-              ]}
-            }"#,
-        )
-        .expect("fixture metadata parses");
-
-        let findings = check(&meta, &allowlist());
+    fn does_not_traverse_into_a_procedural_macro() {
+        // serde's `derive` feature pulls serde_derive, and through it syn. Both run
+        // inside the compiler and neither is linked, so requiring the allow-list to
+        // name the whole macro toolchain would make it meaningless — and it would
+        // grow every time a macro gained a dependency.
+        let fixture = Fixture::new()
+            .declares("serde", false, &["derive"])
+            .proc_macro("serde_derive")
+            .edge("serde", "serde_derive")
+            .edge("serde_derive", "syn")
+            .edge("syn", "tokio");
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
         assert!(
             findings.is_empty(),
-            "a proc macro was treated as an infrastructure dependency: {findings:?}"
-        );
-    }
-
-    #[test]
-    fn does_not_traverse_through_a_proc_macro() {
-        // `syn` is reachable only *through* serde_derive. If the walk did not stop
-        // at proc macros, syn would be flagged — and every serde user would have
-        // to allow-list the whole macro toolchain, which would make the allow-list
-        // meaningless.
-        let meta: Metadata = serde_json::from_str(
-            r#"{
-              "packages": [
-                {"id":"pos-core-id","name":"pos-core","manifest_path":"",
-                 "dependencies":[{"name":"serde","kind":null,"features":["derive"]}],
-                 "targets":[{"kind":["lib"]}]},
-                {"id":"serde-id","name":"serde","manifest_path":"","dependencies":[],
-                 "targets":[{"kind":["lib"]}]},
-                {"id":"serde_derive-id","name":"serde_derive","manifest_path":"",
-                 "dependencies":[],"targets":[{"kind":["proc-macro"]}]},
-                {"id":"tokio-id","name":"tokio","manifest_path":"","dependencies":[],
-                 "targets":[{"kind":["lib"]}]}
-              ],
-              "resolve": {"nodes": [
-                {"id":"pos-core-id","deps":[{"pkg":"serde-id","dep_kinds":[{"kind":null}]}]},
-                {"id":"serde-id","deps":[{"pkg":"serde_derive-id","dep_kinds":[{"kind":null}]}]},
-                {"id":"serde_derive-id","deps":[{"pkg":"tokio-id","dep_kinds":[{"kind":null}]}]}
-              ]}
-            }"#,
-        )
-        .expect("fixture metadata parses");
-
-        let findings = check(&meta, &allowlist());
-        assert!(
-            findings.is_empty(),
-            "the walk crossed a proc-macro boundary: {findings:?}"
+            "the walk crossed a procedural-macro boundary: {findings:?}"
         );
     }
 }

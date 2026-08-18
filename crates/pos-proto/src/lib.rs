@@ -27,6 +27,22 @@
 // that doc examples compile under the same rules has to be stated separately.
 #![doc(test(attr(deny(warnings))))]
 
+pub mod ids;
+pub mod money;
+pub mod quantity;
+pub mod time;
+pub mod ulid;
+
+pub use ids::{
+    BillId, BrandId, CampaignId, ConfigVersionId, DeviceId, EmployeeId, EventId, IngredientId,
+    MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId, StockLedgerEntryId, StoreId, SubjectId,
+    TableId, TenantId,
+};
+pub use money::{CurrencyCode, Money, MoneyError, Ratio, Rounding, div_round};
+pub use quantity::Quantity;
+pub use time::{BusinessDate, CalendarDate, TimeError, Timestamp};
+pub use ulid::Ulid;
+
 /// The cloud↔edge wire contract version.
 ///
 /// A separate axis from the product's SemVer, and from the per-event

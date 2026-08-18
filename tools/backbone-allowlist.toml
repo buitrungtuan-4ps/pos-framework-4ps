@@ -15,7 +15,9 @@ serde       = { reason = "wire serialization; no I/O", adr = "0006" }
 serde_core  = { reason = "transitive from serde", adr = "0006" }
 jiff        = { reason = "zoned datetime arithmetic; MUST be default-features = false", adr = "0014" }
 "jiff-tzdb" = { reason = "pure timezone data compiled into the binary", adr = "0014" }
-jcore       = { reason = "transitive from jiff", adr = "0014" }
+"jiff-core" = { reason = "pure calendar arithmetic; transitive from jiff", adr = "0014" }
+"portable-atomic" = { reason = "transitive from jiff, and only on targets without pointer-width atomics", adr = "0014" }
+"portable-atomic-util" = { reason = "as portable-atomic", adr = "0014" }
 thiserror   = { reason = "error enum derive; no runtime", adr = "0006" }
 
 # Features that make an otherwise-allowed crate unacceptable. A match here fails

@@ -9,6 +9,34 @@ Ordering is by dependency and carries **no calendar dates** — sizes are relati
 Progress is tracked in GitHub milestones `P0`–`P13` plus `Track A`. This document is
 the *plan*; [`CHANGELOG.md`](../CHANGELOG.md) is what actually shipped.
 
+## Two decisions that shape everything below
+
+**1. Framework, not a deployment.** `README.md` promises fork → set 4–6 secrets → run the
+workflow. So the split of responsibility is fixed: **the framework ships the port, a fake
+implementation, the contract suite, and a skeleton example. The forker supplies the
+environment** — their VPS and secrets, their own signing keys, their vendor accounts, their
+hardware.
+
+Consequences, which remove almost every external blocker from the critical path:
+
+| Concern | Framework builds | Forker supplies |
+|---|---|---|
+| Deployment | `bootstrap.sh`, `compose.yml`, the workflow | `VPS_HOST`, `DOMAIN`, `ACME_EMAIL`, `CF_DNS_API_TOKEN`, `RCLONE_*` |
+| OTA signing | signature *verification*, `just keygen`, the rotation runbook | their own two keypairs, stored offline |
+| Printers | `PrinterDriver` + an ESC/POS byte emitter with snapshot tests | real printers, verified at pilot |
+| Fiscalisation | the `Fiscalization` port + `examples/fiscal-skeleton` | their country crate and provider account |
+| Marketplaces, terminals, couriers, ERP | the ports + fakes passing contract tests | their vendor adapters and credentials |
+| Repository governance | `CODEOWNERS`, the workflows | branch protection, the `@maintainers-*` teams, `MIRROR_REMOTE` |
+
+`fiscal-vn` and one marketplace adapter remain in scope as the **reference** implementations,
+but they land when the external decisions in Track A close — they do not gate P1–P9.
+
+**2. Phases complete in order.** Finish P1 before starting P2, rather than cutting a thin
+vertical slice through several phases to get something runnable early. Higher quality per
+layer; nothing runs end to end until P5.
+
+---
+
 ## What is already settled — do not relitigate
 
 Rust · two binaries · SQLite WAL at the edge · PostgreSQL partitioned + RLS + rollups in
@@ -88,7 +116,8 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | Open |
 | 0021 | Corrected 16-port list, superseding ADR-0006 (see D4). | P2 | **Merged** |
 | 0022 | Events partition strategy (see D7). | P7 | Open |
-| 0023 | Tenant hostname and slug-uniqueness model (see D5). | P7 | Open |
+| 0025 | Receipt-number authority as configuration, not a fixed guarantee. | P3 | Open |
+| 0023 | ~~Tenant hostname and slug-uniqueness model~~ — **resolved without a new ADR.** ADR-0011 is Accepted and canonical; the archive is frozen and explicitly non-authoritative, so ADR-0011's mechanism stands. | P7 | **Closed** |
 | 0024 | `PROTOCOL_VERSION` negotiation — where the version rides on the wire, and reject behaviour. | P1 | **Merged** |
 
 ---

@@ -39,6 +39,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - CI: a pull-request gate under ten minutes (rules, lints, tests, both build
   targets, licences, secrets, changelog), a merge-to-`main` workflow, a nightly
   advisory scan, and a daily mirror with a deletion-proof bundle.
+- `pos-proto` value types, the foundation every later calculation trusts: `Ulid`
+  (in-house Crockford base32, injective, time-sortable), `Money` with `Ratio`,
+  `Quantity` and a single `div_round` primitive, `Timestamp`, and `BusinessDate` and
+  `CalendarDate` as deliberately unconvertible types. Eighteen resource-identifier
+  newtypes over `Ulid`, so a `StoreId` cannot be passed where a `TenantId` belongs.
+  Fifty-six tests including property tests for the split-rounding law.
 
 ### Changed
 - Every document now carries the mandatory `Status` / `Owner` / `Last reviewed` header that
@@ -47,6 +53,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - `engineering-guide.md` §8's ADR index reached only 0009; it now covers every record.
 
 ### Fixed
+- **The dependency rule reported crates that are never linked.** Reading
+  `cargo metadata`'s resolve graph reported `log`, `defmt` and `bitflags` behind
+  `jiff`, none of which this workspace activates, and reading `cargo tree` instead
+  reported `syn` and `quote`, which run inside the compiler. The check now uses the
+  metadata graph for structure, follows an edge only when `cargo tree` says it is
+  activated, and stops at procedural macros — so the allow-list stays a statement
+  about runtime dependencies rather than accumulating build-time noise. Two tests
+  pin both halves.
 - **`OrderIn` was missing from the port list.** ADR-0006 and `architecture.md` §5 both named
   fifteen ports and omitted it, although ADR-0012 and `pos-spec.md` §13 depend on it — it is
   the reason QR ordering reuses the marketplace intake path instead of adding a pipeline.
