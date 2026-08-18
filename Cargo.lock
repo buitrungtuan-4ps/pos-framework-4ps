@@ -236,11 +236,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-contract-tests"
+version = "0.1.0"
+dependencies = [
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pos-core"
 version = "0.1.0"
 dependencies = [
  "pos-proto",
  "serde",
+]
+
+[[package]]
+name = "pos-fakes"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-ports",
+ "pos-proto",
+ "serde_json",
 ]
 
 [[package]]

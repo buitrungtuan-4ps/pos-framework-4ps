@@ -36,6 +36,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   the state change" is the only thing that type-checks. Object-safe mirrors
   (`DynPrinterDriver` and four others) cover the families selected by configuration rather
   than at compile time.
+- `pos-contract-tests`: a shared suite per port, 104 cases in all, parameterised by a harness the
+  adapter supplies. Suites are emitted by a macro that takes the adapter's own `block_on`, so this
+  crate depends on no async runtime. Destructive operations — losing power, severing a link, staging
+  an ambiguous card result — live on the harness rather than on the ports, so no production adapter
+  ships a way to corrupt itself. A test asserts every port has a suite.
+- `pos-fakes`: in-memory implementations of all sixteen ports, with fixed-capacity queues returning
+  `RESOURCE_EXHAUSTED`, and `tests/contract.rs` running every suite against them. `pos-core`'s tests
+  will run against these fakes, so this is what stops the domain suite resting on an unchecked
+  assumption about how the real store behaves.
 - `pos-spec.md`: tax is per item class and keyed by sales channel, not a flat store rate;
   a table has exactly one open order; one open shift per cashier device; queue numbers
   reset daily and are not the receipt counter.

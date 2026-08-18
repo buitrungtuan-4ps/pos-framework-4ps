@@ -1,0 +1,21 @@
+[package]
+name        = "pos-fakes"
+version     = "0.1.0"
+description = "In-memory implementations of every port. Passes every contract suite."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+# A normal dependency rather than a dev one, because `harness` is part of this crate's public
+# surface: it is the worked example an adapter author copies, and `store-sqlite`'s own tests will
+# want to look at it.
+pos-contract-tests = { path = "../pos-contract-tests" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

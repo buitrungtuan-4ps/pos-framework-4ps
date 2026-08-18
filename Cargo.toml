@@ -4,6 +4,8 @@ members = [
     "crates/pos-proto",
     "crates/pos-core",
     "crates/pos-ports",
+    "crates/pos-contract-tests",
+    "crates/pos-fakes",
     "xtask",
 ]
 
@@ -20,8 +22,19 @@ members = [
 # "the domain cannot perform I/O" a property of the graph — `cargo tree -p
 # pos-core` — instead of a lint someone has to remember.
 #
-# pos-fakes and pos-contract-tests arrive with P2 and are deliberately NOT
-# subject to the allow-list: the contract suites need an executor.
+# pos-fakes and pos-contract-tests sit below both siblings and are deliberately
+# NOT subject to the allow-list (ADR-0013). Neither pulls in a runtime, though:
+# each suite is emitted by a macro and the adapter invoking it supplies its own
+# `block_on`, so the choice of executor stays with the binary that has one.
+#
+#             pos-core        pos-ports
+#                    \        /    \
+#                  pos-fakes    pos-contract-tests
+#                          \        /
+#                        adapters, binaries
+#
+# pos-fakes is a dev-dependency of pos-core and runs every suite against itself,
+# which is what makes "the fakes behave like the real thing" a checked claim.
 
 # Adapter, binary, and UI crates are created in the phase that needs them
 # (docs/roadmap.md). The intended full layout is in README.md; empty crates
