@@ -1,0 +1,43 @@
+Copyright (c) 2026 Pizza 4P's. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL — INTERNAL USE ONLY
+
+This software and its accompanying documentation (the "Software") are the
+exclusive property of Pizza 4P's and are protected by copyright law and
+international treaty provisions. No licence, express or implied, is granted to
+any person or entity other than employees and contractors of Pizza 4P's acting
+within the scope of their engagement.
+
+You may not, without prior written permission from Pizza 4P's:
+
+  1. copy, reproduce, publish, distribute, sublicense, sell, rent, lease, or
+     otherwise transfer the Software or any portion of it;
+  2. disclose the Software, or any information derived from it, to any third
+     party;
+  3. create derivative works from the Software;
+  4. remove or alter any copyright, trademark, or other proprietary notice.
+
+Reverse engineering, decompilation, and disassembly are permitted only to the
+extent that such acts cannot lawfully be prohibited.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+Notes on this choice, recorded in docs/adr/0009-licence.md:
+
+  * Every source file carries the header below.
+  * The dependency tree is deliberately kept free of copyleft (AGPL, GPL, SSPL,
+    MPL) licences, enforced by cargo-deny, so that a future decision to publish
+    the source requires no dependency surgery. Reversing ADR-0009 is a licence
+    decision, not an engineering project.
+
+Source file header:
+
+  // Copyright (c) 2026 Pizza 4P's. All rights reserved.
+  // Proprietary and confidential. Internal use only. See LICENSE.
