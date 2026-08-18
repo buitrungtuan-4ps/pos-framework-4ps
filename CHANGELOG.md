@@ -51,8 +51,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (`OrderState`, `PaymentMethod`, `PaymentOutcome`, `ReductionKind`, …); `NoPii` as a
   sealed marker so text in an event payload is a compile error with an instruction
   attached; and the two determinism traits, `ClockSource` and `IdGenerator`.
+- The event envelope, the AIP-193 error envelope with its nine canonical statuses, the
+  `PROTOCOL_VERSION` handshake, and the full event catalogue: **49 types**, being the 38
+  the specification declares plus 11 that stated rules needed and nothing carried.
+- `docs/snapshots/events.txt`, generated from the catalogue, with a CI gate that refuses
+  any removal — a published event type or payload field is a contract.
+- Four narrow text types (`DisplayName`, `TranslationKey`, `PermissionKey`,
+  `ReleaseTag`), each admissible in an event payload for a stated reason, and
+  `GuestNote`, which deliberately is not.
 
 ### Changed
+- **`pos-spec.md` §18 now lists 49 event types.** The eleven additions are tabulated with
+  the rule each one serves; the sharpest is `security.permission.overridden`, since a
+  manager-PIN override above a discount ceiling is a named fraud control that had no
+  auditable record at all.
+- **`pos-spec.md` §3: a line note's text never enters the event log.** It is where "for
+  Mr Nguyễn, severe peanut allergy" gets typed — a name and a health condition — and the
+  log is immutable, so nothing personal in it could ever be erased. Events carry only
+  whether a note exists; the kitchen reads it from the local order record.
 - Every document now carries the mandatory `Status` / `Owner` / `Last reviewed` header that
   `engineering-guide.md` §12b requires.
 - `architecture.md` §5 is now the authoritative port table and lists **sixteen** ports.

@@ -41,6 +41,7 @@ use crate::enums;
 use crate::ids;
 use crate::money::{CurrencyCode, Money, Ratio};
 use crate::quantity::Quantity;
+use crate::text::{DisplayName, PermissionKey, ReleaseTag, TranslationKey};
 use crate::time::{BusinessDate, CalendarDate, Timestamp};
 use crate::ulid::Ulid;
 use crate::wire_enum::{Open, WireEnum};
@@ -80,6 +81,11 @@ no_pii!(
     bool, i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize, isize
 );
 
+// Product text. `GuestNote` is deliberately absent — see `crate::text`, which
+// explains why a free-text note stays on the local order record and never enters the
+// immutable log.
+no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
+
 // Value types.
 no_pii!(
     Ulid,
@@ -107,12 +113,19 @@ no_pii!(
     ids::OrderId,
     ids::OrderLineId,
     ids::PaymentId,
+    ids::QrSessionId,
     ids::ShiftId,
     ids::StockLedgerEntryId,
+    ids::CourseId,
+    ids::ReasonCodeId,
+    ids::ShipmentId,
+    ids::StationId,
     ids::StoreId,
     ids::SubjectId,
     ids::TableId,
+    ids::TaxClassId,
     ids::TenantId,
+    ids::VoucherId,
 );
 
 // Closed vocabularies.
@@ -124,6 +137,7 @@ no_pii!(
     enums::PaymentOutcome,
     enums::ReductionKind,
     enums::SalesChannel,
+    enums::ShipmentStatus,
     enums::ShiftState,
     enums::StockLedgerEntryKind,
     enums::TableState,

@@ -19,7 +19,7 @@ cargo xtask <check>
   deps-rule       pos-core / pos-ports / pos-proto import only allow-listed crates
   lint-config     every per-crate clippy.toml restates the baseline keys
   naming          snake_case, no created_at, no bare id, enums have *_UNSPECIFIED
-  snapshot        regenerate or verify the API, event, and permission snapshots
+  snapshot        nothing has been removed from a committed snapshot
   migrations      migrations within a release only add
   docs-gate       a code change touches CHANGELOG.md, or says why not
   links           internal documentation links resolve
@@ -40,6 +40,7 @@ fn main() -> ExitCode {
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
         "links" => checks::links::run(&rest),
+        "snapshot" => checks::snapshot::run(&rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

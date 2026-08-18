@@ -11,6 +11,7 @@ pub mod actions_pinned;
 pub mod deps_rule;
 pub mod links;
 pub mod lint_config;
+pub mod snapshot;
 
 /// Anything that stopped a check from running.
 pub type Error = Box<dyn std::error::Error>;

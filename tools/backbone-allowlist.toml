@@ -19,6 +19,10 @@ jiff        = { reason = "zoned datetime arithmetic; MUST be default-features = 
 "portable-atomic" = { reason = "transitive from jiff, and only on targets without pointer-width atomics", adr = "0014" }
 "portable-atomic-util" = { reason = "as portable-atomic", adr = "0014" }
 thiserror   = { reason = "error enum derive; no runtime", adr = "0006" }
+"serde_json" = { reason = "JSON is the wire format; pure computation, and RawValue is what makes lossless payload forwarding possible", adr = "0006" }
+itoa        = { reason = "integer formatting; transitive from serde_json", adr = "0006" }
+zmij        = { reason = "number formatting; transitive from serde_json, which replaced ryu with it", adr = "0006" }
+memchr      = { reason = "substring search; transitive from serde_json", adr = "0006" }
 
 # Features that make an otherwise-allowed crate unacceptable. A match here fails
 # the build even though the crate name is allowed.

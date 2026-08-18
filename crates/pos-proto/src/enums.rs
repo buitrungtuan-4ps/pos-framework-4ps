@@ -193,11 +193,28 @@ wire_enum! {
     Void = "VOID",
 }
 
+wire_enum! {
+    /// Where a courier job has got to.
+    ///
+    /// The `ShippingDispatch` port reports these back as a callback, and each becomes
+    /// a domain event that shows on the POS and fires a webhook
+    /// (`docs/architecture.md` §6.1).
+    ShipmentStatus, prefix = "SHIPMENT_STATUS";
+    /// A courier has taken the job.
+    Accepted = "ACCEPTED",
+    /// On the way.
+    InTransit = "IN_TRANSIT",
+    /// Delivered.
+    Completed = "COMPLETED",
+    /// Called off, by either side.
+    Cancelled = "CANCELLED",
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
-        SalesChannel, ShiftState, StockLedgerEntryKind, TableState,
+        SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
     };
     use crate::wire_enum::{Open, WireEnum};
 
@@ -251,6 +268,7 @@ mod tests {
         check::<PaymentOutcome>("PAYMENT_OUTCOME");
         check::<StockLedgerEntryKind>("STOCK_LEDGER_ENTRY_KIND");
         check::<ReductionKind>("REDUCTION_KIND");
+        check::<ShipmentStatus>("SHIPMENT_STATUS");
     }
 
     #[test]

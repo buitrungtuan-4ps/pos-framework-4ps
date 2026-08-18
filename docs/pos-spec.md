@@ -23,7 +23,7 @@ Staff roles ship as editable templates: server, cashier, shift lead, store manag
 
 ## 3. Ordering
 
-- Add items from the menu; each line carries quantity, modifiers, and a free-text note.
+- Add items from the menu; each line carries quantity, modifiers, and a free-text note. **The note's text stays at the store and never enters the event log** — it is exactly where "for Mr Nguyễn, severe peanut allergy" gets typed, and the log is immutable, so anything personal in it could never be erased. Events carry only whether a note exists; the kitchen reads the note from the local order record. No report, reconciliation or ERP posting has any use for it.
 - **Modifier groups** may be required or optional and may nest. A dedicated `SPLIT_ITEM` modifier supports half-and-half products: one line, two halves, configurable pricing (**default: the higher-priced half**), and a bill of materials computed per fraction.
 - **Courses** group lines (starter, main, dessert). Fire by course or fire everything.
 - **Fire** sends lines to the kitchen. Before firing, lines are freely editable. After firing, cancelling requires a permission, a reason, and prints a **VOID ticket** at the correct station.
@@ -206,7 +206,37 @@ delivery.shipment.created / .status_changed
 config.version.published · device.activation.completed · fleet.update.rolled_out
 ```
 
-This catalogue is the single source for chain reporting, reconciliation, ERP posting, and webhooks.
+**Eleven further types complete the set.** Each exists because a rule stated elsewhere in
+this document had no event able to carry it, and the asymmetry of the naming standard is
+what makes declaring them early correct: adding an event type is additive and free, while
+removing one is forbidden. So the cost of declaring one now is near zero, and the cost of
+discovering a missing one after a thousand stores hold offline data is a protocol version
+bump.
+
+```
+sales.order.closed · sales.order_line.held
+sales.table.opened / .closed
+billing.bill.opened
+cash.shift.counted
+inventory.stock.received / .wasted
+promotion.voucher.reserved
+security.permission.overridden
+config.version.activated
+```
+
+| Type | The rule that needs it |
+|---|---|
+| `security.permission.overridden` | §11.4 makes a manager-PIN override above a ceiling a fraud control. Nothing carried it, so the control had **no auditable record at all** |
+| `cash.shift.counted` | §6 requires the close to be **blind** — the count entered before the expected amount is revealed. Folded into `shift.closed`, the blindness is unverifiable afterwards, which defeats the control |
+| `inventory.stock.wasted` | §8: cancelling a fired line records waste and does *not* return stock. The ledger has waste entries; the catalogue had no waste event |
+| `inventory.stock.received` | §8 names receipt as one of the five ledger entry kinds |
+| `promotion.voucher.reserved` | §7 makes redemption an atomic check-and-mark, so reserve and redeem are distinct states. With only redemption, a settlement that then failed would burn the voucher |
+| `billing.bill.opened` | Split, merged, settled and voided all presuppose a bill that nothing created |
+| `sales.order.closed`, `sales.order_line.held` | §3 requires hold; the order lifecycle had no terminal event distinct from settlement |
+| `sales.table.opened`, `sales.table.closed` | §2's table cycles through five states; only two transitions had events |
+| `config.version.activated` | Published is not the same as running. The fleet view needs to know which store is actually on which version |
+
+This catalogue is the single source for chain reporting, reconciliation, ERP posting, and webhooks. It is rendered to `docs/snapshots/events.txt` from the code, and CI refuses any removal from that file.
 
 ## 19. Scope
 

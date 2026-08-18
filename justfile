@@ -72,6 +72,14 @@ actions-pinned:
 links:
     cargo run -q -p xtask -- links
 
+# Regenerate the committed snapshots from the code that owns them.
+snapshot:
+    POS_UPDATE_SNAPSHOTS=1 cargo test -q -p pos-proto snapshot
+
+# Refuse a removal from a committed snapshot, against the base branch.
+snapshot-check base="origin/main":
+    cargo run -q -p xtask -- snapshot --base {{base}}
+
 # ---------------------------------------------------------------------------
 # Development loops. These arrive with the phase that creates their binary
 # (docs/roadmap.md) and fail with a clear message until then.

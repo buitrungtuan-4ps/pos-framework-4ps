@@ -45,6 +45,8 @@ jobs:
         run: cargo run -q -p xtask -- actions-pinned
       - name: internal documentation links resolve
         run: cargo run -q -p xtask -- links
+      - name: nothing removed from a committed snapshot
+        run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
 
       # The dependency rule is the check that turns the architecture into law, so
       # prove it still fires rather than trusting that it would. Runs against a

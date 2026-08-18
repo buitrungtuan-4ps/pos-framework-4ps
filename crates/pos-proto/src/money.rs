@@ -121,7 +121,15 @@ pub enum Rounding {
 ///
 /// A rate is never a float. 10% is `Ratio::percent(10)`, which is 10/100 exactly,
 /// and 8.25% is `Ratio::basis_points(825)`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// On the wire it is two integers, `{"numerator": 10, "denominator": 100}`. It has to
+/// cross a boundary because a line snapshot captures **the tax rate in force at the
+/// moment the line was added** (`docs/pos-spec.md` §14.2) — sending a decimal string
+/// or a float instead would reintroduce exactly the imprecision the integer discipline
+/// exists to prevent. `NonZeroI64` means a zero denominator is unrepresentable, so a
+/// malformed rate is rejected at the edge rather than dividing by zero later.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Ratio {
     numerator: i64,
     denominator: NonZeroI64,

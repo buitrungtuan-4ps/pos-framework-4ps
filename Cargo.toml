@@ -41,6 +41,11 @@ repository   = "https://github.com/buitrungtuan-4ps/pos-framework-4ps"
 # does nothing.
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 thiserror = { version = "2", default-features = false }
+# JSON is the wire format, and pos-proto is the wire crate. Pure computation: no
+# I/O, no runtime, no procedural macro of its own. `RawValue` is the specific
+# reason it is a real dependency rather than a dev one — it is what lets a node
+# forward an event payload it does not understand without corrupting it.
+serde_json = { version = "1", default-features = false, features = ["std", "raw_value"] }
 # ADR-0014. `default-features = false` is MANDATORY: the defaults include
 # tz-system and tzdb-zoneinfo, which read $TZ and /usr/share/zoneinfo — filesystem
 # and environment access inside the crate whose allow-list forbids exactly that.

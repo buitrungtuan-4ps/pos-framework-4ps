@@ -159,6 +159,40 @@ resource_id! {
     ConfigVersionId
 }
 resource_id! {
+    /// One guest's session with a table's QR code. Time-limited and bound to a signed
+    /// `table_id`, because a printed code can be photographed and used from outside.
+    QrSessionId
+}
+resource_id! {
+    /// A tax class, such as food, drink or alcohol.
+    ///
+    /// The rate is resolved from the store's locale pack keyed by this and by sales
+    /// channel, so the same item can be taxed differently takeaway and dine-in.
+    TaxClassId
+}
+resource_id! {
+    /// A course: starter, main, dessert. Configured per brand, so it is data rather
+    /// than an enumeration.
+    CourseId
+}
+resource_id! {
+    /// A kitchen station a line routes to.
+    StationId
+}
+resource_id! {
+    /// A reason drawn from the cloud-managed list that a void, discount, comp, refund
+    /// or out-of-sale drawer opening must cite.
+    ReasonCodeId
+}
+resource_id! {
+    /// A voucher instance, whose redemption is an atomic check-and-mark.
+    VoucherId
+}
+resource_id! {
+    /// One delivery job with a courier.
+    ShipmentId
+}
+resource_id! {
     /// A reference to a record in the separate personal-data store.
     ///
     /// This is the one identifier that exists to keep something **out** of the event
