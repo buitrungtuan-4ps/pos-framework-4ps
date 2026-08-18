@@ -1,0 +1,75 @@
+name: mirror
+
+# GitHub is a vendor. Losing the account should cost convenience, not the asset
+# (engineering-guide.md §5, §12).
+#
+# Two artefacts, because they fail differently. `git push --mirror` keeps a true
+# mirror — which means it also propagates deletions, so it is not a backup: a
+# force-push that destroys history on origin destroys it on the mirror too. The
+# bundle is the deletion-proof half. Keeping both is cheap and they cover each
+# other.
+#
+# This workflow is inert until MIRROR_REMOTE and MIRROR_SSH_KEY exist. That is
+# deliberate: it fails loudly on a misconfigured secret and skips silently when
+# nobody has set one up yet, rather than reporting a green mirror that does not
+# exist.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: check whether a mirror is configured
+        id: config
+        env:
+          MIRROR_REMOTE: ${{ secrets.MIRROR_REMOTE }}
+        run: |
+          if [ -z "${MIRROR_REMOTE:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No MIRROR_REMOTE secret set, so nothing is being mirrored." \
+                 "Governance in engineering-guide.md §12 expects a second remote —" \
+                 "set MIRROR_REMOTE and MIRROR_SSH_KEY to activate this."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: push every ref to the second remote
+        if: steps.config.outputs.configured == 'true'
+        env:
+          MIRROR_REMOTE: ${{ secrets.MIRROR_REMOTE }}
+          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$MIRROR_SSH_KEY" > ~/.ssh/mirror_key
+          chmod 0600 ~/.ssh/mirror_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o StrictHostKeyChecking=accept-new"
+          git fetch --prune --tags origin
+          git push --mirror "$MIRROR_REMOTE"
+
+      - name: bundle every ref, as the deletion-proof copy
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git bundle create "dist/pos-framework-$(git rev-parse --short HEAD).bundle" --all
+          git bundle verify dist/*.bundle
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.config.outputs.configured == 'true'
+        with:
+          name: repository-bundle
+          path: dist/*.bundle
+          retention-days: 30

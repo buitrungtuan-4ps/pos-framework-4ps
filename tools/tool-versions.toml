@@ -1,0 +1,23 @@
+# Pinned versions of tools CI installs. Kept here rather than inline in a workflow
+# so that a bump is one reviewable diff, and so the same versions are used locally.
+#
+# Binaries are downloaded and verified against a sha256 recorded HERE, not against
+# the checksum file that ships with the release: whoever can replace the release
+# artifact can replace that file too, so verifying one against the other proves
+# nothing. Bumping a version means recording a new hash, which is the point.
+
+[gitleaks]
+version     = "8.30.1"
+url_linux   = "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_linux_x64.tar.gz"
+sha256_linux = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+[cargo-deny]
+# Installed from source with `--locked` rather than downloaded. It is a Rust tool,
+# the toolchain is already present, and the build is cached — which avoids both a
+# third-party action and a hash to maintain.
+version = "0.20.2"
+
+[just]
+# Only needed by contributors. CI calls `cargo xtask` directly so the pipeline does
+# not depend on `just` existing on a runner.
+version = "1.43.0"

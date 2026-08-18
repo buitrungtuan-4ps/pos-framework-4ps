@@ -1,0 +1,26 @@
+name: rust-setup
+description: >
+  Install the pinned toolchain and restore the cargo cache. A local composite
+  action rather than a third-party one: it travels with the commit under review,
+  so it cannot be changed underneath us the way a mutable tag can.
+
+runs:
+  using: composite
+  steps:
+    # rust-toolchain.toml pins the channel, components and targets, so `rustup
+    # show` is enough to install exactly what the repository asks for. No action
+    # needed, and nothing to keep in sync with the manifest.
+    - shell: bash
+      run: |
+        rustup show active-toolchain || rustup toolchain install
+        rustc --version && cargo --version
+
+    - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+        restore-keys: ${{ runner.os }}-cargo-

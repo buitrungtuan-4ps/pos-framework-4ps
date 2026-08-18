@@ -1,0 +1,78 @@
+name: nightly
+
+# Two things belong on a schedule rather than on a commit.
+#
+# `cargo audit` is one of them: the advisory database moves independently of this
+# repository, so a dependency that was clean at merge time can become vulnerable
+# without anything here changing. A per-commit check would never notice.
+#
+# The rest — the simulator soak and the restore drill — arrive with the crates they
+# exercise (P12, P8). The restore drill matters more than it looks: a backup that
+# has never been restored is not a backup, and it is the drill, not the backup job,
+# that proves the five-minute machine replacement works.
+
+on:
+  schedule:
+    # 19:00 UTC = 02:00 in Vietnam, comfortably after the 04:00 business-date
+    # cutoff has closed the previous trading day everywhere the fleet runs.
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: install cargo-deny
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[cargo-deny\]/,/^\[just\]/p' tools/tool-versions.toml \
+                     | sed -n 's/^version *= *"\(.*\)"/\1/p')"
+          cargo install cargo-deny --locked --version "$version"
+      - name: advisories against a freshly fetched database
+        run: cargo deny --all-features check advisories
+
+      # deny.toml keeps `skip` and `skip-tree` empty today. That will not survive
+      # tokio, sqlx and the windows-* family arriving, so report the size of those
+      # lists every night: the point is that they ratchet down rather than grow
+      # quietly.
+      - name: report duplicate-version exemptions
+        run: |
+          set -euo pipefail
+          count="$(grep -cE '^\s*\{\s*(crate|name)\s*=' <<<"$(sed -n '/^skip\(-tree\)\? *= *\[/,/^\]/p' deny.toml)" || true)"
+          echo "duplicate-version exemptions currently allowed: ${count:-0}"
+
+  soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: fleet simulator soak
+        run: |
+          echo "pos-simulator arrives in P12. See docs/roadmap.md."
+          echo "It reproduces the published envelope in capacity-and-reliability.md:"
+          echo "  222 events/s sustained ingest with 500-700 bursts"
+          echo "  200 stores offline for a day, ~800k events drained in ~9 minutes"
+          echo "  1,000 stores each applying a config version in under a second"
+
+  restore-drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: restore a random store backup and the cloud database
+        run: |
+          echo "Backups arrive with deploy/ in P8. See docs/roadmap.md."
+          echo "The drill must cover BOTH halves: a randomly chosen store backup and"
+          echo "the cloud database, each restored to a scratch instance with totals"
+          echo "verified. Per-store recovery alone does not prove the chain's data is"
+          echo "restorable."

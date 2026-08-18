@@ -31,6 +31,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   a table has exactly one open order; one open shift per cashier device; queue numbers
   reset daily and are not the receipt counter.
 - `naming-and-api.md`: the `bills:split` and `webhook_deliveries:redeliver` custom methods.
+- Cargo workspace with the three backbone crates, the pinned toolchain, layered
+  lints, `deny.toml`, the `justfile`, and the `xtask` crate carrying the repository
+  checks: the dependency rule, the per-crate `clippy.toml` baseline guard, action
+  pinning, and internal documentation links. Each is proven to fire, not merely
+  written.
+- CI: a pull-request gate under ten minutes (rules, lints, tests, both build
+  targets, licences, secrets, changelog), a merge-to-`main` workflow, a nightly
+  advisory scan, and a daily mirror with a deletion-proof bundle.
 
 ### Changed
 - Every document now carries the mandatory `Status` / `Owner` / `Last reviewed` header that

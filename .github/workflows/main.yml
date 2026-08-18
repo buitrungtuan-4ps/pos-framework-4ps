@@ -1,0 +1,59 @@
+name: main
+
+# What runs once a change has landed. Everything here is too slow or too stateful
+# for the ten-minute pull-request gate, and none of it is a substitute for it.
+#
+# The two jobs below are deliberately thin: the crates they exist to test arrive
+# in P2, P4 and P7 (docs/roadmap.md). They are here so that the phase adding an
+# adapter adds its tests, rather than having to design the pipeline as well.
+#
+# When integration tests arrive, add `services:` for PostgreSQL and NATS pinned by
+# image digest (`postgres:16@sha256:...`), not by tag — a tag is mutable, and a
+# silently-changed database version is a long afternoon.
+
+on:
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Against real PostgreSQL and NATS. The domain never needs either; the adapters
+  # do, and a contract test that runs only against a fake proves nothing about the
+  # real thing.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: integration tests
+        run: |
+          echo "No integration tests yet: store-sqlite and printer-escpos arrive in P4,"
+          echo "store-postgres and link-nats in P7. See docs/roadmap.md."
+
+  # ---------------------------------------------------------------------------
+  # Contract tests: every implementation of every port runs the same suite. This
+  # is what makes "swappable" a verified fact rather than a claim, and it is one of
+  # the three nets that catch a syntactically-correct, semantically-wrong change.
+  # ---------------------------------------------------------------------------
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: port contract suites
+        run: |
+          echo "Contract suites arrive with pos-contract-tests in P2. See docs/roadmap.md."
