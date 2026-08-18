@@ -45,6 +45,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `CalendarDate` as deliberately unconvertible types. Eighteen resource-identifier
   newtypes over `Ulid`, so a `StoreId` cannot be passed where a `TenantId` belongs.
   Fifty-six tests including property tests for the split-rounding law.
+- `pos-proto` wire machinery: `Open<E>`, which degrades an unknown enum value to
+  `*_UNSPECIFIED` **while retaining the original token**, plus `require()` as the
+  domain boundary that refuses it; the `wire_enum!` macro; ten closed vocabularies
+  (`OrderState`, `PaymentMethod`, `PaymentOutcome`, `ReductionKind`, …); `NoPii` as a
+  sealed marker so text in an event payload is a compile error with an instruction
+  attached; and the two determinism traits, `ClockSource` and `IdGenerator`.
 
 ### Changed
 - Every document now carries the mandatory `Status` / `Owner` / `Last reviewed` header that

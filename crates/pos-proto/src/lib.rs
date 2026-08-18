@@ -27,21 +27,32 @@
 // that doc examples compile under the same rules has to be stated separately.
 #![doc(test(attr(deny(warnings))))]
 
+pub mod determinism;
+pub mod enums;
 pub mod ids;
 pub mod money;
+pub mod pii;
 pub mod quantity;
 pub mod time;
 pub mod ulid;
+pub mod wire_enum;
 
+pub use determinism::{ClockSource, IdGenerator};
+pub use enums::{
+    BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
+    SalesChannel, ShiftState, StockLedgerEntryKind, TableState,
+};
 pub use ids::{
     BillId, BrandId, CampaignId, ConfigVersionId, DeviceId, EmployeeId, EventId, IngredientId,
     MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId, StockLedgerEntryId, StoreId, SubjectId,
     TableId, TenantId,
 };
 pub use money::{CurrencyCode, Money, MoneyError, Ratio, Rounding, div_round};
+pub use pii::NoPii;
 pub use quantity::Quantity;
 pub use time::{BusinessDate, CalendarDate, TimeError, Timestamp};
 pub use ulid::Ulid;
+pub use wire_enum::{Open, UnknownEnumValue, WireEnum};
 
 /// The cloud↔edge wire contract version.
 ///
