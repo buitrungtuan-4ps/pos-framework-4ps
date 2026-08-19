@@ -30,5 +30,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0015](0015-sqlite-access.md) | SQLite at the edge: `rusqlite` behind one single-writer thread | Accepted |
 | [0017](0017-migrations.md) | Migrations: forward-only, additive, enforced by an `xtask` gate | Accepted |
 | [0018](0018-http-websocket-stack.md) | Edge HTTP/WebSocket stack: axum, a broadcast fan-out, an embedded UI | Accepted |
+| [0030](0030-pairing-and-offline-auth.md) | Edge discovery, pairing, and offline device & user authentication | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

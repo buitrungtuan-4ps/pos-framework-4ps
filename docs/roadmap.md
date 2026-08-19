@@ -123,6 +123,7 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0027 | Country modules — a bundle at `countries/<cc>/`, selected by Cargo feature so a fork compiles only the countries it needs. Amends 0005 and 0013. | P2 | **Merged** |
 | 0023 | ~~Tenant hostname and slug-uniqueness model~~ — **resolved without a new ADR.** ADR-0011 is Accepted and canonical; the archive is frozen and explicitly non-authoritative, so ADR-0011's mechanism stands. | P7 | **Closed** |
 | 0024 | `PROTOCOL_VERSION` negotiation — where the version rides on the wire, and reject behaviour. | P1 | **Merged** |
+| 0030 | Edge discovery, pairing, and offline device & user authentication — QR raw-IP + manual with mDNS behind a trait, a single-use 6-digit pairing code, offline PIN against synced Argon2id hashes with a 5-failure/5-minute local lockout. | P5 | **Merged** |
 
 ---
 

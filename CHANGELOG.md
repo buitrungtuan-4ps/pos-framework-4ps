@@ -129,6 +129,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   test keeps them out of `pos-core`. This governs the edge's internal transport only — the cloud's
   public `/v1` API and its OpenAPI are ADR-0019 (P7). Merged ahead of the P5 `pos-edge` code.
 
+- ADR-0030 (edge discovery, pairing, offline auth): the always-works discovery path is a QR code
+  carrying a raw-IP URL plus manual `IP:port` entry (no name resolution to fail on), with a DHCP
+  reservation pinning the IP; mDNS `pos.local` is a convenience behind an `Advertiser` trait whose
+  real multicast implementation lands with hardware (like the printer's transports), so no mDNS
+  dependency enters the framework now. Device pairing is a single-use, five-minute 6-digit code from a
+  vetted CSPRNG. User authentication is a PIN verified offline against cloud-synced Argon2id hashes,
+  with a five-failure/five-minute lockout enforced locally in `pos_edge` — the Argon2id cost plus the
+  lockout, not PIN entropy, is the brute-force defence. Device tokens and employee ids are logged;
+  PINs, hashes, and pairing codes never are. Adds `getrandom` and `argon2` at the binary layer only.
+  Merged ahead of the P5 code it governs.
 - `pos-edge` (P5): the store binary begins, as a library plus a thin `main` so the HTTP surface is
   testable without binding a socket. It boots an **axum** server (ADR-0018) that answers a `/healthz`
   probe — status, version, protocol version, store id, and no PII — and serves the operator UI, which
