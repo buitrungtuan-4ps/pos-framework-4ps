@@ -81,6 +81,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
   tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
 
+- `printer-escpos` (P4): the ESC/POS thermal-printer adapter for the `PrinterDriver` port. It encodes
+  a `PrintDocument` into ESC/POS bytes (text with emphasis/size/alignment, raster bitmaps, CODE39
+  barcodes, QR codes, feed, cut) and pushes them at a `Transport`; it does not decide text-vs-bitmap
+  (the framework already did, from the code page this adapter reports — ADR-0026 §5). It is idempotent
+  by `job_id` (a flaky cable's retry prints one ticket), refuses to open a drawer on anything but USB
+  (port 9100 has no authentication), returns `unavailable` when unreachable so the caller re-queues,
+  and `failed_precondition` when out of paper. Passes all **8** `PrinterDriver` contract cases via an
+  in-memory recording transport. The retry queue and backup-printer failover live at the caller (port
+  §2), and the real USB/serial/TCP transports plus the real-print test land with A5 hardware.
+
 - `cargo xtask migrations` (P4, ADR-0017 enforcement): the additive-only gate. It refuses a pull
   request that edits a migration already shipped on the base branch (a migration is immutable — the
   same removal-gate mechanism `xtask snapshot` uses) or that adds a destructive statement

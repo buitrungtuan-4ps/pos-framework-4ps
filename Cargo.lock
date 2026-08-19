@@ -402,6 +402,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "printer-escpos"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
