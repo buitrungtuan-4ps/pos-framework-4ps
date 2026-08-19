@@ -40,14 +40,14 @@ Staff roles ship as editable templates: server, cashier, shift lead, store manag
 
 ## 5. Billing and payment
 
-- Bill = subtotal − discounts + service charge + tax, rounded by configured rules. Service charge is applied **after** discounts and **before** tax.
+- Bill: `total_due = subtotal − discounts − comps + service_charge + tax + rounding_adjustment`. Service charge is applied **after** discounts and **before** tax, and is taxable per `store.tax.service_charge_taxable` (default true). Tax rounds **per tax-class subtotal**, not per line and not per bill. Cash rounding is an explicit `rounding_adjustment` line, never a silent adjustment, so the printed lines reconcile to the printed total ([ADR-0028](adr/0028-settlement-and-payment-invariant.md)).
 - **Tax is per item class, not per store.** Every menu item carries a `tax_class` (food, drink, alcohol, …) and the rate is resolved from a table in the store's locale pack **keyed by sales channel** — the same item can be taxed differently takeaway and dine-in (Japan charges 8% and 10% respectively). The config key is `store.tax.tax_class_rates`. A flat store-level rate is a *special case* of this table, not a different model: Vietnam v1 populates one class at one rate. Both `tax_class` and the channel dimension are in the schema from day one because retrofitting them is a migration across every order line ever written, and the rate in force is captured in the line snapshot (§14.2) rather than looked up later.
 - **Split** by item, evenly into N, or by seat. **Merge** before payment.
 - **Discount** by percentage or amount, per line or per bill, with a mandatory reason. Above the role's ceiling it requires a manager PIN entered on the same device.
 - **Comp** (giveaway) is distinct from discount and from void: a comp still consumes inventory and is recorded as cost. Accounting and fraud analysis treat the three differently.
-- **Payment methods** — cash, card, QR/wallet, voucher, gift card (reserved), other — and **several may be combined on one bill**. Card payments always have an *unknown result* branch, which parks the bill for reconciliation rather than guessing.
+- **Payment methods** — cash, card, QR/wallet, voucher, gift card (reserved), other — and **several may be combined on one bill**. A payment carries both `tendered` and `applied_to_bill`; change and over-tender live in the gap. Card payments always have an *unknown result* branch, which parks the bill for reconciliation rather than guessing.
 - **Tips**: `tip_amount` is stored separately from the sale amount. Tips may be adjusted after the card is captured (`billing.tip.adjusted`), cash tips are declared at shift close, and a distribution report exists. The UI is enabled per locale; the data model always carries it.
-- **Receipt numbers increase without gaps per store.** The counter is incremented inside the same SQLite transaction as the bill, so offline operation never skips a number.
+- **Receipt numbers are gapless while a single store authority is reachable.** The authority is configuration, `store.billing.receipt_number_authority = store_server | device_blocks`: `store_server` (default) owns one counter incremented in the bill transaction; `device_blocks` hands each device a contiguous block for jurisdictions that accept per-device sequences. A device partitioned from the authority under `store_server` cannot settle — it already cannot, the server holds the database — and the UI says so rather than inventing a number ([ADR-0025](adr/0025-receipt-number-authority.md)).
 - **Void and refund** after settlement require a manager, a reason, and print a void slip. Refunds happen **only at the store that issued the bill**.
 
 ## 6. Shifts and cash
@@ -150,6 +150,8 @@ These are invariants, not preferences. Property tests are written against them.
 2. **Line snapshots.** A line captures price, tax class and rate, display name, and promotion outcome **at the moment it is added**. It never references the live menu. Changing or deleting a menu item does not alter open orders.
 3. **Split rounding.** The parts of a split must sum **exactly** to the original total; the rounding remainder goes to the last part, and bill-level discounts are allocated proportionally. CI asserts `sum(splits) == original_total`.
 4. **Exclusive settlement.** `bill:settle` is a one-time state transition. A second attempt returns `FAILED_PRECONDITION`. The UI takes a soft lock when a payment screen opens and tells other devices who is paying.
+5. **Payment sum.** For a bill in `SETTLED`, `sum(payment.applied_to_bill) == bill.total_due`, and `sum(tendered) − sum(applied_to_bill) − sum(tip) == change_given`. Tips are a separate ledger, never part of `total_due`. CI asserts both identities and that the printed per-tax-class lines reconcile to the printed tax total ([ADR-0028](adr/0028-settlement-and-payment-invariant.md)).
+6. **Merge convergence.** Same-line edits merge commutatively and associatively, terminal states winning, so two devices reach one state regardless of sync order and a voided line is never resurrected ([ADR-0029](adr/0029-append-command-merge-semantics.md)).
 
 ## 15. Tenant lifecycle and personal data
 

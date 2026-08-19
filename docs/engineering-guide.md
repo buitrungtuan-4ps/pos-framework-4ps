@@ -166,6 +166,9 @@ Recorded so far:
 | 0024 | `PROTOCOL_VERSION` negotiation on the wire |
 | 0026 | Port shapes: the shared failure type, the transaction handle, and three corrections to 0013 |
 | 0027 | Country modules: a bundle at `countries/<cc>/`, selected by Cargo feature |
+| 0025 | Receipt-number authority is configuration; gapless only while one store authority is reachable |
+| 0028 | Settlement and payment invariant: tendered vs applied, tips separate, explicit rounding, tax per class |
+| 0029 | Append-command merge: terminal states win, other fields last-writer-wins on (event_time, device_id) |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 

@@ -54,6 +54,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   suite**, so a real country fills in a proven shape. `cargo xtask countries` fails a module that is
   misnamed, absent from the workspace, or wired into no binary's features.
 
+- ADR-0025 (receipt-number authority is configuration: gapless only while one store authority is
+  reachable), ADR-0028 (the real settlement invariant — `sum(applied) == total_due`, tips a separate
+  ledger, cash rounding as an explicit line, tax per tax-class subtotal, service-charge taxability as
+  config), and ADR-0029 (line merge: terminal states win, other fields last-writer-wins on
+  `(event_time, device_id)`, commutative and associative). These resolve issues #8, #9 and #10 ahead
+  of the P3 domain code they govern; `pos-spec.md` §3/§5/§14 and `architecture.md` §2/§5 are amended
+  to state the rules the code will enforce.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one

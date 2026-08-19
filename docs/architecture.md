@@ -26,7 +26,7 @@ Runs as a Windows service or systemd unit on an ordinary PC or mini-PC.
 | Discovery | Publishes `pos.local` via mDNS. Clients pair by scanning a QR code containing `http://<ip>/pair?...`, or by typing `IP:port` plus a 6-digit code shown on the server screen. |
 | Durability | Every sale is a transaction. Events land in a local outbox table before anything is sent anywhere. |
 
-**Order writes are append commands.** Two devices adding items to the same table produce two commands that merge; they never overwrite each other. Only edits to the *same line* apply last-writer-wins, and both versions stay in the audit log.
+**Order writes are append commands.** Two devices adding items to the same table produce two commands that merge; they never overwrite each other. Edits to the *same line* merge with **terminal states winning** — a `VOIDED` or `SETTLED` line is never overwritten by a later edit — and other fields resolving last-writer-wins on `(event_time, device_id)`; both versions stay in the audit log. The merge is commutative and associative, so sync order cannot change the result ([ADR-0029](adr/0029-append-command-merge-semantics.md)).
 
 ## 3. Cloud tier (`pos_cloud`)
 
@@ -98,7 +98,7 @@ The list above is authoritative and counts **sixteen** ports. [ADR-0006](adr/000
 
 **Contract tests.** Each port ships a shared test suite that every implementation must pass — for example, `EventStore` must return events in order, be idempotent by ULID, and survive a simulated crash mid-transaction. This is what makes "swappable" a verified fact rather than a claim.
 
-**Minimum state machine in core.** `pos-core` contains an explicit table of *state × event → new state*, plus invariants, for Order, Bill, Shift, and Table. Examples of invariants: a settled bill accepts no new lines; a fired line can only be voided with a reason and a permission; a closed shift accepts no transactions; payments always sum to the bill total. This table is the machine-readable twin of [pos-spec.md](pos-spec.md), and property-based tests are written against it.
+**Minimum state machine in core.** `pos-core` contains an explicit table of *state × event → new state*, plus invariants, for Order, Bill, Shift, and Table. Examples of invariants: a settled bill accepts no new lines; a fired line can only be voided with a reason and a permission; a closed shift accepts no transactions; and, for a settled bill, `sum(payment.applied_to_bill) == bill.total_due` — the honest form of “payments sum to the bill”, with tips a separate ledger and change in the gap between tendered and applied ([ADR-0028](adr/0028-settlement-and-payment-invariant.md)). This table is the machine-readable twin of [pos-spec.md](pos-spec.md), and property-based tests are written against it.
 
 ## 6. Integration surface
 

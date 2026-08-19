@@ -116,7 +116,9 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | Open |
 | 0021 | Corrected 16-port list, superseding ADR-0006 (see D4). | P2 | **Merged** |
 | 0022 | Events partition strategy (see D7). | P7 | Open |
-| 0025 | Receipt-number authority as configuration, not a fixed guarantee. | P3 | Open |
+| 0025 | Receipt-number authority as configuration, not a fixed guarantee. | P3 | **Merged** |
+| 0028 | Settlement and payment invariant — tendered vs applied, tips a separate ledger, explicit rounding adjustment, tax per tax-class subtotal, service-charge taxability as config (issue #9). | P3 | **Merged** |
+| 0029 | Append-command merge semantics — terminal states win, other fields last-writer-wins on `(event_time, device_id)`, commutative and associative (issue #10). | P3 | **Merged** |
 | 0026 | Port shapes — one `PortError`, `Transactional`/`TxContext`, outbox cursor ordering, fault injection on the harness, and three corrections to ADR-0013. | P2 | **Merged** |
 | 0027 | Country modules — a bundle at `countries/<cc>/`, selected by Cargo feature so a fork compiles only the countries it needs. Amends 0005 and 0013. | P2 | **Merged** |
 | 0023 | ~~Tenant hostname and slug-uniqueness model~~ — **resolved without a new ADR.** ADR-0011 is Accepted and canonical; the archive is frozen and explicitly non-authoritative, so ADR-0011's mechanism stands. | P7 | **Closed** |
