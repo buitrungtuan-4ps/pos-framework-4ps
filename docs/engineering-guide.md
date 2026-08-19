@@ -171,6 +171,7 @@ Recorded so far:
 | 0029 | Append-command merge: terminal states win, other fields last-writer-wins on (event_time, device_id) |
 | 0015 | SQLite access at the edge: `rusqlite` behind a dedicated single-writer thread |
 | 0017 | Migrations: forward-only, additive, enforced by a `cargo xtask migrations` gate |
+| 0018 | Edge HTTP/WebSocket stack: axum + tower, a `broadcast` fan-out under 50 ms, the UI embedded with `rust-embed` |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 

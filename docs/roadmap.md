@@ -111,7 +111,7 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0015 | SQLite access strategy — `rusqlite` + a dedicated single-writer thread vs `sqlx`. | P4 | **Merged** |
 | 0016 | PostgreSQL access crate — `sqlx` (compile-time checked, needs a build-time DB or offline cache) vs `tokio-postgres` + pool. | P7 | Open |
 | 0017 | Migration tooling for both tiers, plus how additive-only is enforced. | P4 | **Merged** |
-| 0018 | HTTP/WebSocket stack (axum + tower) and UI embedding. | P5 | Open |
+| 0018 | HTTP/WebSocket stack (axum + tower) and UI embedding. | P5 | **Merged** |
 | 0019 | OpenAPI generation from code (generated, never transcribed). | P7 | Open |
 | 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | Open |
 | 0021 | Corrected 16-port list, superseding ADR-0006 (see D4). | P2 | **Merged** |

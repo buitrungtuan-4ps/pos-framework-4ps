@@ -119,6 +119,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   editing a shipped migration or a destructive statement). Both block P4 and are merged ahead of the
   `store-sqlite` code they govern.
 
+- ADR-0018 (edge HTTP/WebSocket stack): `pos_edge` serves its UI-facing HTTP over **axum** on
+  `hyper` + `tower`, opens WebSockets with axum's built-in `ws` extractor, and fans state changes out
+  to every device on the store LAN over a single bounded `tokio::sync::broadcast` channel — an
+  in-process send, so the under-50 ms budget is met by construction and a stalled device degrades
+  itself (a `Lagged` resync) rather than growing server memory. The SolidJS UI is compiled into the
+  binary with `rust-embed` so the store is one static file (a `dev-ui` feature reads from disk
+  instead); tokio, axum, tower and rust-embed enter at the binary layer only, and the dependency-rule
+  test keeps them out of `pos-core`. This governs the edge's internal transport only — the cloud's
+  public `/v1` API and its OpenAPI are ADR-0019 (P7). Merged ahead of the P5 `pos-edge` code.
+
 - `pos-core` permission registry (`pos-spec.md` §9): a **fixed catalogue** of 24 permissions declared
   through one `permissions!` macro, so a new permission is a single entry that cannot omit its group,
   risk, PIN flag, default roles or description — the enum, its `ALL`, and `Permission::meta` all
