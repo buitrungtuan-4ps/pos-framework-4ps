@@ -49,6 +49,8 @@ jobs:
         run: cargo run -q -p xtask -- countries
       - name: nothing removed from a committed snapshot
         run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
+      - name: migrations are additive-only
+        run: cargo run -q -p xtask -- migrations --base origin/${{ github.base_ref }}
 
       # The dependency rule is the check that turns the architecture into law, so
       # prove it still fires rather than trusting that it would. Runs against a

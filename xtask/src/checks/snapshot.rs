@@ -37,7 +37,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Error, repo_root};
+use super::{Error, base_ref, read_at_ref, repo_root};
 use crate::Finding;
 
 /// Snapshot files under this check's protection.
@@ -95,35 +95,6 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         }
     }
     Ok(findings)
-}
-
-fn base_ref(args: &[String]) -> String {
-    let mut iter = args.iter();
-    while let Some(argument) = iter.next() {
-        if argument == "--base"
-            && let Some(value) = iter.next()
-        {
-            return value.clone();
-        }
-    }
-    "origin/main".to_owned()
-}
-
-/// The file's contents at `reference`, or `None` if it did not exist there.
-fn read_at_ref(
-    root: &std::path::Path,
-    reference: &str,
-    path: &str,
-) -> Result<Option<String>, Error> {
-    let output = std::process::Command::new("git")
-        .args(["show", &format!("{reference}:{path}")])
-        .current_dir(root)
-        .output()?;
-    if output.status.success() {
-        Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
-    } else {
-        Ok(None)
-    }
 }
 
 #[cfg(test)]

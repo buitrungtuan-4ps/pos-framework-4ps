@@ -81,6 +81,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
   tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
 
+- `cargo xtask migrations` (P4, ADR-0017 enforcement): the additive-only gate. It refuses a pull
+  request that edits a migration already shipped on the base branch (a migration is immutable — the
+  same removal-gate mechanism `xtask snapshot` uses) or that adds a destructive statement
+  (`DROP TABLE`, `DROP COLUMN`, `RENAME`) without the reviewed `-- migrations:allow-destructive`
+  marker. Wired into the PR workflow and the `just migrations-check` recipe; the destructive
+  detection is unit-tested, and the shared git-diff helpers are factored into `xtask::checks` so the
+  snapshot and migration gates share one implementation.
+
 - `store-sqlite` (P4): the edge `EventStore` and `ConfigStore` over SQLite, the first adapter. One
   `rusqlite` connection owned by a dedicated writer thread (ADR-0015); the async port methods send a
   command over a bounded channel and await a oneshot reply, so blocking SQLite never touches the

@@ -43,6 +43,7 @@ fn main() -> ExitCode {
         "countries" => checks::countries::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
+        "migrations" => checks::migrations::run(&rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

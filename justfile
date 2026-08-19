@@ -82,6 +82,10 @@ snapshot:
 snapshot-check base="origin/main":
     cargo run -q -p xtask -- snapshot --base {{base}}
 
+# Refuse an edit to a shipped migration or a destructive statement (ADR-0017).
+migrations-check base="origin/main":
+    cargo run -q -p xtask -- migrations --base {{base}}
+
 # ---------------------------------------------------------------------------
 # Development loops. These arrive with the phase that creates their binary
 # (docs/roadmap.md) and fail with a clear message until then.
