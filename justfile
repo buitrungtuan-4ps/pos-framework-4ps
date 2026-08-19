@@ -42,6 +42,11 @@ clippy-backbone:
 build:
     cargo build --workspace --locked
 
+# Run the store binary on fakes — no database, no hardware, no config file.
+# Opens http://127.0.0.1:8787/ ; Ctrl-C stops it.
+run-edge:
+    cargo run -p minimal-edge
+
 test:
     cargo test --workspace --locked
     cargo test --workspace --doc

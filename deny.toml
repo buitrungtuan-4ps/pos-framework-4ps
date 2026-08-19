@@ -69,8 +69,25 @@ deny = [
 # size of this list so it ratchets down instead of growing quietly. Zero skips is
 # achievable now and will not stay achievable once tokio, sqlx and the windows-*
 # family arrive — that is the moment to start curating, not to give up.
-skip = []
-skip-tree = []
+#
+# The moment arrived with P5's axum + rust-embed stack. Both entries below are
+# transient: the ecosystem is mid-migration across a major version, and each skip
+# disappears when the laggards catch up. Re-check on the review date.
+skip = [
+    # syn straddles its 2 -> 3 bump: serde_derive and thiserror-impl are on syn 3,
+    # while rust-embed-impl and tracing-attributes are still on syn 2. All four are
+    # build-time proc-macros — none is linked into a shipped binary — so this is a
+    # compile-time duplicate only. review: 2026-11-19
+    { crate = "syn@2", reason = "build-time proc-macro; ecosystem mid-migration from syn 2 to syn 3" },
+]
+skip-tree = [
+    # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed
+    # hashes embedded files with sha2 0.11 (pulling digest 0.11, block-buffer 0.12,
+    # crypto-common 0.2, cpufeatures 0.3), while axum's WebSocket handshake uses the
+    # stable line (sha1 0.10 -> digest 0.10, ...). Skipping the 0.11 subtree leaves
+    # the 0.10 line unique. review: 2026-11-19
+    { crate = "sha2@0.11", reason = "new RustCrypto line pulled by rust-embed; stable line still used by axum" },
+]
 
 [sources]
 unknown-registry = "deny"

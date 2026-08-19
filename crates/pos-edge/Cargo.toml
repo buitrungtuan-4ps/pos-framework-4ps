@@ -1,0 +1,84 @@
+[package]
+name        = "pos-edge"
+version     = "0.0.0"
+description = "The store binary: serves the operator UI and wires adapters into pos-core."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# The binary that everything else exists to run. Most of it is a library so the
+# HTTP surface is testable without binding a socket (see tests/http.rs); main.rs
+# is the thin entry point ADR-0013 calls the "load, decide, apply" layer.
+[lib]
+name = "pos_edge"
+
+[[bin]]
+name = "pos-edge"
+path = "src/main.rs"
+
+[features]
+# By default the SolidJS build (ui/dist) is compiled into the binary, so the
+# store is one static file (ADR-0018, ADR-0002). `dev-ui` flips rust-embed to
+# read from disk, so a UI change is a browser refresh, not a Rust rebuild.
+default = []
+dev-ui  = []
+
+[dependencies]
+# The backbone this binary composes. Paths, not versions: resolved by the workspace.
+pos-core  = { path = "../pos-core" }
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+
+# The async runtime and HTTP stack live at the binary layer only (ADR-0018). The
+# dependency-rule test proves they never reach pos-core.
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum       = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["trace"] }
+# `debug-embed` makes rust-embed embed in every profile, not only release, so the
+# tests exercise the same serving path the shipped binary does. `dev-ui` reads
+# from disk instead, and is handled explicitly in `http::assets`.
+rust-embed = { version = "8", features = ["mime-guess", "debug-embed"] }
+
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+toml       = "1"
+
+[dev-dependencies]
+# Exercise the router without a socket: build the Router and drive it with
+# ServiceExt::oneshot.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# A shipped binary, not a library, so it declares its own lint table rather than
+# inheriting the strict library baseline (Cargo rejects a manifest that both
+# inherits [workspace.lints] and adds to it). The money, no-PII-to-stdout, and
+# no-float rules stay on; unwrap/expect/panic are left at their defaults so the
+# startup path may use them where a failure is fatal anyway.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"

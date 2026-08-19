@@ -129,6 +129,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   test keeps them out of `pos-core`. This governs the edge's internal transport only — the cloud's
   public `/v1` API and its OpenAPI are ADR-0019 (P7). Merged ahead of the P5 `pos-edge` code.
 
+- `pos-edge` (P5): the store binary begins, as a library plus a thin `main` so the HTTP surface is
+  testable without binding a socket. It boots an **axum** server (ADR-0018) that answers a `/healthz`
+  probe — status, version, protocol version, store id, and no PII — and serves the operator UI, which
+  is compiled into the binary with `rust-embed` so the store is one static file (a `dev-ui` feature
+  reads `ui/dist` from disk instead). An unknown path falls back to `index.html` for the P6
+  single-page app rather than 404ing. Bootstrap config is TOML with `deny_unknown_fields` and a
+  required `store_id`; `tracing` is configured in one place with the no-PII rule stated; the server
+  drains in-flight requests on Ctrl-C or `SIGTERM`. `ui/dist/index.html` is a placeholder the real
+  SolidJS app (P6) replaces. The async runtime and HTTP stack enter at the binary layer only — `cargo
+  xtask deps-rule` proves they never reach `pos-core`.
+- `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
+  database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
+  `pos-fakes` as the P5 domain routes land.
+- `cargo-deny` gains two curated, dated `skip`/`skip-tree` entries (`syn@2`, `sha2@0.11`): transient
+  duplicates from the ecosystem's mid-migration across major versions, all build-time or
+  handshake-only and none changing what a shipped binary links. This is the curation the `deny.toml`
+  comment anticipated for when the axum/tokio stack arrived; both entries are reviewed on 2026-11-19.
+
 - `pos-core` permission registry (`pos-spec.md` §9): a **fixed catalogue** of 24 permissions declared
   through one `permissions!` macro, so a new permission is a single entry that cannot omit its group,
   risk, PIN flag, default roles or description — the enum, its `ALL`, and `Permission::meta` all

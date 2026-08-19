@@ -10,6 +10,8 @@ members = [
     "crates/pos-fakes",
     "crates/adapters/store-sqlite",
     "crates/adapters/printer-escpos",
+    "crates/pos-edge",
+    "examples/minimal-edge",
     "xtask",
 ]
 
