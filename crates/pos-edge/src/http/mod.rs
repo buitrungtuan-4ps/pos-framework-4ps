@@ -11,6 +11,7 @@
 
 pub mod assets;
 pub mod health;
+pub mod ws;
 
 use axum::Router;
 use axum::routing::get;
@@ -26,6 +27,8 @@ use crate::state::AppState;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
+        // One WebSocket per device, fed by the fan-out (ADR-0018).
+        .route("/ws", get(ws::handler))
         // Anything not matched is a UI asset; an unknown path falls back to index.html so a
         // client-routed path (the P6 single-page app) still loads.
         .fallback(assets::serve)

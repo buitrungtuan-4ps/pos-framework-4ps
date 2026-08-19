@@ -18,8 +18,10 @@
 //!   later slice).
 //! - [`telemetry`] — the `tracing` subscriber, which records identifiers and counts but **never PII**
 //!   ([`pos_proto::pii`]).
-//! - [`http`] — the axum router: the health probe and the embedded UI today, the domain routes and
-//!   the WebSocket fan-out as they land ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)).
+//! - [`fanout`] — the store-LAN fan-out: one committed change broadcast to every device under 50 ms
+//!   ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)).
+//! - [`http`] — the axum router: the health probe, the embedded UI, and the `/ws` WebSocket today;
+//!   the domain routes as they land.
 //! - [`server`] — binds the listener and serves with graceful shutdown.
 
 #![forbid(unsafe_code)]
@@ -28,6 +30,7 @@
 pub mod config;
 pub mod countries;
 pub mod error;
+pub mod fanout;
 pub mod http;
 pub mod server;
 pub mod state;
@@ -35,5 +38,6 @@ pub mod telemetry;
 
 pub use config::EdgeConfig;
 pub use error::EdgeError;
+pub use fanout::{Fanout, ServerMessage};
 pub use server::serve;
 pub use state::{AppState, BuildInfo};

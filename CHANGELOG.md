@@ -142,6 +142,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ADR-0027) as a Cargo feature and validates the registry at start-up, logging which countries it can
   serve. The async runtime and HTTP stack enter at the binary layer only — `cargo xtask deps-rule`
   proves they never reach `pos-core`.
+- `pos-edge` WebSocket fan-out (P5, ADR-0018): a `/ws` endpoint gives each device one socket fed by a
+  single bounded `tokio::sync::broadcast` channel. When the edge applies a change it publishes once
+  and every device receives it — an in-process send, so the under-50 ms LAN budget is met by
+  construction. The channel is bounded (`FANOUT_CAPACITY`): a device that falls behind is told to
+  reload a fresh snapshot (`ServerMessage::Resync`) rather than making the server buffer without
+  limit — the same bounded-memory discipline the SQLite writer uses. `ServerMessage` is
+  `#[non_exhaustive]` with an internal `type` tag, so a client dispatches on one field and tolerates
+  message kinds added later. An integration test binds a real port and proves a published event
+  reaches one connected device, and that two devices on one table both receive the same change.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

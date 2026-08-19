@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use crate::config::EdgeConfig;
+use crate::fanout::Fanout;
 
 /// Identity the health probe reports: what this binary is and which protocol it speaks. All of it is
 /// compile-time constant, none of it is PII.
@@ -51,15 +52,18 @@ pub struct AppState {
     pub config: Arc<EdgeConfig>,
     /// What this binary is, for the health probe.
     pub build: BuildInfo,
+    /// The store-LAN fan-out every WebSocket subscribes to and every applied decision publishes to.
+    pub fanout: Fanout,
 }
 
 impl AppState {
-    /// Builds the shared state from a loaded configuration.
+    /// Builds the shared state from a loaded configuration, with a fresh fan-out.
     #[must_use]
     pub fn new(config: EdgeConfig) -> Self {
         Self {
             config: Arc::new(config),
             build: BuildInfo::current(),
+            fanout: Fanout::new(),
         }
     }
 }

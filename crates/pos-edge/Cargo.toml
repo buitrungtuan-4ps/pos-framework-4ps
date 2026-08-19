@@ -65,7 +65,12 @@ toml       = "1"
 # ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+# The WebSocket fan-out test binds an ephemeral port and connects a real client.
+# tokio-tungstenite is pinned to the version axum already resolves, so it adds no
+# duplicate; no TLS features (the LAN socket is plaintext ws://).
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
 
 # A shipped binary, not a library, so it declares its own lint table rather than
 # inheriting the strict library baseline (Cargo rejects a manifest that both
