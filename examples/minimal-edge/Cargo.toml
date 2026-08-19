@@ -12,7 +12,9 @@ name = "minimal-edge"
 path = "src/main.rs"
 
 [dependencies]
-pos-edge  = { path = "../../crates/pos-edge" }
+# Selects the reference country (ADR-0027), so the example logs a real country
+# at start-up — the one edit a fork makes to serve its own market.
+pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz"] }
 pos-proto = { path = "../../crates/pos-proto" }
 tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing   = "0.1"

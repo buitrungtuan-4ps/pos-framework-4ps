@@ -21,6 +21,12 @@ use crate::state::AppState;
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
 pub async fn serve(config: EdgeConfig) -> Result<(), EdgeError> {
+    // Refuse to start if the compiled-in country modules disagree, and log which countries this
+    // build can serve (ADR-0027).
+    let countries = crate::countries::registry();
+    countries.validate().map_err(EdgeError::Country)?;
+    tracing::info!(countries = ?countries.country_codes(), "country modules loaded");
+
     let bind = config.bind;
     let state = AppState::new(config);
     let app = crate::http::router(state);

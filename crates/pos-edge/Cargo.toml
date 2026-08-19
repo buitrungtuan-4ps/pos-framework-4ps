@@ -24,12 +24,23 @@ path = "src/main.rs"
 # read from disk, so a UI change is a browser refresh, not a Rust rebuild.
 default = []
 dev-ui  = []
+# Country modules are selected per binary as a Cargo feature (ADR-0027): a fork
+# serving one country enables one line and compiles nothing else. `country-zz`
+# is the reference module; a real fork adds `country-vn = ["dep:pos-country-vn"]`
+# and enables it in `default`. `cargo xtask countries` enforces that every wired
+# country crate is selectable from a binary.
+country-zz = ["dep:pos-country-zz"]
 
 [dependencies]
 # The backbone this binary composes. Paths, not versions: resolved by the workspace.
-pos-core  = { path = "../pos-core" }
-pos-ports = { path = "../pos-ports" }
-pos-proto = { path = "../pos-proto" }
+pos-core    = { path = "../pos-core" }
+pos-ports   = { path = "../pos-ports" }
+pos-proto   = { path = "../pos-proto" }
+pos-country = { path = "../pos-country" }
+
+# Country modules, selected per binary as features (ADR-0027). Optional, so a fork
+# compiles only the ones it enables; `pos-country-zz` is the reference module.
+pos-country-zz = { path = "../../countries/zz", optional = true }
 
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018). The
 # dependency-rule test proves they never reach pos-core.

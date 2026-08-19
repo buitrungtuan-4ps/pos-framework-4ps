@@ -38,4 +38,9 @@ pub enum EdgeError {
     /// The server stopped with an error after starting.
     #[error("server error: {0}")]
     Serve(std::io::Error),
+
+    /// The compiled-in country modules are inconsistent — two claim the same country — so the build
+    /// must not start ([ADR-0027](../../../docs/adr/0027-country-modules.md)).
+    #[error("country modules are inconsistent: {0}")]
+    Country(pos_country::RegistryError),
 }

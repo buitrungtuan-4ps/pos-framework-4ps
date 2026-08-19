@@ -8,8 +8,10 @@ so a store is one static binary with its interface inside it ([ADR-0002](../docs
 
 ## Where it stands
 
-The real interface arrives in **P6** ([`docs/roadmap.md`](../docs/roadmap.md)). Until then,
-`ui/dist/index.html` is a placeholder that proves the embedding path: `pos_edge` serves it, and the
+The real interface arrives in **P6** ([`docs/roadmap.md`](../docs/roadmap.md)). `ui/dist/` is build
+output and is gitignored, so a fresh checkout has nothing to embed. Until P6's toolchain populates
+it, `pos-edge`'s `build.rs` writes a placeholder `ui/dist/index.html` when one is absent — and never
+overwrites a real build. That placeholder proves the embedding path: `pos_edge` serves it, and the
 health endpoint answers, with the network unplugged.
 
 ## How the edge serves it

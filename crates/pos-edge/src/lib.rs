@@ -26,6 +26,7 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod config;
+pub mod countries;
 pub mod error;
 pub mod http;
 pub mod server;

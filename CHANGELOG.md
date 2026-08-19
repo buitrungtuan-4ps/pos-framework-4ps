@@ -136,9 +136,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   reads `ui/dist` from disk instead). An unknown path falls back to `index.html` for the P6
   single-page app rather than 404ing. Bootstrap config is TOML with `deny_unknown_fields` and a
   required `store_id`; `tracing` is configured in one place with the no-PII rule stated; the server
-  drains in-flight requests on Ctrl-C or `SIGTERM`. `ui/dist/index.html` is a placeholder the real
-  SolidJS app (P6) replaces. The async runtime and HTTP stack enter at the binary layer only — `cargo
-  xtask deps-rule` proves they never reach `pos-core`.
+  drains in-flight requests on Ctrl-C or `SIGTERM`. `ui/dist` is gitignored build output, so a
+  `build.rs` writes a placeholder `index.html` there when P6 has not yet built the real one (and
+  never overwrites a real build). The binary wires the reference country module (`country-zz`,
+  ADR-0027) as a Cargo feature and validates the registry at start-up, logging which countries it can
+  serve. The async runtime and HTTP stack enter at the binary layer only — `cargo xtask deps-rule`
+  proves they never reach `pos-core`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
