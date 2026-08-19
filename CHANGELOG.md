@@ -141,6 +141,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   running remainder so the total can never exceed the base. Percentage and fixed-amount actions are
   modeled; combo-price and free-item actions wait for the `decide` slice's menu/line model.
 
+- `pos-core` decision spine (`decide(state, command, ctx) -> Decision`, ADR-0013): the sans-I/O
+  point where a command meets the domain. `DecisionCtx` is the single place a decision reads ambient
+  truth — `now` (read once, a value not a clock), the derived `business_date`, the actor, the granted
+  `PermissionSet`, the `CapabilityContext`, connectivity and currency — so "the clock is read once"
+  and "flags are read through one surface" are structural, not conventional. `decide_line` wires the
+  order-line command family through the state machine (legal transitions), the permission registry (a
+  void-after-fire needs `sales.line.void_fired` **and**, because it is PIN-flagged, a verified PIN),
+  the capability profile (firing by course needs `courses_enabled`), and inventory (a fire's
+  consumption movements). It returns a `#[must_use] LineDecision` carrying the next state, the stock
+  ledger writes, and the post-commit `Effect`s (print a void ticket, recheck availability). Bill,
+  shift and table command families follow the same spine.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
