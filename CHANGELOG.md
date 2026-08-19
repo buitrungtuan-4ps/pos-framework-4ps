@@ -178,6 +178,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   malformed stored hash is never a way in. PINs and hashes are secrets and never logged; only the
   employee id and the outcome are. Adds `argon2` at the binary layer, and a dated `rand_core@0.6`
   deny skip for the salt-generation line argon2 pulls but the edge (verify-only) never uses.
+- `pos-edge` device pairing and discovery (P5, ADR-0030): the edge mints a single-use, five-minute
+  6-digit code from the OS CSPRNG (`getrandom`) and shows the operator a raw-IP pairing URL
+  (`http://<ip>:<port>/pair?code=NNNNNN`) — the discovery path that needs no name resolution; a device
+  redeems the code at `POST /api/pair` for a 128-bit device token. mDNS `pos.local` is a convenience
+  behind an `Advertiser` trait whose real multicast implementation lands with hardware (a
+  `NoopAdvertiser` default ships now, like the printer's placeholder transports). `SystemClock` is the
+  edge's one sanctioned reader of the OS clock (the single place `clippy.toml`'s `SystemTime::now` ban
+  is lifted); everything time-related, including pairing-code expiry, reads it through `ClockSource`,
+  so it is testable against a fixed instant. Config gains an optional `advertised_ip` (the
+  DHCP-pinned LAN IP) for the pairing URL. Pairing codes and device tokens are secrets and never
+  logged.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

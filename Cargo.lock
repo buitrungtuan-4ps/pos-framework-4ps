@@ -811,6 +811,7 @@ dependencies = [
  "argon2",
  "axum",
  "futures-util",
+ "getrandom 0.3.4",
  "http-body-util",
  "pos-core",
  "pos-country",

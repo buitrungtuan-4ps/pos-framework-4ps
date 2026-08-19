@@ -5,8 +5,12 @@
 
 use tokio::net::TcpListener;
 
+use pos_proto::ClockSource;
+
 use crate::config::EdgeConfig;
+use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::error::EdgeError;
+use crate::pairing::pairing_url;
 use crate::state::AppState;
 
 /// Builds the state and router, binds the configured address, and serves until a shutdown signal.
@@ -28,7 +32,35 @@ pub async fn serve(config: EdgeConfig) -> Result<(), EdgeError> {
     tracing::info!(countries = ?countries.country_codes(), "country modules loaded");
 
     let bind = config.bind;
+    let advertised_host = config.advertised_host();
     let state = AppState::new(config);
+
+    // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
+    // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
+    match state.pairing.mint(state.clock.now()) {
+        Ok(code) => {
+            if let Some(host) = advertised_host {
+                tracing::info!(
+                    pairing_url = %pairing_url(host, bind.port(), &code),
+                    "scan or type this to pair a device",
+                );
+            } else {
+                tracing::warn!(
+                    "a device pairs at http://<edge-ip>:{}/pair?code={} — set advertised_ip or read the LAN IP off this machine",
+                    bind.port(),
+                    code.as_str(),
+                );
+            }
+        }
+        Err(_) => {
+            tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
+        }
+    }
+
+    // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
+    // raw-IP pairing URL above still works (ADR-0030).
+    NoopAdvertiser.advertise("pos", bind.port());
+
     let app = crate::http::router(state);
 
     let listener = TcpListener::bind(bind)

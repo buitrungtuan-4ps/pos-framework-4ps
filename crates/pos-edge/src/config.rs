@@ -10,7 +10,7 @@
 //! last-known-good retention ([`docs/roadmap.md`](../../../docs/roadmap.md) P5), layers on top of
 //! this in a later slice.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 
 use pos_proto::ids::StoreId;
@@ -32,13 +32,32 @@ pub struct EdgeConfig {
     /// Which store this machine is. Assigned at activation ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md));
     /// it identifies the event log this edge owns and is not itself PII.
     pub store_id: StoreId,
+    /// The LAN IP to put in the pairing URL ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)),
+    /// pinned by a DHCP reservation. `None` falls back to the bind address when it is a concrete
+    /// interface, and otherwise the operator reads the IP off the console.
+    #[serde(default)]
+    pub advertised_ip: Option<IpAddr>,
 }
 
 impl EdgeConfig {
     /// Builds a configuration directly, for tests and the on-fakes example.
     #[must_use]
     pub fn new(bind: SocketAddr, store_id: StoreId) -> Self {
-        Self { bind, store_id }
+        Self {
+            bind,
+            store_id,
+            advertised_ip: None,
+        }
+    }
+
+    /// The host to advertise in the pairing URL: the configured `advertised_ip`, or the bind IP when
+    /// it names a concrete interface (not `0.0.0.0`/`::`), or `None` when only the operator knows it.
+    #[must_use]
+    pub fn advertised_host(&self) -> Option<IpAddr> {
+        self.advertised_ip.or_else(|| {
+            let ip = self.bind.ip();
+            if ip.is_unspecified() { None } else { Some(ip) }
+        })
     }
 
     /// Parses a configuration from TOML.

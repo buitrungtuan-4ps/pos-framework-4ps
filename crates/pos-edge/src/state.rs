@@ -11,8 +11,10 @@
 
 use std::sync::Arc;
 
+use crate::clock::SystemClock;
 use crate::config::EdgeConfig;
 use crate::fanout::Fanout;
+use crate::pairing::Pairing;
 
 /// Identity the health probe reports: what this binary is and which protocol it speaks. All of it is
 /// compile-time constant, none of it is PII.
@@ -54,16 +56,23 @@ pub struct AppState {
     pub build: BuildInfo,
     /// The store-LAN fan-out every WebSocket subscribes to and every applied decision publishes to.
     pub fanout: Fanout,
+    /// The one sanctioned clock (ADR-0030 needs it for pairing-code expiry; everything time-related
+    /// reads it).
+    pub clock: SystemClock,
+    /// Device pairing state — the live codes and issued device tokens (ADR-0030).
+    pub pairing: Arc<Pairing>,
 }
 
 impl AppState {
-    /// Builds the shared state from a loaded configuration, with a fresh fan-out.
+    /// Builds the shared state from a loaded configuration, with a fresh fan-out and pairing state.
     #[must_use]
     pub fn new(config: EdgeConfig) -> Self {
         Self {
             config: Arc::new(config),
             build: BuildInfo::current(),
             fanout: Fanout::new(),
+            clock: SystemClock,
+            pairing: Arc::new(Pairing::new()),
         }
     }
 }

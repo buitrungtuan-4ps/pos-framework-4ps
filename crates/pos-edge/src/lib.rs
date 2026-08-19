@@ -28,18 +28,24 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod auth;
+pub mod clock;
 pub mod config;
 pub mod countries;
+pub mod discovery;
 pub mod error;
 pub mod fanout;
 pub mod http;
+pub mod pairing;
 pub mod server;
 pub mod state;
 pub mod telemetry;
 
 pub use auth::{Lockout, SignIn};
+pub use clock::SystemClock;
 pub use config::EdgeConfig;
+pub use discovery::{Advertiser, NoopAdvertiser};
 pub use error::EdgeError;
 pub use fanout::{Fanout, ServerMessage};
+pub use pairing::{Code, DeviceToken, Pairing};
 pub use server::serve;
 pub use state::{AppState, BuildInfo};

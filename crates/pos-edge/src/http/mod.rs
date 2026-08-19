@@ -11,10 +11,11 @@
 
 pub mod assets;
 pub mod health;
+pub mod pair;
 pub mod ws;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
@@ -29,6 +30,9 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health::healthz))
         // One WebSocket per device, fed by the fan-out (ADR-0018).
         .route("/ws", get(ws::handler))
+        // Redeem a pairing code for a device token (ADR-0030). The human-facing `/pair?code=` URL is
+        // a GET that falls through to the single-page app, which posts the code here.
+        .route("/api/pair", post(pair::pair))
         // Anything not matched is a UI asset; an unknown path falls back to index.html so a
         // client-routed path (the P6 single-page app) still loads.
         .fallback(assets::serve)
