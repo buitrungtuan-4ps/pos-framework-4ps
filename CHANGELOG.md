@@ -319,6 +319,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   bump is a screen-local acknowledgement until a durable "line made" event exists; ICU i18n with an
   `en` fallback and the no-hardcoded-strings CI check are blocked on ADR-0020; the WCAG-AA audit and
   the per-device layout tuning are part of the visual pass.
+- ADR-0020 and `ui/` i18n (P6): the interface is internationalised. Messages are ICU MessageFormat in
+  per-locale JSON catalogues (`en.json` canonical, `vi.json` a first-pass Vietnamese translation),
+  formatted by `intl-messageformat` over the platform `Intl` (no bundled CLDR data — the embedded
+  Chromium already carries it), with **`en` the enforced fallback** so a missing translation shows
+  English, never a blank. `t(key, args)` reads a reactive locale signal (a language toggle sits in
+  the status bar), and `MessageKey` makes a mistyped key a compile error. **No user-visible string is
+  hardcoded**: `pnpm i18n:lint` parses every `.tsx` with the TypeScript compiler and fails the build
+  on a JSX text node with a letter, or a hardcoded `placeholder`/`title`/`aria-label`/`alt` — proven
+  to fire on a probe. The `ui` CI job runs it, so the seventh standing rule (`AGENTS.md` §2) is now a
+  merge gate for the UI. Accessibility: native focusable controls with a visible focus ring, no
+  meaning by colour alone, `role="alert"` on errors, the document `lang` tracking the locale, and
+  ≥48px touch targets; the numeric WCAG-AA contrast audit of the oklch palette is the remaining
+  visual-pass item. Adds `intl-messageformat` to the UI's dependencies (the Rust backbone is
+  untouched).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

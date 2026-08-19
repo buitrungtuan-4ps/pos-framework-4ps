@@ -2,6 +2,8 @@ import { For, Show, createSignal } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
+import { tableStateKey } from "../i18n/labels";
 import { MENU } from "../lib/menu";
 import { formatMoney } from "../lib/money";
 import { addItem, fire, linesForTable, openBill, tableState } from "../state/store";
@@ -13,13 +15,14 @@ export function Order() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [error, setError] = createSignal<string | null>(null);
+  const label = () => params.id.replace(/^0+/, "") || params.id;
 
   const guard = async (run: () => Promise<void>) => {
     setError(null);
     try {
       await run();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "The store did not respond.");
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
 
@@ -34,10 +37,10 @@ export function Order() {
       <div>
         <div class="mb-3 flex items-center gap-3">
           <a href="/" class="text-sm text-ink-muted no-underline">
-            ← Floor
+            {t("common.back_floor")}
           </a>
-          <h1 class="text-lg font-semibold">Table {params.id.replace(/^0+/, "") || params.id}</h1>
-          <span class="text-sm text-ink-muted">{tableState(params.id).replace("TABLE_STATE_", "").toLowerCase()}</span>
+          <h1 class="text-lg font-semibold">{t("common.table", { label: label() })}</h1>
+          <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
         </div>
 
         <Show when={error()}>
@@ -51,7 +54,7 @@ export function Order() {
         <ul class="flex flex-col gap-2">
           <For
             each={linesForTable(params.id)}
-            fallback={<li class="text-ink-muted">No items yet. Add from the menu.</li>}
+            fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
           >
             {(line) => (
               <li class="flex items-center gap-3 rounded-token border border-line bg-surface p-3">
@@ -59,14 +62,14 @@ export function Order() {
                 <span class="tabular-nums">{formatMoney(line.lineTotal)}</span>
                 <Show
                   when={line.state === "ORDER_LINE_STATE_ADDED"}
-                  fallback={<span class="text-sm text-ok">Fired</span>}
+                  fallback={<span class="text-sm text-ok">{t("order.fired")}</span>}
                 >
                   <button
                     type="button"
                     class="rounded-token bg-accent px-3 py-1 text-accent-ink"
                     onClick={() => void guard(() => fire(line.orderLineId))}
                   >
-                    Fire
+                    {t("order.fire")}
                   </button>
                 </Show>
               </li>
@@ -79,12 +82,12 @@ export function Order() {
           class="mt-4 min-h-touch w-full rounded-token bg-accent px-4 text-lg font-semibold text-accent-ink"
           onClick={() => void takePayment()}
         >
-          Take payment
+          {t("order.take_payment")}
         </button>
       </div>
 
       <aside>
-        <h2 class="mb-2 text-sm font-semibold text-ink-muted">Menu</h2>
+        <h2 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
         <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
           <For each={MENU}>
             {(item) => (

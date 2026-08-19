@@ -1,6 +1,7 @@
 import { Show, createSignal } from "solid-js";
 
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
 import { formatMoney, money, parseWhole } from "../lib/money";
 import { closeShift, countShift, openShift, state } from "../state/store";
 
@@ -20,7 +21,7 @@ export function Shift() {
       await action();
       setAmount("");
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "The store did not respond.");
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
 
@@ -28,7 +29,7 @@ export function Shift() {
 
   return (
     <section class="mx-auto max-w-md p-4">
-      <h1 class="mb-4 text-lg font-semibold">Cash shift</h1>
+      <h1 class="mb-4 text-lg font-semibold">{t("shift.title")}</h1>
 
       <Show when={error()}>
         {(message) => (
@@ -40,7 +41,7 @@ export function Shift() {
 
       <Show when={phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED"}>
         <label class="block text-sm text-ink-muted" for="float">
-          Opening float (đồng)
+          {t("shift.float_label")}
         </label>
         <input
           id="float"
@@ -60,14 +61,14 @@ export function Shift() {
             }
           }}
         >
-          Open shift
+          {t("shift.open")}
         </button>
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_OPEN"}>
-        <p class="text-ink-muted">Shift open. Enter the counted cash to close it — you will see the expected amount only after.</p>
+        <p class="text-ink-muted">{t("shift.open_hint")}</p>
         <label class="mt-3 block text-sm text-ink-muted" for="count">
-          Counted cash (đồng)
+          {t("shift.count_label")}
         </label>
         <input
           id="count"
@@ -88,12 +89,12 @@ export function Shift() {
             }
           }}
         >
-          Enter count
+          {t("shift.enter_count")}
         </button>
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_COUNTED"}>
-        <p class="text-ink-muted">Counted. Close the shift to reveal the variance.</p>
+        <p class="text-ink-muted">{t("shift.counted_hint")}</p>
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
@@ -104,22 +105,29 @@ export function Shift() {
             }
           }}
         >
-          Close &amp; reveal
+          {t("shift.close")}
         </button>
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_CLOSED" && shift()?.variance}>
         {(variance) => (
           <div class="mt-4 rounded-token border border-line bg-surface p-4">
-            <p class="font-semibold">Shift closed</p>
+            <p class="font-semibold">{t("shift.closed")}</p>
             <p class="mt-2 text-ink-muted">
-              Expected <span class="tabular-nums">{formatMoney(shift()?.expected ?? money("VND", 0))}</span>
+              {t("shift.expected")}{" "}
+              <span class="tabular-nums">{formatMoney(shift()?.expected ?? money("VND", 0))}</span>
             </p>
             <p class="text-ink-muted">
-              Counted <span class="tabular-nums">{formatMoney(shift()?.counted ?? money("VND", 0))}</span>
+              {t("shift.counted")}{" "}
+              <span class="tabular-nums">{formatMoney(shift()?.counted ?? money("VND", 0))}</span>
             </p>
-            <p classList={{ "text-danger": variance().amount_minor !== 0, "text-ok": variance().amount_minor === 0 }}>
-              Variance <span class="tabular-nums">{formatMoney(variance())}</span>
+            <p
+              classList={{
+                "text-danger": variance().amount_minor !== 0,
+                "text-ok": variance().amount_minor === 0,
+              }}
+            >
+              {t("shift.variance")} <span class="tabular-nums">{formatMoney(variance())}</span>
             </p>
           </div>
         )}

@@ -2,6 +2,7 @@ import { Show, createSignal } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
+import { t } from "../i18n";
 
 // Pairing a device: the operator reads a six-digit code off the edge and enters it here (or opens
 // the QR link, which lands here with the code pre-filled). Redeeming is single-use; an unknown or
@@ -20,24 +21,24 @@ export function Pairing() {
       await api.pair(code().trim());
       setPaired(true);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "The store did not respond.");
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
 
   return (
     <section class="mx-auto max-w-sm p-4">
-      <h1 class="mb-4 text-lg font-semibold">Pair this device</h1>
+      <h1 class="mb-4 text-lg font-semibold">{t("pair.title")}</h1>
 
       <Show
         when={!paired()}
         fallback={
           <div class="rounded-token border border-line bg-surface p-4">
-            <p class="font-semibold text-ok">Paired</p>
-            <p class="mt-1 text-ink-muted">This device is now trusted by the store.</p>
+            <p class="font-semibold text-ok">{t("pair.paired")}</p>
+            <p class="mt-1 text-ink-muted">{t("pair.paired_hint")}</p>
           </div>
         }
       >
-        <p class="text-ink-muted">Enter the six-digit code shown on the store server.</p>
+        <p class="text-ink-muted">{t("pair.hint")}</p>
         <input
           inputmode="numeric"
           maxLength={6}
@@ -59,7 +60,7 @@ export function Pairing() {
           disabled={code().length !== 6}
           onClick={() => void submit()}
         >
-          Pair
+          {t("pair.submit")}
         </button>
       </Show>
     </section>

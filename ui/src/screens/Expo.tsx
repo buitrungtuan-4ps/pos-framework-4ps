@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 
+import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
 import { firedLines, type KitchenLine } from "../state/store";
 
@@ -41,12 +42,12 @@ export function Expo() {
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-xl font-semibold">Pass</h1>
+      <h1 class="mb-4 text-xl font-semibold">{t("expo.title")}</h1>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <For each={groups()} fallback={<p class="text-ink-muted">Nothing on the pass.</p>}>
+        <For each={groups()} fallback={<p class="text-ink-muted">{t("expo.empty")}</p>}>
           {(group) => (
             <div class="rounded-token border border-line bg-surface-raised p-4">
-              <p class="text-lg font-semibold">Table {group.label}</p>
+              <p class="text-lg font-semibold">{t("common.table", { label: group.label })}</p>
               <ul class="mt-2 flex flex-col gap-1">
                 <For each={group.lines}>{(line) => <li>{line.name}</li>}</For>
               </ul>
@@ -55,14 +56,14 @@ export function Expo() {
                 class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
                 onClick={() => runAway(group.lines)}
               >
-                All away
+                {t("expo.all_away")}
               </button>
             </div>
           )}
         </For>
       </div>
       <Show when={groups().length > 0}>
-        <p class="mt-4 text-sm text-ink-muted">{groups().length} tables on the pass</p>
+        <p class="mt-4 text-sm text-ink-muted">{t("expo.count", { count: groups().length })}</p>
       </Show>
     </section>
   );

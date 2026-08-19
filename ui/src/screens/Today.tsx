@@ -1,13 +1,8 @@
 import { For } from "solid-js";
 
+import { t } from "../i18n";
+import { tableStateKey } from "../i18n/labels";
 import { openBillCount, state, tableCounts } from "../state/store";
-
-const TABLE_LABEL: Record<string, string> = {
-  TABLE_STATE_FREE: "Free",
-  TABLE_STATE_OCCUPIED: "Occupied",
-  TABLE_STATE_AWAITING_PAYMENT: "Awaiting payment",
-  TABLE_STATE_NEEDS_CLEANING: "Needs cleaning",
-};
 
 const ORDER = [
   "TABLE_STATE_FREE",
@@ -21,17 +16,18 @@ const ORDER = [
 // counter.
 export function Today() {
   const counts = () => tableCounts();
-  const shiftState = () => state.shift?.state.replace("SHIFT_STATE_", "").toLowerCase() ?? "none open";
+  const shiftState = () =>
+    state.shift === null ? t("today.no_shift") : state.shift.state.replace("SHIFT_STATE_", "").toLowerCase();
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-lg font-semibold">Today</h1>
+      <h1 class="mb-4 text-lg font-semibold">{t("today.title")}</h1>
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <For each={ORDER}>
           {(key) => (
             <div class="rounded-token border border-line bg-surface p-4">
               <p class="text-2xl font-semibold tabular-nums">{counts()[key] ?? 0}</p>
-              <p class="text-sm text-ink-muted">{TABLE_LABEL[key]}</p>
+              <p class="text-sm text-ink-muted">{t(tableStateKey(key))}</p>
             </div>
           )}
         </For>
@@ -40,11 +36,11 @@ export function Today() {
       <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div class="rounded-token border border-line bg-surface p-4">
           <p class="text-2xl font-semibold tabular-nums">{openBillCount()}</p>
-          <p class="text-sm text-ink-muted">Open bills</p>
+          <p class="text-sm text-ink-muted">{t("today.open_bills")}</p>
         </div>
         <div class="rounded-token border border-line bg-surface p-4">
           <p class="text-2xl font-semibold capitalize">{shiftState()}</p>
-          <p class="text-sm text-ink-muted">Shift</p>
+          <p class="text-sm text-ink-muted">{t("today.shift")}</p>
         </div>
       </div>
     </section>

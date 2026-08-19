@@ -2,14 +2,9 @@ import { For, Show, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
+import { tableStateKey } from "../i18n/labels";
 import { FLOOR, clean, seat, tableState } from "../state/store";
-
-const LABEL: Record<string, string> = {
-  TABLE_STATE_FREE: "Free",
-  TABLE_STATE_OCCUPIED: "Occupied",
-  TABLE_STATE_AWAITING_PAYMENT: "Awaiting payment",
-  TABLE_STATE_NEEDS_CLEANING: "Needs cleaning",
-};
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -39,13 +34,13 @@ export function Floor() {
         navigate(`/table/${tableId}`);
       }
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "The store did not respond.");
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-lg font-semibold">Floor</h1>
+      <h1 class="mb-4 text-lg font-semibold">{t("floor.title")}</h1>
       <Show when={error()}>
         {(message) => (
           <p class="mb-4 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
@@ -63,10 +58,13 @@ export function Floor() {
                 class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left"
                 onClick={() => void onCard(table.id)}
               >
-                <span class="text-xl font-semibold">Table {table.label}</span>
+                <span class="text-xl font-semibold">{t("common.table", { label: table.label })}</span>
                 <span class="inline-flex items-center gap-2 text-sm text-ink-muted">
-                  <span class={`inline-block h-2.5 w-2.5 rounded-full ${DOT[currentState()] ?? "bg-free"}`} aria-hidden="true" />
-                  {LABEL[currentState()] ?? "Free"}
+                  <span
+                    class={`inline-block h-2.5 w-2.5 rounded-full ${DOT[currentState()] ?? "bg-free"}`}
+                    aria-hidden="true"
+                  />
+                  {t(tableStateKey(currentState()))}
                 </span>
               </button>
             );

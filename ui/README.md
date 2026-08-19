@@ -48,12 +48,29 @@ a fresh checkout.
 - `src/lib/` — money (integer minor units, never a float) and the stand-in menu.
 - `src/api/` — the typed client for the edge's routes and the reconnecting `/ws` live link.
 - `src/state/` — the client projection folded from the fan-out.
+- `src/i18n/` — the i18n runtime (ADR-0020): ICU MessageFormat over the platform `Intl`, per-locale
+  JSON catalogues (`en.json` the canonical key list, `vi.json` a first-pass Vietnamese translation),
+  and `t(key, args)` with `en` as the enforced fallback. `MessageKey` makes a mistyped key a type
+  error; the language toggle lives in the status bar.
 - `src/screens/` — floor → order → pay (the primary flow), plus the kitchen display, the pass
   (expo), Today, the cash shift, and pairing. The kitchen and pass take over a dark theme while open
   (`src/lib/screen.ts`), legible at two metres.
 
 Layouts are responsive across phone, tablet and POS terminal from one set of breakpoints, with the
-kitchen and pass on their own dark treatment; the per-device pixel tuning is part of the visual pass.
-Still to come: ICU i18n with an `en` fallback and the no-hardcoded-strings check (blocked on
-ADR-0020), the WCAG-AA audit, and a durable "bump" event so the KDS acknowledgement travels rather
-than being local to one screen.
+kitchen and pass on their own dark treatment.
+
+**i18n.** No user-visible string is hardcoded (ADR-0020): every one goes through `t()`, and
+`pnpm i18n:lint` (a TypeScript-AST scan, run in `pnpm build` and the `ui` CI job) fails the build on
+a JSX text node or a `placeholder`/`title`/`aria-label`/`alt` string that does not. English is the
+always-present fallback; a key missing from `vi.json` renders English rather than a blank. The
+Vietnamese catalogue is a first pass for the store team to refine.
+
+**Accessibility.** Every control is a native focusable element with a visible focus ring; state is
+never conveyed by colour alone (a label rides with every colour); alerts use `role="alert"`; the
+document `lang` follows the locale; touch targets are ≥48px (60px for money and primary actions). The
+one thing to verify with a tool rather than by eye is the exact WCAG-AA contrast ratio of the oklch
+palette — the tokens are designed for high contrast, but the numeric audit is part of the visual
+pass.
+
+Still to come: the per-device pixel tuning, and a durable "bump" event so the KDS acknowledgement
+travels between displays rather than being local to one screen (a domain change, not UI).

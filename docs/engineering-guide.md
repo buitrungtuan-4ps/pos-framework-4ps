@@ -173,6 +173,7 @@ Recorded so far:
 | 0017 | Migrations: forward-only, additive, enforced by a `cargo xtask migrations` gate |
 | 0018 | Edge HTTP/WebSocket stack: axum + tower, a `broadcast` fan-out under 50 ms, the UI embedded with `rust-embed` |
 | 0030 | Edge discovery (QR raw-IP + manual, mDNS behind a trait), single-use pairing code, offline PIN against synced Argon2id hashes with a local lockout |
+| 0020 | i18n runtime: ICU MessageFormat via `@formatjs/intl-messageformat` over the platform `Intl`; `en` is the enforced fallback; a TypeScript-AST lint bans hardcoded user-visible strings |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 

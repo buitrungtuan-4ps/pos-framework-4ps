@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 
+import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
 import { firedLines } from "../state/store";
 
@@ -15,27 +16,24 @@ export function Kds() {
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-xl font-semibold">Kitchen</h1>
+      <h1 class="mb-4 text-xl font-semibold">{t("kds.title")}</h1>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <For
-          each={visible()}
-          fallback={<p class="text-ink-muted">Nothing firing.</p>}
-        >
+        <For each={visible()} fallback={<p class="text-ink-muted">{t("kds.empty")}</p>}>
           {(line) => (
             <button
               type="button"
               class="flex min-h-money flex-col items-start gap-1 rounded-token border border-line bg-surface-raised p-4 text-left"
               onClick={() => bump(line.orderLineId)}
             >
-              <span class="text-sm text-ink-muted">Table {line.tableLabel}</span>
+              <span class="text-sm text-ink-muted">{t("common.table", { label: line.tableLabel })}</span>
               <span class="text-xl font-semibold">{line.name}</span>
-              <span class="mt-1 text-sm text-ink-muted">Tap to bump</span>
+              <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
             </button>
           )}
         </For>
       </div>
       <Show when={visible().length > 0}>
-        <p class="mt-4 text-sm text-ink-muted">{visible().length} firing</p>
+        <p class="mt-4 text-sm text-ink-muted">{t("kds.count", { count: visible().length })}</p>
       </Show>
     </section>
   );

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
 import type { BillResponse, PaymentRequest } from "../api/types";
+import { t } from "../i18n";
 import { formatMoney, money } from "../lib/money";
 import { billTotalMinor, openBill, openBillFor, settle } from "../state/store";
 
@@ -22,7 +23,7 @@ export function Pay() {
       openBill(params.id)
         .then((id) => setBillId(id))
         .catch((caught: unknown) =>
-          setError(caught instanceof ApiError ? caught.message : "Could not open the bill."),
+          setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
         );
     }
   });
@@ -45,7 +46,7 @@ export function Pay() {
     try {
       setDone(await settle(id, payments));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "The store did not respond.");
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
 
@@ -72,17 +73,15 @@ export function Pay() {
   return (
     <section class="mx-auto max-w-xl p-4">
       <a href={`/table/${params.id}`} class="text-sm text-ink-muted no-underline">
-        ← Order
+        {t("common.back_order")}
       </a>
 
       <Show
         when={done()}
         fallback={
           <>
-            <p class="mt-4 text-sm text-ink-muted">Amount due</p>
-            <p class="text-2xl font-semibold tabular-nums">
-              {formatMoney(money("VND", total()))}
-            </p>
+            <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
+            <p class="text-2xl font-semibold tabular-nums">{formatMoney(money("VND", total()))}</p>
 
             <Show when={error()}>
               {(message) => (
@@ -92,7 +91,7 @@ export function Pay() {
               )}
             </Show>
 
-            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">Cash</h2>
+            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
             <div class="grid grid-cols-2 gap-2">
               <For each={quickCash()}>
                 {(amount) => (
@@ -102,13 +101,13 @@ export function Pay() {
                     classList={{ "border-accent": tender() === amount }}
                     onClick={() => setTender(amount)}
                   >
-                    {amount === total() ? "Exact" : formatMoney(money("VND", amount))}
+                    {amount === total() ? t("pay.exact") : formatMoney(money("VND", amount))}
                   </button>
                 )}
               </For>
             </div>
             <p class="mt-2 text-sm text-ink-muted">
-              Change: <span class="tabular-nums">{formatMoney(money("VND", change()))}</span>
+              {t("pay.change")}: <span class="tabular-nums">{formatMoney(money("VND", change()))}</span>
             </p>
 
             <div class="mt-4 flex flex-col gap-2">
@@ -117,14 +116,14 @@ export function Pay() {
                 class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
                 onClick={() => payCash()}
               >
-                Take cash
+                {t("pay.take_cash")}
               </button>
               <button
                 type="button"
                 class="min-h-touch rounded-token border border-line bg-surface"
                 onClick={() => payCard()}
               >
-                Card (exact)
+                {t("pay.card")}
               </button>
             </div>
           </>
@@ -132,22 +131,22 @@ export function Pay() {
       >
         {(bill) => (
           <div class="mt-6 rounded-token border border-line bg-surface p-4">
-            <p class="text-lg font-semibold text-ok">Settled</p>
-            <p class="mt-2">
-              Receipt <span class="font-semibold tabular-nums">#{bill().receipt_number ?? "—"}</span>
+            <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
+            <p class="mt-2 tabular-nums">
+              {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
             </p>
             <p class="mt-1 text-ink-muted">
-              Change: <span class="tabular-nums">{formatMoney(money("VND", change()))}</span>
+              {t("pay.change")}: <span class="tabular-nums">{formatMoney(money("VND", change()))}</span>
             </p>
             <Show when={bill().print_receipt}>
-              <p class="mt-1 text-sm text-ink-muted">Printing receipt…</p>
+              <p class="mt-1 text-sm text-ink-muted">{t("pay.printing")}</p>
             </Show>
             <button
               type="button"
               class="mt-4 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
               onClick={() => navigate("/")}
             >
-              Back to floor
+              {t("pay.back_floor")}
             </button>
           </div>
         )}
