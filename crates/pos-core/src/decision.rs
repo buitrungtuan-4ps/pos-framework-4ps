@@ -30,17 +30,18 @@
 //! [`Permission::VoidFiredLine`]: crate::permission::Permission::VoidFiredLine
 //! [`Capability::Courses`]: crate::capability::Capability::Courses
 
-use pos_proto::OrderLineState;
 use pos_proto::ids::{CourseId, DeviceId, EmployeeId, MenuItemId};
-use pos_proto::money::CurrencyCode;
+use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
 use pos_proto::time::{BusinessDate, Timestamp};
+use pos_proto::{BillState, OrderLineState, ShiftState, TableState};
 
+use crate::billing::{Payment, Settlement};
 use crate::campaign::Connectivity;
 use crate::capability::{Capability, CapabilityContext};
 use crate::error::DomainError;
 use crate::inventory::{RecipeBook, StockMovement, consumption_for_fire};
-use crate::machines::{LineTrigger, OrderLine};
+use crate::machines::{Bill, BillTrigger, LineTrigger, OrderLine, Shift, ShiftTrigger, Table};
 use crate::permission::{Grant, Permission, PermissionSet, require};
 use crate::state_machine::StateMachine;
 
@@ -110,6 +111,12 @@ pub enum Effect {
     /// Recompute availability and, if an item crossed its threshold, auto-86 it and tell the
     /// marketplaces (§8).
     RecheckAvailability,
+    /// Print the guest's receipt after a bill settles.
+    PrintReceipt,
+    /// Print a void slip when a whole bill is voided (§11's audit trail).
+    PrintVoidBillSlip,
+    /// Print the shift report when a shift closes.
+    PrintShiftReport,
 }
 
 /// The outcome of an order-line command: the next state, the inventory ledger to append, and the
@@ -243,19 +250,236 @@ fn transition_only(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Bill
+// ---------------------------------------------------------------------------
+
+/// The outcome of a bill command: the next state, the settlement it proved (if any), and effects.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillDecision {
+    /// The bill's state after the command.
+    pub next_state: BillState,
+    /// The proven settlement, present only for a successful `Settle`.
+    pub settlement: Option<Settlement>,
+    /// Effects to run after the events commit.
+    pub effects: Vec<Effect>,
+}
+
+/// A command against one bill.
+#[derive(Debug, Clone)]
+pub enum BillCommand {
+    /// Settle the bill: prove the payments sum to `total_due` (ADR-0028) and close it.
+    Settle {
+        /// The amount owed, as [`billing::assemble`](crate::billing::assemble) computed it.
+        total_due: Money,
+        /// The payments applied.
+        payments: Vec<Payment>,
+        /// The tips taken — a separate ledger, never part of `total_due`.
+        tips: Vec<Money>,
+    },
+    /// Void the whole bill. Needs [`Permission::VoidBill`], which is PIN-flagged.
+    Void {
+        /// Whether the edge has collected and verified the actor's PIN.
+        pin_verified: bool,
+    },
+}
+
+/// Decides a bill command against the bill's current state.
+///
+/// Settling proves the settlement invariant through [`billing::settle`](crate::billing::settle) —
+/// it is ordinary cashier work and gated by no special permission, but the payments must sum exactly
+/// to `total_due` or it is refused. Voiding a whole bill is fraud-sensitive: it needs
+/// [`Permission::VoidBill`] and, because that permission is PIN-flagged, a verified PIN.
+///
+/// # Errors
+///
+/// - [`DomainError::Transition`] if the command is not legal from `current` (a settled bill is
+///   terminal — a post-settlement refund is a new signed movement, ADR-0028, not a transition here).
+/// - [`DomainError::PaymentsDoNotSumToTotal`] / [`DomainError::NegativeChange`] / [`DomainError::Empty`]
+///   from the settlement invariant.
+/// - [`DomainError::PermissionDenied`] if a bill void is not granted or its PIN was not verified.
+pub fn decide_bill(
+    current: BillState,
+    command: BillCommand,
+    ctx: &DecisionCtx,
+) -> Result<BillDecision, DomainError> {
+    match command {
+        BillCommand::Settle {
+            total_due,
+            payments,
+            tips,
+        } => {
+            let next_state = Bill::step(current, BillTrigger::Settle)?;
+            let settlement = crate::billing::settle(total_due, &payments, &tips)?;
+            Ok(BillDecision {
+                next_state,
+                settlement: Some(settlement),
+                effects: vec![Effect::PrintReceipt],
+            })
+        }
+        BillCommand::Void { pin_verified } => {
+            let next_state = Bill::step(current, BillTrigger::Void)?;
+            let grant = ctx.require(Permission::VoidBill)?;
+            if grant.pin_required && !pin_verified {
+                return Err(DomainError::PermissionDenied {
+                    permission: Permission::VoidBill.meta().id,
+                });
+            }
+            Ok(BillDecision {
+                next_state,
+                settlement: None,
+                effects: vec![Effect::PrintVoidBillSlip],
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shift
+// ---------------------------------------------------------------------------
+
+/// The outcome of a shift command.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShiftDecision {
+    /// The shift's state after the command.
+    pub next_state: ShiftState,
+    /// Effects to run after the events commit.
+    pub effects: Vec<Effect>,
+}
+
+/// A command against a cash shift. The close flow is **blind** (§11.1): the count is entered without
+/// the domain revealing the expected amount, so there is no "count until it matches".
+#[derive(Debug, Clone, Copy)]
+pub enum ShiftCommand {
+    /// Enter the blind count, moving the shift to counted. `counted_minor` is what was physically
+    /// counted; the decision does not compare it to the expected total — that variance is computed
+    /// elsewhere, after the fact.
+    Count {
+        /// The counted cash, in minor units.
+        counted_minor: i64,
+    },
+    /// Close the counted shift.
+    Close,
+}
+
+/// Decides a shift command. Both counting and closing are the close flow and need
+/// [`Permission::CloseShift`]; the count is blind, so this returns no expected amount or variance.
+///
+/// # Errors
+///
+/// - [`DomainError::Transition`] if the command is not legal from `current`.
+/// - [`DomainError::PermissionDenied`] if closing is not granted.
+pub fn decide_shift(
+    current: ShiftState,
+    command: ShiftCommand,
+    ctx: &DecisionCtx,
+) -> Result<ShiftDecision, DomainError> {
+    ctx.require(Permission::CloseShift)?;
+    match command {
+        ShiftCommand::Count { counted_minor } => {
+            // The counted figure is recorded on the event by the caller; the decision deliberately
+            // does not read or return the expected total, which is what makes the close blind.
+            let _ = counted_minor;
+            let next_state = Shift::step(current, ShiftTrigger::Count)?;
+            Ok(ShiftDecision {
+                next_state,
+                effects: Vec::new(),
+            })
+        }
+        ShiftCommand::Close => {
+            let next_state = Shift::step(current, ShiftTrigger::Close)?;
+            Ok(ShiftDecision {
+                next_state,
+                effects: vec![Effect::PrintShiftReport],
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Table
+// ---------------------------------------------------------------------------
+
+/// The outcome of a table command.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableDecision {
+    /// The table's state after the command.
+    pub next_state: TableState,
+    /// Effects to run after the events commit.
+    pub effects: Vec<Effect>,
+}
+
+/// A command against a table. Every one requires the `tables_enabled` capability — a counter or
+/// retail store has no floor to seat (§10).
+#[derive(Debug, Clone, Copy)]
+pub enum TableCommand {
+    /// Seat guests: free → occupied.
+    Seat,
+    /// Request the bill: occupied → awaiting payment.
+    RequestBill,
+    /// The bill settled: awaiting payment → needs cleaning.
+    Settle,
+    /// Clean down: needs cleaning → free.
+    Clean,
+}
+
+impl TableCommand {
+    /// The state-machine trigger this command applies.
+    const fn trigger(self) -> crate::machines::TableTrigger {
+        use crate::machines::TableTrigger;
+        match self {
+            Self::Seat => TableTrigger::Seat,
+            Self::RequestBill => TableTrigger::RequestBill,
+            Self::Settle => TableTrigger::Settle,
+            Self::Clean => TableTrigger::Clean,
+        }
+    }
+}
+
+/// Decides a table command. Gated wholesale by the `tables_enabled` capability; the transitions
+/// themselves are the routine floor cycle and need no permission.
+///
+/// # Errors
+///
+/// - [`DomainError::CapabilityDisabled`] if `tables_enabled` is off.
+/// - [`DomainError::Transition`] if the command is not legal from `current`.
+pub fn decide_table(
+    current: TableState,
+    command: TableCommand,
+    ctx: &DecisionCtx,
+) -> Result<TableDecision, DomainError> {
+    ctx.require_capability(Capability::Tables)?;
+    let next_state = Table::step(current, command.trigger())?;
+    Ok(TableDecision {
+        next_state,
+        effects: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Actor, DecisionCtx, Effect, LineCommand, decide_line};
+    use super::{
+        Actor, BillCommand, DecisionCtx, Effect, LineCommand, ShiftCommand, TableCommand,
+        decide_bill, decide_line, decide_shift, decide_table,
+    };
+    use crate::billing::Payment;
     use crate::campaign::Connectivity;
     use crate::capability::{Capability, CapabilityContext};
     use crate::error::DomainError;
     use crate::inventory::{Recipe, RecipeBook, RecipeLine};
     use crate::permission::{Permission, PermissionSet};
     use pos_proto::ids::{CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId};
-    use pos_proto::money::CurrencyCode;
+    use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::quantity::Quantity;
     use pos_proto::time::{BusinessDate, Timestamp};
-    use pos_proto::{OrderLineState, Ulid};
+    use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState, Ulid};
+
+    fn vnd(amount: i64) -> Money {
+        Money::new(CurrencyCode::VND, amount)
+    }
 
     fn menu_item(n: u128) -> MenuItemId {
         MenuItemId::new(Ulid::from_u128(n))
@@ -444,5 +668,208 @@ mod tests {
         .expect("cancel");
         assert_eq!(decision.next_state, OrderLineState::Voided);
         assert!(decision.effects.is_empty());
+    }
+
+    // ---- Bill ----
+
+    fn cash(amount: i64) -> Payment {
+        Payment {
+            method: PaymentMethod::Cash,
+            tendered: vnd(amount),
+            applied_to_bill: vnd(amount),
+        }
+    }
+
+    #[test]
+    fn settling_a_bill_proves_the_invariant_and_prints_a_receipt() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let decision = decide_bill(
+            BillState::Open,
+            BillCommand::Settle {
+                total_due: vnd(100_000),
+                payments: vec![cash(100_000)],
+                tips: Vec::new(),
+            },
+            &ctx,
+        )
+        .expect("settles");
+        assert_eq!(decision.next_state, BillState::Settled);
+        assert!(decision.effects.contains(&Effect::PrintReceipt));
+        assert!(decision.settlement.is_some());
+    }
+
+    #[test]
+    fn a_bill_that_does_not_sum_is_refused() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::Settle {
+                    total_due: vnd(100_000),
+                    payments: vec![cash(90_000)],
+                    tips: Vec::new(),
+                },
+                &ctx,
+            ),
+            Err(DomainError::PaymentsDoNotSumToTotal { .. })
+        ));
+    }
+
+    #[test]
+    fn voiding_a_bill_needs_the_permission_and_a_pin() {
+        // Not granted → denied.
+        let bare_ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::Void { pin_verified: true },
+                &bare_ctx,
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.bill.void"
+            })
+        ));
+
+        // Granted but no PIN → denied.
+        let granted = ctx_with(
+            PermissionSet::EMPTY.with(Permission::VoidBill),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::Void {
+                    pin_verified: false
+                },
+                &granted,
+            ),
+            Err(DomainError::PermissionDenied { .. })
+        ));
+
+        // Granted with PIN → voided, prints a slip.
+        let decision = decide_bill(
+            BillState::Open,
+            BillCommand::Void { pin_verified: true },
+            &granted,
+        )
+        .expect("voids");
+        assert_eq!(decision.next_state, BillState::Voided);
+        assert!(decision.effects.contains(&Effect::PrintVoidBillSlip));
+    }
+
+    #[test]
+    fn a_settled_bill_cannot_settle_again() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_bill(
+                BillState::Settled,
+                BillCommand::Settle {
+                    total_due: vnd(100_000),
+                    payments: vec![cash(100_000)],
+                    tips: Vec::new(),
+                },
+                &ctx,
+            ),
+            Err(DomainError::Transition(_))
+        ));
+    }
+
+    // ---- Shift ----
+
+    #[test]
+    fn the_close_flow_needs_the_close_permission() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_shift(
+                ShiftState::Open,
+                ShiftCommand::Count {
+                    counted_minor: 1_000_000
+                },
+                &ctx,
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "cash.shift.close"
+            })
+        ));
+    }
+
+    #[test]
+    fn a_blind_count_then_close_moves_the_shift() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::CloseShift),
+            CapabilityContext::NONE,
+        );
+        let counted = decide_shift(
+            ShiftState::Open,
+            ShiftCommand::Count {
+                counted_minor: 1_000_000,
+            },
+            &ctx,
+        )
+        .expect("counts");
+        assert_eq!(counted.next_state, ShiftState::Counted);
+        // Blind: no expected/variance is surfaced — the decision carries no such field at all.
+        assert!(counted.effects.is_empty());
+
+        let closed = decide_shift(ShiftState::Counted, ShiftCommand::Close, &ctx).expect("closes");
+        assert_eq!(closed.next_state, ShiftState::Closed);
+        assert!(closed.effects.contains(&Effect::PrintShiftReport));
+    }
+
+    #[test]
+    fn closing_an_open_uncounted_shift_is_refused() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::CloseShift),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_shift(ShiftState::Open, ShiftCommand::Close, &ctx),
+            Err(DomainError::Transition(_))
+        ));
+    }
+
+    // ---- Table ----
+
+    #[test]
+    fn table_commands_need_the_tables_capability() {
+        let no_tables = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_table(TableState::Free, TableCommand::Seat, &no_tables),
+            Err(DomainError::CapabilityDisabled {
+                capability: "tables_enabled"
+            })
+        ));
+    }
+
+    #[test]
+    fn the_table_cycle_runs_free_to_free() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY,
+            CapabilityContext::NONE.with(Capability::Tables),
+        );
+        let occupied = decide_table(TableState::Free, TableCommand::Seat, &ctx).expect("seat");
+        assert_eq!(occupied.next_state, TableState::Occupied);
+        let awaiting =
+            decide_table(TableState::Occupied, TableCommand::RequestBill, &ctx).expect("request");
+        assert_eq!(awaiting.next_state, TableState::AwaitingPayment);
+        let cleaning =
+            decide_table(TableState::AwaitingPayment, TableCommand::Settle, &ctx).expect("settle");
+        assert_eq!(cleaning.next_state, TableState::NeedsCleaning);
+        let free =
+            decide_table(TableState::NeedsCleaning, TableCommand::Clean, &ctx).expect("clean");
+        assert_eq!(free.next_state, TableState::Free);
+    }
+
+    #[test]
+    fn an_out_of_order_table_command_is_refused() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY,
+            CapabilityContext::NONE.with(Capability::Tables),
+        );
+        // Cannot clean a free table.
+        assert!(matches!(
+            decide_table(TableState::Free, TableCommand::Clean, &ctx),
+            Err(DomainError::Transition(_))
+        ));
     }
 }

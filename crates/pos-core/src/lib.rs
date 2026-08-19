@@ -46,7 +46,11 @@ pub mod state_machine;
 pub use business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 pub use campaign::{AppliedCampaign, Campaign, CampaignKind, Timing, evaluate};
 pub use capability::{Capability, CapabilityContext};
-pub use decision::{Actor, DecisionCtx, Effect, LineCommand, LineDecision, decide_line};
+pub use decision::{
+    Actor, BillCommand, BillDecision, DecisionCtx, Effect, LineCommand, LineDecision, ShiftCommand,
+    ShiftDecision, TableCommand, TableDecision, decide_bill, decide_line, decide_shift,
+    decide_table,
+};
 pub use error::DomainError;
 pub use inventory::{Availability, Recipe, RecipeBook, StockProjection};
 pub use permission::{Grant, Permission, PermissionSet, Role, require};

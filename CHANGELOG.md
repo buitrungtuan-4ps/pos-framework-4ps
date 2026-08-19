@@ -150,8 +150,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   void-after-fire needs `sales.line.void_fired` **and**, because it is PIN-flagged, a verified PIN),
   the capability profile (firing by course needs `courses_enabled`), and inventory (a fire's
   consumption movements). It returns a `#[must_use] LineDecision` carrying the next state, the stock
-  ledger writes, and the post-commit `Effect`s (print a void ticket, recheck availability). Bill,
-  shift and table command families follow the same spine.
+  ledger writes, and the post-commit `Effect`s (print a void ticket, recheck availability).
+
+- `pos-core` decision spine — the remaining command families. `decide_bill` settles a bill through
+  `billing::settle` (the invariant is proven or the command refused) and voids one behind
+  `billing.bill.void` + PIN; `decide_shift` runs the **blind** close (§11.1) — the count is recorded
+  without the decision revealing the expected total — behind `cash.shift.close`; `decide_table`
+  drives the floor cycle (seat → request bill → settle → clean) gated wholesale by the
+  `tables_enabled` capability. All four aggregates (line, bill, shift, table) now share one
+  `DecisionCtx`/`Effect` spine, so the `decide(state, command, ctx) -> Decision` orchestration is
+  complete across the P3 lifecycles.
 
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to

@@ -237,6 +237,25 @@ in CI; the state tables exhaustively tested with no reachable undefined state an
 path; permission catalogue snapshot committed and the matrix generated; zero I/O
 dependencies; the whole suite runs in seconds with fakes.
 
+**Done** — `fa4dab5` (ADRs 0025/0028/0029), `b77d3aa` (state machines), `eea10a7` (billing),
+`28ded52` (permissions), `1acdfe1` (capabilities), `9f24c72` (business date), `c51420c`
+(inventory), `ded929f` (campaigns), `9f078fe` + the bill/shift/table follow-up (`decide`
+spine). Every exit criterion is met: the split and settlement laws are property-tested; the
+five machines are checked by exhaustive enumeration; `docs/snapshots/permissions.txt` and the
+generated `docs/permissions.md` are committed; `pos-core` has zero I/O in its dependency
+closure (proven by `deps-rule`); the suite runs in well under a second on fakes. `decide` now
+covers all four lifecycles — line, bill, shift, table.
+
+Three items named in the prose above are deliberately carried to the phase that holds their
+prerequisite, not skipped: **ICU translation runtime** with plural handling is ADR-0020, which
+lands with the string runtime the UI needs (P6) — the `TranslationKey` type and the `en`
+fallback rule already exist in `pos-proto`; **gapless receipt-number allocation** is ADR-0025's
+`store_server` authority, mechanised in the edge SQLite schema where the counter and
+`uq_bills_store_id_receipt_number` live (P4); and **retaining both versions of a
+last-writer-wins line** is storage, so it lands with that schema too (P4). The merge *rule*
+itself (ADR-0029) is done and exhaustively tested. Seat-level split and combo-price/free-item
+campaign actions wait for the fuller order/line model that P4+ carries.
+
 ### Stage III — The store sells
 
 #### P4 · Edge schema and adapters — *L*
