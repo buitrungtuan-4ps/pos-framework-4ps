@@ -170,6 +170,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `bill_id` — a retry after a crash reuses the number rather than skipping one — and survives
   reopening the database. This is the store's receipt number, never a legal invoice number (the
   country module's, from a pre-allocated range); the two are deliberately never conflated.
+- `pos-edge` offline PIN authentication (P5, ADR-0030): `auth::verify_pin` checks a PIN against a
+  cloud-synced Argon2id PHC hash with no network, and `auth::Lockout` is the five-failure/five-minute
+  lockout — a pure state machine over `(employee, verified, now)`, so the window is unit-tested in
+  microseconds against a fixed clock rather than by waiting. A correct PIN while locked out is still
+  refused (the lockout must be served); the window lifts and the count resets after five minutes; a
+  malformed stored hash is never a way in. PINs and hashes are secrets and never logged; only the
+  employee id and the outcome are. Adds `argon2` at the binary layer, and a dated `rand_core@0.6`
+  deny skip for the salt-generation line argon2 pulls but the edge (verify-only) never uses.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

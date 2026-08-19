@@ -55,6 +55,11 @@ rust-embed = { version = "8", features = ["mime-guess", "debug-embed"] }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
+# Offline user authentication (ADR-0030): PIN verified against cloud-synced
+# Argon2id hashes. Default features only ("password-hash"); salt generation is
+# not needed at the edge, which only verifies.
+argon2 = "0.5"
+
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

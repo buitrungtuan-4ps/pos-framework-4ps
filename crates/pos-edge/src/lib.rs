@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
+pub mod auth;
 pub mod config;
 pub mod countries;
 pub mod error;
@@ -36,6 +37,7 @@ pub mod server;
 pub mod state;
 pub mod telemetry;
 
+pub use auth::{Lockout, SignIn};
 pub use config::EdgeConfig;
 pub use error::EdgeError;
 pub use fanout::{Fanout, ServerMessage};

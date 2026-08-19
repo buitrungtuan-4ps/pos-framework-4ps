@@ -79,6 +79,10 @@ skip = [
     # build-time proc-macros — none is linked into a shipped binary — so this is a
     # compile-time duplicate only. review: 2026-11-19
     { crate = "syn@2", reason = "build-time proc-macro; ecosystem mid-migration from syn 2 to syn 3" },
+    # rand_core straddles 0.6 -> 0.9: password-hash (via argon2) pulls 0.6 for the salt generation
+    # the edge never uses — it only verifies PINs — while tungstenite's WebSocket frame masking pulls
+    # 0.9. Skipping the 0.6 line leaves 0.9 unique. review: 2026-11-19
+    { crate = "rand_core@0.6", reason = "argon2/password-hash's salt-generation line, unused at the edge" },
 ]
 skip-tree = [
     # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed
