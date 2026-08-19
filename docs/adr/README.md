@@ -27,5 +27,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0025](0025-receipt-number-authority.md) | Receipt number gapless only while one store authority is reachable; authority is configuration | Accepted |
 | [0028](0028-settlement-and-payment-invariant.md) | What "payments sum to the bill" means; tendered vs applied, tips a separate ledger, explicit rounding | Accepted |
 | [0029](0029-append-command-merge-semantics.md) | Line merge: terminal states win, other fields last-writer-wins on (event_time, device_id) | Accepted |
+| [0015](0015-sqlite-access.md) | SQLite at the edge: `rusqlite` behind one single-writer thread | Accepted |
+| [0017](0017-migrations.md) | Migrations: forward-only, additive, enforced by an `xtask` gate | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

@@ -81,6 +81,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
   tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
 
+- ADR-0015 (SQLite access at the edge: `rusqlite` behind one dedicated single-writer thread, bridging
+  blocking SQLite into the async `EventStore`/`ConfigStore` ports over a channel, so gapless outbox
+  positioning and `TxContext`-by-shape fall out for free) and ADR-0017 (migrations: forward-only,
+  additive, numbered SQL files with a tiny runner and a `cargo xtask migrations` gate that refuses
+  editing a shipped migration or a destructive statement). Both block P4 and are merged ahead of the
+  `store-sqlite` code they govern.
+
 - `pos-core` permission registry (`pos-spec.md` §9): a **fixed catalogue** of 24 permissions declared
   through one `permissions!` macro, so a new permission is a single entry that cannot omit its group,
   risk, PIN flag, default roles or description — the enum, its `ALL`, and `Permission::meta` all

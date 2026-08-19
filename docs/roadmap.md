@@ -108,9 +108,9 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 |---|---|---|---|
 | 0013 | **Async strategy across the boundary** — sans-I/O synchronous `pos-core` vs async ports; native `async fn` in trait vs `async-trait`; how multi-vendor families dispatch when AFIT blocks `dyn`. | P2 | **Merged** |
 | 0014 | Date/time and timezone library (business-date derivation, DST at the cutoff hour). | P1 | **Merged** |
-| 0015 | SQLite access strategy — `rusqlite` + a dedicated single-writer thread vs `sqlx`. | P4 | Open |
+| 0015 | SQLite access strategy — `rusqlite` + a dedicated single-writer thread vs `sqlx`. | P4 | **Merged** |
 | 0016 | PostgreSQL access crate — `sqlx` (compile-time checked, needs a build-time DB or offline cache) vs `tokio-postgres` + pool. | P7 | Open |
-| 0017 | Migration tooling for both tiers, plus how additive-only is enforced. | P4 | Open |
+| 0017 | Migration tooling for both tiers, plus how additive-only is enforced. | P4 | **Merged** |
 | 0018 | HTTP/WebSocket stack (axum + tower) and UI embedding. | P5 | Open |
 | 0019 | OpenAPI generation from code (generated, never transcribed). | P7 | Open |
 | 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | Open |

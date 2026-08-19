@@ -169,6 +169,8 @@ Recorded so far:
 | 0025 | Receipt-number authority is configuration; gapless only while one store authority is reachable |
 | 0028 | Settlement and payment invariant: tendered vs applied, tips separate, explicit rounding, tax per class |
 | 0029 | Append-command merge: terminal states win, other fields last-writer-wins on (event_time, device_id) |
+| 0015 | SQLite access at the edge: `rusqlite` behind a dedicated single-writer thread |
+| 0017 | Migrations: forward-only, additive, enforced by a `cargo xtask migrations` gate |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 
