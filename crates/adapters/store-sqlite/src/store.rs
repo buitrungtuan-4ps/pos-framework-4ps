@@ -14,7 +14,7 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, EventId, StoreId};
+use pos_proto::ids::{BillId, ConfigVersionId, EventId, StoreId};
 
 use crate::migrations;
 use crate::tx::SqliteTx;
@@ -67,6 +67,35 @@ impl SqliteStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.inner.path
+    }
+
+    /// Allocates the next gapless receipt number for a bill (ADR-0025, the `store_server`
+    /// authority).
+    ///
+    /// Idempotent by `bill_id`: allocating twice for one bill returns the same number and does not
+    /// advance the counter, so a crash between allocating and appending the `billing.bill.settled`
+    /// event reuses the number rather than skipping one. Gapless while this single store authority
+    /// is reachable, because every allocation serialises through the one writer thread.
+    ///
+    /// This is the store's own receipt number, **never** a legal invoice number — that is the
+    /// country module's, issued from a pre-allocated range, and the two must never be conflated.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the allocation fails.
+    pub async fn allocate_receipt_number(
+        &self,
+        store_id: StoreId,
+        bill_id: BillId,
+    ) -> Result<u64, PortError> {
+        self.ask(PortName::EventStore, move |reply| {
+            Command::AllocateReceipt {
+                store_id,
+                bill_id,
+                reply,
+            }
+        })
+        .await
     }
 
     /// Sends a command to the writer thread and awaits its reply.

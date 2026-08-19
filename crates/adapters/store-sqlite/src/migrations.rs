@@ -16,7 +16,10 @@ use rusqlite::Connection;
 
 /// Every migration, in order, embedded at build time. A new schema change appends a `(version, sql)`
 /// pair pointing at a new file — the existing entries are never edited.
-const MIGRATIONS: &[(u32, &str)] = &[(1, include_str!("../migrations/0001_event_store.sql"))];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, include_str!("../migrations/0001_event_store.sql")),
+    (2, include_str!("../migrations/0002_receipt_counter.sql")),
+];
 
 /// Applies every migration the database has not yet seen.
 ///

@@ -151,6 +151,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `#[non_exhaustive]` with an internal `type` tag, so a client dispatches on one field and tolerates
   message kinds added later. An integration test binds a real port and proves a published event
   reaches one connected device, and that two devices on one table both receive the same change.
+- `store-sqlite` gapless receipt numbers (P5, ADR-0025): the `store_server` authority. A new
+  additive migration (`0002_receipt_counter.sql`) adds a per-store counter and a per-bill allocation
+  table, and `SqliteStore::allocate_receipt_number` hands out the next number in one `IMMEDIATE`
+  transaction. Because every allocation funnels through the one writer thread, the sequence is
+  gapless and collision-free even when two cashier devices settle at once; a test drives 200
+  concurrent allocations and asserts the result is exactly `1..=200`. Allocation is idempotent by
+  `bill_id` — a retry after a crash reuses the number rather than skipping one — and survives
+  reopening the database. This is the store's receipt number, never a legal invoice number (the
+  country module's, from a pre-allocated range); the two are deliberately never conflated.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

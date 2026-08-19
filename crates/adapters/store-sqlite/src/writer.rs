@@ -18,7 +18,7 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigUpdate};
 use pos_ports::event_store::{OutboxPosition, OutboxRecord};
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{EventId, StoreId};
+use pos_proto::ids::{BillId, EventId, StoreId};
 
 /// How many undelivered events the store holds before pushing back — mirrors the fake, so
 /// back-pressure behaves identically in tests and in the field.
@@ -72,6 +72,12 @@ pub(crate) enum Command {
     LastKnownGood {
         store_id: StoreId,
         reply: oneshot::Sender<Result<Option<ConfigSnapshot>, PortError>>,
+    },
+    /// Allocate (or return the already-allocated) gapless receipt number for a bill.
+    AllocateReceipt {
+        store_id: StoreId,
+        bill_id: BillId,
+        reply: oneshot::Sender<Result<u64, PortError>>,
     },
 }
 
@@ -127,6 +133,13 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             }
             Command::LastKnownGood { store_id, reply } => {
                 let _ = reply.send(snapshot(&conn, "config_last_known_good", store_id));
+            }
+            Command::AllocateReceipt {
+                store_id,
+                bill_id,
+                reply,
+            } => {
+                let _ = reply.send(allocate_receipt(&mut conn, store_id, bill_id));
             }
         }
     }
@@ -317,6 +330,71 @@ fn outbox_depth(conn: &Connection, store_id: StoreId) -> Result<u64, PortError> 
         )
         .map_err(|error| db_error(port, error))?;
     Ok(u64::try_from(depth).unwrap_or(u64::MAX))
+}
+
+/// Allocates the next gapless receipt number for a bill, or returns the one it already has
+/// (ADR-0025, `store_server` authority).
+///
+/// One `IMMEDIATE` transaction does the whole read-modify-write, so concurrent allocations — which
+/// all funnel through this one writer thread anyway — cannot interleave: the sequence is gapless and
+/// collision-free. Idempotency is the `receipt_allocations` row: a bill that already has a number
+/// gets it back without advancing the counter, so retrying a settle after a crash reuses the number
+/// rather than skipping one.
+fn allocate_receipt(
+    conn: &mut Connection,
+    store_id: StoreId,
+    bill_id: BillId,
+) -> Result<u64, PortError> {
+    let port = PortName::EventStore;
+    let store = store_id.to_string();
+    let bill = bill_id.to_string();
+
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error(port, error))?;
+
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT receipt_number FROM receipt_allocations WHERE store_id = ?1 AND bill_id = ?2",
+            params![store, bill],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+
+    let number = if let Some(number) = existing {
+        number
+    } else {
+        // Ensure a counter row (starting at 1), read the number it will hand out, advance it, and
+        // record the allocation — all inside this transaction, so a rollback consumes nothing.
+        tx.execute(
+            "INSERT INTO receipt_counter (store_id, next_number) VALUES (?1, 1)
+             ON CONFLICT (store_id) DO NOTHING",
+            params![store],
+        )
+        .map_err(|error| db_error(port, error))?;
+        let allocated: i64 = tx
+            .query_row(
+                "SELECT next_number FROM receipt_counter WHERE store_id = ?1",
+                params![store],
+                |row| row.get(0),
+            )
+            .map_err(|error| db_error(port, error))?;
+        tx.execute(
+            "UPDATE receipt_counter SET next_number = next_number + 1 WHERE store_id = ?1",
+            params![store],
+        )
+        .map_err(|error| db_error(port, error))?;
+        tx.execute(
+            "INSERT INTO receipt_allocations (store_id, bill_id, receipt_number) VALUES (?1, ?2, ?3)",
+            params![store, bill, allocated],
+        )
+        .map_err(|error| db_error(port, error))?;
+        allocated
+    };
+
+    tx.commit().map_err(|error| db_error(port, error))?;
+    Ok(u64::try_from(number).unwrap_or(0))
 }
 
 fn snapshot(
