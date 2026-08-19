@@ -26,8 +26,13 @@ async fn main() -> Result<(), EdgeError> {
     // The real edge stores events in SQLite (ADR-0015); the example uses the in-memory fakes.
     let store = SqliteStore::open(&config.store_path).map_err(EdgeError::Store)?;
     let identity = StoreIdentity::for_store(config.store_id);
-    let edge =
-        Arc::new(Edge::new(store, identity, EdgeSession::bootstrap()).map_err(EdgeError::Entropy)?);
+    // The store's own writer thread is the gapless receipt authority (ADR-0025); a clone shares it,
+    // so the loop that appends the settled event and the authority that numbers it are one store.
+    let receipts = Arc::new(store.clone());
+    let edge = Arc::new(
+        Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
+            .map_err(EdgeError::Entropy)?,
+    );
 
     serve(config, edge).await
 }

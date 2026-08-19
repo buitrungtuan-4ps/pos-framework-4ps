@@ -240,6 +240,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   already-fired line is refused by the state machine; adding to an unseated table is refused. The
   `commit_and_publish` half of the loop is now generic, shared by every command. The bootstrap
   session carries an empty `RecipeBook` (an unrecipe'd item consumes nothing) until P7.
+- `pos-edge` bill flow (P5, ADR-0025/ADR-0028): `Edge::open_bill` opens a bill on the order a table
+  holds (`billing.bill.opened`) and moves the table to awaiting payment; `Edge::settle_bill`
+  assembles what is owed from the order's captured line totals (`billing::assemble`, tax per
+  tax-class subtotal), proves the payments sum **exactly** to it (`decide_bill` → `billing::settle`),
+  allocates the gapless per-store receipt number for that bill, then appends
+  `billing.bill.settled` carrying the number and the subtotal/reduction/service-charge/tax/rounding
+  breakdown, and cycles the table to needs-cleaning. A split tender (cash + card) that sums to the
+  total settles; an underpayment, a second settle, and a bill on an unseated table are each refused.
+  The `Effect::PrintReceipt` is returned on the `BillView` for the caller to run after commit — the
+  edge holds no printer, so a rolled-back settle prints nothing.
+- `receipt::ReceiptAuthority` (P5, ADR-0025): the gapless receipt-number authority is injected into
+  the generic `Edge<S>` rather than derived from its store type. The real binary passes the
+  `SqliteStore` itself (its single writer thread is the authority); `receipt::InMemoryReceipts` is the
+  same gapless, bill-idempotent contract without a database, for the example and the engine tests.
+  This is the store's receipt number, never a legal invoice number.
+- `EdgeSession` now carries the store's channel-keyed `TaxRateTable` and default `SalesChannel` (D6),
+  so a bill assembles a real total offline. The bootstrap rates one standard class
+  (`EdgeSession::standard_tax_class`) at 10% dine-in until the cloud config tree (P7) supplies the
+  menu's classes; Vietnam v1's single rate is a special case of the same two-dimensional table.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

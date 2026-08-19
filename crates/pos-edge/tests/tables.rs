@@ -12,7 +12,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pos_edge::{Edge, EdgeSession, StoreIdentity};
+use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::FakeStore;
 use pos_proto::ids::{StoreId, TableId};
 use pos_proto::ulid::Ulid;
@@ -21,7 +21,13 @@ use tower::ServiceExt;
 fn app() -> Router {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)));
     let edge = Arc::new(
-        Edge::new(FakeStore::default(), identity, EdgeSession::bootstrap()).expect("seed"),
+        Edge::new(
+            FakeStore::default(),
+            identity,
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed"),
     );
     pos_edge::http::domain_router(edge)
 }

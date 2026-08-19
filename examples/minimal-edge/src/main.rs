@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use pos_edge::{Edge, EdgeConfig, EdgeError, EdgeSession, StoreIdentity, serve, telemetry};
+use pos_edge::{
+    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryReceipts, StoreIdentity, serve, telemetry,
+};
 use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;
 use pos_proto::ulid::Ulid;
@@ -22,9 +24,15 @@ async fn main() -> Result<(), EdgeError> {
     // A fixed identifier so the example is reproducible; a real store is activated with its own.
     let store_id = StoreId::new(Ulid::from_u128(1));
     let identity = StoreIdentity::for_store(store_id);
+    // The example numbers receipts in memory; a real store uses its SQLite writer thread (ADR-0025).
     let edge = Arc::new(
-        Edge::new(FakeStore::default(), identity, EdgeSession::bootstrap())
-            .expect("seed the id generator"),
+        Edge::new(
+            FakeStore::default(),
+            identity,
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator"),
     );
 
     let bind = "127.0.0.1:8787".parse().expect("a valid loopback address");

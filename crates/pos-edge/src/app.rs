@@ -17,13 +17,15 @@
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use pos_core::billing::{self, BillInput, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::Connectivity;
 use pos_core::capability::CapabilityContext;
 use pos_core::decision::{
-    Actor, DecisionCtx, LineCommand, TableCommand, decide_line, decide_table,
+    Actor, BillCommand, DecisionCtx, Effect, LineCommand, TableCommand, decide_bill, decide_line,
+    decide_table,
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::RecipeBook;
@@ -32,21 +34,24 @@ use pos_ports::event_store::EventStore;
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    SalesOrderLineAdded, SalesOrderLineFired, SalesTableClosed, SalesTableOpened,
+    BillingBillOpened, BillingBillSettled, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
-    BrandId, CourseId, MenuItemId, OrderId, OrderLineId, StationId, StoreId, TableId, TaxClassId,
-    TenantId,
+    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, StationId, StoreId, TableId,
+    TaxClassId, TenantId,
 };
-use pos_proto::money::{CurrencyCode, Money, Ratio};
+use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{ClockSource, IdGenerator, OrderLineState, TableState};
+use pos_proto::{BillState, ClockSource, IdGenerator, OrderLineState, SalesChannel, TableState};
 
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
+use crate::receipt::ReceiptAuthority;
 
 /// Which tenant, brand and store this edge is — the envelope context every event carries. Assigned
 /// at activation ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)); all three are identifiers,
@@ -94,9 +99,24 @@ pub struct EdgeSession {
     /// The recipes a fire consumes (§8). Empty in the bootstrap: an item with no recipe consumes
     /// nothing, so the flow runs before the menu's bill of materials is synced (P7).
     pub recipes: RecipeBook,
+    /// The store's channel-keyed tax rates (D6). Vietnam v1 populates one class at one rate, which is
+    /// a special case of this table, not a different model; carrying both dimensions from day one is
+    /// what avoids a migration across every line ever written.
+    pub tax_rates: TaxRateTable,
+    /// The channel a walk-in bill's order came in on, which selects the tax rate. `DineIn` for a
+    /// full-service store; a marketplace order overrides it per bill (P11).
+    pub sales_channel: SalesChannel,
 }
 
 impl EdgeSession {
+    /// The well-known standard tax class the bootstrap rates the menu at, until the cloud config tree
+    /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)) supplies the real classes.
+    /// A line drafted by the example or a test carries this class so its tax resolves.
+    #[must_use]
+    pub fn standard_tax_class() -> TaxClassId {
+        TaxClassId::new(Ulid::from_u128(1))
+    }
+
     /// Bootstrap defaults until the cloud config tree ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
     /// P7) supplies the real values: a full-service store, every permission granted, VND, UTC with a
     /// 04:00 cut-off, offline. Enough for the edge to sell on fakes and for the dine-in flow to run.
@@ -114,6 +134,12 @@ impl EdgeSession {
             cutoff: CutoffHour::new(4).expect("4 is a valid cut-off hour"),
             connectivity: Connectivity::Offline,
             recipes: RecipeBook::default(),
+            tax_rates: TaxRateTable::new().with(
+                Self::standard_tax_class(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(10),
+            ),
+            sales_channel: SalesChannel::DineIn,
         }
     }
 }
@@ -139,6 +165,9 @@ pub enum AppError {
     /// A command named a line the edge does not know.
     #[error("no such order line")]
     UnknownLine,
+    /// A command named a bill the edge does not know.
+    #[error("no such bill")]
+    UnknownBill,
 }
 
 /// What a table looks like to a caller after a command.
@@ -188,8 +217,31 @@ pub struct LineView {
     pub state: OrderLineState,
 }
 
+/// What a bill looks like to a caller after a command.
+///
+/// After a settle it carries the gapless receipt number and the total the guest paid, plus the
+/// state the bill and its table moved to. `print_receipt` reflects the [`Effect::PrintReceipt`]
+/// the domain returned: the edge does not itself hold a printer, so the caller (the binary) runs the
+/// effect after this returns — a rolled-back settle therefore never prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BillView {
+    /// The bill.
+    pub bill_id: BillId,
+    /// Its state after the command.
+    pub state: BillState,
+    /// The gapless per-store receipt number, present once the bill has settled. Never a legal
+    /// invoice number (ADR-0025).
+    pub receipt_number: Option<u64>,
+    /// What the guest owed, present once settled.
+    pub total_due: Option<Money>,
+    /// The state the bill's table moved to as a result (P5 derives the floor cycle from the bill).
+    pub table_state: TableState,
+    /// Whether the settle asked for a receipt to be printed, for the caller to run after commit.
+    pub print_receipt: bool,
+}
+
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
-/// computed without re-reading the event log.
+/// computed, and a bill assembled, without re-reading the event log.
 #[derive(Debug, Clone, Copy)]
 struct LineRecord {
     order_id: OrderId,
@@ -197,6 +249,20 @@ struct LineRecord {
     menu_item_id: MenuItemId,
     quantity: Quantity,
     course_id: Option<CourseId>,
+    /// The extended total the device captured at add time — the base a bill sums per tax class. A
+    /// line never re-reads the live menu (§14.2), so this is authoritative.
+    line_total: Money,
+    /// The tax class captured at add time, which keys the line into a rate on the bill.
+    tax_class_id: TaxClassId,
+}
+
+/// What the projection remembers about one bill: the order it bills, the table that order sits on
+/// (so settling can cycle the table), and its state (so a second settle is refused).
+#[derive(Debug, Clone, Copy)]
+struct BillRecord {
+    order_id: OrderId,
+    table_id: TableId,
+    state: BillState,
 }
 
 /// The in-memory projection: the current state of each aggregate, folded from the event log.
@@ -210,6 +276,7 @@ struct Projection {
     tables: HashMap<TableId, TableState>,
     table_orders: HashMap<TableId, OrderId>,
     lines: HashMap<OrderLineId, LineRecord>,
+    bills: HashMap<BillId, BillRecord>,
 }
 
 impl Projection {
@@ -245,6 +312,33 @@ impl Projection {
             record.state = state;
         }
     }
+
+    /// The lines on an order, in id order so the assembly (and its rounding residual) is
+    /// deterministic across runs regardless of the hash map's iteration order.
+    fn lines_for_order(&self, order_id: OrderId) -> Vec<LineRecord> {
+        let mut lines: Vec<(OrderLineId, LineRecord)> = self
+            .lines
+            .iter()
+            .filter(|(_, record)| record.order_id == order_id)
+            .map(|(id, record)| (*id, *record))
+            .collect();
+        lines.sort_by_key(|(id, _)| *id);
+        lines.into_iter().map(|(_, record)| record).collect()
+    }
+
+    fn open_bill_record(&mut self, bill_id: BillId, record: BillRecord) {
+        self.bills.insert(bill_id, record);
+    }
+
+    fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
+        self.bills.get(&bill_id).copied()
+    }
+
+    fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
+        if let Some(record) = self.bills.get_mut(&bill_id) {
+            record.state = state;
+        }
+    }
 }
 
 /// The edge application: the store, the session, and the loop that ties them to `pos-core`.
@@ -257,10 +351,17 @@ pub struct Edge<S> {
     ids: Mutex<EdgeIdGenerator<SystemClock>>,
     fanout: Fanout,
     projection: Mutex<Projection>,
+    /// The gapless receipt-number authority a settle allocates from (ADR-0025). Injected rather than
+    /// derived from `S`, so the one loop runs over the real SQLite store and over the fakes alike.
+    receipts: Arc<dyn ReceiptAuthority>,
 }
 
 impl<S: EventStore> Edge<S> {
-    /// Composes an edge over `store` for a given identity and session.
+    /// Composes an edge over `store` for a given identity and session, allocating receipt numbers
+    /// from `receipts`.
+    ///
+    /// The real binary passes the SQLite store itself (its writer thread is the gapless authority,
+    /// ADR-0025); the example and tests pass an [`InMemoryReceipts`](crate::receipt::InMemoryReceipts).
     ///
     /// # Errors
     ///
@@ -269,6 +370,7 @@ impl<S: EventStore> Edge<S> {
         store: S,
         identity: StoreIdentity,
         session: EdgeSession,
+        receipts: Arc<dyn ReceiptAuthority>,
     ) -> Result<Self, getrandom::Error> {
         Ok(Self {
             store,
@@ -278,6 +380,7 @@ impl<S: EventStore> Edge<S> {
             ids: Mutex::new(EdgeIdGenerator::new(SystemClock)?),
             fanout: Fanout::new(),
             projection: Mutex::new(Projection::default()),
+            receipts,
         })
     }
 
@@ -399,6 +502,8 @@ impl<S: EventStore> Edge<S> {
                 menu_item_id: draft.menu_item_id,
                 quantity: draft.quantity,
                 course_id: draft.course_id,
+                line_total: draft.line_total,
+                tax_class_id: draft.tax_class_id,
             },
         );
         Ok(LineView {
@@ -454,6 +559,191 @@ impl<S: EventStore> Edge<S> {
             order_line_id,
             state: decision.next_state,
         })
+    }
+
+    /// Opens a bill on the order a table holds (`billing.bill.opened`) and moves the table to
+    /// awaiting payment.
+    ///
+    /// Splitting, merging and settling all presuppose a bill that something created; opening it is
+    /// the "request bill" moment of the floor cycle, so the table moves `Occupied → AwaitingPayment`
+    /// here. The table's fine-grained state is derived from the bill lifecycle rather than from its
+    /// own events, because the frozen catalogue has no table-transition event for it.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if the table is not occupied (requesting the bill is illegal otherwise),
+    /// [`AppError::NoOpenOrder`] if the table has no order, or [`AppError`] if the store cannot be
+    /// written.
+    pub async fn open_bill(&self, actor: Actor, table_id: TableId) -> Result<BillView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let current_table = self.table_state(table_id);
+        // Requesting the bill is a legal floor move only from Occupied; decide_table also gates the
+        // tables capability.
+        let table_decision = decide_table(current_table, TableCommand::RequestBill, &ctx)?;
+
+        let order_id = self
+            .lock_projection()
+            .order_for_table(table_id)
+            .ok_or(AppError::NoOpenOrder)?;
+        let bill_id = BillId::new(self.next_ulid());
+
+        let payload = BillingBillOpened { bill_id, order_id };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        {
+            let mut projection = self.lock_projection();
+            projection.open_bill_record(
+                bill_id,
+                BillRecord {
+                    order_id,
+                    table_id,
+                    state: BillState::Open,
+                },
+            );
+            projection.set_table(table_id, table_decision.next_state);
+        }
+        Ok(BillView {
+            bill_id,
+            state: BillState::Open,
+            receipt_number: None,
+            total_due: None,
+            table_state: table_decision.next_state,
+            print_receipt: false,
+        })
+    }
+
+    /// Settles a bill (`billing.bill.settled`) and cycles its table to needs-cleaning.
+    ///
+    /// Assembles what is owed from the order's captured line totals ([`billing::assemble`], §14.2),
+    /// proves the payments sum **exactly** to it ([`billing::settle`] via [`decide_bill`], ADR-0028),
+    /// then allocates the gapless per-store receipt number for this bill (ADR-0025) before appending
+    /// the event that carries it — so a crash after allocating reuses the number rather than skipping
+    /// one. The receipt is **not** a legal invoice number.
+    ///
+    /// The [`Effect::PrintReceipt`] the domain returns is surfaced on [`BillView::print_receipt`] for
+    /// the caller to run after commit; the edge holds no printer, so a rolled-back settle prints
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the bill
+    /// is not open, the table is not awaiting payment, the payments do not sum to the total, or a
+    /// line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
+    pub async fn settle_bill(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        payments: Vec<Payment>,
+        tips: Vec<Money>,
+    ) -> Result<BillView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+
+        // Assemble the amount owed from the order's captured line totals, grouped per tax class.
+        let lines = self.lock_projection().lines_for_order(bill.order_id);
+        let class_bases = Self::class_bases(&lines)?;
+        let totals = billing::assemble(&self.bill_input(&class_bases))?;
+
+        // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal.
+        let current_table = self.table_state(bill.table_id);
+        let table_decision = decide_table(current_table, TableCommand::Settle, &ctx)?;
+
+        // Prove the settlement invariant against the assembled total, and that the bill can settle.
+        // Done before allocating a number, so a refused settle consumes none.
+        let bill_decision = decide_bill(
+            bill.state,
+            BillCommand::Settle {
+                total_due: totals.total_due,
+                payments,
+                tips,
+            },
+            &ctx,
+        )?;
+
+        // Allocate the gapless receipt number for this bill, then append the event that records it.
+        let receipt_number = self
+            .receipts
+            .allocate_receipt(self.identity.store_id, bill_id)
+            .await?;
+
+        let reduction_total = totals
+            .discount_total
+            .checked_add(totals.comp_total)
+            .map_err(DomainError::from)?;
+        let payload = BillingBillSettled {
+            bill_id,
+            receipt_number,
+            subtotal: totals.subtotal,
+            reduction_total,
+            service_charge: totals.service_charge,
+            tax_total: totals.tax_total,
+            rounding_adjustment: totals.rounding_adjustment,
+            total_due: totals.total_due,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        {
+            let mut projection = self.lock_projection();
+            projection.set_bill_state(bill_id, bill_decision.next_state);
+            projection.set_table(bill.table_id, table_decision.next_state);
+        }
+        Ok(BillView {
+            bill_id,
+            state: bill_decision.next_state,
+            receipt_number: Some(receipt_number),
+            total_due: Some(totals.total_due),
+            table_state: table_decision.next_state,
+            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+        })
+    }
+
+    /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
+    /// takes. A voided line is owed nothing, so it contributes nothing.
+    fn class_bases(lines: &[LineRecord]) -> Result<Vec<ClassBase>, AppError> {
+        let mut bases: Vec<ClassBase> = Vec::new();
+        for line in lines {
+            if line.state == OrderLineState::Voided {
+                continue;
+            }
+            if let Some(base) = bases
+                .iter_mut()
+                .find(|base| base.tax_class_id == line.tax_class_id)
+            {
+                base.amount = base
+                    .amount
+                    .checked_add(line.line_total)
+                    .map_err(DomainError::from)?;
+            } else {
+                bases.push(ClassBase {
+                    tax_class_id: line.tax_class_id,
+                    amount: line.line_total,
+                });
+            }
+        }
+        Ok(bases)
+    }
+
+    /// Builds the bill-assembly input from the session's tax configuration. The P5 bootstrap runs
+    /// with no bill-level discount, no service charge and no cash rounding; the cloud config tree
+    /// (P7) supplies those, and the shape here is ready for them.
+    fn bill_input<'a>(&'a self, class_bases: &'a [ClassBase]) -> BillInput<'a> {
+        let currency = self.session.currency;
+        BillInput {
+            currency_code: currency,
+            class_bases,
+            bill_discount: Money::zero(currency),
+            comps: Money::zero(currency),
+            service_charge: Money::zero(currency),
+            service_charge_taxable: true,
+            service_charge_tax_class: None,
+            rates: &self.session.tax_rates,
+            sales_channel: self.session.sales_channel,
+            cash_rounding_increment: None,
+            rounding_mode: Rounding::HalfUp,
+        }
     }
 
     /// The commit-and-publish half of every command: write the event in one transaction, then — and
@@ -541,17 +831,19 @@ impl<S: EventStore> Edge<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{Edge, EdgeSession, LineDraft, StoreIdentity};
+    use crate::receipt::InMemoryReceipts;
+    use pos_core::billing::Payment;
     use pos_core::decision::Actor;
     use pos_fakes::FakeStore;
-    use pos_proto::ids::{
-        DeviceId, EmployeeId, MenuItemId, StationId, StoreId, TableId, TaxClassId,
-    };
+    use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StationId, StoreId, TableId};
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
-    use pos_proto::{OrderLineState, TableState};
+    use pos_proto::{BillState, OrderLineState, PaymentMethod, TableState};
 
     fn identity() -> StoreIdentity {
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)))
@@ -565,7 +857,17 @@ mod tests {
     }
 
     fn edge() -> Edge<FakeStore> {
-        Edge::new(FakeStore::default(), identity(), EdgeSession::bootstrap()).expect("seeds")
+        Edge::new(
+            FakeStore::default(),
+            identity(),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds")
+    }
+
+    fn vnd(minor: i64) -> Money {
+        Money::new(CurrencyCode::VND, minor)
     }
 
     fn a_line() -> LineDraft {
@@ -573,9 +875,9 @@ mod tests {
             menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
             display_name: DisplayName::new("Margherita"),
             quantity: Quantity::ONE,
-            unit_price: Money::new(CurrencyCode::VND, 150_000),
-            line_total: Money::new(CurrencyCode::VND, 150_000),
-            tax_class_id: TaxClassId::new(Ulid::from_u128(1)),
+            unit_price: vnd(150_000),
+            line_total: vnd(150_000),
+            tax_class_id: EdgeSession::standard_tax_class(),
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
             seat: None,
             course_id: None,
@@ -688,6 +990,149 @@ mod tests {
             // A fired line cannot fire again — the domain refuses the transition.
             let refused = edge.fire_line(actor(), line.order_line_id, station).await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    fn cash(minor: i64) -> Payment {
+        Payment {
+            method: PaymentMethod::Cash,
+            tendered: vnd(minor),
+            applied_to_bill: vnd(minor),
+        }
+    }
+
+    #[test]
+    fn a_bill_opens_and_settles_with_a_gapless_receipt() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(300));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            // Opening the bill requests it: the table moves to awaiting payment.
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            assert_eq!(opened.state, BillState::Open);
+            assert_eq!(opened.table_state, TableState::AwaitingPayment);
+            assert_eq!(edge.table_state(table), TableState::AwaitingPayment);
+
+            // One 150k line at the 10% standard rate is 165k owed.
+            let settled = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .await
+                .expect("settles");
+            assert_eq!(settled.state, BillState::Settled);
+            assert_eq!(settled.total_due, Some(vnd(165_000)));
+            assert_eq!(
+                settled.receipt_number,
+                Some(1),
+                "the first receipt is number one"
+            );
+            assert!(
+                settled.print_receipt,
+                "settling asks for a receipt to print"
+            );
+            // The table cycles to needs-cleaning, then a clean releases it.
+            assert_eq!(settled.table_state, TableState::NeedsCleaning);
+            let cleaned = edge.clean_table(actor(), table).await.expect("cleans");
+            assert_eq!(cleaned.state, TableState::Free);
+        });
+    }
+
+    #[test]
+    fn a_bill_settles_split_across_cash_and_card() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(301));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+
+            // 65k cash + 100k card == 165k owed: a split tender still sums exactly to the total.
+            let card = Payment {
+                method: PaymentMethod::Card,
+                tendered: vnd(100_000),
+                applied_to_bill: vnd(100_000),
+            };
+            let settled = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card], vec![])
+                .await
+                .expect("settles across two tenders");
+            assert_eq!(settled.state, BillState::Settled);
+            assert_eq!(settled.receipt_number, Some(1));
+        });
+    }
+
+    #[test]
+    fn settling_twice_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(302));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .await
+                .expect("first settle");
+
+            // A settled bill is terminal: a second settle is refused (a refund is a new movement).
+            let refused = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .await;
+            assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    #[test]
+    fn underpaying_a_bill_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(303));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+
+            // 150k applied against 165k owed does not sum to the total — the invariant refuses it.
+            let refused = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)], vec![])
+                .await;
+            assert!(matches!(refused, Err(super::AppError::Domain(_))));
+            // Nothing settled, so no receipt was consumed and the bill is still open.
+            let again = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .await
+                .expect("the still-open bill settles");
+            assert_eq!(
+                again.receipt_number,
+                Some(1),
+                "the refused attempt took no number"
+            );
+        });
+    }
+
+    #[test]
+    fn opening_a_bill_on_an_unseated_table_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(304));
+            // A free table cannot be asked for its bill.
+            let refused = edge.open_bill(actor(), table).await;
+            assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    #[test]
+    fn settling_an_unknown_bill_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let refused = edge
+                .settle_bill(
+                    actor(),
+                    pos_proto::ids::BillId::new(Ulid::from_u128(999)),
+                    vec![cash(1)],
+                    vec![],
+                )
+                .await;
+            assert!(matches!(refused, Err(super::AppError::UnknownBill)));
         });
     }
 }

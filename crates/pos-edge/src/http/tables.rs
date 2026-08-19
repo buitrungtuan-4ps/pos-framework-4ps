@@ -101,7 +101,7 @@ fn respond(outcome: Result<TableView, AppError>) -> Response {
         // table/line that is not in a state the command applies to) is the caller's fault, not the
         // server's — 409 Conflict rather than 500.
         Err(AppError::Domain(error)) => (StatusCode::CONFLICT, error.to_string()).into_response(),
-        Err(error @ (AppError::NoOpenOrder | AppError::UnknownLine)) => {
+        Err(error @ (AppError::NoOpenOrder | AppError::UnknownLine | AppError::UnknownBill)) => {
             (StatusCode::CONFLICT, error.to_string()).into_response()
         }
         Err(AppError::Port(_)) => {
