@@ -47,7 +47,7 @@ pub mod telemetry;
 
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
-    AppError, BillView, Edge, EdgeSession, LineDraft, LineView, StoreIdentity, TableView,
+    AppError, BillView, Edge, EdgeSession, LineDraft, LineView, ShiftView, StoreIdentity, TableView,
 };
 pub use auth::{Lockout, SignIn};
 pub use clock::SystemClock;

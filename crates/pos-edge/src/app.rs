@@ -24,8 +24,8 @@ use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::Connectivity;
 use pos_core::capability::CapabilityContext;
 use pos_core::decision::{
-    Actor, BillCommand, DecisionCtx, Effect, LineCommand, TableCommand, decide_bill, decide_line,
-    decide_table,
+    Actor, BillCommand, DecisionCtx, Effect, LineCommand, ShiftCommand, TableCommand, decide_bill,
+    decide_line, decide_shift, decide_table,
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::RecipeBook;
@@ -34,19 +34,22 @@ use pos_ports::event_store::EventStore;
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesTableClosed, SalesTableOpened,
+    BillingBillOpened, BillingBillSettled, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, StationId, StoreId, TableId,
-    TaxClassId, TenantId,
+    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, ShiftId, StationId, StoreId,
+    TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{BillState, ClockSource, IdGenerator, OrderLineState, SalesChannel, TableState};
+use pos_proto::{
+    BillState, ClockSource, IdGenerator, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
+    TableState,
+};
 
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
@@ -168,6 +171,12 @@ pub enum AppError {
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
+    /// A command named a shift the edge does not know.
+    #[error("no such shift")]
+    UnknownShift,
+    /// A shift was opened while one is already open — one open shift per device (§6, archive).
+    #[error("a shift is already open")]
+    ShiftAlreadyOpen,
 }
 
 /// What a table looks like to a caller after a command.
@@ -240,6 +249,27 @@ pub struct BillView {
     pub print_receipt: bool,
 }
 
+/// What a cash shift looks like to a caller after a command.
+///
+/// The close is **blind** (§11.1): counting reveals nothing, so `expected_amount` and `variance` are
+/// `None` on an open or counted shift and are populated only once the shift closes — the cashier
+/// counts before the system says what it expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShiftView {
+    /// The shift.
+    pub shift_id: ShiftId,
+    /// Its state after the command.
+    pub state: ShiftState,
+    /// What the system expected in the drawer, revealed only at close.
+    pub expected_amount: Option<Money>,
+    /// What the cashier counted, once counted.
+    pub counted_amount: Option<Money>,
+    /// Counted minus expected, revealed only at close. Negative means short.
+    pub variance: Option<Money>,
+    /// Whether closing asked for the shift report to print, for the caller to run after commit.
+    pub print_shift_report: bool,
+}
+
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
 /// computed, and a bill assembled, without re-reading the event log.
 #[derive(Debug, Clone, Copy)]
@@ -265,6 +295,26 @@ struct BillRecord {
     state: BillState,
 }
 
+/// What the projection remembers about a cash shift: its state, the float it opened with, the cash
+/// its settled bills have taken (the rollup the close compares against), and the blind count once
+/// entered. The expected drawer amount is `opening_float + cash_collected`; keeping the count here
+/// but never revealing the expectation before close is what makes the close blind (§11.1).
+#[derive(Debug, Clone, Copy)]
+struct ShiftRecord {
+    state: ShiftState,
+    opening_float: Money,
+    cash_collected: Money,
+    counted: Option<Money>,
+}
+
+impl ShiftRecord {
+    /// The cash the drawer is expected to hold: the float plus every cash payment taken on the
+    /// shift. Cash rounding and non-cash tenders never touch the drawer, so they are not in it.
+    fn expected(&self) -> Result<Money, DomainError> {
+        Ok(self.opening_float.checked_add(self.cash_collected)?)
+    }
+}
+
 /// The in-memory projection: the current state of each aggregate, folded from the event log.
 ///
 /// Durable truth is the event log in the store; this is a cache rebuilt at boot and updated as
@@ -277,6 +327,10 @@ struct Projection {
     table_orders: HashMap<TableId, OrderId>,
     lines: HashMap<OrderLineId, LineRecord>,
     bills: HashMap<BillId, BillRecord>,
+    shifts: HashMap<ShiftId, ShiftRecord>,
+    /// The one shift currently trading or counted, if any — the drawer cash lands on it, and every
+    /// event minted while it is set carries its id. Cleared when the shift closes.
+    open_shift: Option<ShiftId>,
 }
 
 impl Projection {
@@ -338,6 +392,41 @@ impl Projection {
         if let Some(record) = self.bills.get_mut(&bill_id) {
             record.state = state;
         }
+    }
+
+    fn open_shift_record(&mut self, shift_id: ShiftId, record: ShiftRecord) {
+        self.shifts.insert(shift_id, record);
+        self.open_shift = Some(shift_id);
+    }
+
+    fn shift(&self, shift_id: ShiftId) -> Option<ShiftRecord> {
+        self.shifts.get(&shift_id).copied()
+    }
+
+    fn record_shift_count(&mut self, shift_id: ShiftId, counted: Money, state: ShiftState) {
+        if let Some(record) = self.shifts.get_mut(&shift_id) {
+            record.counted = Some(counted);
+            record.state = state;
+        }
+    }
+
+    fn close_shift_record(&mut self, shift_id: ShiftId) {
+        if let Some(record) = self.shifts.get_mut(&shift_id) {
+            record.state = ShiftState::Closed;
+        }
+        if self.open_shift == Some(shift_id) {
+            self.open_shift = None;
+        }
+    }
+
+    /// Adds cash taken on a bill to the open shift's rollup, if a shift is open.
+    fn collect_cash(&mut self, amount: Money) -> Result<(), DomainError> {
+        if let Some(shift_id) = self.open_shift
+            && let Some(record) = self.shifts.get_mut(&shift_id)
+        {
+            record.cash_collected = record.cash_collected.checked_add(amount)?;
+        }
+        Ok(())
     }
 }
 
@@ -651,6 +740,17 @@ impl<S: EventStore> Edge<S> {
         let current_table = self.table_state(bill.table_id);
         let table_decision = decide_table(current_table, TableCommand::Settle, &ctx)?;
 
+        // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
+        // open shift's blind-close roll-up. Summed before the payments move into the command.
+        let mut cash_taken = Money::zero(self.session.currency);
+        for payment in &payments {
+            if payment.method == PaymentMethod::Cash {
+                cash_taken = cash_taken
+                    .checked_add(payment.applied_to_bill)
+                    .map_err(DomainError::from)?;
+            }
+        }
+
         // Prove the settlement invariant against the assembled total, and that the bill can settle.
         // Done before allocating a number, so a refused settle consumes none.
         let bill_decision = decide_bill(
@@ -689,6 +789,7 @@ impl<S: EventStore> Edge<S> {
             let mut projection = self.lock_projection();
             projection.set_bill_state(bill_id, bill_decision.next_state);
             projection.set_table(bill.table_id, table_decision.next_state);
+            projection.collect_cash(cash_taken)?;
         }
         Ok(BillView {
             bill_id,
@@ -697,6 +798,146 @@ impl<S: EventStore> Edge<S> {
             total_due: Some(totals.total_due),
             table_state: table_decision.next_state,
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+        })
+    }
+
+    /// Opens a cash shift with a starting float (`cash.shift.opened`).
+    ///
+    /// One shift is open per device (§6, archive): opening a second while one is still open is
+    /// refused. Subsequent events carry this shift's id until it closes.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::ShiftAlreadyOpen`] if a shift is already open, or [`AppError`] if the store cannot
+    /// be written.
+    pub async fn open_shift(
+        &self,
+        actor: Actor,
+        opening_float: Money,
+    ) -> Result<ShiftView, AppError> {
+        if self.current_shift_id().is_some() {
+            return Err(AppError::ShiftAlreadyOpen);
+        }
+        let ctx = self.decision_ctx(actor)?;
+        let shift_id = ShiftId::new(self.next_ulid());
+
+        let payload = CashShiftOpened {
+            opened_shift_id: shift_id,
+            opening_float,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        self.lock_projection().open_shift_record(
+            shift_id,
+            ShiftRecord {
+                state: ShiftState::Open,
+                opening_float,
+                cash_collected: Money::zero(self.session.currency),
+                counted: None,
+            },
+        );
+        Ok(ShiftView {
+            shift_id,
+            state: ShiftState::Open,
+            expected_amount: None,
+            counted_amount: None,
+            variance: None,
+            print_shift_report: false,
+        })
+    }
+
+    /// Records the blind count on a shift (`cash.shift.counted`).
+    ///
+    /// The counted cash is entered **before** the system reveals what it expected, so this returns
+    /// no expectation and no variance — that is what makes the close blind (§11.1). `counted_minor`
+    /// is the physical count in minor units.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownShift`] for a shift the edge does not know, [`AppError::Domain`] if the
+    /// shift is not open, or [`AppError`] if the store cannot be written.
+    pub async fn count_shift(
+        &self,
+        actor: Actor,
+        shift_id: ShiftId,
+        counted_minor: i64,
+    ) -> Result<ShiftView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let record = self
+            .lock_projection()
+            .shift(shift_id)
+            .ok_or(AppError::UnknownShift)?;
+        let decision = decide_shift(record.state, ShiftCommand::Count { counted_minor }, &ctx)?;
+
+        let counted_amount = Money::new(self.session.currency, counted_minor);
+        let payload = CashShiftCounted {
+            counted_shift_id: shift_id,
+            counted_amount,
+            count_time: ctx.now,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        self.lock_projection()
+            .record_shift_count(shift_id, counted_amount, decision.next_state);
+        Ok(ShiftView {
+            shift_id,
+            state: decision.next_state,
+            expected_amount: None,
+            counted_amount: Some(counted_amount),
+            variance: None,
+            print_shift_report: false,
+        })
+    }
+
+    /// Closes a counted shift (`cash.shift.closed`), revealing the expected amount and the variance.
+    ///
+    /// The expectation is the shift's cash roll-up — opening float plus the cash its bills took — and
+    /// is revealed only now, after the blind count. The variance is `counted − expected`; negative is
+    /// short. Closing surfaces [`Effect::PrintShiftReport`] on the view for the caller to run.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownShift`] for a shift the edge does not know, [`AppError::Domain`] if the
+    /// shift has not been counted (a blind close cannot skip the count) or closing is not granted, or
+    /// [`AppError`] if the store cannot be written.
+    pub async fn close_shift(
+        &self,
+        actor: Actor,
+        shift_id: ShiftId,
+    ) -> Result<ShiftView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let record = self
+            .lock_projection()
+            .shift(shift_id)
+            .ok_or(AppError::UnknownShift)?;
+        let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
+
+        // Reaching Close means the shift was counted, so the count is present; the fallback never
+        // fires but keeps this off any panic path.
+        let counted_amount = record
+            .counted
+            .unwrap_or_else(|| Money::zero(self.session.currency));
+        let expected_amount = record.expected()?;
+        let variance = counted_amount
+            .checked_sub(expected_amount)
+            .map_err(DomainError::from)?;
+
+        let payload = CashShiftClosed {
+            closed_shift_id: shift_id,
+            expected_amount,
+            counted_amount,
+            variance,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        self.lock_projection().close_shift_record(shift_id);
+        Ok(ShiftView {
+            shift_id,
+            state: ShiftState::Closed,
+            expected_amount: Some(expected_amount),
+            counted_amount: Some(counted_amount),
+            variance: Some(variance),
+            print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
         })
     }
 
@@ -796,9 +1037,15 @@ impl<S: EventStore> Edge<S> {
             store_id: self.identity.store_id,
             device_id: ctx.actor.device_id,
             employee_id: Some(ctx.actor.employee_id),
-            shift_id: None,
+            shift_id: self.current_shift_id(),
             data,
         })
+    }
+
+    /// The shift currently trading, so every event minted during it carries its id. `None` when no
+    /// shift is open, which is the ordinary state before the first open of the day.
+    fn current_shift_id(&self) -> Option<ShiftId> {
+        self.lock_projection().open_shift
     }
 
     /// Assembles the decision context from the clock and the session.
@@ -843,7 +1090,7 @@ mod tests {
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
-    use pos_proto::{BillState, OrderLineState, PaymentMethod, TableState};
+    use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
 
     fn identity() -> StoreIdentity {
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)))
@@ -1133,6 +1380,161 @@ mod tests {
                 )
                 .await;
             assert!(matches!(refused, Err(super::AppError::UnknownBill)));
+        });
+    }
+
+    #[test]
+    fn a_shift_opens_counts_and_closes_blind() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            assert_eq!(opened.state, ShiftState::Open);
+            // Counting reveals nothing: no expected amount, no variance yet.
+            let counted = edge
+                .count_shift(actor(), opened.shift_id, 500_000)
+                .await
+                .expect("counts");
+            assert_eq!(counted.state, ShiftState::Counted);
+            assert_eq!(counted.counted_amount, Some(vnd(500_000)));
+            assert_eq!(counted.expected_amount, None, "the count is blind");
+            assert_eq!(counted.variance, None, "the count is blind");
+            // Closing reveals the expected amount (just the float, no sales) and a zero variance.
+            let closed = edge
+                .close_shift(actor(), opened.shift_id)
+                .await
+                .expect("closes");
+            assert_eq!(closed.state, ShiftState::Closed);
+            assert_eq!(closed.expected_amount, Some(vnd(500_000)));
+            assert_eq!(closed.variance, Some(vnd(0)));
+            assert!(closed.print_shift_report, "closing prints the shift report");
+        });
+    }
+
+    #[test]
+    fn a_shift_rolls_up_only_cash_from_settled_bills() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+
+            // A cash sale of 165k lands in the drawer.
+            let table = TableId::new(Ulid::from_u128(400));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], vec![])
+                .await
+                .expect("settles in cash");
+
+            // A card sale does not: it never touches the drawer.
+            let table2 = TableId::new(Ulid::from_u128(401));
+            edge.seat_table(actor(), table2).await.expect("seats");
+            edge.add_line(actor(), table2, a_line())
+                .await
+                .expect("adds");
+            let bill2 = edge.open_bill(actor(), table2).await.expect("opens a bill");
+            let card = Payment {
+                method: PaymentMethod::Card,
+                tendered: vnd(165_000),
+                applied_to_bill: vnd(165_000),
+            };
+            edge.settle_bill(actor(), bill2.bill_id, vec![card], vec![])
+                .await
+                .expect("settles on card");
+
+            // Expected drawer cash is float + cash sales only: 500k + 165k.
+            edge.count_shift(actor(), opened.shift_id, 665_000)
+                .await
+                .expect("counts");
+            let closed = edge
+                .close_shift(actor(), opened.shift_id)
+                .await
+                .expect("closes");
+            assert_eq!(closed.expected_amount, Some(vnd(665_000)));
+            assert_eq!(closed.variance, Some(vnd(0)));
+        });
+    }
+
+    #[test]
+    fn variance_is_negative_when_the_drawer_is_short() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            edge.count_shift(actor(), opened.shift_id, 400_000)
+                .await
+                .expect("counts 100k short");
+            let closed = edge
+                .close_shift(actor(), opened.shift_id)
+                .await
+                .expect("closes");
+            assert_eq!(closed.variance, Some(vnd(-100_000)));
+            assert!(closed.variance.expect("variance").is_negative());
+        });
+    }
+
+    #[test]
+    fn opening_a_second_shift_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            edge.open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            let refused = edge.open_shift(actor(), vnd(500_000)).await;
+            assert!(matches!(refused, Err(super::AppError::ShiftAlreadyOpen)));
+        });
+    }
+
+    #[test]
+    fn closing_without_counting_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            // The close is blind: it cannot skip the count. Open -> Close is not a legal move.
+            let refused = edge.close_shift(actor(), opened.shift_id).await;
+            assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    #[test]
+    fn counting_an_unknown_shift_is_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let refused = edge
+                .count_shift(actor(), pos_proto::ids::ShiftId::new(Ulid::from_u128(9)), 1)
+                .await;
+            assert!(matches!(refused, Err(super::AppError::UnknownShift)));
+        });
+    }
+
+    #[test]
+    fn a_new_shift_opens_after_the_previous_one_closes() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let first = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens the first shift");
+            edge.count_shift(actor(), first.shift_id, 500_000)
+                .await
+                .expect("counts");
+            edge.close_shift(actor(), first.shift_id)
+                .await
+                .expect("closes the first shift");
+            // With the first shift closed, a new one may open.
+            edge.open_shift(actor(), vnd(300_000))
+                .await
+                .expect("opens the next shift");
         });
     }
 }

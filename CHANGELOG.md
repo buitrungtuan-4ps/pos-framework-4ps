@@ -259,6 +259,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   so a bill assembles a real total offline. The bootstrap rates one standard class
   (`EdgeSession::standard_tax_class`) at 10% dine-in until the cloud config tree (P7) supplies the
   menu's classes; Vietnam v1's single rate is a special case of the same two-dimensional table.
+- `pos-edge` cash-shift flow (P5, §6/§11.1): `Edge::open_shift` opens a shift with a starting float
+  (`cash.shift.opened`), `Edge::count_shift` records the **blind** count (`cash.shift.counted`) —
+  returning no expectation or variance, so the cashier counts before the system reveals what it
+  expected — and `Edge::close_shift` reveals the expected drawer cash (opening float plus the cash
+  its bills took) and the variance (`cash.shift.closed`), surfacing `Effect::PrintShiftReport` for
+  the caller. Only cash tenders roll into the expectation; card sales, tips and cash rounding never
+  touch the drawer. One shift is open per device: a second open is refused, and every event minted
+  while a shift is open now carries its `shift_id`. A close that skips the count is refused by the
+  state machine.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
