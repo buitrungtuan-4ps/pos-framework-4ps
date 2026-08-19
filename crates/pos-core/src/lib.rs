@@ -34,6 +34,7 @@
 
 pub mod billing;
 pub mod business_date;
+pub mod campaign;
 pub mod capability;
 pub mod error;
 pub mod inventory;
@@ -42,6 +43,7 @@ pub mod permission;
 pub mod state_machine;
 
 pub use business_date::{CutoffHour, StoreTimeZone, derive_business_date};
+pub use campaign::{AppliedCampaign, Campaign, CampaignKind, Timing, evaluate};
 pub use capability::{Capability, CapabilityContext};
 pub use error::DomainError;
 pub use inventory::{Availability, Recipe, RecipeBook, StockProjection};

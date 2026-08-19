@@ -129,6 +129,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   count are preserved rather than overwritten. All arithmetic is integer `Quantity` in thousandths —
   no float on the availability path.
 
+- `pos-core` campaign engine (`pos-spec.md` §7): one `Campaign` model for happy hours, item and
+  category discounts, combos, vouchers and manual reductions, evaluated in §7's **deterministic
+  order** (item-level → combo → bill-level → voucher → manual, then by descending priority, then by
+  id) with a **split timing** — `evaluate` at `Timing::LineAdd` applies item and combo rules against
+  the line, at `Timing::PaymentStart` the bill-level and voucher rules against the bill, so a guest
+  who ordered at 16:59 keeps the happy-hour price when they pay at 17:30. The voucher stage is
+  skipped entirely when `Connectivity::Offline` — rules run offline, uniqueness runs online.
+  Exclusion groups admit only their highest-priority match, quota gates each campaign, schedule
+  windows may wrap past midnight, and each applied campaign is its own reduction line computed on the
+  running remainder so the total can never exceed the base. Percentage and fixed-amount actions are
+  modeled; combo-price and free-item actions wait for the `decide` slice's menu/line model.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
