@@ -268,6 +268,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   touch the drawer. One shift is open per device: a second open is refused, and every event minted
   while a shift is open now carries its `shift_id`. A close that skips the count is refused by the
   state machine.
+- `pos-edge` order, bill and shift routes over HTTP (P5): the whole sell cycle is now reachable —
+  `POST /api/tables/{id}/lines` and `POST /api/lines/{id}/fire` (order), `POST /api/tables/{id}/bill`
+  and `POST /api/bills/{id}/settle` (bill), and `POST /api/shifts`, `POST /api/shifts/{id}/count`,
+  `POST /api/shifts/{id}/close` (shift). Each is a thin shell over the application loop, sharing one
+  error mapper (a refused command is `409`, an unreachable store `503`, a non-ULID id or unknown
+  payment method `400`). A payment method arrives as an `Open` enum, so an unrecognised token is a
+  clean `400` rather than a deserialise failure, and the domain boundary refuses an unspecified one.
+  An integration test drives a table seat → line → fire → open bill → settle (gapless receipt) →
+  clean, and a shift open → blind count → close, entirely over the router without a socket.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
