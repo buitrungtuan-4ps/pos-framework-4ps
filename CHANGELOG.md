@@ -62,6 +62,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   of the P3 domain code they govern; `pos-spec.md` §3/§5/§14 and `architecture.md` §2/§5 are amended
   to state the rules the code will enforce.
 
+- `pos-core` begins: the state-machine framework and the five lifecycles from `architecture.md` §5
+  — Table, Order, order line, Bill, Shift. Transitions are data, enumerable at runtime, so
+  `docs/state-machines.md` is generated from the code (a test keeps it in sync) and one generic
+  checker proves every machine exhaustively: no reachable undefined state, no orphan or deadlocked
+  state, terminal states with no exit, and a merge that is commutative, associative and
+  terminal-preserving. That merge is the ADR-0029 rule — `VOIDED` outranks every editable state, so
+  a concurrent edit can never resurrect a voided line — and `bill:settle` being one-time (§14.4) is
+  now a property of the `Bill` machine rather than of a lock.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one

@@ -31,3 +31,8 @@
 
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
+
+pub mod machines;
+pub mod state_machine;
+
+pub use state_machine::{StateMachine, TransitionError};
