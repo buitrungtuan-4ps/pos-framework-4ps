@@ -297,6 +297,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   meets its exit criteria: a store seats, orders from two devices, fires, settles with a gapless
   receipt and cycles the table, offline throughout, and a kill mid-sale loses only the uncommitted
   transaction (`tests/recovery.rs`).
+- `ui/` (P6) — the operator interface begins: a SolidJS + Tailwind app built with Vite and
+  TypeScript, embedded into `pos_edge` with rust-embed (ADR-0018). It carries the design-token file
+  (spacing, type, touch, radius, motion and colour, in light and dark), integer-minor-unit money
+  formatting, a typed client for the edge's routes, and a reconnecting `/ws` live link that folds the
+  fan-out into a small client projection — so what one device does appears on every other. The
+  primary flow is playable: a floor plan, a table's order (add items, fire), and a pay screen that
+  settles for a gapless receipt with the VND quick-cash denominations; a persistent status bar shows
+  the store link (offline from the cloud is a normal working state) and the shift. The remaining
+  screens (KDS, expo, Today, shift, pairing) and the four device layouts follow. A CI `ui` job
+  type-checks and builds the app on every pull request; the Rust build still embeds `build.rs`'s
+  placeholder on a fresh checkout, since `ui/dist` is gitignored. Requires Node ≥ 22 and `pnpm`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
