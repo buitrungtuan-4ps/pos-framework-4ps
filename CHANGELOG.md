@@ -198,6 +198,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   is the pure drift decision — an offset past two seconds from a reference clock alarms, because the
   business date is derived from the store's local time and a drifting clock files sales under the
   wrong day. The SNTP network poll that feeds it lands with deployment, like mDNS.
+- `pos-edge` config hot-reload and service units (P5): `active_config::ActiveConfig` swaps the running
+  configuration atomically and in well under a second, retaining the previous good version so a
+  change that turns out wrong rolls back one step, and refusing a candidate that fails validation
+  without touching the active config — a bad config cannot brick the store. Reads take a short read
+  lock and clone an `Arc`, so a handler reading config to answer a screen never blocks on a writer;
+  content validation against the config schema is generic (the schema is P7). `deploy/edge/` adds a
+  hardened systemd unit and a Windows service guide; both deliver the `SIGTERM`/stop the binary
+  already drains gracefully, so a committed sale is durable and an interrupted one was never
+  acknowledged.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
