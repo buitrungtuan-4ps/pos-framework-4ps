@@ -347,6 +347,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   from the axum handlers with `utoipa` and a `cargo xtask openapi --check` drift gate, never
   hand-written. Registered in the ADR index and the engineering guide; these unblock the P7 schema,
   adapters and `pos_cloud`.
+- `store-postgres` (P7): the cloud `EventStore` over PostgreSQL, and the second real implementation
+  of that port — it passes the **same** shared contract suite as `store-sqlite` and the in-memory
+  fake, which is what makes "the cloud store behaves like the edge store" a checked fact. Migration
+  `0001_cloud_events.sql`: the event log is range-partitioned **monthly on `business_date`**
+  (ADR-0022) with a default safety-net partition and a `create_events_partition` function the cloud
+  calls ahead of need, idempotent by `(business_date, event_id)` — the partition key must be in the
+  primary key, and a replay carries the same business date, so this is `event_id` idempotency in
+  practice. Tenant isolation is row-level security on `tenant_id`: a session that has not set
+  `app.tenant_id` sees nothing (default-deny), so a query that forgets its tenant returns empty
+  rather than leaking across tenants. The envelope is a `json` column, not `jsonb`, because the
+  contract requires a replayed event to read back byte-for-byte identical and `jsonb` reorders keys
+  and reformats whitespace. Access is `tokio-postgres` behind a `deadpool` pool (ADR-0016) with no
+  build-time database; the pool recycles connections with `ROLLBACK`, which is what makes a
+  transaction dropped without commit (the simulated crash) leave nothing behind instead of leaking
+  into the next caller.
+- The merge-to-`main` `integration` job now runs `store-postgres` against a real `postgres:16`
+  (pinned by digest) — the twelve `EventStore` contract cases plus cloud-only tests for RLS isolation
+  and monthly partition routing. These live behind the crate's `integration` Cargo feature, so the
+  ten-minute pull-request gate neither compiles nor runs them and stays database-free; `just
+  test-integration` runs them locally against your own PostgreSQL. `deny.toml` gains three reasoned,
+  dated skips for the transient version duplications the `tokio-postgres` stack brings in (the rand
+  0.10 line for its SCRAM nonce, and `fallible-iterator` mid-migration).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

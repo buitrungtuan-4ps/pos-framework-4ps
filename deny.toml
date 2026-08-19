@@ -83,6 +83,10 @@ skip = [
     # the edge never uses — it only verifies PINs — while tungstenite's WebSocket frame masking pulls
     # 0.9. Skipping the 0.6 line leaves 0.9 unique. review: 2026-11-19
     { crate = "rand_core@0.6", reason = "argon2/password-hash's salt-generation line, unused at the edge" },
+    # fallible-iterator straddles 0.2 -> 0.3 inside the tokio-postgres stack (P7): postgres-types is
+    # on 0.2, postgres-protocol on 0.3. Skipping the 0.2 line leaves 0.3 unique. Both are cloud-only
+    # (store-postgres), never at the edge. review: 2026-11-19
+    { crate = "fallible-iterator@0.2", reason = "tokio-postgres stack mid-migration from fallible-iterator 0.2 to 0.3" },
 ]
 skip-tree = [
     # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed
@@ -91,6 +95,11 @@ skip-tree = [
     # stable line (sha1 0.10 -> digest 0.10, ...). Skipping the 0.11 subtree leaves
     # the 0.10 line unique. review: 2026-11-19
     { crate = "sha2@0.11", reason = "new RustCrypto line pulled by rust-embed; stable line still used by axum" },
+    # The rand 0.10 line (rand_core 0.10, getrandom 0.4, chacha20) arrives with the tokio-postgres
+    # stack (P7): postgres-protocol uses it for the SCRAM authentication nonce. The edge's tungstenite
+    # is still on rand 0.9. They are in different binaries — pos_cloud vs pos_edge — so no single
+    # artifact carries both; skipping the 0.10 subtree leaves the 0.9 line unique. review: 2026-11-19
+    { crate = "rand@0.10", reason = "tokio-postgres's SCRAM nonce line; the edge's WebSocket stack is still on rand 0.9" },
 ]
 
 [sources]

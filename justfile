@@ -51,9 +51,13 @@ test:
     cargo test --workspace --locked
     cargo test --workspace --doc
 
-# Needs Docker: real PostgreSQL and NATS, not fakes.
+# Needs a real PostgreSQL (and, later, NATS) — not fakes. Set DATABASE_URL to a
+# libpq string, e.g. `host=localhost port=5432 user=pos password=pos dbname=poscloud`.
+# Each adapter's database tests are behind its `integration` Cargo feature and share
+# one database, so they run single-threaded. This is the merge-to-`main` `integration`
+# job (.github/workflows/main.yml), runnable locally against your own PostgreSQL.
 test-integration:
-    cargo test --workspace --locked --test '*' -- --include-ignored
+    cargo test -p store-postgres --features integration --locked -- --test-threads=1
 
 deny:
     cargo deny --all-features check advisories licenses bans sources
