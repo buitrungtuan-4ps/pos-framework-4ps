@@ -51,4 +51,9 @@ pub enum EdgeError {
     /// The OS entropy source needed to seed the id generator was unavailable.
     #[error("entropy source unavailable: {0}")]
     Entropy(getrandom::Error),
+
+    /// The projection could not be rebuilt from the event log at start-up — the log was unreadable
+    /// or an event would not decode (a corrupt log).
+    #[error("could not rebuild the projection from the log: {0}")]
+    Rebuild(crate::app::AppError),
 }

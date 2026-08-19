@@ -34,5 +34,9 @@ async fn main() -> Result<(), EdgeError> {
             .map_err(EdgeError::Entropy)?,
     );
 
+    // Replay the durable log into the projection before serving, so a restart resumes exactly where
+    // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
+    edge.rebuild().await.map_err(EdgeError::Rebuild)?;
+
     serve(config, edge).await
 }

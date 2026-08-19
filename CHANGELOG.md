@@ -277,6 +277,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   clean `400` rather than a deserialise failure, and the domain boundary refuses an unspecified one.
   An integration test drives a table seat → line → fire → open bill → settle (gapless receipt) →
   clean, and a shift open → blind count → close, entirely over the router without a socket.
+- `pos-edge` records each tender as a `billing.payment.captured` event (P5): a settle now appends one
+  captured-payment event per tender **and** the `billing.bill.settled` event in a single transaction,
+  so a crash never leaves a receipt without its payments. The captured payments are what let the
+  shift cash roll-up be rebuilt from the log; a cash payment's outcome is `CAPTURED`, tips are held
+  apart (per-payment tip capture is P7).
+- `pos-edge` rebuilds the projection from the durable log at boot (P5 crash recovery, ADR-0015):
+  `Edge::rebuild` replays every event in `event_id` order and folds it back — table, order line,
+  bill, table cycle, and the shift float-plus-cash roll-up — so a restart resumes exactly where the
+  last committed transaction left off and only an *uncommitted* transaction is lost. The `pos-edge`
+  binary calls it before serving. Idempotent: replaying committed facts lands on the same state.
+  Integration tests prove a second edge over the same store recovers a settled sale, a fired line,
+  the cleaned-down table cycle and the shift's cash total, and that a double rebuild is a no-op.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

@@ -17,6 +17,7 @@
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use pos_core::billing::{self, BillInput, ClassBase, Payment};
@@ -30,16 +31,17 @@ use pos_core::decision::{
 use pos_core::error::DomainError;
 use pos_core::inventory::RecipeBook;
 use pos_core::permission::{Permission, PermissionSet};
-use pos_ports::event_store::EventStore;
+use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, CashShiftClosed, CashShiftCounted, CashShiftOpened,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesTableClosed, SalesTableOpened,
+    BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
+    CashShiftCounted, CashShiftOpened, EventType, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, ShiftId, StationId, StoreId,
-    TableId, TaxClassId, TenantId,
+    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId, StationId,
+    StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
@@ -47,8 +49,8 @@ use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::{
-    BillState, ClockSource, IdGenerator, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
-    TableState,
+    BillState, ClockSource, IdGenerator, Open, OrderLineState, PaymentMethod, PaymentOutcome,
+    SalesChannel, ShiftState, TableState,
 };
 
 use crate::clock::SystemClock;
@@ -351,6 +353,15 @@ impl Projection {
 
     fn order_for_table(&self, table_id: TableId) -> Option<OrderId> {
         self.table_orders.get(&table_id).copied()
+    }
+
+    /// The table an order sits on, if any — the reverse of [`Self::open_order`], used by rebuild to
+    /// recover a bill's table from the log (a bill event names its order, not its table).
+    fn table_for_order(&self, order_id: OrderId) -> Option<TableId> {
+        self.table_orders
+            .iter()
+            .find(|(_, order)| **order == order_id)
+            .map(|(table, _)| *table)
     }
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
@@ -752,18 +763,19 @@ impl<S: EventStore> Edge<S> {
         }
 
         // Prove the settlement invariant against the assembled total, and that the bill can settle.
-        // Done before allocating a number, so a refused settle consumes none.
+        // Done before allocating a number, so a refused settle consumes none. The payments are cloned
+        // because each is recorded again below as a captured-payment event.
         let bill_decision = decide_bill(
             bill.state,
             BillCommand::Settle {
                 total_due: totals.total_due,
-                payments,
+                payments: payments.clone(),
                 tips,
             },
             &ctx,
         )?;
 
-        // Allocate the gapless receipt number for this bill, then append the event that records it.
+        // Allocate the gapless receipt number for this bill, then append the events that record it.
         let receipt_number = self
             .receipts
             .allocate_receipt(self.identity.store_id, bill_id)
@@ -773,7 +785,35 @@ impl<S: EventStore> Edge<S> {
             .discount_total
             .checked_add(totals.comp_total)
             .map_err(DomainError::from)?;
-        let payload = BillingBillSettled {
+
+        // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
+        // transaction so a crash never leaves a receipt without its payments (or the reverse). The
+        // captured payments are what let the shift cash roll-up be rebuilt from the log; each records
+        // its own change, and tips are held apart from the sale (per-payment tip capture is P7).
+        let zero = Money::zero(self.session.currency);
+        let mut envelopes = Vec::with_capacity(payments.len() + 1);
+        let mut messages = Vec::with_capacity(payments.len() + 1);
+        for payment in &payments {
+            let change = payment
+                .tendered
+                .checked_sub(payment.applied_to_bill)
+                .map_err(DomainError::from)?;
+            let captured = BillingPaymentCaptured {
+                bill_id,
+                payment_id: PaymentId::new(self.next_ulid()),
+                method: Open::from_known(payment.method),
+                outcome: Open::from_known(PaymentOutcome::Captured),
+                tendered: payment.tendered,
+                applied_to_bill: payment.applied_to_bill,
+                change_given: if change.is_negative() { zero } else { change },
+                tip_amount: zero,
+            };
+            let (envelope, message) = self.prepare(&ctx, &captured)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+
+        let settled = BillingBillSettled {
             bill_id,
             receipt_number,
             subtotal: totals.subtotal,
@@ -783,7 +823,11 @@ impl<S: EventStore> Edge<S> {
             rounding_adjustment: totals.rounding_adjustment,
             total_due: totals.total_due,
         };
-        self.commit_and_publish(&ctx, &payload).await?;
+        let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
+        envelopes.push(settled_envelope);
+        messages.push(settled_message);
+
+        self.append_and_publish(envelopes, messages).await?;
 
         {
             let mut projection = self.lock_projection();
@@ -941,6 +985,140 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// Rebuilds the in-memory projection from the durable event log (P5 crash recovery).
+    ///
+    /// The log in the store is the truth; the projection is a cache. On boot the edge replays every
+    /// event in `event_id` order and folds it back, so a committed sale — a seated table, a fired
+    /// line, a settled bill with its receipt, an open shift and the cash it has taken — survives a
+    /// restart, and only an *uncommitted* transaction is lost. Idempotent: replaying committed facts
+    /// lands on the same state each time.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the log cannot be read, or [`AppError::Encode`] if a stored event cannot
+    /// be decoded (a corrupt log).
+    pub async fn rebuild(&self) -> Result<(), AppError> {
+        // A page large enough that a normal store's day is a handful of reads, small enough that the
+        // batch and its decode stay bounded.
+        let limit = NonZeroU32::new(512).unwrap_or(NonZeroU32::MIN);
+        let mut after: Option<pos_proto::ids::EventId> = None;
+        loop {
+            let mut query = EventQuery::first(self.identity.store_id, limit);
+            if let Some(cursor) = after {
+                query = query.after(cursor);
+            }
+            let batch = self.store.read(&query).await?;
+            let Some(last) = batch.last() else { break };
+            after = Some(last.event_id);
+            let mut projection = self.lock_projection();
+            for envelope in &batch {
+                Self::fold(&mut projection, envelope)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Folds one logged event back into the projection during [`Self::rebuild`].
+    ///
+    /// The reverse of what each command emits, without re-deciding: the events already happened, so
+    /// this trusts them. Events the projection does not track — and unknown types from a newer
+    /// writer — are skipped, which is what keeps a forward-compatible log replayable.
+    fn fold(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let Some(known) = envelope.event_type.known() else {
+            return Ok(());
+        };
+        match known {
+            EventType::SalesTableOpened => {
+                let event: SalesTableOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_table(event.table_id, TableState::Occupied);
+                projection.open_order(event.table_id, event.order_id);
+            }
+            EventType::SalesTableClosed => {
+                let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_table(event.table_id, TableState::Free);
+            }
+            EventType::SalesOrderLineAdded => {
+                let event: SalesOrderLineAdded =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.add_line(
+                    event.order_line_id,
+                    LineRecord {
+                        order_id: event.order_id,
+                        state: OrderLineState::Added,
+                        menu_item_id: event.menu_item_id,
+                        quantity: event.quantity,
+                        course_id: event.course_id,
+                        line_total: event.line_total,
+                        tax_class_id: event.tax_class_id,
+                    },
+                );
+            }
+            EventType::SalesOrderLineFired => {
+                let event: SalesOrderLineFired =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_line_state(event.order_line_id, OrderLineState::Fired);
+            }
+            EventType::BillingBillOpened => {
+                let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                if let Some(table_id) = projection.table_for_order(event.order_id) {
+                    projection.open_bill_record(
+                        event.bill_id,
+                        BillRecord {
+                            order_id: event.order_id,
+                            table_id,
+                            state: BillState::Open,
+                        },
+                    );
+                    projection.set_table(table_id, TableState::AwaitingPayment);
+                }
+            }
+            EventType::BillingPaymentCaptured => {
+                let event: BillingPaymentCaptured =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                // Only cash reaches the drawer, and the roll-up is the reason payments are evented.
+                if event.method.known() == PaymentMethod::Cash {
+                    projection.collect_cash(event.applied_to_bill)?;
+                }
+            }
+            EventType::BillingBillSettled => {
+                let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_bill_state(event.bill_id, BillState::Settled);
+                if let Some(record) = projection.bill(event.bill_id) {
+                    projection.set_table(record.table_id, TableState::NeedsCleaning);
+                }
+            }
+            EventType::CashShiftOpened => {
+                let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.open_shift_record(
+                    event.opened_shift_id,
+                    ShiftRecord {
+                        state: ShiftState::Open,
+                        opening_float: event.opening_float,
+                        cash_collected: Money::zero(event.opening_float.currency_code),
+                        counted: None,
+                    },
+                );
+            }
+            EventType::CashShiftCounted => {
+                let event: CashShiftCounted = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.record_shift_count(
+                    event.counted_shift_id,
+                    event.counted_amount,
+                    ShiftState::Counted,
+                );
+            }
+            EventType::CashShiftClosed => {
+                let event: CashShiftClosed = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.close_shift_record(event.closed_shift_id);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
     /// takes. A voided line is owed nothing, so it contributes nothing.
     fn class_bases(lines: &[LineRecord]) -> Result<Vec<ClassBase>, AppError> {
@@ -987,28 +1165,54 @@ impl<S: EventStore> Edge<S> {
         }
     }
 
-    /// The commit-and-publish half of every command: write the event in one transaction, then — and
-    /// only then — tell every device. In that order, so a rolled-back write is never seen. Updating
-    /// the projection is the caller's, done after this returns for the same reason.
+    /// The commit-and-publish half of a single-event command: write the event in one transaction,
+    /// then — and only then — tell every device. In that order, so a rolled-back write is never seen.
+    /// Updating the projection is the caller's, done after this returns for the same reason.
     async fn commit_and_publish<P: EventPayload + serde::Serialize>(
         &self,
         ctx: &DecisionCtx,
         payload: &P,
     ) -> Result<(), AppError> {
+        let (envelope, message) = self.prepare(ctx, payload)?;
+        self.append_and_publish(vec![envelope], vec![message]).await
+    }
+
+    /// Prepares an event for the store and the fan-out: the stamped envelope to append, and the
+    /// message to broadcast once it commits.
+    fn prepare<P: EventPayload + serde::Serialize>(
+        &self,
+        ctx: &DecisionCtx,
+        payload: &P,
+    ) -> Result<(EventEnvelope<RawPayload>, ServerMessage), AppError> {
         let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
         let event_type = EventTypeRef::from_known(P::EVENT_TYPE).as_str().to_owned();
         let envelope = self.envelope(ctx, payload)?;
+        Ok((
+            envelope,
+            ServerMessage::Event {
+                event_type,
+                payload: published,
+            },
+        ))
+    }
 
+    /// Appends every envelope in **one** transaction, then — and only then — publishes every message.
+    ///
+    /// The atomic-append is what lets a settle write its `billing.payment.captured` events and its
+    /// `billing.bill.settled` event together: a crash leaves either all of them or none, never a
+    /// receipt without its payments. Nothing is published until the commit succeeds.
+    async fn append_and_publish(
+        &self,
+        envelopes: Vec<EventEnvelope<RawPayload>>,
+        messages: Vec<ServerMessage>,
+    ) -> Result<(), AppError> {
         let mut tx = self.store.begin().await?;
-        self.store
-            .append(&mut tx, std::slice::from_ref(&envelope))
-            .await?;
+        self.store.append(&mut tx, &envelopes).await?;
         tx.commit().await?;
 
-        self.fanout.publish(&ServerMessage::Event {
-            event_type,
-            payload: published,
-        });
+        for message in &messages {
+            self.fanout.publish(message);
+        }
         Ok(())
     }
 
