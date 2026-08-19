@@ -289,6 +289,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   binary calls it before serving. Idempotent: replaying committed facts lands on the same state.
   Integration tests prove a second edge over the same store recovers a settled sale, a fired line,
   the cleaned-down table cycle and the shift's cash total, and that a double rebuild is a no-op.
+- The **dine-in acceptance flow** is now an automated test (`tests/dine_in.rs`, the P5 exit
+  criterion): one table, two devices, no network — seat → both devices order → fire by course → add
+  a later course → open the bill → settle it split across cash and card → a gapless receipt → the
+  table cycles to clean. Every committed change reaches both devices over the fan-out, and the flow
+  runs entirely on the in-memory fakes, which is the offline demonstration. With this, P5 (`pos_edge`)
+  meets its exit criteria: a store seats, orders from two devices, fires, settles with a gapless
+  receipt and cycles the table, offline throughout, and a kill mid-sale loses only the uncommitted
+  transaction (`tests/recovery.rs`).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
