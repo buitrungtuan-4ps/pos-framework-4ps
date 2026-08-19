@@ -16,5 +16,8 @@ serde.workspace = true
 # `cargo xtask deps-rule` fails the build if it appears here or anywhere in this
 # crate's resolved normal-dependency closure.
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

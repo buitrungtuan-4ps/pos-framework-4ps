@@ -71,6 +71,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   a concurrent edit can never resurrect a voided line — and `bill:settle` being one-time (§14.4) is
   now a property of the `Bill` machine rather than of a lock.
 
+- `pos-core` billing: `assemble` computes a bill's totals with tax **per tax-class subtotal**
+  (rounded once per class, the per-class lines reconciling to the tax total a VAT invoice prints),
+  bill-level discounts and comps allocated proportionally across classes, a service charge that is
+  taxable per config, and cash rounding materialised as an explicit `rounding_adjustment` line —
+  ADR-0028 made mechanical. `settle` proves the settlement invariant (`sum(applied) == total_due`,
+  change `= tendered − applied − tips`, tips a separate ledger) and refuses under-application and
+  negative change. `split_evenly`/`split_by_weights` bind the §14.3 law (`sum(splits) ==
+  original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
+  tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
