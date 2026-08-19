@@ -73,9 +73,10 @@ links:
     cargo run -q -p xtask -- links
     cargo run -q -p xtask -- countries
 
-# Regenerate the committed snapshots from the code that owns them.
+# Regenerate the committed snapshots and generated docs from the code that owns them.
 snapshot:
     POS_UPDATE_SNAPSHOTS=1 cargo test -q -p pos-proto snapshot
+    POS_UPDATE_SNAPSHOTS=1 cargo test -q -p pos-core
 
 # Refuse a removal from a committed snapshot, against the base branch.
 snapshot-check base="origin/main":

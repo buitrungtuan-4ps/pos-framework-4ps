@@ -22,6 +22,13 @@
 //! A `schema_version=` line may change, because bumping one is a deliberate act that
 //! already carries its own obligations — a mandatory upgrade note in the changelog, and
 //! two releases running in parallel.
+//!
+//! The permission snapshot (`docs/snapshots/permissions.txt`) follows the same shape: a
+//! bare permission id is the contract — a role synced from an older cloud may still
+//! reference it, so it may be added but never removed (deprecate instead) — while the
+//! tabbed metadata lines (`group=`, `risk=`, `pin_required=`, `default_role=`) are
+//! mutable, because re-grouping a permission or adjusting a default role is a deliberate
+//! change to a seed, not a broken contract.
 
 use std::collections::BTreeSet;
 
@@ -29,11 +36,23 @@ use super::{Error, repo_root};
 use crate::Finding;
 
 /// Snapshot files under this check's protection.
-const SNAPSHOTS: &[&str] = &["docs/snapshots/events.txt"];
+const SNAPSHOTS: &[&str] = &[
+    "docs/snapshots/events.txt",
+    "docs/snapshots/permissions.txt",
+];
+
+/// Tab-prefixed metadata keys that may change or disappear without breaking a contract.
+const MUTABLE_KEYS: &[&str] = &[
+    "\tschema_version=",
+    "\tgroup=",
+    "\trisk=",
+    "\tpin_required=",
+    "\tdefault_role=",
+];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
 fn is_mutable(line: &str) -> bool {
-    line.starts_with('#') || line.contains("\tschema_version=")
+    line.starts_with('#') || MUTABLE_KEYS.iter().any(|key| line.contains(key))
 }
 
 /// Compares each snapshot against the base ref.
@@ -119,5 +138,21 @@ mod tests {
     #[test]
     fn comments_are_ignored() {
         assert!(is_mutable("# Event catalogue snapshot. Generated."));
+    }
+
+    #[test]
+    fn a_bare_permission_id_is_a_contract() {
+        // No tab: the id itself, which a role synced from an older cloud may still name.
+        assert!(!is_mutable("billing.bill.void"));
+    }
+
+    #[test]
+    fn permission_metadata_may_change() {
+        // Re-grouping a permission or adjusting a default role is a deliberate change to a
+        // seed, not a broken contract, so these do not need the removal gate.
+        assert!(is_mutable("billing.bill.void\tgroup=BILLING"));
+        assert!(is_mutable("billing.bill.void\trisk=HIGH"));
+        assert!(is_mutable("billing.bill.void\tpin_required=true"));
+        assert!(is_mutable("billing.bill.void\tdefault_role=OWNER"));
     }
 }

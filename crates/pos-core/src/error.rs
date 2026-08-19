@@ -55,6 +55,15 @@ pub enum DomainError {
         /// What was empty, for the message.
         what: &'static str,
     },
+
+    /// The acting role's [`PermissionSet`](crate::permission::PermissionSet) does not grant the
+    /// permission the action needs. Deny by default: every gated action fails this way unless the
+    /// set explicitly carries the permission
+    /// ([`docs/pos-spec.md` §9](../../../docs/pos-spec.md)).
+    PermissionDenied {
+        /// The denied permission's stable id, e.g. `billing.bill.void`.
+        permission: &'static str,
+    },
 }
 
 impl core::fmt::Display for DomainError {
@@ -80,6 +89,9 @@ impl core::fmt::Display for DomainError {
                 "no tax rate configured for class {tax_class_id} on channel {sales_channel}"
             ),
             Self::Empty { what } => write!(f, "{what} must not be empty"),
+            Self::PermissionDenied { permission } => {
+                write!(f, "permission denied: {permission}")
+            }
         }
     }
 }
@@ -92,7 +104,8 @@ impl core::error::Error for DomainError {
             Self::PaymentsDoNotSumToTotal { .. }
             | Self::NegativeChange
             | Self::TaxRateNotConfigured { .. }
-            | Self::Empty { .. } => None,
+            | Self::Empty { .. }
+            | Self::PermissionDenied { .. } => None,
         }
     }
 }

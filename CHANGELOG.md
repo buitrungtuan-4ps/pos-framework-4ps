@@ -81,6 +81,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
   tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
 
+- `pos-core` permission registry (`pos-spec.md` §9): a **fixed catalogue** of 24 permissions declared
+  through one `permissions!` macro, so a new permission is a single entry that cannot omit its group,
+  risk, PIN flag, default roles or description — the enum, its `ALL`, and `Permission::meta` all
+  derive from that one block and cannot drift. `PermissionSet` is a `u64` bitset (a compile-time
+  assertion keeps the catalogue inside 64), roles are data synced from the cloud, and every check
+  goes through one `require()` gate that is **deny by default** and returns `DomainError::PermissionDenied`
+  naming the id. High-risk money vectors (void, comp, refund, price override, drawer-no-sale) carry a
+  mandatory PIN flag a test enforces. `docs/snapshots/permissions.txt` records every id under the same
+  removal gate as the event catalogue — the bare id is an immutable contract, the tabbed metadata is
+  mutable — and `docs/permissions.md` is the generated role matrix.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
@@ -150,6 +161,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - Documentation and decisions only; no code, no protocol, no migrations, no permission
   changes. ADR-0006 is marked superseded rather than edited — its decision stands, only its
   port list was incomplete.
+- The permission catalogue introduces 24 permission identifiers (`docs/snapshots/permissions.txt`).
+  This is the initial catalogue, not a change to an existing one, so nothing needs migrating; but
+  from here on adding, retiring or re-defaulting a permission is an `Upgrade note` under rule 4, and a
+  role synced from an older cloud that still names a retired id must keep resolving — ids are
+  deprecated, never removed.
 - `CODEOWNERS` routes review to four `@maintainers-*` teams. GitHub **silently ignores** an
   entry naming a team that does not exist, so the required-review protection on the backbone
   crates does nothing until those teams are created. See `MAINTAINERS.md`.
