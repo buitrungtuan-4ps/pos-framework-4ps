@@ -117,6 +117,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   because the tablet and the cloud aggregator must apply the *same* rules or one bill lands on two
   different business dates.
 
+- `pos-core` inventory (`pos-spec.md` §8): recipes as a **bill of materials per item and per
+  modifier** (a modifier carries its own `MenuItemId` and its own `Recipe`, so "the large size adds
+  50 g of dough" is a recipe like any other), a `StockProjection` of on-hand quantities updated by
+  the five ledger movements, and `available(item) = floor(min over ingredients(on_hand / per_unit))`.
+  Because availability reads the current projection every time, shared ingredients propagate for
+  free — the archive's C=10/D=8/E=6 fixture is a test: cooking one A drops B's availability from 8 to
+  7 through the shared ingredient D, without B being sold. `Availability::is_sellable` is the auto-86
+  decision; `consumption_for_fire` sums base plus modifiers scaled by line quantity; and
+  `stocktake_movement` computes the delta against the projection **at count time**, so sales during a
+  count are preserved rather than overwritten. All arithmetic is integer `Quantity` in thousandths —
+  no float on the availability path.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one
