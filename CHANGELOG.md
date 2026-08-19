@@ -189,6 +189,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   so it is testable against a fixed instant. Config gains an optional `advertised_ip` (the
   DHCP-pinned LAN IP) for the pairing URL. Pairing codes and device tokens are secrets and never
   logged.
+- `pos-edge` ULID `IdGenerator` and SNTP drift monitor (P5): `idgen::EdgeIdGenerator` mints
+  monotonic, time-sortable ULIDs over a `ClockSource` — it clamps to a non-decreasing timestamp so an
+  NTP step backwards cannot emit an id that sorts before one already handed out (the event feed pages
+  by ULID), and increments the random component within a millisecond so same-ms ids strictly
+  increase. The 80 random bits come from a SplitMix64 stream seeded once from the OS CSPRNG; a ULID's
+  randomness is not a secret (pairing codes and device tokens take OS entropy directly). `sntp::assess`
+  is the pure drift decision — an offset past two seconds from a reference clock alarms, because the
+  business date is derived from the store's local time and a drifting clock files sales under the
+  wrong day. The SNTP network poll that feeds it lands with deployment, like mDNS.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
