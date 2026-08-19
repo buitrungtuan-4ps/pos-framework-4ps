@@ -8,6 +8,7 @@ members = [
     "countries/zz",
     "crates/pos-contract-tests",
     "crates/pos-fakes",
+    "crates/adapters/store-sqlite",
     "xtask",
 ]
 

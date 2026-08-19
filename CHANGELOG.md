@@ -81,6 +81,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original_total`) at the domain level. A `DomainError` names which rule the inputs broke. Property
   tests over arbitrary amounts, parts, weights and payments bind §14.3 and §14.5 in CI.
 
+- `store-sqlite` (P4): the edge `EventStore` and `ConfigStore` over SQLite, the first adapter. One
+  `rusqlite` connection owned by a dedicated writer thread (ADR-0015); the async port methods send a
+  command over a bounded channel and await a oneshot reply, so blocking SQLite never touches the
+  executor and every write serialises through one point. The outbox position is an AUTOINCREMENT
+  rowid assigned inside the commit transaction — monotone, never reused after an acknowledged delete,
+  and starting at one so it never collides with `OutboxPosition::START`. A transaction buffers its
+  writes in the `SqliteTx` and flushes them in one `BEGIN IMMEDIATE`…`COMMIT` on commit, so a dropped
+  handle rolls back and a crash mid-transaction loses only the uncommitted work. Idempotency is
+  `INSERT OR IGNORE` (the stored copy wins), reads come back ordered by `event_id`, and the schema is
+  WAL with `synchronous = NORMAL`. It passes **all 19** shared contract cases — the same suites the
+  fake runs — including both power-loss cases, driven by reopening the database file. The schema is
+  the forward-only migration `0001_event_store.sql` applied by the ADR-0017 runner.
+
 - ADR-0015 (SQLite access at the edge: `rusqlite` behind one dedicated single-writer thread, bridging
   blocking SQLite into the async `EventStore`/`ConfigStore` ports over a channel, so gapless outbox
   positioning and `TxContext`-by-shape fall out for free) and ADR-0017 (migrations: forward-only,
