@@ -33,11 +33,13 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod billing;
+pub mod capability;
 pub mod error;
 pub mod machines;
 pub mod permission;
 pub mod state_machine;
 
+pub use capability::{Capability, CapabilityContext};
 pub use error::DomainError;
 pub use permission::{Grant, Permission, PermissionSet, Role, require};
 pub use state_machine::{StateMachine, TransitionError};

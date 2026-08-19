@@ -64,6 +64,15 @@ pub enum DomainError {
         /// The denied permission's stable id, e.g. `billing.bill.void`.
         permission: &'static str,
     },
+
+    /// An action needs a store capability that this store's profile does not enable. The one gate
+    /// [`CapabilityContext::require`](crate::capability::CapabilityContext::require) fails this way,
+    /// which is why scattering `if flag` through the code is unnecessary and banned
+    /// ([`docs/pos-spec.md` §10](../../../docs/pos-spec.md)).
+    CapabilityDisabled {
+        /// The disabled capability's config key, e.g. `seats_enabled`.
+        capability: &'static str,
+    },
 }
 
 impl core::fmt::Display for DomainError {
@@ -92,6 +101,9 @@ impl core::fmt::Display for DomainError {
             Self::PermissionDenied { permission } => {
                 write!(f, "permission denied: {permission}")
             }
+            Self::CapabilityDisabled { capability } => {
+                write!(f, "capability disabled: {capability}")
+            }
         }
     }
 }
@@ -105,7 +117,8 @@ impl core::error::Error for DomainError {
             | Self::NegativeChange
             | Self::TaxRateNotConfigured { .. }
             | Self::Empty { .. }
-            | Self::PermissionDenied { .. } => None,
+            | Self::PermissionDenied { .. }
+            | Self::CapabilityDisabled { .. } => None,
         }
     }
 }

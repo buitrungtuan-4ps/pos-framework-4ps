@@ -92,6 +92,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   removal gate as the event catalogue — the bare id is an immutable contract, the tabbed metadata is
   mutable — and `docs/permissions.md` is the generated role matrix.
 
+- `pos-core` capability context (`pos-spec.md` §10): the ten store-profile flags (`tables_enabled`,
+  `kds_enabled`, `pay_first_enabled`, …) as a fixed catalogue declared through one `capabilities!`
+  macro, read through a single `CapabilityContext` — `require()` returns `DomainError::CapabilityDisabled`
+  naming the key, so the banned "scatter `if flag` through the code" pattern has nowhere to live.
+  Full-service, cafe-counter and retail are three presets over the same flags. Inter-flag validity
+  (`pay_first` excludes `tables`; `seats` requires `tables`) is `conflicts()`, a pure function over
+  enumerable `RULES` the cloud runs before publishing a config version and the edge could run
+  identically. `docs/snapshots/capabilities.txt` puts every flag key under the removal gate — a key
+  is a config term a synced edge reads — with its `default` as mutable metadata.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one

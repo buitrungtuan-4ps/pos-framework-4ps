@@ -29,6 +29,11 @@
 //! tabbed metadata lines (`group=`, `risk=`, `pin_required=`, `default_role=`) are
 //! mutable, because re-grouping a permission or adjusting a default role is a deliberate
 //! change to a seed, not a broken contract.
+//!
+//! The capability snapshot (`docs/snapshots/capabilities.txt`) is the same again: a bare
+//! flag key is a term in the configuration document a synced edge reads, so it may not
+//! disappear, while its tabbed `default=` may change (a default change owes an upgrade
+//! note, but is allowed).
 
 use std::collections::BTreeSet;
 
@@ -39,6 +44,7 @@ use crate::Finding;
 const SNAPSHOTS: &[&str] = &[
     "docs/snapshots/events.txt",
     "docs/snapshots/permissions.txt",
+    "docs/snapshots/capabilities.txt",
 ];
 
 /// Tab-prefixed metadata keys that may change or disappear without breaking a contract.
@@ -48,6 +54,7 @@ const MUTABLE_KEYS: &[&str] = &[
     "\trisk=",
     "\tpin_required=",
     "\tdefault_role=",
+    "\tdefault=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -154,5 +161,15 @@ mod tests {
         assert!(is_mutable("billing.bill.void\trisk=HIGH"));
         assert!(is_mutable("billing.bill.void\tpin_required=true"));
         assert!(is_mutable("billing.bill.void\tdefault_role=OWNER"));
+    }
+
+    #[test]
+    fn a_bare_capability_key_is_a_contract() {
+        assert!(!is_mutable("tables_enabled"));
+    }
+
+    #[test]
+    fn a_capability_default_may_change() {
+        assert!(is_mutable("tables_enabled\tdefault=true"));
     }
 }
