@@ -102,6 +102,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   identically. `docs/snapshots/capabilities.txt` puts every flag key under the removal gate — a key
   is a config term a synced edge reads — with its `default` as mutable metadata.
 
+- `pos-core` business-date derivation (`pos-spec.md` §14.1, ADR-0014): `derive_business_date` turns
+  an instant into the trading day it belongs to, in the **store's** timezone with its cutoff hour
+  (default 04:00) — computing rollups in the server's timezone is named in `docs/roadmap.md` P3 as
+  *the* classic revenue-skewing bug. It runs the safe direction (instant → civil) and subtracts the
+  cutoff as civil arithmetic, so a 25-hour fall-back day needs no special case. `resolve_local_time`
+  handles the ambiguous direction (daypart and shift boundaries) with the one policy ADR-0014 fixes —
+  a skipped local time resolves forward, a doubled one to the earlier instant. `StoreTimeZone` and
+  `CutoffHour` validate at construction so a bad IANA name or hour fails once, not per derivation, and
+  `jiff` stays out of the crate's public signatures. Tests cover Ho Chi Minh, Honolulu, and both US
+  DST transitions. `pos-core` now enables `jiff`'s `tzdb-bundle-always` feature (ADR-0014), so the
+  timezone database is compiled into the binary as pure data — Windows ships none and the edge is a
+  static binary on an unadministered machine; this adds to binary size on both tiers, accepted
+  because the tablet and the cloud aggregator must apply the *same* rules or one bill lands on two
+  different business dates.
+
 ### Changed
 - `README.md`'s repository layout moves country modules out of `crates/adapters/` and up to
   `countries/` at the root. Filing `fiscal-vn` beside `store-sqlite` described a country as one

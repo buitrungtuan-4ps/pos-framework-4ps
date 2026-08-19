@@ -33,12 +33,14 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod billing;
+pub mod business_date;
 pub mod capability;
 pub mod error;
 pub mod machines;
 pub mod permission;
 pub mod state_machine;
 
+pub use business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 pub use capability::{Capability, CapabilityContext};
 pub use error::DomainError;
 pub use permission::{Grant, Permission, PermissionSet, Role, require};
