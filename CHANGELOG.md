@@ -333,6 +333,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ≥48px touch targets; the numeric WCAG-AA contrast audit of the oklch palette is the remaining
   visual-pass item. Adds `intl-messageformat` to the UI's dependencies (the Rust backbone is
   untouched).
+- The four P7 decisions, ahead of the cloud code they govern (ADR-before-code): **ADR-0016** — cloud
+  PostgreSQL access is `tokio-postgres` behind a `deadpool` pool with hand-written SQL and RLS set per
+  transaction, chosen so the workspace builds with no database and correctness is proven by tests
+  against a real PostgreSQL rather than by the compiler. **ADR-0022** — the events table is
+  range-partitioned **monthly by `business_date`**, tenant isolation is RLS (a column and a policy, not
+  the partition key), and retention drops whole partitions; resolves the three-way partition ambiguity
+  and supersedes ADR-0008's "by `store_id`" phrasing. **ADR-0023** — tenants are flat per-tenant
+  subdomains with no country label, DNS created through the Cloudflare API is the slug-uniqueness
+  ledger (no shared cross-cell database), redirect never proxy, wildcard renewals staggered above ~5
+  cells; resolves the ADR-0011/archive contradiction and supersedes ADR-0011's country-in-hostname
+  mechanism while keeping its redirect principle. **ADR-0019** — the public `/v1` OpenAPI is generated
+  from the axum handlers with `utoipa` and a `cargo xtask openapi --check` drift gate, never
+  hand-written. Registered in the ADR index and the engineering guide; these unblock the P7 schema,
+  adapters and `pos_cloud`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

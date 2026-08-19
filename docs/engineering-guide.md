@@ -174,6 +174,10 @@ Recorded so far:
 | 0018 | Edge HTTP/WebSocket stack: axum + tower, a `broadcast` fan-out under 50 ms, the UI embedded with `rust-embed` |
 | 0030 | Edge discovery (QR raw-IP + manual, mDNS behind a trait), single-use pairing code, offline PIN against synced Argon2id hashes with a local lockout |
 | 0020 | i18n runtime: ICU MessageFormat via `@formatjs/intl-messageformat` over the platform `Intl`; `en` is the enforced fallback; a TypeScript-AST lint bans hardcoded user-visible strings |
+| 0016 | Cloud PostgreSQL access: `tokio-postgres` + `deadpool`, hand-written SQL, RLS set per transaction, no build-time database |
+| 0022 | Events partitioned monthly by `business_date`; tenant isolation is RLS (a column and a policy), not the partition key; retention drops whole partitions |
+| 0023 | Flat per-tenant subdomains, no country label; DNS created via the Cloudflare API is the slug-uniqueness ledger; redirect never proxy; stagger wildcard renewals above ~5 cells |
+| 0019 | OpenAPI generated from the axum handlers with `utoipa`; `cargo xtask openapi --check` fails CI on drift |
 
 The full index, including records reserved for decisions not yet taken, is in [`docs/adr/README.md`](adr/README.md).
 
