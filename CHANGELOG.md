@@ -207,6 +207,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   hardened systemd unit and a Windows service guide; both deliver the `SIGTERM`/stop the binary
   already drains gracefully, so a committed sale is durable and an interrupted one was never
   acknowledged.
+- `pos-edge` application layer (P5 keystone): `app::Edge<S>` is the load → decide → apply → publish
+  loop ADR-0013 gives each binary. For a command it loads the aggregate's state from an in-memory
+  projection, decides with the synchronous `pos-core` spine, writes the wire events it maps to inside
+  one store transaction, and — only after the commit — folds the change into the projection and
+  publishes it to every device over the fan-out, so a rolled-back write is never shown. It is generic
+  over the store `S`, so the identical loop runs against `pos-fakes` in a test and `store-sqlite` on a
+  real machine (static dispatch, no `dyn`). This slice wires the table floor cycle (seat →
+  `sales.table.opened`, clean → `sales.table.closed`); the order, bill and shift families follow the
+  same shape. Tests prove seating opens a table, that two devices both see the change over the
+  fan-out (the dine-in exit criterion in miniature), and that an illegal transition is refused and
+  publishes nothing. `StoreIdentity` and `EdgeSession` carry the envelope context and the
+  config-driven decision inputs.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

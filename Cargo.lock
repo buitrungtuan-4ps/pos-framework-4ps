@@ -816,6 +816,7 @@ dependencies = [
  "pos-core",
  "pos-country",
  "pos-country-zz",
+ "pos-fakes",
  "pos-ports",
  "pos-proto",
  "rust-embed",

@@ -28,6 +28,7 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod active_config;
+pub mod app;
 pub mod auth;
 pub mod clock;
 pub mod config;
@@ -44,6 +45,7 @@ pub mod state;
 pub mod telemetry;
 
 pub use active_config::{ActiveConfig, ConfigRejected};
+pub use app::{AppError, Edge, EdgeSession, StoreIdentity, TableView};
 pub use auth::{Lockout, SignIn};
 pub use clock::SystemClock;
 pub use config::EdgeConfig;
