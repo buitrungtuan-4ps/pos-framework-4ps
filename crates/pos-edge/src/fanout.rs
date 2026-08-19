@@ -165,7 +165,7 @@ mod tests {
 
         match receiver.recv().await {
             Err(RecvError::Lagged(missed)) => {
-                assert!(missed >= 1, "the subscriber was told it fell behind")
+                assert!(missed >= 1, "the subscriber was told it fell behind");
             }
             other => panic!("expected a Lagged signal, got {other:?}"),
         }
