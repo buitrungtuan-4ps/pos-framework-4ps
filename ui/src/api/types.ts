@@ -68,3 +68,11 @@ export interface ShiftResponse {
   variance?: Money;
   print_shift_report: boolean;
 }
+
+export interface PairRequest {
+  code: string;
+}
+
+export interface PairAccepted {
+  device_token: string;
+}

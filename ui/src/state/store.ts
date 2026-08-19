@@ -218,6 +218,44 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
   return { orderLineId, orderId, name, quantityMilli: milli, lineTotal, state: "ORDER_LINE_STATE_ADDED" };
 }
 
+// The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.
+export function tableLabel(tableId: string): string {
+  return FLOOR.find((table) => table.id === tableId)?.label ?? tableId;
+}
+
+export interface KitchenLine {
+  orderLineId: string;
+  name: string;
+  tableLabel: string;
+}
+
+// Every fired line still on an open order, newest tables last — what the kitchen and the pass work
+// from. A line whose table has been cleaned (its bill settled) drops out, because the order is done.
+export function firedLines(): KitchenLine[] {
+  const liveOrders = new Set(Object.values(state.tableOrder));
+  return Object.values(state.lines)
+    .filter((line) => line.state === "ORDER_LINE_STATE_FIRED" && liveOrders.has(line.orderId))
+    .map((line) => ({
+      orderLineId: line.orderLineId,
+      name: line.name,
+      tableLabel: tableLabel(state.orderTable[line.orderId] ?? ""),
+    }));
+}
+
+// Table counts by state, for the Today summary.
+export function tableCounts(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const table of FLOOR) {
+    const current = tableState(table.id);
+    counts[current] = (counts[current] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export function openBillCount(): number {
+  return Object.keys(state.openBill).length;
+}
+
 // ---- commands (call the edge, update at once, let the fan-out reconcile) -----
 
 export async function seat(tableId: string): Promise<void> {

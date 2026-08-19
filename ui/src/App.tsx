@@ -3,9 +3,14 @@ import { Route, Router } from "@solidjs/router";
 
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
+import { Expo } from "./screens/Expo";
 import { Floor } from "./screens/Floor";
+import { Kds } from "./screens/Kds";
 import { Order } from "./screens/Order";
+import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
+import { Shift } from "./screens/Shift";
+import { Today } from "./screens/Today";
 import { fold, setLink } from "./state/store";
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
@@ -36,6 +41,11 @@ export function App() {
       <Route path="/" component={Floor} />
       <Route path="/table/:id" component={Order} />
       <Route path="/table/:id/pay" component={Pay} />
+      <Route path="/kds" component={Kds} />
+      <Route path="/expo" component={Expo} />
+      <Route path="/today" component={Today} />
+      <Route path="/shift" component={Shift} />
+      <Route path="/pair" component={Pairing} />
     </Router>
   );
 }

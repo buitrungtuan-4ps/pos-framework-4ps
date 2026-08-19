@@ -308,6 +308,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   screens (KDS, expo, Today, shift, pairing) and the four device layouts follow. A CI `ui` job
   type-checks and builds the app on every pull request; the Rust build still embeds `build.rs`'s
   placeholder on a fresh checkout, since `ui/dist` is gitignored. Requires Node ≥ 22 and `pnpm`.
+- `ui/` (P6) — the remaining operator screens, over the same live projection: the **kitchen display**
+  (every fired line, bump to clear) and the **pass** (fired lines gathered by table, "all away"), both
+  on a dark theme they take over while open (legible at two metres); **Today** (the floor at a glance
+  — table counts, open bills, shift, a live read rather than a report); the **cash shift** (open →
+  blind count → close revealing the variance, the count never shown beside the expectation); and
+  **pairing** (redeem a six-digit code, pre-filled from the QR link). A status-bar nav links them.
+  Layouts are responsive across phone, tablet and POS from one breakpoint set, with the kitchen and
+  pass on their own dark treatment. Known follow-ups, called out rather than hidden: the KDS/pass
+  bump is a screen-local acknowledgement until a durable "line made" event exists; ICU i18n with an
+  `en` fallback and the no-hardcoded-strings CI check are blocked on ADR-0020; the WCAG-AA audit and
+  the per-device layout tuning are part of the visual pass.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

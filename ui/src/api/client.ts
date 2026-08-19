@@ -10,6 +10,7 @@ import type {
   LineRequest,
   LineResponse,
   OpenShiftRequest,
+  PairAccepted,
   SettleRequest,
   ShiftResponse,
   TableResponse,
@@ -67,4 +68,6 @@ export const api = {
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`),
+
+  pair: (code: string) => request<PairAccepted>("POST", "/api/pair", { code }),
 };

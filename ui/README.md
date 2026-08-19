@@ -48,5 +48,12 @@ a fresh checkout.
 - `src/lib/` — money (integer minor units, never a float) and the stand-in menu.
 - `src/api/` — the typed client for the edge's routes and the reconnecting `/ws` live link.
 - `src/state/` — the client projection folded from the fan-out.
-- `src/screens/` — the primary flow: floor → order → pay. The remaining screens (KDS, expo, Today,
-  shift, pairing) follow.
+- `src/screens/` — floor → order → pay (the primary flow), plus the kitchen display, the pass
+  (expo), Today, the cash shift, and pairing. The kitchen and pass take over a dark theme while open
+  (`src/lib/screen.ts`), legible at two metres.
+
+Layouts are responsive across phone, tablet and POS terminal from one set of breakpoints, with the
+kitchen and pass on their own dark treatment; the per-device pixel tuning is part of the visual pass.
+Still to come: ICU i18n with an `en` fallback and the no-hardcoded-strings check (blocked on
+ADR-0020), the WCAG-AA audit, and a durable "bump" event so the KDS acknowledgement travels rather
+than being local to one screen.

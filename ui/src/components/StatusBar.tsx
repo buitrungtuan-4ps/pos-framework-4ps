@@ -1,7 +1,16 @@
-import { Show, createSignal } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { A } from "@solidjs/router";
 
 import { state } from "../state/store";
+
+const NAV = [
+  { href: "/", label: "Floor" },
+  { href: "/kds", label: "Kitchen" },
+  { href: "/expo", label: "Pass" },
+  { href: "/today", label: "Today" },
+  { href: "/shift", label: "Shift" },
+  { href: "/pair", label: "Pair" },
+];
 
 // The persistent status bar. It names the store link (to the edge on the LAN, not the cloud — a
 // store is meant to trade with the cloud unreachable), the open shift, and a theme toggle. Nothing
@@ -39,6 +48,15 @@ export function StatusBar() {
       <Show when={state.shift} fallback={<span class="text-ink-muted">No shift open</span>}>
         {(shift) => <span class="text-ink-muted">Shift {shift().state.replace("SHIFT_STATE_", "").toLowerCase()}</span>}
       </Show>
+      <nav class="flex items-center gap-3 text-ink-muted">
+        <For each={NAV}>
+          {(item) => (
+            <A href={item.href} class="no-underline hover:text-ink" activeClass="text-ink" end>
+              {item.label}
+            </A>
+          )}
+        </For>
+      </nav>
       <button
         type="button"
         class="ml-auto rounded-token border border-line px-3 py-1 text-ink"

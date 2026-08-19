@@ -1,0 +1,69 @@
+import { For, Show, createMemo, createSignal } from "solid-js";
+
+import { useDarkTakeover } from "../lib/screen";
+import { firedLines, type KitchenLine } from "../state/store";
+
+interface TableGroup {
+  label: string;
+  lines: KitchenLine[];
+}
+
+// The pass: fired lines gathered by table, so the expeditor runs a whole table together. "All away"
+// clears that table from the pass — a local acknowledgement, like the KDS bump, until a durable
+// event carries it.
+export function Expo() {
+  useDarkTakeover();
+  const [away, setAway] = createSignal<ReadonlySet<string>>(new Set());
+
+  const groups = createMemo<TableGroup[]>(() => {
+    const byTable = new Map<string, KitchenLine[]>();
+    for (const line of firedLines()) {
+      if (away().has(line.orderLineId)) {
+        continue;
+      }
+      const lines = byTable.get(line.tableLabel) ?? [];
+      lines.push(line);
+      byTable.set(line.tableLabel, lines);
+    }
+    return [...byTable.entries()]
+      .map(([label, lines]) => ({ label, lines }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  });
+
+  const runAway = (lines: KitchenLine[]) =>
+    setAway((current) => {
+      const next = new Set(current);
+      for (const line of lines) {
+        next.add(line.orderLineId);
+      }
+      return next;
+    });
+
+  return (
+    <section class="p-4">
+      <h1 class="mb-4 text-xl font-semibold">Pass</h1>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <For each={groups()} fallback={<p class="text-ink-muted">Nothing on the pass.</p>}>
+          {(group) => (
+            <div class="rounded-token border border-line bg-surface-raised p-4">
+              <p class="text-lg font-semibold">Table {group.label}</p>
+              <ul class="mt-2 flex flex-col gap-1">
+                <For each={group.lines}>{(line) => <li>{line.name}</li>}</For>
+              </ul>
+              <button
+                type="button"
+                class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+                onClick={() => runAway(group.lines)}
+              >
+                All away
+              </button>
+            </div>
+          )}
+        </For>
+      </div>
+      <Show when={groups().length > 0}>
+        <p class="mt-4 text-sm text-ink-muted">{groups().length} tables on the pass</p>
+      </Show>
+    </section>
+  );
+}
