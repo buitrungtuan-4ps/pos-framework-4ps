@@ -230,6 +230,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   config-driven decision inputs until the cloud config tree (P7). An integration test drives seat →
   read → clean and the 409/400 paths without a socket. The acting actor is a fixed development
   identity pending token→actor resolution.
+- `pos-edge` order-line flow (P5): `Edge::add_line` records a line on the order a table holds
+  (`sales.order_line.added`) and `Edge::fire_line` sends it to the kitchen
+  (`sales.order_line.fired`) through the `pos-core` `decide_line` spine, consuming its recipe (§8).
+  The edge does not invent prices: a `LineDraft` carries the amounts the device captured from the
+  menu it holds (`unit_price`, `line_total`, `tax_class`, `tax_rate` — a line never references the
+  live menu), and the projection remembers each line's item, quantity and state so a fire can be
+  decided and (once the menu's bill of materials syncs, P7) its consumption computed. Firing an
+  already-fired line is refused by the state machine; adding to an unseated table is refused. The
+  `commit_and_publish` half of the loop is now generic, shared by every command. The bootstrap
+  session carries an empty `RecipeBook` (an unrecipe'd item consumes nothing) until P7.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

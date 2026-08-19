@@ -97,9 +97,13 @@ fn bad_request() -> Response {
 fn respond(outcome: Result<TableView, AppError>) -> Response {
     match outcome {
         Ok(view) => Json(TableResponse::from(view)).into_response(),
-        // A refused command (illegal transition, missing permission, disabled capability) is the
-        // caller's fault, not the server's — 409 Conflict rather than 500.
+        // A refused command (illegal transition, missing permission, disabled capability, or a
+        // table/line that is not in a state the command applies to) is the caller's fault, not the
+        // server's — 409 Conflict rather than 500.
         Err(AppError::Domain(error)) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        Err(error @ (AppError::NoOpenOrder | AppError::UnknownLine)) => {
+            (StatusCode::CONFLICT, error.to_string()).into_response()
+        }
         Err(AppError::Port(_)) => {
             (StatusCode::SERVICE_UNAVAILABLE, "the store is unavailable").into_response()
         }
