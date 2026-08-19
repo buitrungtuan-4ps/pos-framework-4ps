@@ -3,14 +3,17 @@
 
 //! The `pos_edge` entry point.
 //!
-//! Deliberately tiny: install logging, load the bootstrap config, serve. Everything testable lives
-//! in the [`pos_edge`] library. The config path comes from `POS_EDGE_CONFIG`, defaulting to
-//! `config.toml` in the working directory; on a real store it is written at activation. To run the
-//! edge on fakes with no config file, use the `minimal-edge` example (`just run-edge`).
+//! Deliberately tiny: install logging, load the bootstrap config, open the SQLite store, compose the
+//! application [`Edge`], serve. Everything testable lives in the [`pos_edge`] library. The config
+//! path comes from `POS_EDGE_CONFIG`, defaulting to `config.toml`; on a real store it is written at
+//! activation. To run the edge on fakes with no config file, use the `minimal-edge` example
+//! (`just run-edge`).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use pos_edge::{EdgeConfig, EdgeError, serve, telemetry};
+use pos_edge::{Edge, EdgeConfig, EdgeError, EdgeSession, StoreIdentity, serve, telemetry};
+use store_sqlite::SqliteStore;
 
 #[tokio::main]
 async fn main() -> Result<(), EdgeError> {
@@ -20,5 +23,11 @@ async fn main() -> Result<(), EdgeError> {
         .map_or_else(|| PathBuf::from("config.toml"), PathBuf::from);
     let config = EdgeConfig::load(&path)?;
 
-    serve(config).await
+    // The real edge stores events in SQLite (ADR-0015); the example uses the in-memory fakes.
+    let store = SqliteStore::open(&config.store_path).map_err(EdgeError::Store)?;
+    let identity = StoreIdentity::for_store(config.store_id);
+    let edge =
+        Arc::new(Edge::new(store, identity, EdgeSession::bootstrap()).map_err(EdgeError::Entropy)?);
+
+    serve(config, edge).await
 }

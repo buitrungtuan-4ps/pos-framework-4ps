@@ -16,6 +16,8 @@ path = "src/main.rs"
 # at start-up — the one edit a fork makes to serve its own market.
 pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz"] }
 pos-proto = { path = "../../crates/pos-proto" }
+# The example composes the edge over the in-memory fakes — no database, no hardware.
+pos-fakes = { path = "../../crates/pos-fakes" }
 tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing   = "0.1"
 

@@ -43,4 +43,12 @@ pub enum EdgeError {
     /// must not start ([ADR-0027](../../../docs/adr/0027-country-modules.md)).
     #[error("country modules are inconsistent: {0}")]
     Country(pos_country::RegistryError),
+
+    /// The event store could not be opened at start-up.
+    #[error("could not open the store: {0}")]
+    Store(pos_ports::PortError),
+
+    /// The OS entropy source needed to seed the id generator was unavailable.
+    #[error("entropy source unavailable: {0}")]
+    Entropy(getrandom::Error),
 }

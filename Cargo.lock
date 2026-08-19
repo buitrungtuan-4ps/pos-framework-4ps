@@ -681,6 +681,7 @@ name = "minimal-edge"
 version = "0.0.0"
 dependencies = [
  "pos-edge",
+ "pos-fakes",
  "pos-proto",
  "tokio",
  "tracing",
@@ -822,6 +823,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "store-sqlite",
  "thiserror",
  "tokio",
  "tokio-tungstenite",

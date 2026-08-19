@@ -25,13 +25,14 @@ use pos_core::campaign::Connectivity;
 use pos_core::capability::CapabilityContext;
 use pos_core::decision::{Actor, DecisionCtx, TableCommand, decide_table};
 use pos_core::error::DomainError;
-use pos_core::permission::PermissionSet;
+use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::EventStore;
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{SalesTableClosed, SalesTableOpened};
 use pos_proto::ids::{BrandId, StoreId, TableId, TenantId};
 use pos_proto::money::CurrencyCode;
+use pos_proto::ulid::Ulid;
 use pos_proto::{ClockSource, IdGenerator, TableState};
 
 use crate::clock::SystemClock;
@@ -51,6 +52,19 @@ pub struct StoreIdentity {
     pub store_id: StoreId,
 }
 
+impl StoreIdentity {
+    /// The identity for a store, with bootstrap tenant and brand ids until activation
+    /// ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)) supplies the real ones.
+    #[must_use]
+    pub fn for_store(store_id: StoreId) -> Self {
+        Self {
+            tenant_id: TenantId::new(Ulid::from_u128(1)),
+            brand_id: BrandId::new(Ulid::from_u128(1)),
+            store_id,
+        }
+    }
+}
+
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
 /// is config-driven; the values arrive from the cloud config tree in P7.
@@ -68,6 +82,27 @@ pub struct EdgeSession {
     pub cutoff: CutoffHour,
     /// Whether the store is currently online (drives the campaign engine's offline rule).
     pub connectivity: Connectivity,
+}
+
+impl EdgeSession {
+    /// Bootstrap defaults until the cloud config tree ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
+    /// P7) supplies the real values: a full-service store, every permission granted, VND, UTC with a
+    /// 04:00 cut-off, offline. Enough for the edge to sell on fakes and for the dine-in flow to run.
+    #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the only expect is on CutoffHour::new(4), a compile-time constant that is always valid"
+    )]
+    pub fn bootstrap() -> Self {
+        Self {
+            granted: Permission::ALL.iter().copied().collect(),
+            capabilities: CapabilityContext::full_service(),
+            currency: CurrencyCode::VND,
+            timezone: StoreTimeZone::utc(),
+            cutoff: CutoffHour::new(4).expect("4 is a valid cut-off hour"),
+            connectivity: Connectivity::Offline,
+        }
+    }
 }
 
 /// A failure applying a command.
@@ -279,7 +314,7 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
-    fn next_ulid(&self) -> pos_proto::ulid::Ulid {
+    fn next_ulid(&self) -> Ulid {
         self.ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

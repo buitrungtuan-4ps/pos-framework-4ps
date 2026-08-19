@@ -219,6 +219,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   fan-out (the dine-in exit criterion in miniature), and that an illegal transition is refused and
   publishes nothing. `StoreIdentity` and `EdgeSession` carry the envelope context and the
   config-driven decision inputs.
+- `pos-edge` HTTP domain routes (P5): the table floor cycle is now reachable over HTTP —
+  `POST /api/tables/{id}/seat`, `POST /api/tables/{id}/clean`, `GET /api/tables/{id}` — each a thin
+  shell over the application loop that returns the table on success, `409 Conflict` for an illegal
+  transition (the caller's fault, not the server's), and `400` for a non-ULID id. `serve` is now
+  generic over the store and composes the domain router with the infra router, **sharing one fan-out**
+  so a committed change over HTTP reaches every `/ws` device. The real `pos-edge` binary composes
+  `store-sqlite` (with a `store_path` config key), and `examples/minimal-edge` composes `pos-fakes`;
+  `StoreIdentity::for_store` and `EdgeSession::bootstrap` supply the envelope context and
+  config-driven decision inputs until the cloud config tree (P7). An integration test drives seat →
+  read → clean and the 409/400 paths without a socket. The acting actor is a fixed development
+  identity pending token→actor resolution.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

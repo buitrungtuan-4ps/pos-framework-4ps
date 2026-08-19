@@ -12,12 +12,18 @@
 pub mod assets;
 pub mod health;
 pub mod pair;
+pub mod tables;
 pub mod ws;
+
+use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
+use pos_ports::event_store::EventStore;
+
+use crate::app::Edge;
 use crate::state::AppState;
 
 /// Builds the router over the shared [`AppState`].
@@ -40,4 +46,19 @@ pub fn router(state: AppState) -> Router {
         // which is where PII would be (see `crate::telemetry`).
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Builds the domain routes over the application [`Edge`].
+///
+/// Generic over the store `S`, so the identical routes run against `pos-fakes` and `store-sqlite`
+/// (ADR-0013). Merged with [`router`] at composition; its state is the shared `Arc<Edge<S>>`.
+pub fn domain_router<S>(edge: Arc<Edge<S>>) -> Router
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/api/tables/{id}/seat", post(tables::seat::<S>))
+        .route("/api/tables/{id}/clean", post(tables::clean::<S>))
+        .route("/api/tables/{id}", get(tables::get::<S>))
+        .with_state(edge)
 }

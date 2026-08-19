@@ -67,10 +67,20 @@ impl AppState {
     /// Builds the shared state from a loaded configuration, with a fresh fan-out and pairing state.
     #[must_use]
     pub fn new(config: EdgeConfig) -> Self {
+        Self::with_fanout(config, Fanout::new())
+    }
+
+    /// Builds the shared state over an existing fan-out.
+    ///
+    /// The composed edge shares one fan-out between the application loop (which publishes) and the
+    /// `/ws` route (which subscribes), so a device sees a committed change; this constructor is how
+    /// that one channel reaches both.
+    #[must_use]
+    pub fn with_fanout(config: EdgeConfig, fanout: Fanout) -> Self {
         Self {
             config: Arc::new(config),
             build: BuildInfo::current(),
-            fanout: Fanout::new(),
+            fanout,
             clock: SystemClock,
             pairing: Arc::new(Pairing::new()),
         }

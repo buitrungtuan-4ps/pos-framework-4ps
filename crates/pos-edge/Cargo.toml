@@ -42,6 +42,10 @@ pos-country = { path = "../pos-country" }
 # compiles only the ones it enables; `pos-country-zz` is the reference module.
 pos-country-zz = { path = "../../countries/zz", optional = true }
 
+# The real edge composes the SQLite event store (ADR-0015); main.rs opens it. The
+# example composes pos-fakes instead.
+store-sqlite = { path = "../adapters/store-sqlite" }
+
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018). The
 # dependency-rule test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }

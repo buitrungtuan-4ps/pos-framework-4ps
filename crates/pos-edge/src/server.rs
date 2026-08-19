@@ -3,10 +3,14 @@
 
 //! Binding the listener and serving with graceful shutdown.
 
+use std::sync::Arc;
+
 use tokio::net::TcpListener;
 
+use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
 
+use crate::app::Edge;
 use crate::config::EdgeConfig;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::error::EdgeError;
@@ -15,16 +19,23 @@ use crate::state::AppState;
 
 /// Builds the state and router, binds the configured address, and serves until a shutdown signal.
 ///
-/// Graceful shutdown means an in-flight request finishes before the process exits — which, once the
-/// domain routes land, is what keeps "kill the process mid-sale and lose only the uncommitted
-/// transaction" ([`docs/roadmap.md`](../../../docs/roadmap.md) P5) true: a committed sale is durable
-/// and an interrupted one was never acknowledged.
+/// The composed [`Edge`] is generic over the store `S`, so the same server runs against `pos-fakes`
+/// (the example) and `store-sqlite` (the real edge). The edge's fan-out is shared with the `/ws`
+/// route, so a committed change reaches every device.
+///
+/// Graceful shutdown means an in-flight request finishes before the process exits — what keeps "kill
+/// the process mid-sale and lose only the uncommitted transaction"
+/// ([`docs/roadmap.md`](../../../docs/roadmap.md) P5) true: a committed sale is durable and an
+/// interrupted one was never acknowledged.
 ///
 /// # Errors
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve(config: EdgeConfig) -> Result<(), EdgeError> {
+pub async fn serve<S>(config: EdgeConfig, edge: Arc<Edge<S>>) -> Result<(), EdgeError>
+where
+    S: EventStore + Send + Sync + 'static,
+{
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
     // build can serve (ADR-0027).
     let countries = crate::countries::registry();
@@ -33,7 +44,8 @@ pub async fn serve(config: EdgeConfig) -> Result<(), EdgeError> {
 
     let bind = config.bind;
     let advertised_host = config.advertised_host();
-    let state = AppState::new(config);
+    // Share the edge's fan-out with the /ws route so a committed change reaches every device.
+    let state = AppState::with_fanout(config, edge.fanout().clone());
 
     // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
     // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
@@ -61,7 +73,7 @@ pub async fn serve(config: EdgeConfig) -> Result<(), EdgeError> {
     // raw-IP pairing URL above still works (ADR-0030).
     NoopAdvertiser.advertise("pos", bind.port());
 
-    let app = crate::http::router(state);
+    let app = crate::http::router(state).merge(crate::http::domain_router(edge));
 
     let listener = TcpListener::bind(bind)
         .await

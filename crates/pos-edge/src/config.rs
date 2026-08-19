@@ -11,7 +11,7 @@
 //! this in a later slice.
 
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pos_proto::ids::StoreId;
 use serde::Deserialize;
@@ -37,6 +37,10 @@ pub struct EdgeConfig {
     /// interface, and otherwise the operator reads the IP off the console.
     #[serde(default)]
     pub advertised_ip: Option<IpAddr>,
+    /// Where the SQLite event store lives ([ADR-0015](../../../docs/adr/0015-sqlite-access.md)).
+    /// Relative to the working directory the service unit sets. Defaults to `store.sqlite`.
+    #[serde(default = "default_store_path")]
+    pub store_path: PathBuf,
 }
 
 impl EdgeConfig {
@@ -47,6 +51,7 @@ impl EdgeConfig {
             bind,
             store_id,
             advertised_ip: None,
+            store_path: default_store_path(),
         }
     }
 
@@ -91,6 +96,11 @@ fn default_bind() -> SocketAddr {
     DEFAULT_BIND
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 8787)))
+}
+
+/// The serde default for [`EdgeConfig::store_path`].
+fn default_store_path() -> PathBuf {
+    PathBuf::from("store.sqlite")
 }
 
 #[cfg(test)]
