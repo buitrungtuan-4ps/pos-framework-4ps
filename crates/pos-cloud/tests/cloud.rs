@@ -8,7 +8,7 @@
 //! proven without a database, while the store-specific behaviour (RLS, partitioning, the rollup and
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -29,6 +29,7 @@ use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::http::CloudApp;
+use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
@@ -1448,6 +1449,86 @@ async fn rollups_reset_clears_the_cursor_so_the_projector_replays() {
     assert!(
         after.cursor.is_none() && after.days.is_empty(),
         "reset returns the rollup to the empty default, so the projector replays from the start"
+    );
+}
+
+// --- Reconciliation diff (`POST /internal/reconcile`) -------------------------------------------
+
+/// A reconciliation store that "has" a fixed set of ids; the missing ones are the complement.
+#[derive(Clone)]
+struct FakeReconcile {
+    present: HashSet<EventId>,
+}
+
+impl ReconcileStore for FakeReconcile {
+    async fn absent_event_ids(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+        candidates: &[EventId],
+    ) -> Result<Vec<EventId>, ReconcileError> {
+        Ok(candidates
+            .iter()
+            .filter(|id| !self.present.contains(id))
+            .copied()
+            .collect())
+    }
+}
+
+/// An event id ULID string for the small integer `n`.
+fn event_ulid(n: u128) -> String {
+    Ulid::from_u128(n).to_string()
+}
+
+#[tokio::test]
+async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
+    // The cloud holds 1 and 3; the edge reports holding 1, 2, 3, 4 — so 2 and 4 must be re-pushed.
+    let present: HashSet<EventId> = [1_u128, 3]
+        .into_iter()
+        .map(|n| EventId::new(Ulid::from_u128(n)))
+        .collect();
+    let router = http::reconcile_router(FakeReconcile { present });
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "event_ids": [event_ulid(1), event_ulid(2), event_ulid(3), event_ulid(4)],
+    });
+    let response = router
+        .oneshot(post_json("/internal/reconcile", &body))
+        .await
+        .expect("route the reconcile");
+    assert_eq!(response.status(), StatusCode::OK);
+    let missing = json_body(response).await["missing"]
+        .as_array()
+        .expect("a missing array")
+        .iter()
+        .map(|value| value.as_str().expect("a string").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        missing,
+        vec![event_ulid(2), event_ulid(4)],
+        "only the ids the cloud lacks are returned, in the manifest's order"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_rejects_a_malformed_id() {
+    let router = http::reconcile_router(FakeReconcile {
+        present: HashSet::new(),
+    });
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "event_ids": ["not-a-ulid"],
+    });
+    let response = router
+        .oneshot(post_json("/internal/reconcile", &body))
+        .await
+        .expect("route the reconcile");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a manifest carrying a non-ULID id is rejected, not silently dropped"
     );
 }
 

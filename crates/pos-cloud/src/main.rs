@@ -145,7 +145,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
-    axum::serve(listener, http::router(app))
+    // The reconciliation diff endpoint (ADR-0040) carries its own state, so it is merged in rather
+    // than threaded through CloudApp; it shares the same private-network `/internal` surface as ingest.
+    let service = http::router(app).merge(http::reconcile_router(store.reconcile()));
+    axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 

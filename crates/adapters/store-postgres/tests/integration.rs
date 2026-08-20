@@ -975,3 +975,61 @@ mod webhooks_store {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// The reconciliation membership query (ADR-0040): which candidate ids the
+// cloud already holds, scoped by tenant and store.
+// ---------------------------------------------------------------------------
+
+mod reconcile_query {
+    use super::{TENANT_A, block_on, prepared, seed_row};
+
+    /// The event id `seed_row` writes for `seed`.
+    fn evt(seed: i32) -> String {
+        format!("EVT{seed:022}")
+    }
+
+    #[test]
+    fn present_event_ids_answers_membership_scoped_by_tenant_and_store() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            // Two events for (TENANT_A, store-1); one for a different store; one for a different
+            // tenant — none of which must count toward store-1's membership.
+            seed_row(&admin, 1, TENANT_A, "store-1")
+                .await
+                .expect("seed 1");
+            seed_row(&admin, 2, TENANT_A, "store-1")
+                .await
+                .expect("seed 2");
+            seed_row(&admin, 3, TENANT_A, "store-2")
+                .await
+                .expect("seed 3");
+            seed_row(&admin, 4, "tenant-b", "store-1")
+                .await
+                .expect("seed 4");
+
+            let reconcile = store.reconcile();
+            // Candidates: 1 and 2 are present for store-1; 3 belongs to store-2; 9 was never written.
+            let candidates = vec![evt(1), evt(2), evt(3), evt(9)];
+            let present = reconcile
+                .present_event_ids(TENANT_A, "store-1", &candidates)
+                .await
+                .expect("membership query");
+            let mut present = present;
+            present.sort();
+            assert_eq!(
+                present,
+                vec![evt(1), evt(2)],
+                "only ids actually in (TENANT_A, store-1) count — not store-2's, not tenant-b's, \
+                 and not one that was never written"
+            );
+
+            // An empty candidate set is an empty answer and touches nothing.
+            let none = reconcile
+                .present_event_ids(TENANT_A, "store-1", &[])
+                .await
+                .expect("empty query");
+            assert!(none.is_empty(), "no candidates, no membership");
+        });
+    }
+}

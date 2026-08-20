@@ -60,6 +60,7 @@ pub mod dashboard;
 pub mod http;
 mod openapi;
 mod persistence;
+pub mod reconcile;
 pub mod retention;
 pub mod webhook;
 

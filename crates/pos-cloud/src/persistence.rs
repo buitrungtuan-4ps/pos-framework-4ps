@@ -7,8 +7,9 @@
 //! ([ADR-0037](../../../docs/adr/0037-api-keys.md)), `AdminStore`
 //! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)), `ConfigTreeStore`
 //! ([ADR-0033](../../../docs/adr/0033-config-tree.md)), `SubjectStore`
-//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)) and `WebhookEndpointStore`
-//! ([ADR-0032](../../../docs/adr/0032-webhooks.md)) traits live here in the cloud, where the
+//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)), `WebhookEndpointStore`
+//! ([ADR-0032](../../../docs/adr/0032-webhooks.md)) and `ReconcileStore`
+//! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -16,11 +17,11 @@
 //! adapter; all domain conversion stays here — the adapter never learns a cloud type, and the cloud
 //! never writes SQL.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresRollups, PostgresStore,
-    PostgresSubjects, PostgresWebhooks,
+    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresReconcile, PostgresRollups,
+    PostgresStore, PostgresSubjects, PostgresWebhooks,
 };
 
 use pos_ports::PortError;
@@ -37,6 +38,7 @@ use crate::auth::totp::TotpSecret;
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
+use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
@@ -403,5 +405,29 @@ impl ApiKeyStore for PostgresApiKeys {
             }
             None => Ok(None),
         }
+    }
+}
+
+impl ReconcileStore for PostgresReconcile {
+    async fn absent_event_ids(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        candidates: &[EventId],
+    ) -> Result<Vec<EventId>, ReconcileError> {
+        let candidate_strings: Vec<String> = candidates.iter().map(ToString::to_string).collect();
+        let present: HashSet<String> = self
+            .present_event_ids(&tenant.to_string(), &store.to_string(), &candidate_strings)
+            .await
+            .map_err(|error| ReconcileError::new(error.to_string()))?
+            .into_iter()
+            .collect();
+        // The missing ids are the candidates the log did not return; return them from the caller's own
+        // typed list, so no id is re-parsed from a string on the way back out.
+        Ok(candidates
+            .iter()
+            .filter(|id| !present.contains(&id.to_string()))
+            .copied()
+            .collect())
     }
 }

@@ -162,6 +162,14 @@ impl PostgresStore {
         crate::webhooks::PostgresWebhooks::new(self.pool.clone())
     }
 
+    /// The reconciliation query over this pool ([ADR-0040](../../../docs/adr/0040-reconciliation.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReconcileStore` seam over it.
+    #[must_use]
+    pub fn reconcile(&self) -> crate::reconcile::PostgresReconcile {
+        crate::reconcile::PostgresReconcile::new(self.pool.clone())
+    }
+
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
     /// current ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
     ///

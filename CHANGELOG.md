@@ -742,6 +742,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   regardless — a store with no rollup yet resets to the same empty state. Reuses the existing
   `RollupStore` collaborator; a router test proves a seeded cursor is cleared and the cookieless call
   is `401`.
+- `pos-cloud` / `store-postgres` (P7): **nightly reconciliation** (ADR-0040, a new ADR) — the cloud's
+  emit-missing-ids side. Because ULIDs are not a dense sequence, the cloud cannot know what it dropped
+  on its own, so reconciliation is an edge-initiated diff: `POST /internal/reconcile` takes
+  `{tenant_id, store_id, event_ids:[…]}` and returns `{missing:[…]}` — exactly the ids the event log
+  lacks, which the edge then re-pushes through the idempotent `/internal/ingest`. It lives on the
+  private-network `/internal` surface beside ingest (unauthenticated, absent from the OpenAPI). A new
+  `ReconcileStore` seam is answered by a `store-postgres` `event_id = ANY(candidates)` membership query
+  scoped by tenant and store, bridged through `persistence.rs`; the endpoint is a small
+  independently-stated sub-router merged into the main router in `main`, so reconciliation adds **no
+  eighth `CloudApp` generic**. Proven by a router test over a fake (missing = candidates − present;
+  a non-ULID id is a `400`) and a gated `store-postgres` integration test of the membership query
+  (tenant/store-scoped, empty-set short-circuit). The `pos_edge` job that assembles the nightly
+  manifest and re-pushes is store-side fleet wiring (P9).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

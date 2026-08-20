@@ -6,9 +6,12 @@
 //! Five kinds of route:
 //!
 //!  * `/health` — liveness.
-//!  * `/internal/*` — the ingest re-push target the reconciliation loop uses (`docs/roadmap.md`
-//!    P7); the primary production path is the NATS cursor feed. Not part of the external contract,
-//!    and not authenticated — it is reachable only on the cloud's own private network.
+//!  * `/internal/*` — the ingest re-push target and the reconciliation diff the fleet uses
+//!    (`docs/roadmap.md` P7): `/internal/ingest` (the primary production path is the NATS cursor
+//!    feed) and `/internal/reconcile` ([ADR-0040](../../../docs/adr/0040-reconciliation.md), an edge
+//!    asking which ids the cloud is missing). Not part of the external contract, and not
+//!    authenticated — reachable only on the cloud's own private network. Built by [`reconcile_router`]
+//!    (its own state) and merged into the main router.
 //!  * `/v1/*` — the **public** API external integrators build against. Every data route requires a
 //!    scoped per-tenant API key ([`crate::auth::bearer`]) and answers only for the key's own tenant.
 //!    Every `/v1` handler carries a [`utoipa::path`] annotation and every response type derives
@@ -52,7 +55,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, EventId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
@@ -65,6 +68,7 @@ use crate::config_tree::{
 };
 use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
 use crate::openapi::ApiDoc;
+use crate::reconcile::ReconcileStore;
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
 };
@@ -219,9 +223,92 @@ where
         .with_state(app)
 }
 
+/// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
+///
+/// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
+/// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
+/// the ids to re-push through `/internal/ingest`. It needs only the [`ReconcileStore`], so it carries
+/// its own state and is merged into the main router in `main`, rather than threading an extra
+/// collaborator through every `CloudApp` handler. Internal, private-network, and absent from the
+/// public OpenAPI, exactly like `/internal/ingest`.
+pub fn reconcile_router<Rec>(store: Rec) -> Router
+where
+    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/internal/reconcile", post(reconcile::<Rec>))
+        .with_state(store)
+}
+
 /// Liveness: answers as soon as the process is serving.
 async fn health() -> &'static str {
     "ok"
+}
+
+/// An edge's reconciliation manifest: the ids it holds for one store, for the cloud to diff.
+#[derive(Debug, Clone, Deserialize)]
+struct ReconcileRequest {
+    /// The tenant the store belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose log is being reconciled (a 26-character ULID).
+    store_id: String,
+    /// The event ids the edge holds for this store over the window it is reconciling.
+    event_ids: Vec<String>,
+}
+
+/// The ids the cloud is missing from the manifest — what the edge should re-push.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReconcileResponse {
+    /// The subset of the manifest the cloud's event log does not contain (ULID strings).
+    missing: Vec<String>,
+}
+
+/// Answers which of the edge's candidate ids the cloud is missing for a store
+/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)). Internal (the reconciliation partner of
+/// `/internal/ingest`), so it carries no authentication and is absent from the public OpenAPI.
+async fn reconcile<Rec>(State(store): State<Rec>, Json(request): Json<ReconcileRequest>) -> Response
+where
+    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+{
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let mut candidates = Vec::with_capacity(request.event_ids.len());
+    for raw in &request.event_ids {
+        match raw.parse::<EventId>() {
+            Ok(id) => candidates.push(id),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "an event id is not a ULID").into_response();
+            }
+        }
+    }
+    match store
+        .absent_event_ids(tenant_id, store_id, &candidates)
+        .await
+    {
+        Ok(missing) => (
+            StatusCode::OK,
+            Json(ReconcileResponse {
+                missing: missing.iter().map(ToString::to_string).collect(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a reconciliation diff failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
 }
 
 /// The generated OpenAPI document for the public `/v1` surface.
