@@ -858,6 +858,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   The fork's 4–6 secrets (`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` / `VPS_KNOWN_HOSTS` / `DOMAIN` /
   `ACME_EMAIL` / `CF_DNS_API_TOKEN`) are documented in the workflow and `deploy/README.md`; the SSH
   host key is pinned (`VPS_KNOWN_HOSTS`), not trust-on-first-use.
+- `deploy/` (P8, ADR-0046 — a new ADR): **cloud backups and the restore drill**. Postgres now archives
+  WAL continuously (`archive_mode=on` to a `wal_archive` volume, a fail-closed `archive_command`);
+  `deploy/backup.sh` streams a compressed `pg_dump` out of the container and ships it off-box with
+  `rclone` when `RCLONE_REMOTE` is set; the deploy workflow takes a `--label pre-update` snapshot before
+  each new image comes up. Four unequal backup classes — continuous WAL, the daily dump, a weekly Garage
+  object sync, and the pre-update snapshot — price each by its real recovery value. `deploy/restore-drill.sh`
+  is the proof a backup restores: it dumps the live database, restores it into a throwaway one, and
+  reconciles every public table's row count against the source, exiting non-zero on any mismatch — a
+  silently unrestorable backup fails loudly. `nightly.yml`'s `restore-drill` job now runs it for real
+  against a service Postgres seeded with a synthetic dataset (it was a placeholder echo). The
+  store-backup half of the drill is edge WAL shipping (P9, spike A4) and joins when that lands.
+  `/backups/` is git-ignored — a dump holds T1/T2 data and must never be committed.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

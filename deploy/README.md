@@ -95,6 +95,30 @@ A rollback is re-running the workflow at an older commit — its image tag names
 build, and the app container is stateless; all durable state lives in the `postgres` /
 `garage` / `nats` volumes. Backups and the weekly restore drill (P8d) are the durability half.
 
+## Backups and restore
+
+Durability has four unequal classes ([ADR-0046](../docs/adr/0046-backups-and-restore.md)), because
+not all data is worth the same recovery point:
+
+1. **Continuous WAL** — Postgres archives each filled segment to the `wal_archive` volume
+   (`archive_mode=on` in `compose.yml`); the box cron ships the segments off-box with `rclone`.
+   Recovery point is minutes, not a day.
+2. **Daily cloud-database dump** — [`backup.sh`](backup.sh) streams a compressed `pg_dump` and, if
+   `RCLONE_REMOTE` is set, copies it to the off-box tier. A backup on the database's own box is not a
+   backup.
+3. **Garage object sync** — menu images, weekly, off-box; lowest value because they regenerate from
+   the tenant's source uploads.
+4. **The `.pre-update` snapshot** — the deploy workflow runs `backup.sh --label pre-update` before a
+   new image comes up, so a bad release rolls straight back to a known-good database.
+
+[`restore-drill.sh`](restore-drill.sh) is the proof the backups are real: it dumps the live database,
+restores it into a throwaway one, and reconciles every table's row count against the source — a
+silently unrestorable backup fails it. It runs for real each night against a service Postgres in
+[`nightly.yml`](../.github/workflows/nightly.yml)'s `restore-drill` job, and can be pointed at the box
+(a reachable `PGHOST`) for the weekly drill on production data. The store-backup half of the drill is
+edge WAL shipping (P9, spike A4) and joins when that lands.
+
 > This environment has no Docker daemon, so these artifacts are validated by YAML/`bash -n`
-> parsing, the `actions-pinned` gate, and review. The true end-to-end check is the P8 exit:
-> a human forks, sets the secrets, runs the workflow, and reaches the admin UI.
+> parsing, the `actions-pinned` gate, and review (the nightly `restore-drill` job exercises the
+> restore path for real on its own schedule). The true end-to-end check is the P8 exit: a human
+> forks, sets the secrets, runs the workflow, and reaches the admin UI.

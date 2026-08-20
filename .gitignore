@@ -10,6 +10,11 @@
 config.toml
 /deploy/secrets/
 
+# Database backups hold T1/T2 data and must never be committed (ADR-0046); backup.sh writes
+# them here by default.
+/backups/
+/deploy/backups/
+
 # Vendored sources are shipped as a release artifact rather than committed: the
 # windows-targets family ships prebuilt .lib blobs, and git keeps every version of
 # them forever. engineering-guide.md §5 sanctions either form ("committed, or

@@ -64,15 +64,44 @@ jobs:
           echo "  200 stores offline for a day, ~800k events drained in ~9 minutes"
           echo "  1,000 stores each applying a config version in under a second"
 
+  # Exercises the cloud-database restore path for real (P8, ADR-0046): seed a service Postgres,
+  # then deploy/restore-drill.sh dumps it, restores into a throwaway database, and reconciles every
+  # table's row count against the source. A silently-unrestorable backup fails this job. The store
+  # half of the drill (a random store backup) is edge WAL shipping — P9, spike A4 — and joins here
+  # when it lands; per-store recovery alone does not prove the chain's data is restorable.
   restore-drill:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
+    services:
+      # Pinned by digest (postgres:16 as of this commit), matching the integration job in main.yml.
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: poscloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pos -d poscloud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: pos
+      PGPASSWORD: pos
+      PGDATABASE: poscloud
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: restore a random store backup and the cloud database
+      - name: install the postgres client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: seed a synthetic dataset
         run: |
-          echo "Backups arrive with deploy/ in P8. See docs/roadmap.md."
-          echo "The drill must cover BOTH halves: a randomly chosen store backup and"
-          echo "the cloud database, each restored to a scratch instance with totals"
-          echo "verified. Per-store recovery alone does not prove the chain's data is"
-          echo "restorable."
+          psql -v ON_ERROR_STOP=1 -c "CREATE TABLE drill_marker (id serial PRIMARY KEY, val text NOT NULL)"
+          psql -v ON_ERROR_STOP=1 -c "INSERT INTO drill_marker (val) SELECT 'row-' || g FROM generate_series(1, 137) g"
+      - name: restore drill — dump, restore to a scratch database, reconcile counts
+        run: |
+          chmod +x deploy/restore-drill.sh
+          deploy/restore-drill.sh

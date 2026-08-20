@@ -78,6 +78,25 @@ jobs:
             gunzip -c /tmp/images.tgz | docker load
           '
 
+      - name: Pre-update database snapshot
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          target="${VPS_USER}@${VPS_HOST}"
+          # Snapshot the existing database before the new image comes up, so a bad release rolls
+          # back to a known-good copy (ADR-0046). The first deploy has no database yet — skip.
+          ssh $ssh_opts "$target" '
+            cd ~/pos-cloud/deploy
+            chmod +x backup.sh
+            if [ -n "$(docker compose ps -q postgres 2>/dev/null)" ]; then
+              ./backup.sh --label pre-update
+            else
+              echo "no running postgres yet; skipping the pre-update snapshot (first deploy)"
+            fi
+          '
+
       - name: Bootstrap and bring up
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}

@@ -97,8 +97,22 @@ services:
     pids_limit: 256
     env_file:
       - ./secrets/pos.env
+    # Continuous WAL archiving (ADR-0046): each filled segment is copied to the wal_archive
+    # volume, from which the box cron ships it off-box with rclone. archive_command fails closed
+    # (`test ! -f` refuses to overwrite), so a segment is never silently lost.
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f
+      - -c
+      - max_wal_size=1GB
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - wal_archive:/wal-archive
     networks:
       - backend
     healthcheck:
@@ -157,6 +171,7 @@ networks:
 
 volumes:
   pgdata: {}
+  wal_archive: {}
   natsdata: {}
   garage_meta: {}
   garage_data: {}
