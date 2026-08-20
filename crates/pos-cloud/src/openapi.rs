@@ -13,7 +13,8 @@
 //! Internal routes (`/health`, `/internal/*`) are deliberately absent: the document is the external
 //! contract, and those are not part of it.
 
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 use crate::cloud::DailyRollup;
 
@@ -28,9 +29,34 @@ use crate::cloud::DailyRollup;
     ),
     paths(crate::http::daily_rollups),
     components(schemas(DailyRollup)),
+    modifiers(&BearerSecurity),
     tags((name = "rollups", description = "Per-store, per-trading-day activity rollups."))
 )]
 pub(crate) struct ApiDoc;
+
+/// Declares the `api_key` bearer scheme the `/v1` routes require, so the generated document tells an
+/// integrator how to authenticate ([ADR-0037](../../../docs/adr/0037-api-keys.md)). A modifier
+/// rather than an attribute, because utoipa builds the security scheme through its own builder.
+struct BearerSecurity;
+
+impl Modify for BearerSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "api_key",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .description(Some(
+                            "A scoped per-tenant API key, presented as \
+                             `Authorization: Bearer pos_<id>_<secret>`.",
+                        ))
+                        .build(),
+                ),
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

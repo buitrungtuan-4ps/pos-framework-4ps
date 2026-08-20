@@ -1,27 +1,49 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `pos_cloud`'s ingest and rollup spine, against the in-memory fake.
+//! `pos_cloud`'s ingest and rollup spine and its public `/v1` surface, against the in-memory fakes.
 //!
-//! The same `Cloud` code runs here against `pos-fakes` and, in the binary, against `store-postgres`
-//! (ADR-0026) — so idempotent ingest and the rollup fold are proven without a database, and the
-//! store-specific behaviour (RLS, partitioning) is proven by `store-postgres`'s own suite.
+//! The same handler code runs here against `pos-fakes` and, in the binary, against `store-postgres`
+//! (ADR-0026) — so idempotent ingest, the materialised rollup read, and the `/v1` bearer check are
+//! proven without a database, while the store-specific behaviour (RLS, partitioning, the rollup and
+//! API-key tables) is proven by `store-postgres`'s own integration suite.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
+use pos_cloud::auth::apikey::{
+    ApiKeyId, ApiKeyStore, ApiKeyStoreError, Scope, StoredApiKey, issue,
+};
+use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
+use pos_cloud::http::CloudApp;
 use pos_cloud::{Cloud, IngestOutcome, http};
 use pos_contract_tests::fixtures;
-use pos_fakes::FakeStore;
+use pos_fakes::{FakeClock, FakeStore};
 use pos_proto::BusinessDate;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::StoreId;
+use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
 fn store_id() -> StoreId {
     StoreId::new(Ulid::from_u128(0x0ADA))
+}
+
+fn tenant() -> TenantId {
+    TenantId::new(Ulid::from_u128(0x7E11A))
+}
+
+/// A low-entropy, obviously-fake secret so no real key material is committed.
+const FAKE_SECRET: &str = "fakesecretfortestsonly";
+
+/// A clock fixed well past the epoch, so an issued key (with no expiry) is live.
+fn clock() -> FakeClock {
+    FakeClock::new(Timestamp::from_milliseconds_since_epoch(1_700_000_000_000).expect("valid"))
 }
 
 /// A run of activation events, re-dated onto `business_date` (`YYYY-MM-DD`).
@@ -39,6 +61,91 @@ fn dated(
     }
     events
 }
+
+// --- In-memory collaborators for the router (the binary uses `store-postgres`) ------------------
+
+/// The materialised rollup read model, keyed by `(tenant, store)` exactly as the real table.
+#[derive(Clone, Default)]
+struct FakeRollups {
+    rows: Arc<Mutex<HashMap<(TenantId, StoreId), StoredRollups>>>,
+}
+
+impl RollupStore for FakeRollups {
+    async fn load(&self, tenant: TenantId, store: StoreId) -> Result<StoredRollups, RollupError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn save(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        rollups: &StoredRollups,
+    ) -> Result<(), RollupError> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .insert((tenant, store), rollups.clone());
+        Ok(())
+    }
+}
+
+/// The API-key store the bearer check consults, keyed by the public id.
+#[derive(Clone, Default)]
+struct FakeKeys {
+    rows: Arc<Mutex<HashMap<ApiKeyId, StoredApiKey>>>,
+}
+
+impl FakeKeys {
+    fn insert(&self, key: StoredApiKey) {
+        self.rows.lock().expect("lock").insert(key.id, key);
+    }
+}
+
+impl ApiKeyStore for FakeKeys {
+    async fn lookup(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+        Ok(self.rows.lock().expect("lock").get(&id).cloned())
+    }
+}
+
+/// Issues a key for `tenant_id` with `scopes` into `keys`, and returns the one-time token to present.
+fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
+    let id = ApiKeyId::new(Ulid::from_u128(0xA11CE));
+    let (stored, token) = issue(
+        id,
+        tenant_id,
+        scopes.iter().copied().collect(),
+        FAKE_SECRET,
+        None,
+    );
+    keys.insert(stored);
+    token
+}
+
+/// Builds an application state over the fakes.
+fn app(
+    cloud: Cloud<FakeStore>,
+    rollups: FakeRollups,
+    keys: FakeKeys,
+) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock> {
+    CloudApp::new(cloud, rollups, keys, clock())
+}
+
+/// A GET request for `uri`, optionally carrying a `Bearer` token.
+fn get(uri: &str, bearer: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().uri(uri);
+    if let Some(token) = bearer {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    builder.body(Body::empty()).expect("build the request")
+}
+
+// --- The application spine, exercised directly (no HTTP) ----------------------------------------
 
 #[tokio::test]
 async fn ingest_is_idempotent_by_event_id() {
@@ -104,22 +211,28 @@ async fn rollups_fold_events_by_trading_day_and_type() {
     assert_eq!(july.total_events, 2);
 }
 
+// --- The HTTP surface ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn the_ingest_endpoint_accepts_a_batch_and_health_answers() {
     let events = fixtures::activations(store_id(), 1, 5);
     let body = serde_json::to_vec(&events).expect("serialise the batch");
 
-    let response = http::router(Cloud::new(FakeStore::new()))
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/internal/ingest")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .expect("build the request"),
-        )
-        .await
-        .expect("route the request");
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    ))
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/internal/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("build the request"),
+    )
+    .await
+    .expect("route the request");
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response
         .into_body()
@@ -136,34 +249,41 @@ async fn the_ingest_endpoint_accepts_a_batch_and_health_answers() {
         }
     );
 
-    let health = http::router(Cloud::new(FakeStore::new()))
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .expect("build the request"),
-        )
-        .await
-        .expect("route health");
+    let health = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    ))
+    .oneshot(get("/health", None))
+    .await
+    .expect("route health");
     assert_eq!(health.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn the_v1_rollups_endpoint_answers_from_the_log() {
+async fn the_v1_rollups_endpoint_answers_from_the_materialised_store_for_an_authorised_key() {
     let cloud = Cloud::new(FakeStore::new());
     cloud
         .ingest(&dated(1, 3, 2026, 3, 15))
         .await
         .expect("ingest");
-    let ulid = Ulid::from_u128(0x0ADA).to_string();
 
-    let response = http::router(cloud)
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/stores/{ulid}/rollups/daily"))
-                .body(Body::empty())
-                .expect("build the request"),
-        )
+    // Materialise the rollup the way the projector does, for this store's tenant.
+    let rollups = FakeRollups::default();
+    project(cloud.store(), &rollups, tenant(), store_id())
+        .await
+        .expect("project the rollup");
+
+    // A key for the store's tenant, scoped to read rollups.
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let ulid = store_id().as_ulid().to_string();
+
+    let response = http::router(app(cloud, rollups, keys))
+        .oneshot(get(
+            &format!("/v1/stores/{ulid}/rollups/daily"),
+            Some(&token),
+        ))
         .await
         .expect("route the request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -181,30 +301,124 @@ async fn the_v1_rollups_endpoint_answers_from_the_log() {
 }
 
 #[tokio::test]
-async fn a_malformed_store_id_is_a_bad_request() {
-    let response = http::router(Cloud::new(FakeStore::new()))
-        .oneshot(
-            Request::builder()
-                .uri("/v1/stores/not-a-ulid/rollups/daily")
-                .body(Body::empty())
-                .expect("build the request"),
-        )
+async fn a_request_without_a_key_is_unauthorised() {
+    let ulid = store_id().as_ulid().to_string();
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    ))
+    .oneshot(get(&format!("/v1/stores/{ulid}/rollups/daily"), None))
+    .await
+    .expect("route the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "a /v1 data route is closed without a key"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("www-authenticate")
+            .expect("the scheme is advertised"),
+        "Bearer"
+    );
+}
+
+#[tokio::test]
+async fn a_key_without_the_scope_is_forbidden() {
+    // A valid key, but granted only ManageWebhooks — it may not read rollups.
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::ManageWebhooks]);
+    let ulid = store_id().as_ulid().to_string();
+
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys,
+    ))
+    .oneshot(get(
+        &format!("/v1/stores/{ulid}/rollups/daily"),
+        Some(&token),
+    ))
+    .await
+    .expect("route the request");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_key_for_another_tenant_reads_no_rollups() {
+    // Tenant A materialises a rollup for the store.
+    let cloud = Cloud::new(FakeStore::new());
+    cloud
+        .ingest(&dated(1, 3, 2026, 3, 15))
+        .await
+        .expect("ingest");
+    let rollups = FakeRollups::default();
+    project(cloud.store(), &rollups, tenant(), store_id())
+        .await
+        .expect("project");
+
+    // A key belonging to a *different* tenant, correctly scoped, asks for the same store id.
+    let other_tenant = TenantId::new(Ulid::from_u128(0xB0B));
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, other_tenant, &[Scope::ReadRollups]);
+    let ulid = store_id().as_ulid().to_string();
+
+    let response = http::router(app(cloud, rollups, keys))
+        .oneshot(get(
+            &format!("/v1/stores/{ulid}/rollups/daily"),
+            Some(&token),
+        ))
         .await
         .expect("route the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a valid key never errors — it just sees nothing outside its tenant"
+    );
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    let rollups: serde_json::Value = serde_json::from_slice(&bytes).expect("parse the rollups");
+    assert_eq!(
+        rollups.as_array().expect("an array").len(),
+        0,
+        "the tenant comes from the grant, so another tenant's store reads back empty, not leaked"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_store_id_is_a_bad_request() {
+    // Present a valid, scoped key so the request reaches the store-id parse rather than stopping at
+    // authentication.
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys,
+    ))
+    .oneshot(get("/v1/stores/not-a-ulid/rollups/daily", Some(&token)))
+    .await
+    .expect("route the request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn the_openapi_document_is_served() {
-    let response = http::router(Cloud::new(FakeStore::new()))
-        .oneshot(
-            Request::builder()
-                .uri("/v1/openapi.json")
-                .body(Body::empty())
-                .expect("build the request"),
-        )
-        .await
-        .expect("route the request");
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    ))
+    .oneshot(get("/v1/openapi.json", None))
+    .await
+    .expect("route the request");
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response
         .into_body()
@@ -217,5 +431,9 @@ async fn the_openapi_document_is_served() {
     assert!(
         document["paths"]["/v1/stores/{store_id}/rollups/daily"].is_object(),
         "the rollups path is described"
+    );
+    assert!(
+        document["components"]["securitySchemes"]["api_key"].is_object(),
+        "the bearer security scheme is declared in the generated document"
     );
 }

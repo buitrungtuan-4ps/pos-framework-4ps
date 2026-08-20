@@ -15,7 +15,8 @@
         "tags": [
           "rollups"
         ],
-        "summary": "A store's per-trading-day activity rollups, oldest day first.",
+        "summary": "A store's per-trading-day activity rollups, oldest day first — answered from the materialised\nrollup, never a log scan.",
+        "description": "Requires a valid API key with the `read_rollups` scope, and answers **only** for that key's\ntenant: the tenant comes from the verified grant, never the request, so a caller can read a\nstore's rollups only if the store is within its own tenant. A `store_id` outside the tenant is\nnot an error — it simply has no rollup and reads back as an empty list.",
         "operationId": "daily_rollups",
         "parameters": [
           {
@@ -45,10 +46,21 @@
           "400": {
             "description": "The store id is not a ULID"
           },
+          "401": {
+            "description": "The API key is missing, malformed, or invalid"
+          },
+          "403": {
+            "description": "The API key lacks the read_rollups scope"
+          },
           "503": {
-            "description": "The store is unreachable"
+            "description": "The rollup store is unreachable"
           }
-        }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
       }
     }
   },
@@ -86,6 +98,13 @@
             "minimum": 0
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A scoped per-tenant API key, presented as `Authorization: Bearer pos_<id>_<secret>`."
       }
     }
   },

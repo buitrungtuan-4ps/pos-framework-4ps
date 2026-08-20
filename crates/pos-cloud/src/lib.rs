@@ -21,16 +21,22 @@
 //! books reconcilable. [`dashboard`] answers activity dashboards from a materialised rollup a
 //! projector keeps current, so a view is an O(days) lookup rather than a log scan.
 //!
+//! The `/v1` dashboard read is now fully wired: it authenticates a scoped per-tenant API key
+//! ([`auth::bearer`]), answers from the materialised rollup ([`dashboard`]) for the key's own
+//! tenant, and both the rollup table and the API-key table are persisted in `store-postgres`
+//! (ADR-0036, ADR-0037).
+//!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
 //! routes (ADR-0033), the super-admin login route + credential persistence and the API-key
-//! persistence + provisioning route the [`auth::bearer`] extractor is now ready for (ADR-0034,
-//! ADR-0037), the subject-store schema and the retention runner's wiring into `main` (ADR-0035), and
-//! the materialised-rollup table, projector task, and `/v1` wiring for dashboards (ADR-0036).
+//! provisioning route (ADR-0034, ADR-0037), the subject-store schema and the retention runner's
+//! wiring into `main` (ADR-0035), and the rollup **projector** background task that keeps the
+//! materialised rollup current (ADR-0036).
 
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod clock;
 pub mod cloud;
 pub mod config;
 pub mod config_tree;

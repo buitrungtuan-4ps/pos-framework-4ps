@@ -571,6 +571,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   tenant sees only that tenant's rollup rows via RLS. Alongside the existing event-log RLS cases,
   this closes the "cross-tenant isolation proven by tests" half of the P7 exit criterion. Gated
   behind the `integration` feature; runs in the merge-to-`main` job against `postgres:16`.
+- `pos-cloud` (P7): the persistence and the auth are now **wired into the running binary**, so `/v1`
+  is a real authenticated, tenant-isolated, materialised-read surface. The router carries one
+  `CloudApp` state bundling the event store, the rollup read model, the API-key store, and a
+  `SystemClock`; `GET /v1/stores/{store_id}/rollups/daily` now **requires a bearer API key** with the
+  `read_rollups` scope (missing/invalid → one indistinguishable `401`, wrong scope → `403`), and
+  answers from the **materialised rollup** for the **key's own tenant** — the tenant comes from the
+  verified grant, never the request, so a caller reading another tenant's `store_id` gets an empty
+  list, never that tenant's data. `main` opens one Postgres pool and takes three views of it (event
+  store, rollups, API keys). The internal `/internal/ingest` and `/health` stay unauthenticated
+  (private network only). The generated OpenAPI now declares the `api_key` bearer scheme and the
+  route's `401`/`403` responses and security requirement (snapshot regenerated). Router tests cover
+  the authorised read, a missing key (`401` + `WWW-Authenticate`), a wrong-scope key (`403`), a
+  foreign-tenant key reading empty, and a malformed store id (`400`), all against the fakes.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

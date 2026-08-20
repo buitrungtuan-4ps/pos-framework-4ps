@@ -12,6 +12,8 @@ use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 use link_nats::{ConsumerConfig, NatsConsumer};
+use pos_cloud::clock::SystemClock;
+use pos_cloud::http::CloudApp;
 use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, http};
 use store_postgres::PostgresStore;
 
@@ -41,7 +43,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
-    let cloud = Cloud::new(store);
+    // One pool, three views of it: the event-store application layer, the materialised-rollup read
+    // model the `/v1` dashboard answers from, and the API-key store the `/v1` bearer check consults.
+    let cloud = Cloud::new(store.clone());
+    let app = CloudApp::new(
+        cloud.clone(),
+        store.rollups(),
+        store.api_keys(),
+        SystemClock,
+    );
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
@@ -63,7 +73,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
-    axum::serve(listener, http::router(cloud))
+    axum::serve(listener, http::router(app))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
