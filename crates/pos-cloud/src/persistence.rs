@@ -12,12 +12,14 @@
 //! domain conversion stays here — the adapter never learns a cloud type, and the cloud never writes
 //! SQL.
 
-use store_postgres::{PostgresApiKeys, PostgresRollups};
+use store_postgres::{PostgresApiKeys, PostgresRollups, PostgresStore};
 
+use pos_ports::PortError;
 use pos_proto::ids::{StoreId, TenantId};
 
 use crate::auth::apikey::{ApiKeyId, ApiKeyStore, ApiKeyStoreError, StoredApiKey};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
+use crate::dashboard::projector::StoreCatalog;
 
 impl RollupStore for PostgresRollups {
     async fn load(
@@ -51,6 +53,12 @@ impl RollupStore for PostgresRollups {
         self.save_state(tenant, store_id, &json)
             .await
             .map_err(|error| RollupError::store(error.to_string()))
+    }
+}
+
+impl StoreCatalog for PostgresStore {
+    async fn active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
+        self.list_active_stores().await
     }
 }
 

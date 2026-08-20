@@ -14,12 +14,16 @@
 //!  * [`projection`] — [`project`] folds each new event once (cursor-advanced, idempotent,
 //!    rebuildable by resetting the cursor), and [`dashboard`] answers from the stored rollup with no
 //!    log scan.
+//!  * [`projector`] — the background loop around [`project`]: on each tick it lists the fleet
+//!    ([`StoreCatalog`]) and projects every store, so the materialised rollup stays current. The one
+//!    writer of the rollup table.
 //!
-//! Pure and I/O-free behind a [`RollupStore`] seam. The `store-postgres`
-//! rollup table, the background projector task, and the HTTP wiring that points `/v1` at this read
-//! path are the remaining, deliberately-separate wiring (ADR-0036).
+//! Pure and I/O-free behind the [`RollupStore`] and [`StoreCatalog`] seams; `store-postgres` provides
+//! the rollup table and the fleet listing, and [`crate::http`] points `/v1` at [`dashboard`].
 
 pub mod projection;
+pub mod projector;
 pub mod rollup;
 
 pub use projection::{ProjectReport, RollupError, RollupStore, StoredRollups, dashboard, project};
+pub use projector::{FleetReport, StoreCatalog, project_fleet};

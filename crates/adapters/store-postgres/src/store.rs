@@ -11,7 +11,7 @@ use tokio_postgres::NoTls;
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{EventId, StoreId};
+use pos_proto::ids::{EventId, StoreId, TenantId};
 
 /// The cloud schema, applied idempotently at start-up ([ADR-0017](../../../docs/adr/0017-migrations.md)).
 const MIGRATION_0001: &str = include_str!("../migrations/0001_cloud_events.sql");
@@ -99,6 +99,32 @@ impl PostgresStore {
     #[must_use]
     pub fn api_keys(&self) -> crate::apikeys::PostgresApiKeys {
         crate::apikeys::PostgresApiKeys::new(self.pool.clone())
+    }
+
+    /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
+    /// current ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+    ///
+    /// Read as the trusted role, so it spans every tenant (RLS bypassed) — the projector maintains
+    /// the whole fleet's rollups, not one tenant's. A row whose ids are not ULIDs (impossible for
+    /// rows this adapter wrote) is skipped rather than failing the whole listing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
+        let connection = self.connection().await?;
+        let rows = connection
+            .query("SELECT DISTINCT tenant_id, store_id FROM events", &[])
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let tenant: String = row.get(0);
+                let store: String = row.get(1);
+                Some((tenant.parse().ok()?, store.parse().ok()?))
+            })
+            .collect())
     }
 
     /// Creates the monthly partition covering `business_date` (an `YYYY-MM-DD` string), ahead of

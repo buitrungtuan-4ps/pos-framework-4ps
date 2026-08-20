@@ -584,6 +584,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   route's `401`/`403` responses and security requirement (snapshot regenerated). Router tests cover
   the authorised read, a missing key (`401` + `WWW-Authenticate`), a wrong-scope key (`403`), a
   foreign-tenant key reading empty, and a malformed store id (`400`), all against the fakes.
+- `pos-cloud` (P7): the **rollup projector** background task, now the single writer of the
+  materialised rollup the `/v1` dashboard reads (ADR-0036). Ingest only appends to the event log;
+  each interval (configurable, default 30 s) the projector lists the fleet — a new `StoreCatalog`
+  seam, answered in `store-postgres` from the distinct `(tenant_id, store_id)` of the log — and
+  folds every store's new events into its rollup via the existing `project`, advancing the per-store
+  cursor so each event is folded exactly once. Robust: one store's projection failing is logged and
+  counted, not fatal; only a failure to list the fleet ends a tick, and the next retries. Wired into
+  `main` alongside the ingest cursor and shut down with it on SIGINT. Without it the wired `/v1` read
+  would return empty in production, so this is what makes the dashboard slice live. Unit-tested
+  against the fakes (a pass folds the fleet then is idempotent; an empty fleet does nothing).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

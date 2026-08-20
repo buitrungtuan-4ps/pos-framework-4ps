@@ -23,15 +23,15 @@
 //!
 //! The `/v1` dashboard read is now fully wired: it authenticates a scoped per-tenant API key
 //! ([`auth::bearer`]), answers from the materialised rollup ([`dashboard`]) for the key's own
-//! tenant, and both the rollup table and the API-key table are persisted in `store-postgres`
+//! tenant, both the rollup table and the API-key table are persisted in `store-postgres`, and the
+//! [`dashboard::projector`] background task keeps that rollup current across the fleet
 //! (ADR-0036, ADR-0037).
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
 //! routes (ADR-0033), the super-admin login route + credential persistence and the API-key
-//! provisioning route (ADR-0034, ADR-0037), the subject-store schema and the retention runner's
-//! wiring into `main` (ADR-0035), and the rollup **projector** background task that keeps the
-//! materialised rollup current (ADR-0036).
+//! provisioning route (ADR-0034, ADR-0037), and the subject-store schema and the retention runner's
+//! wiring into `main` (ADR-0035).
 
 #![forbid(unsafe_code)]
 

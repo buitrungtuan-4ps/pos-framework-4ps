@@ -22,6 +22,11 @@ const fn default_expires_secs() -> u64 {
     5
 }
 
+/// How often the rollup projector sweeps the fleet, in seconds, when the config does not say.
+const fn default_projector_interval_secs() -> u64 {
+    30
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -34,6 +39,9 @@ pub struct CloudConfig {
     /// through the `/internal/ingest` reconciliation re-push.
     #[serde(default)]
     pub nats: Option<NatsIngestConfig>,
+    /// How often the rollup projector sweeps the fleet to keep dashboards current, in seconds.
+    #[serde(default = "default_projector_interval_secs")]
+    pub projector_interval_secs: u64,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -83,6 +91,10 @@ mod tests {
         assert_eq!(config.bind.port(), 8443);
         assert!(config.database_url.contains("dbname=poscloud"));
         assert!(config.nats.is_none(), "no [nats] means the cursor is off");
+        assert_eq!(
+            config.projector_interval_secs, 30,
+            "the projector interval defaults when unset"
+        );
     }
 
     #[test]

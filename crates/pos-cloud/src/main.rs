@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
-use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, http};
+use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, dashboard, http};
 use store_postgres::PostgresStore;
 
 #[tokio::main]
@@ -71,18 +71,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // The rollup projector: the single writer of the materialised rollup the `/v1` dashboard reads.
+    // Ingest only appends to the log; this sweeps the fleet on an interval and folds each store's
+    // new events into its rollup, so a dashboard is never more than one interval stale. The store is
+    // both the event log it reads and the catalog of stores it iterates.
+    let projector_interval = Duration::from_secs(config.projector_interval_secs);
+    tracing::info!(
+        interval_secs = config.projector_interval_secs,
+        "rollup projector started"
+    );
+    let projector_task = tokio::spawn(dashboard::projector::run(
+        store.clone(),
+        store.rollups(),
+        store.clone(),
+        projector_interval,
+        shutdown_signal(),
+    ));
+
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
     axum::serve(listener, http::router(app))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // The server has stopped, so wind the cursor down too. Its own shutdown signal has already
-    // fired (same SIGINT); this awaits its clean exit, or aborts a stuck pull.
+    // The server has stopped, so wind the background tasks down too. Their own shutdown signals have
+    // already fired (same SIGINT); this awaits their clean exit, or aborts a stuck one.
     if let Some(task) = cursor_task {
         task.abort();
         let _ = task.await;
     }
+    projector_task.abort();
+    let _ = projector_task.await;
     Ok(())
 }
 
