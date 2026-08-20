@@ -61,6 +61,11 @@ toml       = "1"
 url  = "2"
 hmac = "0.13"
 sha2 = "0.11"
+
+# Super-admin auth (P7, ADR-0034). `argon2` (same version/idiom the edge uses for PIN hashes) hashes
+# and verifies the password. RFC 6238 TOTP runs over HMAC-SHA256 using the `sha2`+`hmac` already
+# added above for webhooks, so it adds no crypto crate (ADR-0034 explains the SHA256 choice).
+argon2 = "0.5"
 # ADR-0019: the public /v1 OpenAPI is generated from the handlers and types, never hand-written.
 # `utoipa::ToSchema` rides beside the serde derives on the response types, and `utoipa::path` beside
 # the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.

@@ -34,6 +34,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0031](0031-cloud-adapter-transports.md) | Cloud adapter transports: async-nats for the link, hand-rolled S3 and VictoriaMetrics HTTP | Accepted |
 | [0032](0032-webhooks.md) | Webhooks: a signed, SSRF-guarded cursor over the event log, with a per-endpoint circuit breaker | Accepted |
 | [0033](0033-config-tree.md) | The four-level config tree: deep-merged layers, RFC 7386 merge-patch deltas, cloud-side validation, K-bounded snapshots | Accepted |
+| [0034](0034-super-admin-auth.md) | Super-admin auth: Argon2id password + mandatory RFC 6238 TOTP (SHA256), no-oracle two-factor, host-only `__Host-` session cookie | Accepted |
 | [0020](0020-i18n-runtime.md) | i18n runtime: ICU MessageFormat over the platform `Intl`, `en` the enforced fallback | Accepted |
 | [0016](0016-postgres-access.md) | Cloud PostgreSQL access: `tokio-postgres` behind a pool, SQL by hand, RLS per transaction | Accepted |
 | [0022](0022-events-partition-strategy.md) | Events partitioned monthly by business date; tenant isolation by RLS, not by the partition key | Accepted |

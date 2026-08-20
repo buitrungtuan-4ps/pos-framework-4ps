@@ -474,6 +474,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   "more than K behind ⇒ snapshot" rule made concrete. The engine produces the `ConfigUpdate` values
   the `ConfigStore` port carries and is pure (no persistence, no I/O); its persistence and the admin
   routes are a later slice. `pos-cloud` now composes `pos-core` (pure) for the capability rules.
+- `pos-cloud` (P7): **super-admin authentication** (ADR-0034) — the two-factor sign-in guarding the
+  admin surface. The password is hashed with **Argon2id** (the same primitive and crate the edge uses
+  for PIN hashes; only the PHC hash is stored, never the password), and a **mandatory RFC 6238 TOTP**
+  second factor is required — there is no password-only path. TOTP runs over **HMAC-SHA256** (RFC 6238
+  permits it, authenticators honour `algorithm=SHA256`), chosen so the cloud reuses the `sha2`/`hmac`
+  already in its tree instead of adding a second SHA1 crate version; codes are 6-digit on a 30-second
+  step, accepted within a ±1-step skew window, and **single-use** (verification returns the matched
+  step and refuses any step at or below the last one used, blocking replay). Both factors are
+  evaluated before any verdict and the specific failure is server-log-only, so a prober learns
+  nothing about which factor was wrong. The session cookie is **host-only** — `__Host-` prefixed,
+  `Secure; HttpOnly; SameSite=Strict; Path=/`, and deliberately **no `Domain`** — so an admin session
+  never crosses to another tenant's subdomain (the roadmap's named worst-case isolation failure). The
+  auth core is pure and unit-tested with no clock or network: against RFC 6238's SHA256 vectors,
+  secret redaction from `Debug`, the mandatory-second-factor/no-oracle rules, replay refusal, and the
+  cookie attributes. Adds `argon2` (already at the edge); no new crypto crate for TOTP. The login
+  route, credential persistence, TOTP enrolment, and per-tenant API keys are later slices.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

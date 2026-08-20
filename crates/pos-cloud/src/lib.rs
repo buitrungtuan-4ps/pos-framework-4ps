@@ -14,14 +14,17 @@
 //! [`webhook`] pushes the same log outward: a signed, SSRF-guarded cursor per subscribed endpoint.
 //! [`config_tree`] is the other direction — the four-level Tenant→Brand→Store→Device configuration
 //! the cloud composes, validates, versions, and publishes to each store as a delta or a snapshot.
+//! [`auth`] guards the admin surface: an Argon2id password with a mandatory TOTP second factor, and
+//! a host-only session cookie.
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
-//! routes (ADR-0033), super-admin auth (Argon2 + TOTP) and per-tenant API keys, the
-//! retention/PII-masking cron, and the dashboard screens with materialised rollups.
+//! routes (ADR-0033), the super-admin login route + credential persistence and per-tenant API keys
+//! (ADR-0034), the retention/PII-masking cron, and the dashboard screens with materialised rollups.
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod cloud;
 pub mod config;
 pub mod config_tree;
