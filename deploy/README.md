@@ -33,8 +33,10 @@ server** by `bootstrap.sh` (P8b), never checked in and never returned to GitHub:
 |---|---|
 | `secrets/pos.env` | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` |
 | `secrets/cloud.toml` | `pos_cloud` config: `bind = "0.0.0.0:8080"`, `database_url` (with the postgres password, `host = "postgres"`), optional `[nats]` |
+| `secrets/nats.conf` | NATS JetStream + a token enforced on the internal network |
 | `secrets/garage.toml` | Garage server config (`rpc_secret`, data/meta paths) |
 | `secrets/caddy.env` | `DOMAIN` / `ACME_EMAIL` / `CF_DNS_API_TOKEN` for TLS issuance |
+| `secrets/setup-token.txt` | the one-time super-admin setup token (printed once; consumed by the first-boot enrolment route, P8c) |
 
 `secrets/cloud.toml` **must be `chmod 600` and `chown 10001:10001`** — the `pos_cloud`
 container runs as the non-root uid `10001`, and a `600` file readable only by root would be
@@ -52,17 +54,29 @@ can stay grey-clouded. With no purchased domain, set `DOMAIN=<vps-ip>.sslip.io` 
 [`Caddyfile`](Caddyfile) to the documented HTTP-01 fallback. Cloudflare **"Flexible" SSL is
 forbidden** — the origin is always real TLS.
 
-## Bring-up
+## Bootstrap and bring-up
 
-Once `bootstrap.sh` (P8b) has written `secrets/*`:
+[`bootstrap.sh`](bootstrap.sh) generates `secrets/*` on the box and brings the stack up. It
+is idempotent — an existing secret is kept, never rotated — so it is safe to re-run. Only the
+TLS values come from outside the box, passed in the environment on the first run:
 
 ```
-docker compose up -d --build
+DOMAIN=cloud.example.com ACME_EMAIL=ops@example.com CF_DNS_API_TOKEN=xxxx ./bootstrap.sh
 ```
 
-A rollback is re-running with an older `POS_CLOUD_IMAGE` tag — the app container is
-stateless; all durable state lives in the `postgres` / `garage` / `nats` volumes. The deploy
-workflow (P8c) ships a pinned image over SSH and runs this; backups and the weekly restore
+With no purchased domain, use the sslip.io fallback (HTTP-01, no Cloudflare token):
+
+```
+DOMAIN=203-0-113-9.sslip.io ACME_EMAIL=ops@example.com ./bootstrap.sh
+```
+
+It prints a **one-time super-admin setup token** once; that token enrols the first
+super-admin (password + TOTP) through the first-boot provisioning route (wired in P8c) and is
+void thereafter. Set `POS_BOOTSTRAP_NO_UP=1` to generate secrets without starting the stack.
+
+A rollback is re-running with an older `POS_CLOUD_IMAGE` tag — the app container is stateless;
+all durable state lives in the `postgres` / `garage` / `nats` volumes. The deploy workflow
+(P8c) ships a pinned image over SSH and runs `bootstrap.sh`; backups and the weekly restore
 drill (P8d) are the durability half.
 
 > This environment has no Docker daemon, so these artifacts are validated by YAML/`bash -n`

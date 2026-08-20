@@ -116,10 +116,12 @@ services:
     mem_limit: 256m
     cpus: 0.5
     pids_limit: 128
-    # JetStream on, durable store on the volume, monitoring endpoint on :8222 for the
-    # healthcheck. The -alpine tag carries a shell + busybox wget the check needs.
-    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    # Loads the generated config: JetStream on, a token enforced for client connections,
+    # monitoring on :8222 for the healthcheck (open, no token). The -alpine tag carries a
+    # shell + busybox wget the check needs.
+    command: ["-c", "/etc/nats/nats.conf"]
     volumes:
+      - ./secrets/nats.conf:/etc/nats/nats.conf:ro
       - natsdata:/data
     networks:
       - backend

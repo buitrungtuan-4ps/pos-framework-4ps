@@ -817,6 +817,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   repo — `deploy/compose.yml` reads `deploy/secrets/{pos.env,cloud.toml,garage.toml,caddy.env}`, all
   git-ignored and generated on the box by `bootstrap.sh` (P8b, next). A root `.dockerignore` keeps the
   build context to the source cargo needs.
+- `deploy/bootstrap.sh` (P8, ADR-0044): the idempotent server-side bootstrap. It mints the internal
+  operational secrets **on the VPS** — the PostgreSQL password (`pos.env`), the `pos_cloud` config
+  (`cloud.toml`, chowned to the app's uid `10001` so a `600` file stays readable by the non-root
+  container), a NATS JetStream token (`nats.conf`, now enforced on the internal network), and a Garage
+  `rpc_secret` (`garage.toml`) — writes them `600` under the git-ignored `deploy/secrets/`, and brings the
+  stack up. Re-running keeps every existing secret rather than rotating it, so a second run cannot lock
+  the box out of a database whose password was already deployed. Only the TLS values (`DOMAIN`,
+  `ACME_EMAIL`, `CF_DNS_API_TOKEN`) come from outside, passed in the environment on the first run and
+  written to `caddy.env`; an `*.sslip.io` `DOMAIN` needs no Cloudflare token (HTTP-01 fallback). It prints
+  a **one-time super-admin setup token** once — the token that enrols the first super-admin through the
+  first-boot provisioning route wired in P8c; `AdminStore` has no credential-writer yet, so that route,
+  and the `reset_admin` break-glass beside it, are P8c's slice. No application code changed here.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
