@@ -444,6 +444,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `link-nats`'s and `pos-cloud`'s `integration` suites. The binary starts the cursor when a `[nats]`
   config section is present and shuts it down with the HTTP server; absent that section it serves
   reconciliation re-pushes only. ADR-0031 is amended to record the consumer and its testing.
+- `pos-cloud` (P7): the **webhook delivery engine** (ADR-0032) — how a tenant receives events as
+  signed HTTPS `POST`s. A webhook is **a cursor over the event log, not a queue**: each endpoint
+  stores only its position, so a dead endpoint falls behind without the cloud buffering anything (the
+  P7 exit criterion), and a failed delivery simply does not advance the cursor. Four safety rails,
+  each a separately-tested module: **HMAC-SHA256 signing** over a `"{timestamp}.{body}"` payload with
+  a `v1=` header and a ±5-minute replay window (bound into the signature, so a capture cannot be
+  re-stamped); **SSRF vetting** that requires https, forbids URL credentials, and refuses any host
+  that resolves to a non-public-unicast address (loopback, RFC-1918, the `169.254.169.254` metadata
+  range, CGNAT, ULA, IPv4-mapped v6, documentation, reserved, multicast), connecting only to the
+  vetted addresses so DNS rebinding cannot slip through; a **circuit breaker** that backs a failing
+  endpoint off and **auto-disables** it after 24 hours of continuous failure; and full **per-endpoint
+  isolation** (one cursor, one breaker each). The whole engine — signing, replay window, SSRF
+  classifier, breaker, and the falls-behind cursor — is unit-tested with no broker, network, or
+  database, against explicit crypto and IP-range vectors. The concrete TLS sender (behind a
+  `WebhookTransport` seam) and endpoint persistence are deliberately later slices (ADR-0032). Adds
+  `url`, `hmac`, `sha2` — all already in the workspace tree, so no new dependency version enters.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

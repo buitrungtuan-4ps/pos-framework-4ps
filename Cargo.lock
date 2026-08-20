@@ -1370,6 +1370,7 @@ name = "pos-cloud"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "hmac",
  "http-body-util",
  "link-nats",
  "pos-contract-tests",
@@ -1378,6 +1379,7 @@ dependencies = [
  "pos-proto",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "store-postgres",
  "thiserror",
  "tokio",
@@ -1386,6 +1388,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "utoipa",
 ]
 

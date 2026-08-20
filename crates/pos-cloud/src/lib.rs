@@ -11,11 +11,12 @@
 //! (ADR-0026). Events reach ingest two ways: the **[`cursor`]** — a durable NATS consumer that is the
 //! production feed — and the `/internal/ingest` route the nightly reconciliation re-pushes through.
 //! The public read surface is the generated **`/v1`** API and its OpenAPI document ([`http`]).
+//! [`webhook`] pushes the same log outward: a signed, SSRF-guarded cursor per subscribed endpoint.
 //!
-//! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): webhooks (a cursor over the
-//! log with HMAC and SSRF protection), super-admin auth (Argon2 + TOTP) and per-tenant API keys, the
-//! four-level config tree, the retention/PII-masking cron, and the dashboard screens with
-//! materialised rollups.
+//! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
+//! concrete TLS sender and endpoint persistence (ADR-0032), super-admin auth (Argon2 + TOTP) and
+//! per-tenant API keys, the four-level config tree, the retention/PII-masking cron, and the
+//! dashboard screens with materialised rollups.
 
 #![forbid(unsafe_code)]
 
@@ -24,6 +25,7 @@ pub mod config;
 pub mod cursor;
 pub mod http;
 mod openapi;
+pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};
 pub use config::{CloudConfig, NatsIngestConfig};

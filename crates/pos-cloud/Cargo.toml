@@ -49,6 +49,14 @@ serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
 toml       = "1"
+
+# Webhooks (P7, ADR-0032). `url` parses and validates tenant-supplied destination URLs for the SSRF
+# guard — URL parsing is exactly the "genuinely hard and general" thing not to hand-roll (ADR-0007),
+# and it is already in the tree. `hmac`+`sha2` sign each delivery, on the same RustCrypto line
+# blob-garage already uses (hmac 0.13 / sha2 0.11), so no new crypto version enters the graph.
+url  = "2"
+hmac = "0.13"
+sha2 = "0.11"
 # ADR-0019: the public /v1 OpenAPI is generated from the handlers and types, never hand-written.
 # `utoipa::ToSchema` rides beside the serde derives on the response types, and `utoipa::path` beside
 # the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.
