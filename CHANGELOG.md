@@ -519,6 +519,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `RollupStore` seam; no new dependencies. The `store-postgres` rollup table, the background projector
   task, and pointing `/v1/stores/{id}/rollups/daily` at the materialised read (same response shape,
   so no OpenAPI change) are the remaining wiring.
+- `pos-cloud` (P7): **scoped per-tenant API keys** (ADR-0037) — the bearer credential machine
+  integrators present to the public `/v1` API, and the isolation boundary for it. A key is
+  `pos_<id>_<secret>`; the cloud stores only `SHA-256(secret)` (a fast hash is correct for a
+  high-entropy random token — Argon2 is for guessable human passwords, ADR-0034), verifies in
+  constant time, and every key is **bound to one tenant** (`Grant::tenant`, checked against the
+  resource) and **deny-by-default by scope** (`Grant::authorizes`), so a key reaches one tenant's data
+  and only the capabilities it was granted. Keys are revocable, optionally expiring, and the full
+  token is shown once (only the hash is kept); the rejection reason is server-log-only, so it is not
+  an enumeration oracle. The `pos_` prefix is fixed so a leaked key trips secret scanners. Lives
+  beside the super-admin auth in `auth::apikey`; pure and unit-tested (issue→present→verify
+  round-trip, wrong secret, id mismatch, revoked, inclusive expiry, malformed tokens, deny-by-default
+  scoping, and no secret leaking through `Debug`), with obviously-fake test secrets. Reuses `sha2`; no
+  new dependencies. Key persistence, the provisioning route, and the `/v1` bearer extractor are the
+  remaining wiring.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

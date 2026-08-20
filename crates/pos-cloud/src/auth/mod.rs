@@ -1,19 +1,23 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Super-admin authentication: an Argon2id password **and** a mandatory TOTP second factor (P7,
-//! [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! Cloud authentication — two mechanisms for two kinds of caller (P7).
 //!
-//! The super-admin is the most privileged identity in the cloud, so its sign-in is two-factor and
-//! the second factor is not optional. [`SuperAdminCredential::authenticate`] accepts a login only
-//! when the [`password`] verifies *and* the [`totp`] code verifies and has not been used before;
-//! there is no password-only path. The [`session`] cookie it leads to is scoped to a single
-//! subdomain, so an admin session cannot travel between tenants.
+//! The **super-admin** is a human signing in interactively
+//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): the most privileged identity, so its
+//! sign-in is two-factor and the second factor is not optional. [`SuperAdminCredential::authenticate`]
+//! accepts a login only when the [`password`] verifies *and* the [`totp`] code verifies and has not
+//! been used before; there is no password-only path, and the [`session`] cookie it leads to is scoped
+//! to a single subdomain so an admin session cannot travel between tenants. Both factors are always
+//! evaluated before a verdict, and the client is told only that sign-in failed — the specific
+//! [`AuthError`] is for the server's own log, so a prober cannot learn which factor was wrong.
 //!
-//! Both factors are always evaluated before a verdict, and the caller returns one generic failure to
-//! the client whichever factor was wrong — the specific [`AuthError`] is for the server's own log, so
-//! a prober cannot learn whether it was the password or the code that failed.
+//! A **machine integrator** presents a scoped per-tenant [`apikey`] instead
+//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)): a bearer token whose secret is stored only as a
+//! hash, bound to one tenant and a deny-by-default scope set — the isolation and least-privilege
+//! controls for the public `/v1` surface.
 
+pub mod apikey;
 pub mod password;
 pub mod session;
 pub mod totp;

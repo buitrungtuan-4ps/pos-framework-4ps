@@ -15,7 +15,8 @@
 //! [`config_tree`] is the other direction — the four-level Tenant→Brand→Store→Device configuration
 //! the cloud composes, validates, versions, and publishes to each store as a delta or a snapshot.
 //! [`auth`] guards the admin surface: an Argon2id password with a mandatory TOTP second factor, and
-//! a host-only session cookie. [`retention`] is the data-protection cron: it masks personal data in
+//! a host-only session cookie, and issues scoped per-tenant API keys for machine callers of `/v1`.
+//! [`retention`] is the data-protection cron: it masks personal data in
 //! the subject store once it is past its configured retention period (PDPD/GDPR/CCPA), keeping the
 //! books reconcilable. [`dashboard`] answers activity dashboards from a materialised rollup a
 //! projector keeps current, so a view is an O(days) lookup rather than a log scan.
@@ -23,8 +24,9 @@
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
 //! routes (ADR-0033), the super-admin login route + credential persistence and per-tenant API keys
-//! (ADR-0034), the subject-store schema and the retention runner's wiring into `main` (ADR-0035),
-//! and the materialised-rollup table, projector task, and `/v1` wiring for dashboards (ADR-0036).
+//! and per-tenant API-key persistence + the `/v1` bearer extractor (ADR-0034, ADR-0037), the
+//! subject-store schema and the retention runner's wiring into `main` (ADR-0035), and the
+//! materialised-rollup table, projector task, and `/v1` wiring for dashboards (ADR-0036).
 
 #![forbid(unsafe_code)]
 

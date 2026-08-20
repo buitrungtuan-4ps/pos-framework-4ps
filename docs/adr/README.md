@@ -37,6 +37,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0034](0034-super-admin-auth.md) | Super-admin auth: Argon2id password + mandatory RFC 6238 TOTP (SHA256), no-oracle two-factor, host-only `__Host-` session cookie | Accepted |
 | [0035](0035-retention-and-pii-masking.md) | Retention is enforced by masking the subject store (not deleting it), on a configured period; idempotent daily sweep; rights requests stay escalated | Accepted |
 | [0036](0036-materialised-rollups.md) | Dashboards answer from a materialised rollup maintained by a projector cursor (each event folded once, one shared fold); the read takes no `EventStore`, so it never scans the log | Accepted |
+| [0037](0037-api-keys.md) | Scoped per-tenant API keys: `pos_<id>_<secret>` bearer tokens, SHA-256-hashed (not Argon2), tenant-bound and deny-by-default by scope, revocable and shown once | Accepted |
 | [0020](0020-i18n-runtime.md) | i18n runtime: ICU MessageFormat over the platform `Intl`, `en` the enforced fallback | Accepted |
 | [0016](0016-postgres-access.md) | Cloud PostgreSQL access: `tokio-postgres` behind a pool, SQL by hand, RLS per transaction | Accepted |
 | [0022](0022-events-partition-strategy.md) | Events partitioned monthly by business date; tenant isolation by RLS, not by the partition key | Accepted |
