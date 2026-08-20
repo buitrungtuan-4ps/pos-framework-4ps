@@ -618,8 +618,9 @@ mod api_keys_store {
                 .await
                 .expect("list");
             assert_eq!(listed.len(), 1);
-            assert_eq!(listed[0].id, "KEY0000000000000000000001");
-            assert_eq!(listed[0].scopes, scopes, "the granted scopes are listed");
+            let only = listed.first().expect("exactly one key");
+            assert_eq!(only.id, "KEY0000000000000000000001");
+            assert_eq!(only.scopes, scopes, "the granted scopes are listed");
 
             // Another tenant sees nothing.
             let other = keys
