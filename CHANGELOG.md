@@ -845,6 +845,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   present, a second call `409`, and the `404` / `401` / `422` refusals each provisioning nothing. The
   reset break-glass is a DB one-shot in the deploy workflow (next), gated by a GitHub Environment, so
   no `reset_admin` flag ever rides in the app's own container environment.
+- `deploy/` (P8, ADR-0044/ADR-0045): the **deploy workflow** and the reset break-glass.
+  `.github/workflows/deploy.yml` (manual `workflow_dispatch`, in a `production` GitHub Environment)
+  builds the `pos_cloud` and Caddy images in CI, ships both over the existing SSH channel
+  (`docker save | ssh docker load` — no registry, so GitHub still holds no application secret), and
+  runs `bootstrap.sh` on the box with the loaded image tags and `POS_BOOTSTRAP_NO_BUILD=1` so the box
+  never rebuilds from source. A rollback is re-running at an older commit; the app container is
+  stateless. `bootstrap.sh` now writes the setup token as `admin_setup_token` into `cloud.toml` (where
+  `pos_cloud` reads it) and gained the `POS_BOOTSTRAP_NO_BUILD` path. `reset_admin=true` runs
+  `deploy/reset-admin.sh` after bring-up — `DELETE FROM super_admin; DELETE FROM admin_sessions;`, the
+  ADR-0045 break-glass — gated by the Environment's required reviewer, the second human a wipe needs.
+  The fork's 4–6 secrets (`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` / `VPS_KNOWN_HOSTS` / `DOMAIN` /
+  `ACME_EMAIL` / `CF_DNS_API_TOKEN`) are documented in the workflow and `deploy/README.md`; the SSH
+  host key is pinned (`VPS_KNOWN_HOSTS`), not trust-on-first-use.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

@@ -32,11 +32,10 @@ server** by `bootstrap.sh` (P8b), never checked in and never returned to GitHub:
 | File | Holds |
 |---|---|
 | `secrets/pos.env` | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` |
-| `secrets/cloud.toml` | `pos_cloud` config: `bind = "0.0.0.0:8080"`, `database_url` (with the postgres password, `host = "postgres"`), optional `[nats]` |
+| `secrets/cloud.toml` | `pos_cloud` config: `bind = "0.0.0.0:8080"`, `database_url` (with the postgres password, `host = "postgres"`), the one-time `admin_setup_token` (ADR-0045), optional `[nats]` |
 | `secrets/nats.conf` | NATS JetStream + a token enforced on the internal network |
 | `secrets/garage.toml` | Garage server config (`rpc_secret`, data/meta paths) |
 | `secrets/caddy.env` | `DOMAIN` / `ACME_EMAIL` / `CF_DNS_API_TOKEN` for TLS issuance |
-| `secrets/setup-token.txt` | the one-time super-admin setup token (printed once; consumed by the first-boot enrolment route, P8c) |
 
 `secrets/cloud.toml` **must be `chmod 600` and `chown 10001:10001`** — the `pos_cloud`
 container runs as the non-root uid `10001`, and a `600` file readable only by root would be
@@ -70,14 +69,31 @@ With no purchased domain, use the sslip.io fallback (HTTP-01, no Cloudflare toke
 DOMAIN=203-0-113-9.sslip.io ACME_EMAIL=ops@example.com ./bootstrap.sh
 ```
 
-It prints a **one-time super-admin setup token** once; that token enrols the first
-super-admin (password + TOTP) through the first-boot provisioning route (wired in P8c) and is
-void thereafter. Set `POS_BOOTSTRAP_NO_UP=1` to generate secrets without starting the stack.
+It prints a **one-time super-admin setup token** once (also written as `admin_setup_token` in
+`secrets/cloud.toml`). Enrol the first super-admin with it at `POST /admin/setup` — the route
+takes a chosen password and returns the TOTP enrolment once, then 409s ([ADR-0045](../docs/adr/0045-first-boot-admin-enrolment.md)).
+Set `POS_BOOTSTRAP_NO_UP=1` to generate secrets without starting the stack, or
+`POS_BOOTSTRAP_NO_BUILD=1` (with `POS_CLOUD_IMAGE`/`CADDY_IMAGE`) to run prebuilt images
+without rebuilding — the mode the deploy workflow uses.
 
-A rollback is re-running with an older `POS_CLOUD_IMAGE` tag — the app container is stateless;
-all durable state lives in the `postgres` / `garage` / `nats` volumes. The deploy workflow
-(P8c) ships a pinned image over SSH and runs `bootstrap.sh`; backups and the weekly restore
-drill (P8d) are the durability half.
+## Deploy workflow and the reset break-glass
+
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) (manual `workflow_dispatch`)
+builds both images in CI, ships them over the existing SSH channel (no registry), and runs
+`bootstrap.sh` on the box. It runs in the `production` GitHub Environment — **configure that
+Environment with a required reviewer**, so every deploy, and the break-glass in particular,
+is approved by a second human. The 4–6 GitHub secrets it needs (`VPS_HOST`, `VPS_USER`,
+`VPS_SSH_KEY`, `VPS_KNOWN_HOSTS`, `DOMAIN`, `ACME_EMAIL`, `CF_DNS_API_TOKEN`) are the only
+values that cross the repo boundary; none is an application secret.
+
+Running it with `reset_admin=true` invokes [`reset-admin.sh`](reset-admin.sh) after bring-up,
+which clears the super-admin and every session (`DELETE FROM super_admin; DELETE FROM
+admin_sessions;`) so a locked-out operator can re-enrol at `/admin/setup`. Reset lives here,
+not in the app, so no reset flag ever rides in the container's environment.
+
+A rollback is re-running the workflow at an older commit — its image tag names a specific
+build, and the app container is stateless; all durable state lives in the `postgres` /
+`garage` / `nats` volumes. Backups and the weekly restore drill (P8d) are the durability half.
 
 > This environment has no Docker daemon, so these artifacts are validated by YAML/`bash -n`
 > parsing, the `actions-pinned` gate, and review. The true end-to-end check is the P8 exit:

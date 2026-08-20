@@ -1,0 +1,109 @@
+name: deploy
+
+# Manual deploy of one country cell to its VPS (ADR-0044). CI builds the two images, ships
+# them over the existing SSH channel (no registry — GitHub holds no application secret), and
+# runs bootstrap.sh on the box. A rollback is re-running with an older commit's image tag: the
+# app container is stateless, all durable state lives in the postgres/garage/nats volumes.
+#
+# Required GitHub secrets — the only values that ever cross the repo boundary, and none is an
+# application secret (the box mints those itself, ADR-0044):
+#   VPS_HOST          host or IP to SSH to
+#   VPS_USER          SSH user (e.g. a sudo-less deploy user, or root)
+#   VPS_SSH_KEY       that user's private key (PEM)
+#   VPS_KNOWN_HOSTS   the box's SSH host key(s), so the connection is not trust-on-first-use
+#   DOMAIN            the cell's hostname (or <vps-ip>.sslip.io with no purchased domain)
+#   ACME_EMAIL        contact address for the TLS certificate
+#   CF_DNS_API_TOKEN  Cloudflare Zone:DNS:Edit token (leave empty for an *.sslip.io DOMAIN)
+#
+# reset_admin=true is the break-glass (ADR-0045): after bring-up it clears the super-admin and
+# every session on the box, so the operator can re-enrol at /admin/setup. It — and every
+# deploy — runs through the `production` Environment, whose required reviewer is the second
+# human the break-glass needs; configure that protection rule on the fork.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_admin:
+        description: "Break-glass: wipe the super-admin and all sessions, then re-enrol via /admin/setup"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build the images
+        run: |
+          TAG="${GITHUB_SHA}"
+          docker build -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
+          docker build -f deploy/caddy.Dockerfile -t "pos-caddy:${TAG}" deploy
+          docker save "pos-cloud:${TAG}" "pos-caddy:${TAG}" | gzip > /tmp/images.tgz
+
+      - name: Open the SSH channel
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Ship the images and the deploy files
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          target="${VPS_USER}@${VPS_HOST}"
+          # Ship the deploy tree, but never the local secrets/ — the box holds its own.
+          tar -C deploy --exclude=secrets -czf /tmp/deploy.tgz .
+          scp $ssh_opts /tmp/deploy.tgz /tmp/images.tgz "${target}:/tmp/"
+          ssh $ssh_opts "$target" '
+            set -e
+            mkdir -p ~/pos-cloud/deploy
+            tar -C ~/pos-cloud/deploy -xzf /tmp/deploy.tgz
+            gunzip -c /tmp/images.tgz | docker load
+          '
+
+      - name: Bootstrap and bring up
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+        run: |
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          target="${VPS_USER}@${VPS_HOST}"
+          tag="${GITHUB_SHA}"
+          # Uses the images just loaded (POS_BOOTSTRAP_NO_BUILD=1 so the box never rebuilds from
+          # source). bootstrap.sh keeps any existing secret, so a redeploy does not rotate them.
+          ssh $ssh_opts "$target" \
+            "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh && \
+             DOMAIN='${DOMAIN}' ACME_EMAIL='${ACME_EMAIL}' CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
+             POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='pos-caddy:${tag}' POS_BOOTSTRAP_NO_BUILD=1 \
+             ./bootstrap.sh"
+
+      - name: Break-glass admin reset
+        if: ${{ inputs.reset_admin }}
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          target="${VPS_USER}@${VPS_HOST}"
+          echo "reset_admin=true: clearing the super-admin and all sessions on the box"
+          ssh $ssh_opts "$target" 'cd ~/pos-cloud/deploy && ./reset-admin.sh'
