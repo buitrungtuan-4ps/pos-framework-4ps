@@ -11,6 +11,7 @@ use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::{PortError, TxContext};
@@ -41,7 +42,7 @@ pub struct IngestOutcome {
 /// type — enough for an activity dashboard, and it uses only envelope fields (`business_date`,
 /// `event_type`), so it needs no per-event-type decoding. Money- and order-shaped rollups, and the
 /// materialised tables that make the <10 ms dashboard query real, land with the dashboard slice.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct DailyRollup {
     /// The store's trading day, `YYYY-MM-DD` ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md)).
     pub business_date: String,

@@ -344,9 +344,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ledger (no shared cross-cell database), redirect never proxy, wildcard renewals staggered above ~5
   cells; resolves the ADR-0011/archive contradiction and supersedes ADR-0011's country-in-hostname
   mechanism while keeping its redirect principle. **ADR-0019** — the public `/v1` OpenAPI is generated
-  from the axum handlers with `utoipa` and a `cargo xtask openapi --check` drift gate, never
-  hand-written. Registered in the ADR index and the engineering guide; these unblock the P7 schema,
-  adapters and `pos_cloud`.
+  from the axum handlers with `utoipa` and a drift gate (a `pos-cloud` test that renders
+  `docs/openapi.json` and fails CI on any difference, the same idiom as the event-catalogue snapshot),
+  never hand-written. Registered in the ADR index and the engineering guide; these unblock the P7
+  schema, adapters and `pos_cloud`.
 - `store-postgres` (P7): the cloud `EventStore` over PostgreSQL, and the second real implementation
   of that port — it passes the **same** shared contract suite as `store-sqlite` and the in-memory
   fake, which is what makes "the cloud store behaves like the edge store" a checked fact. Migration
@@ -422,6 +423,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   consumer that drives ingest in production, webhooks, super-admin auth (Argon2 + TOTP), the
   four-level config tree, the retention/PII-masking cron, and the dashboard screens with
   materialised rollups.
+- `pos-cloud` (P7): the public `/v1` read API and its **generated** OpenAPI (ADR-0019).
+  `GET /v1/stores/{store_id}/rollups/daily` returns a store's per-trading-day activity rollups; a
+  malformed store id is a `400`, an unreachable store a `503`. The OpenAPI document at
+  `GET /v1/openapi.json` is generated from the handlers (`utoipa::path`) and their response types
+  (`utoipa::ToSchema` beside the `serde` derives), never hand-written, and is committed at
+  `docs/openapi.json`. A `pos-cloud` test renders that file and fails CI on any drift — the same
+  opt-in idiom (`POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-cloud openapi`) as `pos-proto`'s
+  event-catalogue snapshot, so the document can never disagree with the code. `/internal/*` stays out
+  of the external contract by construction.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

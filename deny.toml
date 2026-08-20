@@ -97,6 +97,11 @@ skip = [
     # on 0.2, postgres-protocol on 0.3. Skipping the 0.2 line leaves 0.3 unique. Both are cloud-only
     # (store-postgres), never at the edge. review: 2026-11-19
     { crate = "fallible-iterator@0.2", reason = "tokio-postgres stack mid-migration from fallible-iterator 0.2 to 0.3" },
+    # hashbrown straddles 0.14 -> 0.17 across the two binaries: rusqlite's hashlink (edge, store-sqlite)
+    # pins 0.14, while indexmap (cloud, pulled by utoipa for OpenAPI generation, P7) is on 0.17. The two
+    # binaries never link both, so this is a workspace-graph duplicate only; skipping the 0.14 line
+    # leaves 0.17 unique. review: 2026-11-19
+    { crate = "hashbrown@0.14", reason = "rusqlite/hashlink (edge) still on 0.14; utoipa/indexmap (cloud) on 0.17" },
 ]
 skip-tree = [
     # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed

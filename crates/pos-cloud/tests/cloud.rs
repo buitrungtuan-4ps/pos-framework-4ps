@@ -147,3 +147,75 @@ async fn the_ingest_endpoint_accepts_a_batch_and_health_answers() {
         .expect("route health");
     assert_eq!(health.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn the_v1_rollups_endpoint_answers_from_the_log() {
+    let cloud = Cloud::new(FakeStore::new());
+    cloud
+        .ingest(&dated(1, 3, 2026, 3, 15))
+        .await
+        .expect("ingest");
+    let ulid = Ulid::from_u128(0x0ADA).to_string();
+
+    let response = http::router(cloud)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/stores/{ulid}/rollups/daily"))
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    let rollups: serde_json::Value = serde_json::from_slice(&bytes).expect("parse the rollups");
+    let days = rollups.as_array().expect("an array of days");
+    assert_eq!(days.len(), 1);
+    assert_eq!(days[0]["business_date"], "2026-03-15");
+    assert_eq!(days[0]["total_events"], 3);
+}
+
+#[tokio::test]
+async fn a_malformed_store_id_is_a_bad_request() {
+    let response = http::router(Cloud::new(FakeStore::new()))
+        .oneshot(
+            Request::builder()
+                .uri("/v1/stores/not-a-ulid/rollups/daily")
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_openapi_document_is_served() {
+    let response = http::router(Cloud::new(FakeStore::new()))
+        .oneshot(
+            Request::builder()
+                .uri("/v1/openapi.json")
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).expect("parse the document");
+    assert_eq!(document["openapi"], "3.1.0");
+    assert!(
+        document["paths"]["/v1/stores/{store_id}/rollups/daily"].is_object(),
+        "the rollups path is described"
+    );
+}

@@ -21,6 +21,7 @@
 pub mod cloud;
 pub mod config;
 pub mod http;
+mod openapi;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};
 pub use config::CloudConfig;

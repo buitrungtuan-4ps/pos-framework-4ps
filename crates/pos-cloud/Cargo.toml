@@ -39,6 +39,10 @@ serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
 toml       = "1"
+# ADR-0019: the public /v1 OpenAPI is generated from the handlers and types, never hand-written.
+# `utoipa::ToSchema` rides beside the serde derives on the response types, and `utoipa::path` beside
+# the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.
+utoipa = "5"
 
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
