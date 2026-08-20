@@ -460,6 +460,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   database, against explicit crypto and IP-range vectors. The concrete TLS sender (behind a
   `WebhookTransport` seam) and endpoint persistence are deliberately later slices (ADR-0032). Adds
   `url`, `hmac`, `sha2` — all already in the workspace tree, so no new dependency version enters.
+- `pos-cloud` (P7): the **four-level configuration tree** (ADR-0033) the cloud owns and publishes,
+  resolving `docs/roadmap.md`'s D10 open questions. A store's effective configuration is the deep
+  merge of four authored layers — Tenant → Brand → Store → Device, most-specific winning, nested
+  objects merged and scalars/arrays replaced. **Deltas are RFC 7386 JSON Merge Patch**: a present key
+  overrides, a nested object recurses, and `null` deletes — so a delta can remove a key, and `diff`
+  then `apply` round-trips (property-tested over many pairs). A candidate version is **validated in
+  the cloud before it is published**, reusing `pos-core`'s §10 inter-flag capability rules
+  (`capability::conflicts`) so the cloud cannot bless a flag combination the edge would reject; a
+  rejected publish changes nothing, so the **last good version stays current**. A store reports the
+  version it holds and gets a **delta when it is within K (default 20) versions of current**, or a
+  **full snapshot** when it is further behind or holding a version the cloud no longer retains — the
+  "more than K behind ⇒ snapshot" rule made concrete. The engine produces the `ConfigUpdate` values
+  the `ConfigStore` port carries and is pure (no persistence, no I/O); its persistence and the admin
+  routes are a later slice. `pos-cloud` now composes `pos-core` (pure) for the capability rules.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

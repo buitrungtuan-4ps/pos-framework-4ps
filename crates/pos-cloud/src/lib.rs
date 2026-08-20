@@ -12,16 +12,19 @@
 //! production feed — and the `/internal/ingest` route the nightly reconciliation re-pushes through.
 //! The public read surface is the generated **`/v1`** API and its OpenAPI document ([`http`]).
 //! [`webhook`] pushes the same log outward: a signed, SSRF-guarded cursor per subscribed endpoint.
+//! [`config_tree`] is the other direction — the four-level Tenant→Brand→Store→Device configuration
+//! the cloud composes, validates, versions, and publishes to each store as a delta or a snapshot.
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
-//! concrete TLS sender and endpoint persistence (ADR-0032), super-admin auth (Argon2 + TOTP) and
-//! per-tenant API keys, the four-level config tree, the retention/PII-masking cron, and the
-//! dashboard screens with materialised rollups.
+//! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
+//! routes (ADR-0033), super-admin auth (Argon2 + TOTP) and per-tenant API keys, the
+//! retention/PII-masking cron, and the dashboard screens with materialised rollups.
 
 #![forbid(unsafe_code)]
 
 pub mod cloud;
 pub mod config;
+pub mod config_tree;
 pub mod cursor;
 pub mod http;
 mod openapi;

@@ -35,6 +35,10 @@ store-postgres = { path = "../adapters/store-postgres" }
 # (src/cursor.rs) drives Cloud::ingest; the ack policy is tested without a broker, and the loop is
 # proven against real JetStream by link-nats's own integration test.
 link-nats = { path = "../adapters/link-nats" }
+# The config tree validates a version against pos-core's §10 inter-flag capability rules before
+# publishing (ADR-0033), reusing the domain's own rule set so the cloud and edge cannot disagree.
+# pos-core is pure (the dependency-rule test keeps it I/O-free), so composing it here is sound.
+pos-core = { path = "../pos-core" }
 
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
 # test proves they never reach pos-core.

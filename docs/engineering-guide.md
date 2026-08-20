@@ -175,6 +175,7 @@ Recorded so far:
 | 0030 | Edge discovery (QR raw-IP + manual, mDNS behind a trait), single-use pairing code, offline PIN against synced Argon2id hashes with a local lockout |
 | 0031 | Cloud adapter transports: `async-nats` for `link-nats`; hand-rolled SigV4+HTTP for `blob-garage` (thin, soon-deleted); bounded-queue HTTP for `metrics-vm` (off the sales path) |
 | 0032 | Webhooks are a signed, SSRF-guarded cursor over the event log: per-endpoint cursor (falls behind without buffering), HMAC-SHA256 over a timestamped payload with a ±5-minute replay window, https-only destinations vetted against forbidden IP ranges, and a circuit breaker with 24-hour auto-disable |
+| 0033 | The four-level Tenant→Brand→Store→Device config tree: layers deep-merge (most-specific wins), deltas are RFC 7386 JSON Merge Patch (deletion via `null`, diff/apply round-trips), a version is validated against §10 inter-flag rules before publish (rejection keeps last-good), and a store more than K=20 versions behind gets a full snapshot |
 | 0020 | i18n runtime: ICU MessageFormat via `@formatjs/intl-messageformat` over the platform `Intl`; `en` is the enforced fallback; a TypeScript-AST lint bans hardcoded user-visible strings |
 | 0016 | Cloud PostgreSQL access: `tokio-postgres` + `deadpool`, hand-written SQL, RLS set per transaction, no build-time database |
 | 0022 | Events partitioned monthly by `business_date`; tenant isolation is RLS (a column and a policy), not the partition key; retention drops whole partitions |
