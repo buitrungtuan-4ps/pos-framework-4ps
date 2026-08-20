@@ -593,9 +593,15 @@ mod api_keys_store {
             let hash: &[u8] = &[3_u8; 32];
             let scopes = vec!["read_rollups".to_owned(), "read_events".to_owned()];
 
-            keys.insert("KEY0000000000000000000001", "TENANT000000000000000000AA", hash, &scopes, None)
-                .await
-                .expect("insert the key");
+            keys.insert(
+                "KEY0000000000000000000001",
+                "TENANT000000000000000000AA",
+                hash,
+                &scopes,
+                None,
+            )
+            .await
+            .expect("insert the key");
 
             let row = keys
                 .fetch("KEY0000000000000000000001")
@@ -623,9 +629,16 @@ mod api_keys_store {
             assert!(other.is_empty(), "the listing is scoped to the tenant");
 
             // Revoke: the first call changes a row, the second is a no-op, and the key reads revoked.
-            assert!(keys.revoke("KEY0000000000000000000001").await.expect("revoke"));
             assert!(
-                !keys.revoke("KEY0000000000000000000001").await.expect("revoke again"),
+                keys.revoke("KEY0000000000000000000001")
+                    .await
+                    .expect("revoke")
+            );
+            assert!(
+                !keys
+                    .revoke("KEY0000000000000000000001")
+                    .await
+                    .expect("revoke again"),
                 "revoking an already-revoked key changes nothing"
             );
             let row = keys
