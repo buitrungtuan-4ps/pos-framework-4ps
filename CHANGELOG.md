@@ -734,6 +734,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `/internal`. Reuses the existing API-key bearer and config-tree collaborators — no new dependency or
   `CloudApp` generic. Router tests cover snapshot → up-to-date and the `401`/`403`/`404` closes. The
   `pos_edge` loop that polls this and applies through `ConfigStore` is store-side fleet wiring (P9).
+- `pos-cloud` (P7): **reset-cursor-and-replay** for the materialised rollup. `POST
+  /admin/stores/{store_id}/rollups/reset?tenant_id=…` (behind the super-admin session guard) saves the
+  store's rollup back to the empty default, clearing its per-store projector cursor; the next
+  projector pass then re-folds every event from the start of the durable log, so the cloud's read
+  model can be rebuilt without touching the event log (`docs/roadmap.md` P7, ADR-0036). `204`
+  regardless — a store with no rollup yet resets to the same empty state. Reuses the existing
+  `RollupStore` collaborator; a router test proves a seeded cursor is cleared and the cookieless call
+  is `401`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

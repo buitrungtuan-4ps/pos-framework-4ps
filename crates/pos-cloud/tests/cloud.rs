@@ -1404,6 +1404,53 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }
 
+// --- Rollup reset-cursor-and-replay (`POST /admin/stores/{id}/rollups/reset`) -------------------
+
+#[tokio::test]
+async fn rollups_reset_clears_the_cursor_so_the_projector_replays() {
+    // A rollup seeded with an advanced cursor and a day of activity.
+    let rollups = FakeRollups::default();
+    let seeded = StoredRollups {
+        cursor: Some(EventId::new(Ulid::from_u128(0x00C0_FFEE))),
+        ..StoredRollups::default()
+    };
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the rollup");
+
+    let router = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        rollups.clone(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ));
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/admin/stores/{store_ulid}/rollups/reset?tenant_id={tenant_ulid}");
+
+    // Closed without a session.
+    let unauth = router
+        .clone()
+        .oneshot(post_json(&uri, &serde_json::json!({})))
+        .await
+        .expect("route");
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    // With a session, the cursor is cleared so the next projector pass re-folds from the log.
+    let cookie = admin_cookie(&router).await;
+    let reset = router
+        .oneshot(post_with_cookie(&uri, &serde_json::json!({}), &cookie))
+        .await
+        .expect("route");
+    assert_eq!(reset.status(), StatusCode::NO_CONTENT);
+    let after = rollups.load(tenant(), store_id()).await.expect("load");
+    assert!(
+        after.cursor.is_none() && after.days.is_empty(),
+        "reset returns the rollup to the empty default, so the projector replays from the start"
+    );
+}
+
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
 
 /// Registering returns the signing secret once, the listing shows the endpoint without any secret,

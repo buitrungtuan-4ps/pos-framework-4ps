@@ -63,7 +63,7 @@ use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
 };
-use crate::dashboard::{RollupError, RollupStore, dashboard};
+use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
 use crate::openapi::ApiDoc;
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -202,6 +202,10 @@ where
         .route(
             "/admin/stores/{store_id}/config/{level}",
             axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/rollups/reset",
+            post(admin_rollups_reset::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/webhooks",
@@ -809,6 +813,49 @@ where
         )
             .into_response(),
         Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// Resets a store's materialised rollup so the projector rebuilds it from the event log
+/// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
+/// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
+/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+/// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
+async fn admin_rollups_reset<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match app
+        .rollups
+        .save(tenant_id, store_id, &StoredRollups::default())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => rollup_error_response(&error),
     }
 }
 
