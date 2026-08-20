@@ -26,6 +26,7 @@
 pub mod admin;
 pub mod apikey;
 pub mod bearer;
+pub mod enrol;
 pub mod password;
 pub mod session;
 pub mod totp;

@@ -47,6 +47,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use std::collections::BTreeSet;
 
+use argon2::password_hash::SaltString;
 use axum::extract::{Path, Query, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -67,6 +68,10 @@ use pos_proto::ulid::Ulid;
 use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::enrol::{
+    MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
+};
+use crate::auth::password::hash_password;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
@@ -107,6 +112,7 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     config_trees: T,
     webhooks: W,
     admin_session_ttl_secs: u64,
+    admin_setup_token: Option<String>,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -137,6 +143,7 @@ where
             config_trees: self.config_trees.clone(),
             webhooks: self.webhooks.clone(),
             admin_session_ttl_secs: self.admin_session_ttl_secs,
+            admin_setup_token: self.admin_setup_token.clone(),
         }
     }
 }
@@ -162,6 +169,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             config_trees,
             webhooks,
             admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
+            admin_setup_token: None,
         }
     }
 
@@ -170,6 +178,16 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_admin_session_ttl_secs(mut self, secs: u64) -> Self {
         self.admin_session_ttl_secs = secs;
+        self
+    }
+
+    /// Sets the one-time super-admin setup token that gates first-boot enrolment
+    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)) — the binary threads in the
+    /// configured value ([`crate::config::CloudConfig::admin_setup_token`]). `None` leaves
+    /// `/admin/setup` disabled (a `404`), the posture once an admin is enrolled and the token removed.
+    #[must_use]
+    pub fn with_admin_setup_token(mut self, token: Option<String>) -> Self {
+        self.admin_setup_token = token;
         self
     }
 }
@@ -201,6 +219,7 @@ where
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
+        .route("/admin/setup", post(admin_setup::<S, R, K, C, A, T, W>))
         .route(
             "/admin/api-keys",
             post(admin_create_api_key::<S, R, K, C, A, T, W>)
@@ -945,6 +964,59 @@ where
     }
 }
 
+/// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+///
+/// Token-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch
+/// (compared in constant time), `422` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
+/// `409` once an administrator is already enrolled, and on success `201` with the one-time TOTP
+/// enrolment. The password is hashed with Argon2id under a fresh CSPRNG salt and never stored in the
+/// clear; the TOTP secret is generated here and returned exactly once.
+async fn admin_setup<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(request): Json<SetupRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let Some(expected) = app.admin_setup_token.as_deref() else {
+        // No token configured: setup is off. Reveal nothing more than "no such route".
+        return (StatusCode::NOT_FOUND, "setup is not enabled").into_response();
+    };
+    if !constant_time_eq(&request.setup_token, expected) {
+        return (StatusCode::UNAUTHORIZED, "setup failed").into_response();
+    }
+    if request.password.len() < MIN_PASSWORD_LEN {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the password is too short",
+        )
+            .into_response();
+    }
+    let Some((secret, phc)) = mint_credential(&request.password) else {
+        tracing::error!("could not mint a super-admin credential (entropy or hashing failed)");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the setup service is unavailable",
+        )
+            .into_response();
+    };
+    match app.admin.provision_credential(phc, secret.to_vec()).await {
+        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+        Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the setup service is unavailable",
+        )
+            .into_response(),
+    }
+}
+
 /// Signs a super-admin out: revokes the session server-side and clears the client cookie.
 ///
 /// Idempotent — a request with no session, or one the store cannot reach, still clears the client
@@ -1658,6 +1730,20 @@ fn random_hex_32() -> Option<String> {
         let _ = write!(hex, "{byte:02x}");
     }
     Some(hex)
+}
+
+/// Mints a fresh super-admin credential from OS entropy: a [`TOTP_SECRET_BYTES`]-byte TOTP secret and
+/// the Argon2id PHC hash of `password` under a fresh 16-byte CSPRNG salt. `None` if the OS entropy
+/// source is unavailable or hashing fails — the caller then fails closed rather than provision a
+/// credential built on weak randomness.
+fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> {
+    let mut secret = [0_u8; TOTP_SECRET_BYTES];
+    getrandom::fill(&mut secret).ok()?;
+    let mut salt_bytes = [0_u8; 16];
+    getrandom::fill(&mut salt_bytes).ok()?;
+    let salt = SaltString::encode_b64(&salt_bytes).ok()?;
+    let phc = hash_password(password, &salt).ok()?;
+    Some((secret, phc))
 }
 
 /// Maps a [`PortError`] to an HTTP response, translating the AIP-193 status to a status code so a

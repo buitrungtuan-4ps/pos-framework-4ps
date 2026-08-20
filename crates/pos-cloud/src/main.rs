@@ -65,7 +65,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.config_trees(),
         store.webhooks(),
     )
-    .with_admin_session_ttl_secs(config.admin_session_ttl_secs);
+    .with_admin_session_ttl_secs(config.admin_session_ttl_secs)
+    .with_admin_setup_token(config.admin_setup_token.clone());
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the

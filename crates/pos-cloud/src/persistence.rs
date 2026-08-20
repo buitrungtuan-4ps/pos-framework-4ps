@@ -319,6 +319,16 @@ impl AdminStore for PostgresAdmin {
         }))
     }
 
+    async fn provision_credential(
+        &self,
+        password_phc: String,
+        totp_secret: Vec<u8>,
+    ) -> Result<bool, AdminStoreError> {
+        self.insert_credential(&password_phc, &totp_secret)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
     async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
         let step = i64::try_from(step).unwrap_or(i64::MAX);
         self.advance_totp_step(step)

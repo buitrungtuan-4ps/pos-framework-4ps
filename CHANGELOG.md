@@ -829,6 +829,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   a **one-time super-admin setup token** once — the token that enrols the first super-admin through the
   first-boot provisioning route wired in P8c; `AdminStore` has no credential-writer yet, so that route,
   and the `reset_admin` break-glass beside it, are P8c's slice. No application code changed here.
+- `pos-cloud` / `store-postgres` (P8, ADR-0045 — a new ADR): **first-boot super-admin enrolment**, the
+  route that consumes the setup token above. `POST /admin/setup` provisions the single super-admin the
+  first time — token-gated and self-disabling — closing the gap ADR-0034 left ("first-boot seeding, P8
+  bootstrap"): the login existed but nothing could write the first credential. It compares the
+  configured `admin_setup_token` in constant time, then hashes the operator's chosen password with
+  Argon2id under a fresh CSPRNG salt, generates a 256-bit TOTP secret, and returns the enrolment (the
+  `otpauth://` URI and its base32 secret) exactly once. It answers `404` when no token is configured,
+  `401` on a token mismatch, `422` below a 12-character password, and `409` once an admin exists —
+  provisioning is `INSERT … ON CONFLICT DO NOTHING` on the single-row `super_admin` table, so the first
+  enrolment wins and the token is thereafter inert. `AdminStore` gains a `provision_credential` writer
+  (backed by `store-postgres`; **no new migration** — the table already had the shape from migration
+  `0003`), and a new `crate::auth::enrol` hand-rolls RFC 4648 base32 and the `otpauth://` URI (no new
+  dependency). Proven over the fakes: enrol → `201` with a well-formed enrolment and a credential now
+  present, a second call `409`, and the `404` / `401` / `422` refusals each provisioning nothing. The
+  reset break-glass is a DB one-shot in the deploy workflow (next), gated by a GitHub Environment, so
+  no `reset_admin` flag ever rides in the app's own container environment.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

@@ -41,12 +41,13 @@
 //! destination, signing secret, cursor, disabled flag — so the admin CRUD lists a tenant's endpoints
 //! and the delivery task can reload the enabled fleet across a restart (ADR-0032).
 //!
-//! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
-//! concrete TLS sender and the admin CRUD routes that register and revoke endpoints over the seam
-//! that now exists (ADR-0032), the config tree's publish path that delivers a `ConfigUpdate` to a
-//! store over the wire (ADR-0033), the subject-store *writer* that populates personal data
-//! (P10/P11 marketplace and corporate-invoice buyer fields, ADR-0035), and the super-admin's TOTP
-//! enrolment/provisioning and first-boot seeding (ADR-0034, P8 bootstrap).
+//! First-boot super-admin enrolment now exists too: [`auth::enrol`] and the token-gated
+//! `/admin/setup` route provision the single credential [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)
+//! always assumed but never wrote, keyed on a one-time setup token the deploy bootstrap mints
+//! ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md), P8).
+//!
+//! Deliberately not here yet, its own slice: the subject-store *writer* that populates personal data
+//! (P10/P11 marketplace and corporate-invoice buyer fields, ADR-0035).
 
 #![forbid(unsafe_code)]
 

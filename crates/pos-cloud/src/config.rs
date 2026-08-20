@@ -72,6 +72,12 @@ pub struct CloudConfig {
     /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
     #[serde(default = "default_admin_session_ttl_secs")]
     pub admin_session_ttl_secs: u64,
+    /// The one-time super-admin setup token that gates first-boot enrolment
+    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). **No default**: when it is
+    /// absent the `/admin/setup` route is off (a `404`). `bootstrap.sh` mints it into this file on the
+    /// first deploy and it is removed once the first super-admin is enrolled.
+    #[serde(default)]
+    pub admin_setup_token: Option<String>,
     /// How long personal data is retained before the cron masks it, in days
     /// ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)). **No default**: the period
     /// is a legal decision, not a code guess, so when it is absent the retention cron does not run at
@@ -151,6 +157,10 @@ mod tests {
         assert_eq!(
             config.retention_days, None,
             "with no configured retention period the cron stays off — never a code default"
+        );
+        assert_eq!(
+            config.admin_setup_token, None,
+            "with no configured setup token the /admin/setup route stays off"
         );
         assert_eq!(
             config.retention_sweep_interval_secs,

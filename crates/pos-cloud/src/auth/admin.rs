@@ -80,6 +80,21 @@ pub trait AdminStore {
         &self,
     ) -> impl Future<Output = Result<Option<AdminCredential>, AdminStoreError>> + Send;
 
+    /// Provisions the single super-admin credential *if none exists yet* — the first-boot enrolment
+    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). `password_phc` is the
+    /// Argon2id PHC string and `totp_secret` the raw shared secret. Returns whether it created the
+    /// credential: `Ok(false)` means one was already provisioned and nothing was written, so the
+    /// caller refuses the enrolment rather than replacing a live admin.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn provision_credential(
+        &self,
+        password_phc: String,
+        totp_secret: Vec<u8>,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
     /// Records `step` as the newest TOTP step spent, advancing the stored value only forward so a
     /// concurrent or replayed login cannot lower it. Idempotent for a step already recorded.
     ///
@@ -454,6 +469,25 @@ mod tests {
                     credential,
                     last_used_totp_step: *self.last_used_totp_step.lock().expect("lock"),
                 }))
+        }
+
+        async fn provision_credential(
+            &self,
+            password_phc: String,
+            totp_secret: Vec<u8>,
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut slot = self.credential.lock().expect("lock");
+            if slot.is_some() {
+                return Ok(false);
+            }
+            *slot = Some(SuperAdminCredential::new(
+                password_phc,
+                TotpSecret::new(totp_secret),
+            ));
+            Ok(true)
         }
 
         async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {

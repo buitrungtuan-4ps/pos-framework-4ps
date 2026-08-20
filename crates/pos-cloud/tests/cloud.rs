@@ -226,6 +226,22 @@ impl AdminStore for FakeAdmin {
             }))
     }
 
+    async fn provision_credential(
+        &self,
+        password_phc: String,
+        totp_secret: Vec<u8>,
+    ) -> Result<bool, AdminStoreError> {
+        let mut slot = self.credential.lock().expect("lock");
+        if slot.is_some() {
+            return Ok(false);
+        }
+        *slot = Some(SuperAdminCredential::new(
+            password_phc,
+            TotpSecret::new(totp_secret),
+        ));
+        Ok(true)
+    }
+
     async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
         let mut last = self.last_used_totp_step.lock().expect("lock");
         if last.is_none_or(|current| step > current) {
@@ -959,6 +975,128 @@ async fn a_wrong_admin_password_is_refused_and_sets_no_cookie() {
     assert!(
         response.headers().get("set-cookie").is_none(),
         "a refused login issues no session cookie"
+    );
+}
+
+/// An obviously-fake first-boot setup token; never a real credential.
+const SETUP_TOKEN: &str = "a-one-time-setup-token-abc123";
+
+/// A router with first-boot enrolment enabled (or not, per `token`) over an *unprovisioned* admin,
+/// returning the admin handle so a test can assert whether a credential got written.
+fn setup_router(token: Option<&str>) -> (axum::Router, FakeAdmin) {
+    let admin = FakeAdmin::default();
+    let app = app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+    )
+    .with_admin_setup_token(token.map(str::to_owned));
+    (http::router(app), admin)
+}
+
+#[tokio::test]
+async fn first_boot_setup_enrols_the_admin_then_refuses_a_second() {
+    let (router, admin) = setup_router(Some(SETUP_TOKEN));
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": ADMIN_PASSWORD });
+
+    let response = router
+        .clone()
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "first-boot enrolment succeeds"
+    );
+    let enrolment = json_body(response).await;
+    let uri = enrolment["otpauth_uri"].as_str().expect("an otpauth uri");
+    assert!(
+        uri.starts_with("otpauth://totp/Pizza4Ps:super-admin?secret="),
+        "the enrolment carries a provisioning uri: {uri}"
+    );
+    assert!(
+        uri.contains("algorithm=SHA256"),
+        "the uri fixes SHA-256: {uri}"
+    );
+    assert!(
+        enrolment["secret_base32"]
+            .as_str()
+            .is_some_and(|secret| !secret.is_empty()),
+        "a base32 secret is returned for manual entry"
+    );
+    assert!(
+        admin.load_credential().await.expect("load").is_some(),
+        "a credential is now provisioned"
+    );
+
+    // A second enrolment is refused — first-boot is over, even with the right token.
+    let again = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        again.status(),
+        StatusCode::CONFLICT,
+        "a second enrolment against an existing admin is refused"
+    );
+}
+
+#[tokio::test]
+async fn setup_is_404_when_no_token_is_configured() {
+    let (router, admin) = setup_router(None);
+    let body = serde_json::json!({ "setup_token": "anything", "password": ADMIN_PASSWORD });
+    let response = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "setup is off when no token is configured"
+    );
+    assert!(
+        admin.load_credential().await.expect("load").is_none(),
+        "nothing was provisioned"
+    );
+}
+
+#[tokio::test]
+async fn setup_with_a_wrong_token_is_401_and_provisions_nothing() {
+    let (router, admin) = setup_router(Some(SETUP_TOKEN));
+    let body = serde_json::json!({ "setup_token": "the-wrong-token", "password": ADMIN_PASSWORD });
+    let response = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "a wrong setup token is refused"
+    );
+    assert!(
+        admin.load_credential().await.expect("load").is_none(),
+        "a refused setup provisions nothing"
+    );
+}
+
+#[tokio::test]
+async fn setup_with_a_short_password_is_422() {
+    let (router, admin) = setup_router(Some(SETUP_TOKEN));
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": "short" });
+    let response = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "too short a password is refused before anything is written"
+    );
+    assert!(
+        admin.load_credential().await.expect("load").is_none(),
+        "a refused setup provisions nothing"
     );
 }
 

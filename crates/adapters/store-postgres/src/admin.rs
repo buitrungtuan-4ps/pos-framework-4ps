@@ -64,6 +64,33 @@ impl PostgresAdmin {
         }))
     }
 
+    /// Provisions the single super-admin credential if none exists yet — the first-boot enrolment
+    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). `ON CONFLICT (id) DO
+    /// NOTHING` makes it first-writer-wins on the single-row table, so a second call writes nothing;
+    /// `last_used_totp_step` starts `NULL`, marking a credential that has never signed in.
+    ///
+    /// Returns whether it inserted the row.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn insert_credential(
+        &self,
+        password_phc: &str,
+        totp_secret: &[u8],
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "INSERT INTO super_admin (id, password_phc, totp_secret, last_used_totp_step) \
+                 VALUES (true, $1, $2, NULL) ON CONFLICT (id) DO NOTHING",
+                &[&password_phc, &totp_secret],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
     /// Records `step` as the newest TOTP step spent, advancing only forward.
     ///
     /// The `WHERE last_used_totp_step IS NULL OR last_used_totp_step < $1` guard makes this monotonic
