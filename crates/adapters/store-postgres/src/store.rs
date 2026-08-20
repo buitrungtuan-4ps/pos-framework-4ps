@@ -23,6 +23,9 @@ const MIGRATION_0002: &str = include_str!("../migrations/0002_cloud_rollups_apik
 /// The super-admin credential and session schema ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
 const MIGRATION_0003: &str = include_str!("../migrations/0003_cloud_admin.sql");
 
+/// The four-level configuration-tree schema ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+const MIGRATION_0004: &str = include_str!("../migrations/0004_cloud_config_trees.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -89,6 +92,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0003)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0004)
+            .await
             .map_err(unavailable)
     }
 
@@ -114,6 +121,14 @@ impl PostgresStore {
     #[must_use]
     pub fn admin(&self) -> crate::admin::PostgresAdmin {
         crate::admin::PostgresAdmin::new(self.pool.clone())
+    }
+
+    /// The configuration-tree store over this pool ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConfigTreeStore` seam over it.
+    #[must_use]
+    pub fn config_trees(&self) -> crate::config_trees::PostgresConfigTrees {
+        crate::config_trees::PostgresConfigTrees::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

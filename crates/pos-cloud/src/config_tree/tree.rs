@@ -11,6 +11,7 @@
 //! store's sync: a delta when the store is close behind, a full snapshot when it is more than *K*
 //! versions behind or holding a version the cloud no longer has.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use pos_ports::config_store::{ConfigDelta, ConfigDocument, ConfigSnapshot, ConfigUpdate};
@@ -78,6 +79,33 @@ struct Version {
     effective: Value,
 }
 
+/// A published version in serializable form: a version id and the effective document it resolves to,
+/// as persisted in a [`ConfigTreeState`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PublishedVersion {
+    /// The version id (a ULID).
+    pub id: ConfigVersionId,
+    /// The composed, validated effective document this version resolves to.
+    pub effective: Value,
+}
+
+/// A [`ConfigTree`]'s persistable state: its four authored layers, its published history, and its
+/// snapshot-fallback threshold *K*. Everything but the validator, which the binary supplies on
+/// rehydration — the state is data, the validator is behaviour.
+///
+/// This is what a [`ConfigTreeStore`](super::ConfigTreeStore) persists (as one JSON document) and
+/// what [`ConfigTree::from_state`] rebuilds a live tree from, so a store's tree survives a restart
+/// and the last good version stays current across one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigTreeState {
+    /// The four authored layers, Tenant → Brand → Store → Device.
+    pub layers: [Value; 4],
+    /// The published version history, oldest first.
+    pub history: Vec<PublishedVersion>,
+    /// The snapshot-fallback threshold ([`DEFAULT_K`]).
+    pub k: usize,
+}
+
 /// A store's configuration authority: its four layers, its published history, and its validator.
 #[derive(Debug)]
 pub struct ConfigTree<V> {
@@ -111,6 +139,49 @@ impl<V: ConfigValidator> ConfigTree<V> {
     pub fn with_k(mut self, k: usize) -> Self {
         self.k = k;
         self
+    }
+
+    /// Rebuilds a tree for `store_id` from a persisted [`ConfigTreeState`] and a fresh `validator`.
+    ///
+    /// The inverse of [`ConfigTree::state`]: the layers and history come back exactly as stored, so
+    /// the current version and effective document are unchanged across a restart. The history is
+    /// trusted as already-validated (it was validated when each version was published), so this does
+    /// not re-run validation — it rehydrates, it does not re-publish.
+    #[must_use]
+    pub fn from_state(store_id: StoreId, validator: V, state: ConfigTreeState) -> Self {
+        Self {
+            store_id,
+            layers: state.layers,
+            history: state
+                .history
+                .into_iter()
+                .map(|version| Version {
+                    id: version.id,
+                    effective: version.effective,
+                })
+                .collect(),
+            validator,
+            k: state.k,
+        }
+    }
+
+    /// Exports the tree's persistable state — its layers, history, and *K* — for a
+    /// [`ConfigTreeStore`](super::ConfigTreeStore) to persist. The validator is behaviour, not state,
+    /// so it is not included.
+    #[must_use]
+    pub fn state(&self) -> ConfigTreeState {
+        ConfigTreeState {
+            layers: self.layers.clone(),
+            history: self
+                .history
+                .iter()
+                .map(|version| PublishedVersion {
+                    id: version.id,
+                    effective: version.effective.clone(),
+                })
+                .collect(),
+            k: self.k,
+        }
     }
 
     /// Replaces one level's document and publishes the resulting version under `version_id`.
@@ -379,6 +450,37 @@ mod tests {
         // But holding v4 is only 1 behind, within K=2, so a delta.
         assert!(matches!(
             tree.update_for(Some(version(4))),
+            SyncOutcome::Deliver(ConfigUpdate::Delta(_))
+        ));
+    }
+
+    #[test]
+    fn a_tree_round_trips_through_its_serializable_state() {
+        let mut tree = ConfigTree::new(store_id(), StructuralValidator).with_k(7);
+        tree.publish(ConfigLevel::Tenant, json!({"a": 1, "b": 2}), version(1))
+            .expect("v1");
+        tree.publish(ConfigLevel::Store, json!({"b": 20}), version(2))
+            .expect("v2");
+
+        // Export, serialise, deserialise, and rebuild — as the persistence seam does.
+        let state = tree.state();
+        let json = serde_json::to_string(&state).expect("state serialises");
+        let restored_state = serde_json::from_str(&json).expect("state round-trips");
+        let restored = ConfigTree::from_state(store_id(), StructuralValidator, restored_state);
+
+        assert_eq!(
+            restored.current_version(),
+            Some(version(2)),
+            "the current version survives the round-trip"
+        );
+        assert_eq!(
+            restored.current_effective(),
+            Some(&json!({"a": 1, "b": 20})),
+            "the effective document survives the round-trip"
+        );
+        // And the history is intact: a store on v1 still gets a delta, not a forced snapshot.
+        assert!(matches!(
+            restored.update_for(Some(version(1))),
             SyncOutcome::Deliver(ConfigUpdate::Delta(_))
         ));
     }

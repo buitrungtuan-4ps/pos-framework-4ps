@@ -21,10 +21,12 @@
 
 mod admin;
 mod apikeys;
+mod config_trees;
 mod rollups;
 mod store;
 
 pub use admin::{AdminCredentialRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
+pub use config_trees::PostgresConfigTrees;
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};

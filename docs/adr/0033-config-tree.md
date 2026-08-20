@@ -69,6 +69,15 @@ must never reach it, and a store that has been offline for a while must be able 
   *K* (20, configurable).
 - The engine is pure and I/O-free: composition, the merge patch, validation, and the snapshot/delta
   decision are all unit-tested with no database, including the round-trip and last-good properties.
-  **Deliberately not here yet:** persisting the layers and version history (in `store-postgres`), the
-  admin routes that author them, and the publish path that hands a [`ConfigUpdate`] to a store — the
-  store's apply side already exists behind `ConfigStore`.
+- **Landed since:** persistence. A `ConfigTreeStore` seam and the `store-postgres` `config_trees`
+  table (migration `0004`) persist a store's whole tree — the four authored layers and the published
+  history — as one `jsonb` document per `(tenant, store)`, keyed and RLS-isolated by tenant exactly as
+  the rollup read model. `ConfigTree::state` / `ConfigTree::from_state` export and rehydrate that
+  state (the validator is behaviour, supplied fresh on load; the history is trusted as
+  already-validated and not re-run), so a store's tree — and its last good version — survives a
+  restart. Round-trip is unit-tested on the engine and against a real database in the adapter's
+  integration suite.
+- **Deliberately not here yet:** the admin routes that author the layers and publish, and the publish
+  path that hands a [`ConfigUpdate`] to a store — the store's apply side already exists behind
+  `ConfigStore`. A shared Tenant/Brand layer that fans out to every store under it is a future
+  modeling step; today each store's tree holds its own four layers.

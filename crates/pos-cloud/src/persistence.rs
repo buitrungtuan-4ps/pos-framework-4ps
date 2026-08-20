@@ -4,8 +4,9 @@
 //! Wiring the cloud's persistence seams to their `store-postgres` tables.
 //!
 //! The `RollupStore` ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)), `ApiKeyStore`
-//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)) and `AdminStore`
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) traits live here in the cloud, where the
+//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)), `AdminStore`
+//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) and `ConfigTreeStore`
+//! ([ADR-0033](../../../docs/adr/0033-config-tree.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -13,7 +14,9 @@
 //! adapter; all domain conversion stays here — the adapter never learns a cloud type, and the cloud
 //! never writes SQL.
 
-use store_postgres::{PostgresAdmin, PostgresApiKeys, PostgresRollups, PostgresStore};
+use store_postgres::{
+    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresRollups, PostgresStore,
+};
 
 use pos_ports::PortError;
 use pos_proto::ids::{StoreId, TenantId};
@@ -25,6 +28,7 @@ use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
 use crate::auth::totp::TotpSecret;
+use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
 
@@ -66,6 +70,39 @@ impl RollupStore for PostgresRollups {
 impl StoreCatalog for PostgresStore {
     async fn active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
         self.list_active_stores().await
+    }
+}
+
+impl ConfigTreeStore for PostgresConfigTrees {
+    async fn load(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
+        match self
+            .load_state(tenant, store)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))?
+        {
+            Some(json) => serde_json::from_str(&json).map(Some).map_err(|error| {
+                ConfigStoreError::new(format!("decoding the stored config tree failed: {error}"))
+            }),
+            None => Ok(None),
+        }
+    }
+
+    async fn save(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        state: &ConfigTreeState,
+    ) -> Result<(), ConfigStoreError> {
+        let json = serde_json::to_string(state).map_err(|error| {
+            ConfigStoreError::new(format!("encoding the config tree failed: {error}"))
+        })?;
+        self.save_state(tenant, store, &json)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 }
 

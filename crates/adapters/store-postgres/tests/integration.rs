@@ -133,8 +133,8 @@ impl EventStoreHarness for StoreHarness {
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
-                 TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions \
-                 RESTART IDENTITY;",
+                 TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
+                 config_trees RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -175,8 +175,8 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     let admin = admin().await?;
     admin
         .batch_execute(
-            "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions \
-             RESTART IDENTITY",
+            "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
+             config_trees RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -648,6 +648,84 @@ mod api_keys_store {
                 .expect("fetch")
                 .expect("still present");
             assert!(row.revoked, "the key now reads revoked");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The four-level config-tree store (ADR-0033).
+// ---------------------------------------------------------------------------
+
+mod config_tree_store {
+    use super::{block_on, prepared};
+    use pos_proto::{StoreId, TenantId, Ulid};
+
+    fn parsed(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).expect("valid json")
+    }
+
+    /// A tree state saves, loads back equal, upserts in place, and is scoped to its tenant.
+    #[test]
+    fn save_load_upsert_and_tenant_scope() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x00C0_FFEE));
+            let store_id = StoreId::new(Ulid::from_u128(0x5709));
+
+            assert!(
+                trees
+                    .load_state(tenant, store_id)
+                    .await
+                    .expect("load")
+                    .is_none(),
+                "no row before the first save"
+            );
+
+            // A representative ConfigTreeState document (the adapter treats it as opaque jsonb).
+            let first = r#"{"k":20,"layers":[{"currency_code":"VND"},{},{},{}],"history":[]}"#;
+            trees
+                .save_state(tenant, store_id, first)
+                .await
+                .expect("save");
+            let loaded = trees
+                .load_state(tenant, store_id)
+                .await
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                parsed(&loaded),
+                parsed(first),
+                "the stored document round-trips (compared as JSON, since jsonb reorders keys)"
+            );
+
+            // Upsert in place: a second save replaces the row rather than erroring or duplicating.
+            let second = r#"{"k":20,"layers":[{"currency_code":"JPY"},{},{},{}],"history":[]}"#;
+            trees
+                .save_state(tenant, store_id, second)
+                .await
+                .expect("upsert");
+            let reloaded = trees
+                .load_state(tenant, store_id)
+                .await
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                parsed(&reloaded),
+                parsed(second),
+                "the upsert replaced the state"
+            );
+
+            // Another tenant with the same store id sees nothing — the (tenant, store) key isolates.
+            let other = TenantId::new(Ulid::from_u128(0xBEEF));
+            assert!(
+                trees
+                    .load_state(other, store_id)
+                    .await
+                    .expect("load")
+                    .is_none(),
+                "the load is scoped to the tenant"
+            );
         });
     }
 }

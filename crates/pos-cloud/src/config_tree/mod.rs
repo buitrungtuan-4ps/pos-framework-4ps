@@ -18,13 +18,20 @@
 //!  * **Snapshot vs delta** ([`tree`]): keyed on *K* — a store within *K* versions of current gets a
 //!    delta; one further behind, or holding a version the cloud no longer retains, gets a snapshot.
 //!
-//! Pure and I/O-free: it produces the [`ConfigUpdate`](pos_ports::config_store::ConfigUpdate) values
-//! the `ConfigStore` port carries, but does not persist or publish them — that, and the admin routes,
+//! The engine ([`merge`], [`tree`], [`validate`]) is pure and I/O-free: it produces the
+//! [`ConfigUpdate`](pos_ports::config_store::ConfigUpdate) values the `ConfigStore` port carries but
+//! does not itself perform I/O. [`store`] is the persistence seam over it — a store's whole tree
+//! ([`ConfigTreeState`]) round-trips through one JSON document per `(tenant, store)`, so the tree
+//! survives a restart with its last good version still current. The admin routes that author layers
 //! are a later slice.
 
 pub mod merge;
+pub mod store;
 pub mod tree;
 pub mod validate;
 
-pub use tree::{ConfigError, ConfigLevel, ConfigTree, DEFAULT_K, SyncOutcome};
+pub use store::{ConfigStoreError, ConfigTreeStore};
+pub use tree::{
+    ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, DEFAULT_K, PublishedVersion, SyncOutcome,
+};
 pub use validate::{CapabilityValidator, ConfigValidator, StructuralValidator};

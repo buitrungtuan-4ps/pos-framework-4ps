@@ -625,6 +625,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   tests prove a provisioned token then authenticates a real `/v1` read and stops the moment it is
   revoked, that provisioning is closed without a session (`401`), and that an unknown scope is
   refused (`400`); the `store-postgres` integration suite covers insert → list → revoke.
+- `pos-cloud` / `store-postgres` (P7): the **config tree now persists** (ADR-0033). A new
+  `ConfigTreeStore` seam and the `store-postgres` `config_trees` table (migration `0004`) round-trip a
+  store's whole tree — its four authored layers and its published version history — as one `jsonb`
+  document per `(tenant, store)`, keyed and RLS-isolated by tenant exactly as the rollup read model.
+  The pure engine gains `ConfigTree::state` / `ConfigTree::from_state` to export and rehydrate that
+  state: the layers and history come back exactly as stored (so the current version and effective
+  document are unchanged across a restart, and the last good version stays current), the validator is
+  supplied fresh on load (behaviour, not state), and the history is trusted as already-validated
+  rather than re-published. Adds no dependency. Unit-tested on the engine (serialise → rebuild →
+  same effective document and same delta/snapshot decision) and against a real database in the
+  adapter's integration suite (save → load → upsert → tenant-scoped miss). The admin authoring
+  routes and the publish path to a store remain the next slice.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
