@@ -18,13 +18,15 @@
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
 //!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
 //!    behind that guard — provisioning of scoped per-tenant API keys ([ADR-0037](../../../docs/adr/0037-api-keys.md)):
-//!    issue (returning the token once), list, and revoke. Not part of the public contract, so — like
-//!    `/internal` — it is absent from the OpenAPI document.
+//!    issue (returning the token once), list, and revoke; and authoring the four-level configuration
+//!    tree ([ADR-0033](../../../docs/adr/0033-config-tree.md)): publish a level of a store's tree
+//!    (validated, versioned) and read its effective document. Not part of the public contract, so —
+//!    like `/internal` — it is absent from the OpenAPI document.
 //!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
-//! [`ApiKeyStore`], the [`AdminStore`], and the [`ClockSource`] — bundled in [`CloudApp`]. Tests
-//! drive it against `pos-fakes` and the binary serves it over `store-postgres` with the identical
-//! handler code (ADR-0026).
+//! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], and the [`ClockSource`] — bundled in
+//! [`CloudApp`]. Tests drive it against `pos-fakes` and the binary serves it over `store-postgres`
+//! with the identical handler code (ADR-0026).
 
 use core::fmt;
 use core::fmt::Write as _;
@@ -43,7 +45,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
@@ -51,6 +53,9 @@ use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue}
 use crate::auth::bearer::{authenticate, require_scope};
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::cloud::{Cloud, DailyRollup};
+use crate::config_tree::{
+    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore,
+};
 use crate::dashboard::{RollupError, RollupStore, dashboard};
 use crate::openapi::ApiDoc;
 use utoipa::OpenApi as _;
@@ -62,21 +67,22 @@ const DEFAULT_ADMIN_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 
 /// Everything a request handler needs, bundled so the router carries one state type: the event
 /// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
-/// check consults, the super-admin store the `/admin` login and session guard use, and the clock both
-/// checks verify time against.
+/// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
+/// store the `/admin` config routes author, and the clock the checks verify time against.
 ///
 /// Cloneable and cheap to clone — each collaborator is itself a shared handle (a pool, an `Arc`), so
 /// a clone talks to the same backing store.
-pub struct CloudApp<S, R, K, C, A> {
+pub struct CloudApp<S, R, K, C, A, T> {
     cloud: Cloud<S>,
     rollups: R,
     keys: K,
     clock: C,
     admin: A,
+    config_trees: T,
     admin_session_ttl_secs: u64,
 }
 
-impl<S, R, K, C, A> fmt::Debug for CloudApp<S, R, K, C, A> {
+impl<S, R, K, C, A, T> fmt::Debug for CloudApp<S, R, K, C, A, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // The collaborators are opaque handles — a pool, a key store, a clock — and some hold
         // secrets, so the fields are deliberately elided rather than rendered.
@@ -84,13 +90,14 @@ impl<S, R, K, C, A> fmt::Debug for CloudApp<S, R, K, C, A> {
     }
 }
 
-impl<S, R, K, C, A> Clone for CloudApp<S, R, K, C, A>
+impl<S, R, K, C, A, T> Clone for CloudApp<S, R, K, C, A, T>
 where
     S: Clone,
     R: Clone,
     K: Clone,
     C: Clone,
     A: Clone,
+    T: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -99,21 +106,30 @@ where
             keys: self.keys.clone(),
             clock: self.clock.clone(),
             admin: self.admin.clone(),
+            config_trees: self.config_trees.clone(),
             admin_session_ttl_secs: self.admin_session_ttl_secs,
         }
     }
 }
 
-impl<S, R, K, C, A> CloudApp<S, R, K, C, A> {
+impl<S, R, K, C, A, T> CloudApp<S, R, K, C, A, T> {
     /// Bundles the collaborators into one shareable application state, with the default super-admin
     /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it).
-    pub const fn new(cloud: Cloud<S>, rollups: R, keys: K, clock: C, admin: A) -> Self {
+    pub const fn new(
+        cloud: Cloud<S>,
+        rollups: R,
+        keys: K,
+        clock: C,
+        admin: A,
+        config_trees: T,
+    ) -> Self {
         Self {
             cloud,
             rollups,
             keys,
             clock,
             admin,
+            config_trees,
             admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
         }
     }
@@ -128,7 +144,7 @@ impl<S, R, K, C, A> CloudApp<S, R, K, C, A> {
 }
 
 /// Builds the cloud router over `app`.
-pub fn router<S, R, K, C, A>(app: CloudApp<S, R, K, C, A>) -> Router
+pub fn router<S, R, K, C, A, T>(app: CloudApp<S, R, K, C, A, T>) -> Router
 where
     S: EventStore + Clone + Send + Sync + 'static,
     S::Tx: Send,
@@ -136,25 +152,35 @@ where
     K: ApiKeyStore + ApiKeyAdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/health", get(health))
-        .route("/internal/ingest", post(ingest::<S, R, K, C, A>))
+        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T>))
         .route(
             "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<S, R, K, C, A>),
+            get(daily_rollups::<S, R, K, C, A, T>),
         )
         .route("/v1/openapi.json", get(openapi))
-        .route("/admin/login", post(admin_login::<S, R, K, C, A>))
-        .route("/admin/logout", post(admin_logout::<S, R, K, C, A>))
-        .route("/admin/session", get(admin_session::<S, R, K, C, A>))
+        .route("/admin/login", post(admin_login::<S, R, K, C, A, T>))
+        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T>))
+        .route("/admin/session", get(admin_session::<S, R, K, C, A, T>))
         .route(
             "/admin/api-keys",
-            post(admin_create_api_key::<S, R, K, C, A>).get(admin_list_api_keys::<S, R, K, C, A>),
+            post(admin_create_api_key::<S, R, K, C, A, T>)
+                .get(admin_list_api_keys::<S, R, K, C, A, T>),
         )
         .route(
             "/admin/api-keys/{id}",
-            delete(admin_revoke_api_key::<S, R, K, C, A>),
+            delete(admin_revoke_api_key::<S, R, K, C, A, T>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config",
+            get(admin_config_effective::<S, R, K, C, A, T>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config/{level}",
+            axum::routing::put(admin_config_publish::<S, R, K, C, A, T>),
         )
         .with_state(app)
 }
@@ -171,8 +197,8 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
 
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
 /// so it is deliberately absent from the public OpenAPI document and carries no authentication.
-async fn ingest<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn ingest<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     Json(events): Json<Vec<EventEnvelope<RawPayload>>>,
 ) -> Response
 where
@@ -184,6 +210,7 @@ where
     K: Clone + Send + Sync + 'static,
     C: Clone + Send + Sync + 'static,
     A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     match app.cloud.ingest(&events).await {
         Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
@@ -212,8 +239,8 @@ where
     ),
     tag = "rollups",
 )]
-pub(crate) async fn daily_rollups<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+pub(crate) async fn daily_rollups<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
 ) -> Response
@@ -225,6 +252,7 @@ where
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
     // read rollups at all? Only then does the request touch a resource.
@@ -257,8 +285,8 @@ where
 /// browser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a
 /// store outage is a `503`. Not in the OpenAPI document — this is the admin surface, not the public
 /// `/v1` API.
-async fn admin_login<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_login<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     Json(request): Json<LoginRequest>,
 ) -> Response
 where
@@ -268,6 +296,7 @@ where
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     let Some(token) = mint_session_token() else {
         // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
@@ -300,8 +329,8 @@ where
 ///
 /// Idempotent — a request with no session, or one the store cannot reach, still clears the client
 /// cookie, so the browser is always logged out even if the server-side row lingers to its TTL.
-async fn admin_logout<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_logout<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
 ) -> Response
 where
@@ -310,6 +339,7 @@ where
     K: Clone + Send + Sync + 'static,
     C: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     if let Err(error) = logout(&app.admin, &headers).await {
         // The server-side revoke failed, but clearing the client cookie still logs the browser out;
@@ -322,8 +352,8 @@ where
 
 /// Confirms the caller holds a live super-admin session — the guard every other `/admin` route will
 /// stand behind, exposed here as a `204`/`401` "am I signed in?" check for the admin UI.
-async fn admin_session<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_session<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
 ) -> Response
 where
@@ -332,6 +362,7 @@ where
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     match authenticate_session(&app.admin, &app.clock, &headers).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -373,8 +404,8 @@ struct ListApiKeysQuery {
 /// Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and
 /// persists it (storing only the secret's hash). The token in the `201` body is the only time the
 /// secret is visible.
-async fn admin_create_api_key<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_create_api_key<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Response
@@ -384,6 +415,7 @@ where
     K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -437,8 +469,8 @@ where
 }
 
 /// Lists a tenant's API keys as metadata only — never a secret (super-admin only).
-async fn admin_list_api_keys<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_list_api_keys<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
     Query(query): Query<ListApiKeysQuery>,
 ) -> Response
@@ -448,6 +480,7 @@ where
     K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -470,8 +503,8 @@ where
 
 /// Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking
 /// is idempotent, and telling the caller which it was is a needless enumeration signal.
-async fn admin_revoke_api_key<S, R, K, C, A>(
-    State(app): State<CloudApp<S, R, K, C, A>>,
+async fn admin_revoke_api_key<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response
@@ -481,6 +514,7 @@ where
     K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -501,6 +535,181 @@ where
     }
 }
 
+/// The tenant a config request is scoped to. The super-admin is global, so it names the tenant on
+/// the query string, exactly as API-key provisioning does.
+#[derive(Debug, Clone, Deserialize)]
+struct ConfigTenantQuery {
+    /// The tenant whose store's config tree to author or read (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// The version id a successful publish produced.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PublishedConfig {
+    /// The new config version id (a ULID).
+    config_version_id: String,
+}
+
+/// The violations a rejected publish reported — the composed document failed validation, so nothing
+/// changed and the last good version stays current.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigViolations {
+    /// One human-readable message per violation.
+    violations: Vec<String>,
+}
+
+/// Authors one level of a store's config tree and publishes the composed version (super-admin only).
+///
+/// Loads the store's tree for the query's tenant, replaces the named `level`'s document with the
+/// request body, and publishes — composing, validating, and (only if valid) appending a new version,
+/// which is then persisted. A rejected version is a `422` carrying the violations; nothing is stored
+/// and the last good version stays current ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+async fn admin_config_publish<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
+    headers: HeaderMap,
+    Path((store_id, level)): Path<(String, String)>,
+    Query(query): Query<ConfigTenantQuery>,
+    Json(document): Json<serde_json::Value>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(level) = parse_config_level(&level) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "level must be one of tenant, brand, store, device",
+        )
+            .into_response();
+    };
+
+    // Rehydrate the store's tree (or start a fresh one), authoring against the §10-aware validator.
+    let mut tree = match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => ConfigTree::from_state(store_id, CapabilityValidator, state),
+        Ok(None) => ConfigTree::new(store_id, CapabilityValidator),
+        Err(error) => return config_store_error_response(&error),
+    };
+    let Some(version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(level, document, version_id) {
+        Ok(id) => {
+            if let Err(error) = app
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// The current effective (composed, validated) config document for a store (super-admin only), or
+/// `404` if nothing has been published to it yet.
+async fn admin_config_effective<S, R, K, C, A, T>(
+    State(app): State<CloudApp<S, R, K, C, A, T>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            match tree.current_effective() {
+                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    "the store has no published configuration",
+                )
+                    .into_response(),
+            }
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// Maps a config-tree store failure to a retryable `503`, logging the detail rather than leaking it.
+fn config_store_error_response(error: &crate::config_tree::ConfigStoreError) -> Response {
+    tracing::error!(%error, "a config-tree store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the configuration service is unavailable",
+    )
+        .into_response()
+}
+
+/// Parses a config-tree level from its path segment, or `None` for an unknown one.
+fn parse_config_level(level: &str) -> Option<ConfigLevel> {
+    match level {
+        "tenant" => Some(ConfigLevel::Tenant),
+        "brand" => Some(ConfigLevel::Brand),
+        "store" => Some(ConfigLevel::Store),
+        "device" => Some(ConfigLevel::Device),
+        _ => None,
+    }
+}
+
 /// Parses wire scope names strictly, returning the first unknown name rather than dropping it — the
 /// deny-by-default read tolerance is wrong for a write, where a typo would silently grant nothing.
 fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
@@ -512,17 +721,24 @@ fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
     Ok(scopes)
 }
 
-/// Mints an API-key id: a ULID from `now_ms` and 80 CSPRNG bits, or `None` if the OS entropy source
-/// is unavailable (the caller then fails closed rather than mint a guessable id).
+/// Mints an API-key id from `now_ms`, or `None` if the OS entropy source is unavailable.
 fn mint_api_key_id(now_ms: i64) -> Option<ApiKeyId> {
+    mint_ulid(now_ms).map(ApiKeyId::new)
+}
+
+/// Mints a config version id from `now_ms`, or `None` if the OS entropy source is unavailable.
+fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
+    mint_ulid(now_ms).map(ConfigVersionId::new)
+}
+
+/// A fresh ULID: `now_ms` as the timestamp and 80 CSPRNG bits as the randomness, or `None` if the OS
+/// entropy source is unavailable (the caller then fails closed rather than mint a guessable id).
+fn mint_ulid(now_ms: i64) -> Option<Ulid> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).ok()?;
     let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
     // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
-    Some(ApiKeyId::new(Ulid::from_parts(
-        ms,
-        u128::from_le_bytes(bytes),
-    )))
+    Some(Ulid::from_parts(ms, u128::from_le_bytes(bytes)))
 }
 
 /// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid

@@ -77,7 +77,14 @@ must never reach it, and a store that has been offline for a while must be able 
   already-validated and not re-run), so a store's tree — and its last good version — survives a
   restart. Round-trip is unit-tested on the engine and against a real database in the adapter's
   integration suite.
-- **Deliberately not here yet:** the admin routes that author the layers and publish, and the publish
-  path that hands a [`ConfigUpdate`] to a store — the store's apply side already exists behind
-  `ConfigStore`. A shared Tenant/Brand layer that fans out to every store under it is a future
-  modeling step; today each store's tree holds its own four layers.
+- **Landed since:** the admin authoring routes. `PUT /admin/stores/{store_id}/config/{level}` (behind
+  the super-admin session guard) loads the store's tree, replaces the named level's document, and
+  publishes — composing, validating, and, only if valid, appending a version that is then persisted;
+  an incoherent version is a `422` carrying the violations and changes nothing. `GET
+  /admin/stores/{store_id}/config` returns the current effective document, or `404` if the store has
+  none yet. The tenant is named on the query string (the super-admin is global), and the version id
+  is a ULID minted at the edge.
+- **Deliberately not here yet:** the publish path that hands a [`ConfigUpdate`] to a store — the
+  store's apply side already exists behind `ConfigStore`, but the cloud does not yet deliver
+  `update_for`'s output over the wire. A shared Tenant/Brand layer that fans out to every store under
+  it is a future modeling step; today each store's tree holds its own four layers.

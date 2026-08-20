@@ -31,15 +31,15 @@
 //! session-guard routes plus — behind that guard — the scoped per-tenant API-key provisioning routes
 //! (`/admin/api-keys`: issue once, list, revoke) (ADR-0034, ADR-0037).
 //!
-//! The config tree ([`config_tree`]) now also persists: a `ConfigTreeStore` seam and a
-//! `store-postgres` table round-trip a store's whole tree (layers + history) so it survives a
-//! restart with its last good version current (ADR-0033).
+//! The config tree ([`config_tree`]) now persists and is authored over `/admin`: a `ConfigTreeStore`
+//! seam and a `store-postgres` table round-trip a store's whole tree, and the `/admin/stores/{id}/config`
+//! routes publish a level (validated, versioned) and read the effective document (ADR-0033).
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
-//! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's admin authoring routes
-//! and the publish path to a store (ADR-0033), the subject-store schema and the retention runner's
-//! wiring into `main` (ADR-0035), and the super-admin's TOTP enrolment/provisioning and first-boot
-//! seeding (ADR-0034, P8 bootstrap).
+//! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's publish path that
+//! delivers a `ConfigUpdate` to a store over the wire (ADR-0033), the subject-store schema and the
+//! retention runner's wiring into `main` (ADR-0035), and the super-admin's TOTP enrolment/provisioning
+//! and first-boot seeding (ADR-0034, P8 bootstrap).
 
 #![forbid(unsafe_code)]
 

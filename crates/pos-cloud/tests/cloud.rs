@@ -26,6 +26,7 @@ use pos_cloud::auth::apikey::{
 };
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
+use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::http::CloudApp;
 use pos_cloud::{Cloud, IngestOutcome, http};
@@ -267,13 +268,46 @@ fn admin_totp_code() -> String {
     )
 }
 
+/// The config-tree store, keyed by `(tenant, store)` exactly as the real table.
+#[derive(Clone, Default)]
+struct FakeConfigTrees {
+    rows: Arc<Mutex<HashMap<(TenantId, StoreId), ConfigTreeState>>>,
+}
+
+impl ConfigTreeStore for FakeConfigTrees {
+    async fn load(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .cloned())
+    }
+
+    async fn save(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        state: &ConfigTreeState,
+    ) -> Result<(), ConfigStoreError> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .insert((tenant, store), state.clone());
+        Ok(())
+    }
+}
+
+/// The full application state type over the fakes.
+type FakeApp = CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin, FakeConfigTrees>;
+
 /// Builds an application state over the fakes, with an unprovisioned admin (the `/admin` routes are
 /// reachable but no login can succeed) — enough for the ingest and `/v1` tests.
-fn app(
-    cloud: Cloud<FakeStore>,
-    rollups: FakeRollups,
-    keys: FakeKeys,
-) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin> {
+fn app(cloud: Cloud<FakeStore>, rollups: FakeRollups, keys: FakeKeys) -> FakeApp {
     app_with_admin(cloud, rollups, keys, FakeAdmin::default())
 }
 
@@ -283,8 +317,20 @@ fn app_with_admin(
     rollups: FakeRollups,
     keys: FakeKeys,
     admin: FakeAdmin,
-) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin> {
-    CloudApp::new(cloud, rollups, keys, clock(), admin)
+) -> FakeApp {
+    app_full(cloud, rollups, keys, admin, FakeConfigTrees::default())
+}
+
+/// Builds an application state over the fakes with specific admin and config-tree stores, for the
+/// config-authoring tests that inspect the persisted tree.
+fn app_full(
+    cloud: Cloud<FakeStore>,
+    rollups: FakeRollups,
+    keys: FakeKeys,
+    admin: FakeAdmin,
+    config_trees: FakeConfigTrees,
+) -> FakeApp {
+    CloudApp::new(cloud, rollups, keys, clock(), admin, config_trees)
 }
 
 /// A GET request for `uri`, optionally carrying a `Bearer` token.
@@ -317,6 +363,18 @@ fn post_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
         .expect("build the request")
 }
 
+/// A PUT request for `uri` with a JSON body and no cookie — for the guard tests.
+fn put_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
 /// The `name=value` pair from a `Set-Cookie` header value (its first `;`-separated segment).
 fn cookie_pair(set_cookie: &str) -> &str {
     set_cookie.split(';').next().unwrap_or(set_cookie)
@@ -326,6 +384,19 @@ fn cookie_pair(set_cookie: &str) -> &str {
 fn post_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A PUT request for `uri` with a JSON body and a `Cookie` header.
+fn put_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
         .uri(uri)
         .header("content-type", "application/json")
         .header("cookie", cookie)
@@ -968,5 +1039,139 @@ async fn provisioning_with_an_unknown_scope_is_rejected() {
         response.status(),
         StatusCode::BAD_REQUEST,
         "an unknown scope name is a 400, never a silent no-op grant"
+    );
+}
+
+// --- Config-tree admin authoring (`/admin/stores/{id}/config`, behind the session guard) --------
+
+#[tokio::test]
+async fn config_publish_composes_validates_and_reads_back_effective() {
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let base = format!("/admin/stores/{store_ulid}/config");
+
+    // Author the tenant layer, then override one key at the store layer.
+    let tenant_doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("{base}/tenant?tenant_id={tenant_ulid}"),
+            &tenant_doc,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let published = json_body(published).await;
+    assert!(
+        published["config_version_id"].as_str().is_some(),
+        "a successful publish returns the new version id"
+    );
+
+    let store_doc = serde_json::json!({ "tips_enabled": true });
+    let published2 = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("{base}/store?tenant_id={tenant_ulid}"),
+            &store_doc,
+            &cookie,
+        ))
+        .await
+        .expect("route the second publish");
+    assert_eq!(published2.status(), StatusCode::OK);
+
+    // The effective document is the deep merge, most-specific winning.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(effective.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(effective).await,
+        serde_json::json!({ "currency_code": "VND", "tips_enabled": true }),
+        "the store layer overrode the tenant layer"
+    );
+}
+
+#[tokio::test]
+async fn an_incoherent_config_is_rejected_with_violations() {
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // pay_first_enabled and tables_enabled are mutually exclusive (pos-core §10).
+    let bad = serde_json::json!({ "pay_first_enabled": true, "tables_enabled": true });
+    let response = router
+        .oneshot(put_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
+            &bad,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(response).await;
+    assert!(
+        !body["violations"]
+            .as_array()
+            .expect("violations array")
+            .is_empty(),
+        "the rejection names the violated rule(s)"
+    );
+}
+
+#[tokio::test]
+async fn config_routes_require_a_session() {
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+
+    let publish = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/admin/stores/{store_ulid}/config/tenant?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "a": 1 }),
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(publish.status(), StatusCode::UNAUTHORIZED);
+
+    // And an unpublished store, once past the guard, reads 404 rather than an empty 200.
+    let cookie = admin_cookie(&router).await;
+    let read = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        read.status(),
+        StatusCode::NOT_FOUND,
+        "a store with no published config has no effective document"
     );
 }

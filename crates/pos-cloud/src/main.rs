@@ -43,9 +43,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
-    // One pool, four views of it: the event-store application layer, the materialised-rollup read
-    // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, and
-    // the super-admin store the `/admin` login and session guard use.
+    // One pool, five views of it: the event-store application layer, the materialised-rollup read
+    // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
+    // super-admin store the `/admin` login and session guard use, and the config-tree store the
+    // `/admin` config routes author.
     let cloud = Cloud::new(store.clone());
     let app = CloudApp::new(
         cloud.clone(),
@@ -53,6 +54,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.api_keys(),
         SystemClock,
         store.admin(),
+        store.config_trees(),
     )
     .with_admin_session_ttl_secs(config.admin_session_ttl_secs);
 

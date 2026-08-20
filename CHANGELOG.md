@@ -637,6 +637,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   same effective document and same delta/snapshot decision) and against a real database in the
   adapter's integration suite (save → load → upsert → tenant-scoped miss). The admin authoring
   routes and the publish path to a store remain the next slice.
+- `pos-cloud` (P7): the **config-tree admin routes** are wired (ADR-0033), behind the super-admin
+  session guard. `PUT /admin/stores/{store_id}/config/{level}` (level ∈ tenant/brand/store/device)
+  loads the store's tree for the query's tenant, replaces that level's document with the request
+  body, and publishes — composing the four layers, validating (including pos-core's §10 inter-flag
+  capability rules), and, only if valid, appending a version (a ULID minted at the edge) that is then
+  persisted; the `200` carries the new `config_version_id`. An incoherent version — e.g.
+  `pay_first_enabled` with `tables_enabled` — is a `422` carrying the violations, and nothing is
+  stored, so the last good version stays current. `GET /admin/stores/{store_id}/config` returns the
+  current effective (deep-merged, most-specific-wins) document, or `404` if the store has none yet.
+  The tenant is named on the query string (the super-admin is global). `CloudApp` gains the
+  config-tree store as a sixth collaborator. Router tests cover publish → override → effective-merge,
+  the incoherent-config `422`, the cookieless `401`, and the unpublished-store `404`. The publish
+  path that delivers a `ConfigUpdate` to a store over the wire remains the next slice.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
