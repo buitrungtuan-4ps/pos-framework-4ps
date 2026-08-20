@@ -64,6 +64,7 @@ mod openapi;
 mod persistence;
 pub mod reconcile;
 pub mod retention;
+pub mod translations;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};

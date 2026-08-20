@@ -9,8 +9,9 @@
 //! ([ADR-0033](../../../docs/adr/0033-config-tree.md)), `SubjectStore`
 //! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)), `WebhookEndpointStore`
 //! ([ADR-0032](../../../docs/adr/0032-webhooks.md)), `ReconcileStore`
-//! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)) and `DeviceProposalStore`
-//! ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)) traits live here in the cloud, where the
+//! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), `DeviceProposalStore`
+//! ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)) and `TranslationStore`
+//! ([ADR-0043](../../../docs/adr/0043-translation-grid.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -22,7 +23,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
     PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects, PostgresWebhooks,
+    PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects, PostgresTranslations,
+    PostgresWebhooks,
 };
 
 use pos_ports::PortError;
@@ -45,6 +47,7 @@ use crate::devices::{
 };
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
+use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -489,5 +492,36 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         self.mark(&tenant.to_string(), &id.to_string(), status.as_wire())
             .await
             .map_err(|error| DeviceProposalError::new(error.to_string()))
+    }
+}
+
+impl TranslationStore for PostgresTranslations {
+    async fn load(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TranslationGrid>, TranslationStoreError> {
+        let json = self
+            .load_grid(&tenant.to_string())
+            .await
+            .map_err(|error| TranslationStoreError::new(error.to_string()))?;
+        match json {
+            Some(text) => serde_json::from_str(&text).map(Some).map_err(|error| {
+                TranslationStoreError::new(format!("decoding the stored grid failed: {error}"))
+            }),
+            None => Ok(None),
+        }
+    }
+
+    async fn save(
+        &self,
+        tenant: TenantId,
+        grid: &TranslationGrid,
+    ) -> Result<(), TranslationStoreError> {
+        let json = serde_json::to_string(grid).map_err(|error| {
+            TranslationStoreError::new(format!("encoding the grid failed: {error}"))
+        })?;
+        self.save_grid(&tenant.to_string(), &json)
+            .await
+            .map_err(|error| TranslationStoreError::new(error.to_string()))
     }
 }

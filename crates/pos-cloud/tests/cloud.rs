@@ -34,6 +34,7 @@ use pos_cloud::devices::{
 };
 use pos_cloud::http::CloudApp;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
+use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
@@ -1750,6 +1751,109 @@ async fn device_routes_enforce_their_scopes_and_the_session() {
         .await
         .expect("route");
     assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- Translation grid (`/admin/translations`, behind the session guard) -------------------------
+
+/// The translation store, one grid per tenant.
+#[derive(Clone, Default)]
+struct FakeTranslations {
+    rows: Arc<Mutex<HashMap<TenantId, TranslationGrid>>>,
+}
+
+impl TranslationStore for FakeTranslations {
+    async fn load(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TranslationGrid>, TranslationStoreError> {
+        Ok(self.rows.lock().expect("lock").get(&tenant).cloned())
+    }
+
+    async fn save(
+        &self,
+        tenant: TenantId,
+        grid: &TranslationGrid,
+    ) -> Result<(), TranslationStoreError> {
+        self.rows.lock().expect("lock").insert(tenant, grid.clone());
+        Ok(())
+    }
+}
+
+/// The main router (for `/admin/login`) and the translation sub-router, sharing one admin store.
+fn translation_app(admin: FakeAdmin, translations: FakeTranslations) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::translation_router(translations, admin, clock()))
+}
+
+#[tokio::test]
+async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let uri = format!("/admin/translations?tenant_id={tenant_ulid}");
+
+    // A grid with en on every key publishes and round-trips through GET.
+    let good = serde_json::json!({
+        "menu.pho": { "en": "Pho", "vi": "Phở" },
+        "menu.tea": { "en": "Tea" },
+    });
+    let put = router
+        .clone()
+        .oneshot(put_with_cookie(&uri, &good, &cookie))
+        .await
+        .expect("route the publish");
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    let got = router
+        .clone()
+        .oneshot(get_with_cookie(&uri, &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(got.status(), StatusCode::OK);
+    assert_eq!(json_body(got).await, good, "the grid round-trips");
+
+    // A grid missing en on a key is a 422 naming it, and does not overwrite the good grid.
+    let bad = serde_json::json!({ "menu.rice": { "vi": "Cơm" } });
+    let rejected = router
+        .clone()
+        .oneshot(put_with_cookie(&uri, &bad, &cookie))
+        .await
+        .expect("route the bad publish");
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(rejected).await["missing_fallback"],
+        serde_json::json!(["menu.rice"]),
+        "the rejection names the key lacking an en fallback"
+    );
+    let unchanged = router
+        .oneshot(get_with_cookie(&uri, &cookie))
+        .await
+        .expect("route the re-read");
+    assert_eq!(
+        json_body(unchanged).await,
+        good,
+        "a rejected publish left the last good grid current"
+    );
+}
+
+#[tokio::test]
+async fn translation_routes_require_a_session() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let response = router
+        .oneshot(get(
+            &format!("/admin/translations?tenant_id={tenant_ulid}"),
+            None,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------

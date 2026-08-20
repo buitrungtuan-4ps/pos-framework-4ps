@@ -160,6 +160,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             store.api_keys(),
             SystemClock,
+        ))
+        .merge(http::translation_router(
+            store.translations(),
+            store.admin(),
+            SystemClock,
         ));
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())

@@ -31,10 +31,12 @@
 //!    tree ([ADR-0033](../../../docs/adr/0033-config-tree.md)): publish a level of a store's tree
 //!    (validated, versioned) and read its effective document; and registering webhook endpoints
 //!    ([ADR-0032](../../../docs/adr/0032-webhooks.md)): register a destination (SSRF-vetted, returning
-//!    the signing secret once), list, and delete; and resolving device-onboarding proposals
+//!    the signing secret once), list, and delete; resolving device-onboarding proposals
 //!    ([ADR-0041](../../../docs/adr/0041-device-onboarding.md), via [`device_router`]): list the
-//!    pending queue and approve or reject. Not part of the public contract, so — like `/internal` —
-//!    it is absent from the OpenAPI document.
+//!    pending queue and approve or reject; and authoring the translation grid
+//!    ([ADR-0043](../../../docs/adr/0043-translation-grid.md), via [`translation_router`]): read and
+//!    replace a tenant's localized strings, `en`-validated. Not part of the public contract, so —
+//!    like `/internal` — it is absent from the OpenAPI document.
 //!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
 //! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], the [`WebhookEndpointStore`], and the
@@ -77,6 +79,7 @@ use crate::devices::{
 };
 use crate::openapi::ApiDoc;
 use crate::reconcile::ReconcileStore;
+use crate::translations::{TranslationGrid, TranslationStore};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
 };
@@ -600,6 +603,123 @@ fn device_error_response(error: &crate::devices::DeviceProposalError) -> Respons
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the device service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Translation grid (`/admin/translations`) ---------------------------------------------------
+
+/// The collaborators the translation-grid routes need, stated independently of [`CloudApp`].
+#[derive(Clone)]
+struct TranslationState<Tr, A, C> {
+    translations: Tr,
+    admin: A,
+    clock: C,
+}
+
+/// The tenant a translation request is scoped to (the super-admin is global).
+#[derive(Debug, Clone, Deserialize)]
+struct TranslationTenantQuery {
+    /// The tenant whose grid to read or write (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// The keys a rejected grid failed the fallback rule on — every key must carry a non-empty `en`.
+#[derive(Debug, Clone, serde::Serialize)]
+struct GridViolations {
+    /// The keys missing a non-empty `en` value ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+    missing_fallback: Vec<String>,
+}
+
+/// Builds the translation-grid sub-router, stated independently of [`CloudApp`]
+/// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+///
+/// A super-admin reads and replaces a tenant's whole grid behind the session guard; a `PUT` is
+/// validated so every key carries a non-empty `en` fallback before anything is stored. Like the other
+/// merged sub-routers, it carries its own state rather than adding a `CloudApp` generic.
+pub fn translation_router<Tr, A, C>(translations: Tr, admin: A, clock: C) -> Router
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/translations",
+            get(get_translations::<Tr, A, C>).put(put_translations::<Tr, A, C>),
+        )
+        .with_state(TranslationState {
+            translations,
+            admin,
+            clock,
+        })
+}
+
+/// Returns a tenant's translation grid (super-admin only), or an empty grid if it has authored none.
+async fn get_translations<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.translations.load(tenant_id).await {
+        // A tenant with no grid yet is an empty grid to edit, not a 404.
+        Ok(grid) => (StatusCode::OK, Json(grid.unwrap_or_default())).into_response(),
+        Err(error) => translation_error_response(&error),
+    }
+}
+
+/// Replaces a tenant's translation grid (super-admin only). A grid whose every key does not carry a
+/// non-empty `en` is a `422` naming the offending keys, and nothing is stored.
+async fn put_translations<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+    Json(grid): Json<TranslationGrid>,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let missing = grid.keys_missing_fallback();
+    if !missing.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(GridViolations {
+                missing_fallback: missing,
+            }),
+        )
+            .into_response();
+    }
+    match state.translations.save(tenant_id, &grid).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => translation_error_response(&error),
+    }
+}
+
+/// Maps a translation-store failure to a retryable `503`, logging the detail rather than leaking it.
+fn translation_error_response(error: &crate::translations::TranslationStoreError) -> Response {
+    tracing::error!(%error, "a translation store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the translation service is unavailable",
     )
         .into_response()
 }

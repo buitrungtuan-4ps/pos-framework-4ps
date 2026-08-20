@@ -35,6 +35,9 @@ const MIGRATION_0006: &str = include_str!("../migrations/0006_cloud_webhooks.sql
 /// The device-proposal table ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
 const MIGRATION_0007: &str = include_str!("../migrations/0007_cloud_device_proposals.sql");
 
+/// The translation-grid table ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+const MIGRATION_0008: &str = include_str!("../migrations/0008_cloud_translations.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -117,6 +120,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0007)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0008)
+            .await
             .map_err(unavailable)
     }
 
@@ -184,6 +191,15 @@ impl PostgresStore {
     #[must_use]
     pub fn device_proposals(&self) -> crate::devices::PostgresDeviceProposals {
         crate::devices::PostgresDeviceProposals::new(self.pool.clone())
+    }
+
+    /// The translation-grid store over this pool ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `TranslationStore` seam over
+    /// it.
+    #[must_use]
+    pub fn translations(&self) -> crate::translations::PostgresTranslations {
+        crate::translations::PostgresTranslations::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

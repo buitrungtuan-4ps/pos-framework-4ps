@@ -27,6 +27,7 @@ mod reconcile;
 mod rollups;
 mod store;
 mod subjects;
+mod translations;
 mod webhooks;
 
 pub use admin::{AdminCredentialRow, PostgresAdmin};
@@ -37,4 +38,5 @@ pub use reconcile::PostgresReconcile;
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};
 pub use subjects::{PostgresSubjects, SubjectRow};
+pub use translations::PostgresTranslations;
 pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};

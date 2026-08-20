@@ -783,6 +783,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   its pixel bound; a non-image upload is a clean `Decode` error). Where renditions are stored (a
   Postgres `bytea` table rather than the deletion-scheduled `blob-garage` port) and the admin upload
   route are the next slice.
+- `pos-cloud` / `store-postgres` (P7): the **translation grid** (ADR-0043, a new ADR) — the cloud-side
+  place a tenant authors its localized menu/content strings, feeding the edge's ICU i18n runtime
+  (ADR-0020). The grid is `key → { locale → string }`, one `jsonb` per tenant (`store-postgres`
+  migration `0008`, RLS-isolated), behind a new `TranslationStore` seam and `persistence.rs` bridge.
+  The one structural rule is the always-present fallback: `PUT /admin/translations?tenant_id=…`
+  (super-admin session) is rejected `422` naming every key that lacks a non-empty `en`, and nothing is
+  stored — so the edge can always degrade to English rather than to a raw key; `GET
+  /admin/translations?tenant_id=…` returns the grid (empty if none yet). Authoring is a validated
+  whole-grid replace, in a merged sub-router carrying its own state (no `CloudApp` generic). Proven by
+  a pure `keys_missing_fallback` unit test and a router round-trip (`PUT` → `GET`, the `422` on a grid
+  missing `en`, and the `401` without a session). The store-facing `/sync` fetch that hands the edge
+  its grid is the next slice, the same split config delivery drew.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
