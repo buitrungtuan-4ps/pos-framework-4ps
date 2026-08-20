@@ -38,6 +38,12 @@ async fn main() -> ExitCode {
 
 /// Boots the cloud: config from `POS_CLOUD_CONFIG`, the PostgreSQL store migrated, the HTTP server
 /// bound and served until shutdown.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the boot sequence wires the store, four background tasks (cursor, projector, \
+              retention, webhook dispatch), the merged router, and their shared shutdown in one \
+              linear flow; splitting it would scatter the handles the shutdown join needs"
+)]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("POS_CLOUD_CONFIG")
         .map_err(|_| "POS_CLOUD_CONFIG must name a configuration file")?;
@@ -145,9 +151,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
-    // The reconciliation diff endpoint (ADR-0040) carries its own state, so it is merged in rather
-    // than threaded through CloudApp; it shares the same private-network `/internal` surface as ingest.
-    let service = http::router(app).merge(http::reconcile_router(store.reconcile()));
+    // The reconciliation diff (ADR-0040) and device-onboarding (ADR-0041) endpoints carry their own
+    // state, so they are merged in rather than threaded through CloudApp.
+    let service = http::router(app)
+        .merge(http::reconcile_router(store.reconcile()))
+        .merge(http::device_router(
+            store.device_proposals(),
+            store.admin(),
+            store.api_keys(),
+            SystemClock,
+        ));
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

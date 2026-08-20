@@ -134,7 +134,7 @@ impl EventStoreHarness for StoreHarness {
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 config_trees, subjects, webhook_endpoints RESTART IDENTITY;",
+                 config_trees, subjects, webhook_endpoints, device_proposals RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -176,7 +176,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, subjects, webhook_endpoints RESTART IDENTITY",
+             config_trees, subjects, webhook_endpoints, device_proposals RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1030,6 +1030,104 @@ mod reconcile_query {
                 .await
                 .expect("empty query");
             assert!(none.is_empty(), "no candidates, no membership");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The device-proposal onboarding queue (ADR-0041): propose, list by status,
+// and the one-way pending → approved/rejected resolve.
+// ---------------------------------------------------------------------------
+
+mod device_proposals {
+    use super::{TENANT_A, block_on, prepared};
+
+    #[test]
+    fn propose_list_and_resolve_round_trip() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+
+            // Two proposals for store-1, one for store-2 — all pending.
+            devices
+                .create(
+                    "DEV1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Kitchen 1",
+                    "10.0.0.1:9100",
+                )
+                .await
+                .expect("propose 1");
+            devices
+                .create("DEV2", TENANT_A, "store-1", "kds", "Expo", "10.0.0.2")
+                .await
+                .expect("propose 2");
+            devices
+                .create(
+                    "DEV3",
+                    TENANT_A,
+                    "store-2",
+                    "printer",
+                    "Bar",
+                    "10.0.0.3:9100",
+                )
+                .await
+                .expect("propose 3");
+
+            // The store-scoped pending list sees only store-1's two; the tenant-wide queue sees all.
+            let store_1_pending = devices
+                .fetch(TENANT_A, Some("store-1"), "pending")
+                .await
+                .expect("store-1 pending");
+            assert_eq!(store_1_pending.len(), 2, "only store-1's proposals");
+            let all_pending = devices
+                .fetch(TENANT_A, None, "pending")
+                .await
+                .expect("tenant pending");
+            assert_eq!(all_pending.len(), 3, "the whole tenant's queue");
+
+            // Approve one; it leaves the pending list and joins the approved one.
+            assert!(
+                devices
+                    .mark(TENANT_A, "DEV1", "approved")
+                    .await
+                    .expect("approve"),
+                "a pending proposal is resolved"
+            );
+            let approved = devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("store-1 approved");
+            assert_eq!(approved.len(), 1);
+            assert_eq!(approved.first().expect("one row").id, "DEV1");
+            assert_eq!(
+                devices
+                    .fetch(TENANT_A, Some("store-1"), "pending")
+                    .await
+                    .expect("store-1 pending after approve")
+                    .len(),
+                1,
+                "one of store-1's two is still pending"
+            );
+
+            // Resolving again is a no-op: the row is no longer pending.
+            assert!(
+                !devices
+                    .mark(TENANT_A, "DEV1", "rejected")
+                    .await
+                    .expect("re-resolve"),
+                "an already-resolved proposal does not transition again"
+            );
+            // And another tenant cannot resolve this tenant's proposal.
+            assert!(
+                !devices
+                    .mark("tenant-b", "DEV2", "approved")
+                    .await
+                    .expect("cross-tenant"),
+                "the tenant scope stops one tenant resolving another's proposal"
+            );
         });
     }
 }

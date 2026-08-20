@@ -17,10 +17,12 @@
 //!    Every `/v1` handler carries a [`utoipa::path`] annotation and every response type derives
 //!    `utoipa::ToSchema`, so `/v1/openapi.json` is generated from the code and can never drift from
 //!    it ([ADR-0019](../../../docs/adr/0019-openapi-generation.md)).
-//!  * `/sync/*` — the **store-facing** surface a first-party store pulls its own configuration from
-//!    ([ADR-0039](../../../docs/adr/0039-config-delivery.md)): bearer-authed with a `read_config`
-//!    scope, tenant-isolated, and — being store operation rather than an integrator API — absent
-//!    from the public OpenAPI document, like `/admin` and `/internal`.
+//!  * `/sync/*` — the **store-facing** surface a first-party store operates its own state on:
+//!    pulling configuration ([ADR-0039](../../../docs/adr/0039-config-delivery.md), `read_config`
+//!    scope) and proposing/reading its devices ([ADR-0041](../../../docs/adr/0041-device-onboarding.md),
+//!    `manage_devices` scope, via [`device_router`]). Bearer-authed, tenant-isolated, and — being
+//!    store operation rather than an integrator API — absent from the public OpenAPI, like `/admin`
+//!    and `/internal`.
 //!  * `/admin/*` — the **interactive** super-admin surface ([`crate::auth::admin`],
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
 //!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
@@ -29,8 +31,10 @@
 //!    tree ([ADR-0033](../../../docs/adr/0033-config-tree.md)): publish a level of a store's tree
 //!    (validated, versioned) and read its effective document; and registering webhook endpoints
 //!    ([ADR-0032](../../../docs/adr/0032-webhooks.md)): register a destination (SSRF-vetted, returning
-//!    the signing secret once), list, and delete. Not part of the public contract, so — like
-//!    `/internal` — it is absent from the OpenAPI document.
+//!    the signing secret once), list, and delete; and resolving device-onboarding proposals
+//!    ([ADR-0041](../../../docs/adr/0041-device-onboarding.md), via [`device_router`]): list the
+//!    pending queue and approve or reject. Not part of the public contract, so — like `/internal` —
+//!    it is absent from the OpenAPI document.
 //!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
 //! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], the [`WebhookEndpointStore`], and the
@@ -67,6 +71,10 @@ use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
 };
 use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
+use crate::devices::{
+    DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
+    PersistedDeviceProposal,
+};
 use crate::openapi::ApiDoc;
 use crate::reconcile::ReconcileStore;
 use crate::webhook::{
@@ -309,6 +317,291 @@ where
                 .into_response()
         }
     }
+}
+
+// --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) ------------------------
+
+/// The collaborators the device-onboarding routes need, stated independently of [`CloudApp`]: the
+/// proposal store, plus the admin, API-key, and clock stores the two auth paths use.
+#[derive(Clone)]
+struct DeviceState<D, A, K, C> {
+    devices: D,
+    admin: A,
+    keys: K,
+    clock: C,
+}
+
+/// Builds the device-onboarding sub-router, stated independently of [`CloudApp`]
+/// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+///
+/// A store proposes a discovered printer/KDS and reads back its approved devices on the store-facing
+/// `/sync` surface (API key, `manage_devices` scope); a super-admin lists the pending queue and
+/// approves or rejects on `/admin` (session guard). It needs the proposal store plus the existing
+/// admin/api-key/clock collaborators, so — like [`reconcile_router`] — it carries its own state and is
+/// merged into the main router rather than adding an eighth `CloudApp` generic.
+pub fn device_router<D, A, K, C>(devices: D, admin: A, keys: K, clock: C) -> Router
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/sync/stores/{store_id}/devices",
+            post(propose_device::<D, A, K, C>).get(list_store_devices::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals",
+            get(list_pending_devices::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/approve",
+            post(approve_device::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/reject",
+            post(reject_device::<D, A, K, C>),
+        )
+        .with_state(DeviceState {
+            devices,
+            admin,
+            keys,
+            clock,
+        })
+}
+
+/// A store's proposal of a discovered device.
+#[derive(Debug, Clone, Deserialize)]
+struct ProposeDeviceRequest {
+    /// `printer` or `kds`.
+    kind: String,
+    /// A human-readable name for the device.
+    name: String,
+    /// The device's network address, as discovered (e.g. `192.168.1.50:9100`).
+    address: String,
+}
+
+/// The id and status of a freshly-proposed device (always `pending`).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProposeDeviceResponse {
+    /// The proposal's id (a ULID).
+    id: String,
+    /// The status — `pending` until an operator resolves it.
+    status: String,
+}
+
+/// The tenant a device listing or resolution is scoped to (the super-admin is global).
+#[derive(Debug, Clone, Deserialize)]
+struct DeviceTenantQuery {
+    /// The tenant whose proposals to act on (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
+/// approve; the id is minted here and returned once.
+async fn propose_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<ProposeDeviceRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    let Some(kind) = DeviceKind::from_wire(&request.kind) else {
+        return (StatusCode::BAD_REQUEST, "kind must be one of printer, kds").into_response();
+    };
+    if request.name.trim().is_empty() || request.address.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name and address are required").into_response();
+    }
+    let Some(id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceProposalId::new)
+    else {
+        tracing::error!("could not read OS entropy to mint a device-proposal id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the device service is unavailable",
+        )
+            .into_response();
+    };
+    let proposal = PersistedDeviceProposal {
+        id,
+        tenant_id: grant.tenant(),
+        store_id,
+        kind,
+        name: request.name,
+        address: request.address,
+    };
+    match state.devices.propose(&proposal).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(ProposeDeviceResponse {
+                id: id.to_string(),
+                status: DeviceProposalStatus::Pending.as_wire().to_owned(),
+            }),
+        )
+            .into_response(),
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A store lists its **approved** devices (`manage_devices` scope) — what the edge acts on, never a
+/// raw discovery.
+async fn list_store_devices<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    match state
+        .devices
+        .list(
+            grant.tenant(),
+            Some(store_id),
+            DeviceProposalStatus::Approved,
+        )
+        .await
+    {
+        Ok(devices) => {
+            (StatusCode::OK, Json::<Vec<DeviceProposalSummary>>(devices)).into_response()
+        }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's pending device proposals — the approval queue.
+async fn list_pending_devices<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Pending)
+        .await
+    {
+        Ok(devices) => {
+            (StatusCode::OK, Json::<Vec<DeviceProposalSummary>>(devices)).into_response()
+        }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A super-admin approves a pending proposal.
+async fn approve_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    resolve_device(&state, &headers, &id, &query, true).await
+}
+
+/// A super-admin rejects a pending proposal.
+async fn reject_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    resolve_device(&state, &headers, &id, &query, false).await
+}
+
+/// Resolves a proposal to approved or rejected (super-admin only). `204` whether or not a pending row
+/// was found — resolving is idempotent, tenant-scoped, and telling the caller which case it was is a
+/// needless enumeration signal.
+async fn resolve_device<D, A, K, C>(
+    state: &DeviceState<D, A, K, C>,
+    headers: &HeaderMap,
+    id: &str,
+    query: &DeviceTenantQuery,
+    approved: bool,
+) -> Response
+where
+    D: DeviceProposalStore,
+    A: AdminStore,
+    C: ClockSource,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        id.parse::<Ulid>().map(DeviceProposalId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the proposal id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.devices.resolve(tenant_id, id, approved).await {
+        Ok(_found) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// Maps a device-proposal store failure to a retryable `503`, logging the detail rather than leaking it.
+fn device_error_response(error: &crate::devices::DeviceProposalError) -> Response {
+    tracing::error!(%error, "a device-proposal store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the device service is unavailable",
+    )
+        .into_response()
 }
 
 /// The generated OpenAPI document for the public `/v1` surface.

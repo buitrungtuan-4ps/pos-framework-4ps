@@ -8,8 +8,9 @@
 //! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)), `ConfigTreeStore`
 //! ([ADR-0033](../../../docs/adr/0033-config-tree.md)), `SubjectStore`
 //! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)), `WebhookEndpointStore`
-//! ([ADR-0032](../../../docs/adr/0032-webhooks.md)) and `ReconcileStore`
-//! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)) traits live here in the cloud, where the
+//! ([ADR-0032](../../../docs/adr/0032-webhooks.md)), `ReconcileStore`
+//! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)) and `DeviceProposalStore`
+//! ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -20,8 +21,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresReconcile, PostgresRollups,
-    PostgresStore, PostgresSubjects, PostgresWebhooks,
+    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects, PostgresWebhooks,
 };
 
 use pos_ports::PortError;
@@ -38,6 +39,10 @@ use crate::auth::totp::TotpSecret;
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
+use crate::devices::{
+    DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
+    DeviceProposalSummary, PersistedDeviceProposal,
+};
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::webhook::sign::SigningSecret;
@@ -429,5 +434,60 @@ impl ReconcileStore for PostgresReconcile {
             .filter(|id| !present.contains(&id.to_string()))
             .copied()
             .collect())
+    }
+}
+
+impl DeviceProposalStore for PostgresDeviceProposals {
+    async fn propose(&self, proposal: &PersistedDeviceProposal) -> Result<(), DeviceProposalError> {
+        self.create(
+            &proposal.id.to_string(),
+            &proposal.tenant_id.to_string(),
+            &proposal.store_id.to_string(),
+            proposal.kind.as_wire(),
+            &proposal.name,
+            &proposal.address,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        status: DeviceProposalStatus,
+    ) -> Result<Vec<DeviceProposalSummary>, DeviceProposalError> {
+        let store = store.map(|id| id.to_string());
+        let rows = self
+            .fetch(&tenant.to_string(), store.as_deref(), status.as_wire())
+            .await
+            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| DeviceProposalSummary {
+                id: row.id,
+                store_id: row.store_id,
+                kind: row.kind,
+                name: row.name,
+                address: row.address,
+                status: row.status,
+            })
+            .collect())
+    }
+
+    async fn resolve(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        approved: bool,
+    ) -> Result<bool, DeviceProposalError> {
+        let status = if approved {
+            DeviceProposalStatus::Approved
+        } else {
+            DeviceProposalStatus::Rejected
+        };
+        self.mark(&tenant.to_string(), &id.to_string(), status.as_wire())
+            .await
+            .map_err(|error| DeviceProposalError::new(error.to_string()))
     }
 }

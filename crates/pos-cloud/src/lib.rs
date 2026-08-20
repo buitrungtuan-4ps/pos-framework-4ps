@@ -57,6 +57,7 @@ pub mod config;
 pub mod config_tree;
 pub mod cursor;
 pub mod dashboard;
+pub mod devices;
 pub mod http;
 mod openapi;
 mod persistence;

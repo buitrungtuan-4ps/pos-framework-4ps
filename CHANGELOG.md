@@ -755,6 +755,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   a non-ULID id is a `400`) and a gated `store-postgres` integration test of the membership query
   (tenant/store-scoped, empty-set short-circuit). The `pos_edge` job that assembles the nightly
   manifest and re-pushes is store-side fleet wiring (P9).
+- `pos-cloud` / `store-postgres` (P7): the **printer/KDS discover → propose → admin-approves** flow
+  (ADR-0041, a new ADR). A store discovers a device on its LAN and proposes it; a super-admin approves
+  it before it is usable — the human gate that keeps an unauthenticated port-9100 device off the
+  fleet. `store-postgres` migration `0007` adds `device_proposals` (id, tenant_id, store_id, kind,
+  name, address, status, timestamps), RLS-isolated by tenant with a partial index on the pending
+  queue, behind a new `DeviceProposalStore` seam and `persistence.rs` bridge. `POST
+  /sync/stores/{id}/devices` proposes (store-facing, API key with a new `manage_devices` scope, stored
+  `pending`); `GET /sync/stores/{id}/devices` returns the store's **approved** devices — what the edge
+  acts on, never a raw discovery. `GET /admin/devices/proposals?tenant_id=…` is the super-admin pending
+  queue and `POST …/{id}/approve` / `…/{id}/reject` resolve one (idempotent: only a pending row
+  transitions; tenant-scoped so one tenant cannot resolve another's). The routes are a merged
+  sub-router carrying their own state, so device onboarding adds **no eighth `CloudApp` generic**
+  (same shape as reconciliation). Proven over the fakes end to end (propose → pending queue →
+  approve → approved list; scope/`session` closes) and by a gated `store-postgres` integration test
+  (propose → list by status → one-way resolve → cross-tenant no-op). The `pos_edge` mDNS discovery
+  loop is store-side wiring (P5/P9).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

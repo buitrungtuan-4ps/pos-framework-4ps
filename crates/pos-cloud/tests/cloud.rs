@@ -28,6 +28,10 @@ use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
+use pos_cloud::devices::{
+    DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
+    DeviceProposalSummary, PersistedDeviceProposal,
+};
 use pos_cloud::http::CloudApp;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::webhook::{
@@ -471,6 +475,19 @@ fn post_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A POST request for `uri` with a JSON body and a `Bearer` token — a store client call.
+fn post_json_bearer(uri: &str, body: &serde_json::Value, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::from(
             serde_json::to_vec(body).expect("serialise the body"),
         ))
@@ -1530,6 +1547,209 @@ async fn reconcile_rejects_a_malformed_id() {
         StatusCode::BAD_REQUEST,
         "a manifest carrying a non-ULID id is rejected, not silently dropped"
     );
+}
+
+// --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) -----------------------
+
+/// One stored proposal, carrying the status a bare `PersistedDeviceProposal` does not.
+#[derive(Clone)]
+struct DeviceRow {
+    id: DeviceProposalId,
+    tenant: TenantId,
+    store: StoreId,
+    kind: DeviceKind,
+    name: String,
+    address: String,
+    status: DeviceProposalStatus,
+}
+
+/// The device-proposal store as a flat list, exactly as the real table reads.
+#[derive(Clone, Default)]
+struct FakeDevices {
+    rows: Arc<Mutex<Vec<DeviceRow>>>,
+}
+
+impl DeviceProposalStore for FakeDevices {
+    async fn propose(&self, proposal: &PersistedDeviceProposal) -> Result<(), DeviceProposalError> {
+        self.rows.lock().expect("lock").push(DeviceRow {
+            id: proposal.id,
+            tenant: proposal.tenant_id,
+            store: proposal.store_id,
+            kind: proposal.kind,
+            name: proposal.name.clone(),
+            address: proposal.address.clone(),
+            status: DeviceProposalStatus::Pending,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        status: DeviceProposalStatus,
+    ) -> Result<Vec<DeviceProposalSummary>, DeviceProposalError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| {
+                row.tenant == tenant
+                    && row.status == status
+                    && store.is_none_or(|only| row.store == only)
+            })
+            .map(|row| DeviceProposalSummary {
+                id: row.id.to_string(),
+                store_id: row.store.to_string(),
+                kind: row.kind.as_wire().to_owned(),
+                name: row.name.clone(),
+                address: row.address.clone(),
+                status: row.status.as_wire().to_owned(),
+            })
+            .collect())
+    }
+
+    async fn resolve(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        approved: bool,
+    ) -> Result<bool, DeviceProposalError> {
+        let mut rows = self.rows.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Pending {
+                row.status = if approved {
+                    DeviceProposalStatus::Approved
+                } else {
+                    DeviceProposalStatus::Rejected
+                };
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// The main router (for `/admin/login`) and the device sub-router, sharing one admin and one key
+/// store, plus the read_config-issuing key store — production's `merge`, in a test.
+fn device_app(admin: FakeAdmin, keys: FakeKeys, devices: FakeDevices) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::device_router(devices, admin, keys, clock()))
+}
+
+#[tokio::test]
+async fn device_onboarding_propose_then_approve_then_appears_approved() {
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let router = device_app(provisioned_admin(), keys.clone(), devices);
+    let cookie = admin_cookie(&router).await;
+    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let devices_uri = format!("/sync/stores/{store_ulid}/devices");
+
+    // The store proposes a discovered printer.
+    let proposal = serde_json::json!({ "kind": "printer", "name": "Kitchen 1", "address": "192.168.1.50:9100" });
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(&devices_uri, &proposal, &token))
+        .await
+        .expect("route the proposal");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["status"], "pending");
+    let id = created["id"].as_str().expect("an id").to_owned();
+
+    // It shows in the admin pending queue.
+    let pending = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/devices/proposals?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the queue");
+    assert_eq!(pending.status(), StatusCode::OK);
+    let queue = json_body(pending).await;
+    assert_eq!(queue.as_array().expect("array").len(), 1);
+    assert_eq!(queue[0]["id"], id);
+    assert_eq!(queue[0]["kind"], "printer");
+
+    // Before approval the store sees no approved devices.
+    let before = router
+        .clone()
+        .oneshot(get(&devices_uri, Some(&token)))
+        .await
+        .expect("route the store read");
+    assert_eq!(
+        json_body(before).await.as_array().expect("array").len(),
+        0,
+        "nothing is usable until an operator approves it"
+    );
+
+    // The admin approves; it then appears in the store's approved list.
+    let approve = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approve.status(), StatusCode::NO_CONTENT);
+    let after = router
+        .oneshot(get(&devices_uri, Some(&token)))
+        .await
+        .expect("route the store read");
+    let approved = json_body(after).await;
+    assert_eq!(approved.as_array().expect("array").len(), 1);
+    assert_eq!(approved[0]["address"], "192.168.1.50:9100");
+}
+
+#[tokio::test]
+async fn device_routes_enforce_their_scopes_and_the_session() {
+    let keys = FakeKeys::default();
+    let router = device_app(provisioned_admin(), keys.clone(), FakeDevices::default());
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let devices_uri = format!("/sync/stores/{store_ulid}/devices");
+    let proposal = serde_json::json!({ "kind": "kds", "name": "Expo", "address": "192.168.1.9" });
+
+    // No bearer: closed.
+    let anon = router
+        .clone()
+        .oneshot(post_json(&devices_uri, &proposal))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+
+    // A key without manage_devices: forbidden.
+    let rollups_only = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let wrong = router
+        .clone()
+        .oneshot(post_json_bearer(&devices_uri, &proposal, &rollups_only))
+        .await
+        .expect("route");
+    assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+
+    // The admin queue is closed without a session.
+    let no_session = router
+        .oneshot(get(
+            &format!("/admin/devices/proposals?tenant_id={tenant_ulid}"),
+            None,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
 }
 
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------

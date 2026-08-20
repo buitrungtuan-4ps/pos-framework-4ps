@@ -49,6 +49,9 @@ pub enum Scope {
     /// Pull the store's own configuration updates (`GET /sync/stores/{id}/config`). The credential a
     /// first-party store holds to keep its config current ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
     ReadConfig,
+    /// Propose discovered devices and read the store's approved ones (`/sync/stores/{id}/devices`)
+    /// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+    ManageDevices,
 }
 
 impl Scope {
@@ -61,6 +64,7 @@ impl Scope {
             Self::ReadEvents => "read_events",
             Self::ManageWebhooks => "manage_webhooks",
             Self::ReadConfig => "read_config",
+            Self::ManageDevices => "manage_devices",
         }
     }
 
@@ -76,6 +80,7 @@ impl Scope {
             "read_events" => Some(Self::ReadEvents),
             "manage_webhooks" => Some(Self::ManageWebhooks),
             "read_config" => Some(Self::ReadConfig),
+            "manage_devices" => Some(Self::ManageDevices),
             _ => None,
         }
     }

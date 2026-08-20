@@ -32,6 +32,9 @@ const MIGRATION_0005: &str = include_str!("../migrations/0005_cloud_subjects.sql
 /// The webhook-endpoint table ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
 const MIGRATION_0006: &str = include_str!("../migrations/0006_cloud_webhooks.sql");
 
+/// The device-proposal table ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+const MIGRATION_0007: &str = include_str!("../migrations/0007_cloud_device_proposals.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -110,6 +113,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0006)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0007)
+            .await
             .map_err(unavailable)
     }
 
@@ -168,6 +175,15 @@ impl PostgresStore {
     #[must_use]
     pub fn reconcile(&self) -> crate::reconcile::PostgresReconcile {
         crate::reconcile::PostgresReconcile::new(self.pool.clone())
+    }
+
+    /// The device-proposal store over this pool ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `DeviceProposalStore` seam
+    /// over it.
+    #[must_use]
+    pub fn device_proposals(&self) -> crate::devices::PostgresDeviceProposals {
+        crate::devices::PostgresDeviceProposals::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
