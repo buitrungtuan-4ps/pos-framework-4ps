@@ -15,9 +15,13 @@
 //! A **machine integrator** presents a scoped per-tenant [`apikey`] instead
 //! ([ADR-0037](../../../docs/adr/0037-api-keys.md)): a bearer token whose secret is stored only as a
 //! hash, bound to one tenant and a deny-by-default scope set — the isolation and least-privilege
-//! controls for the public `/v1` surface.
+//! controls for the public `/v1` surface. [`bearer`] is the HTTP seam over it: it reads the
+//! `Authorization` header, verifies the key against the clock, and yields the [`apikey::Grant`] a
+//! `/v1` handler then gates by scope and scopes to a tenant — refusing every credential problem with
+//! one indistinguishable `401`.
 
 pub mod apikey;
+pub mod bearer;
 pub mod password;
 pub mod session;
 pub mod totp;

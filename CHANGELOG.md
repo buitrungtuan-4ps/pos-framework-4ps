@@ -533,6 +533,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   scoping, and no secret leaking through `Debug`), with obviously-fake test secrets. Reuses `sha2`; no
   new dependencies. Key persistence, the provisioning route, and the `/v1` bearer extractor are the
   remaining wiring.
+- `pos-cloud` (P7): the **`/v1` bearer authentication seam** (ADR-0037) — `auth::bearer`, the HTTP
+  edge over the pure API-key engine. `authenticate` reads the `Authorization: Bearer pos_…` header,
+  looks the key up by its public id through a new `ApiKeyStore` lookup seam, and verifies it against
+  the clock; `require_scope` then gates the specific action. Two rules are enforced structurally: a
+  **no-oracle refusal** — a missing/malformed header, an unknown id, a wrong secret, a revoked or
+  expired key all render one indistinguishable `401` (the reason is server-log-only), so a prober
+  cannot enumerate keys — and a **store outage answers retryably** (`503`), never as a false denial
+  that would make a caller discard a good key. A missing scope is a separate `403`, safe to
+  distinguish because identity is already proven. Unit-tested with an in-memory key store and a fake
+  clock (valid key → grant, unknown id and bad secret indistinguishable, missing/wrong-scheme header,
+  store-outage `503`, ungranted-scope `403`, and all three credential problems rendering the identical
+  `401`).
+- `pos-cloud` (P7): the materialised-rollup read seam is now **keyed by `(tenant, store)`**
+  (ADR-0036). `RollupStore::load`/`save`, `dashboard`, and `project` all take a `TenantId`; because a
+  `/v1` caller's tenant comes from its authenticated `Grant` and never from the request, a caller can
+  only read rollups for a store within its own tenant, and guessing another tenant's `store_id` reads
+  back empty rather than that tenant's data — tenant isolation is a fact of the key, not of a check a
+  handler might forget. Library-only refinement (no route or binary yet on it); the from-log
+  `Cloud::daily_rollups` reconciliation path is unchanged.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

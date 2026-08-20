@@ -23,10 +23,10 @@
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
-//! routes (ADR-0033), the super-admin login route + credential persistence and per-tenant API keys
-//! and per-tenant API-key persistence + the `/v1` bearer extractor (ADR-0034, ADR-0037), the
-//! subject-store schema and the retention runner's wiring into `main` (ADR-0035), and the
-//! materialised-rollup table, projector task, and `/v1` wiring for dashboards (ADR-0036).
+//! routes (ADR-0033), the super-admin login route + credential persistence and the API-key
+//! persistence + provisioning route the [`auth::bearer`] extractor is now ready for (ADR-0034,
+//! ADR-0037), the subject-store schema and the retention runner's wiring into `main` (ADR-0035), and
+//! the materialised-rollup table, projector task, and `/v1` wiring for dashboards (ADR-0036).
 
 #![forbid(unsafe_code)]
 

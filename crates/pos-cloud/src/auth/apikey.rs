@@ -23,6 +23,7 @@
 //! never recoverable afterwards. This module is otherwise pure and deterministic.
 
 use core::fmt;
+use core::future::Future;
 use std::collections::BTreeSet;
 
 use sha2::{Digest as _, Sha256};
@@ -241,6 +242,40 @@ pub fn verify(
         tenant_id: stored.tenant_id,
         scopes: stored.scopes.clone(),
     })
+}
+
+/// The store that persists issued API keys (a table in `store-postgres`; a fake in tests).
+///
+/// Lookup is by [`ApiKeyId`] — the public half of the token — so [`verify`] can fetch the single
+/// candidate record and check the secret against it in constant time. A miss (`Ok(None)`) is *not* a
+/// store error: it is an unknown key, and the caller must treat it exactly as it treats a bad secret,
+/// so a prober cannot tell "no such key" from "wrong secret". A returned [`ApiKeyStoreError`] means
+/// the backing store itself failed — the database is unreachable — which is the caller's cue to
+/// answer retryably rather than deny.
+pub trait ApiKeyStore {
+    /// Fetches the stored key with `id`, or `None` if there is no such key.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiKeyStoreError`] only if the store itself could not be read — never for a missing key.
+    fn lookup(
+        &self,
+        id: ApiKeyId,
+    ) -> impl Future<Output = Result<Option<StoredApiKey>, ApiKeyStoreError>> + Send;
+}
+
+/// A failure of the API-key store itself — the database is unreachable — as distinct from a key
+/// simply not being present, which is `Ok(None)`.
+#[derive(Debug, thiserror::Error)]
+#[error("the API-key store failed: {0}")]
+pub struct ApiKeyStoreError(String);
+
+impl ApiKeyStoreError {
+    /// A store failure carrying a human-readable reason (for the server's log).
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
 }
 
 /// `SHA-256` of a secret's bytes — what is stored and compared, never the secret itself.

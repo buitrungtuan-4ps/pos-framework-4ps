@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::ids::{EventId, StoreId};
+use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::cloud::DailyRollup;
 
@@ -40,16 +40,24 @@ pub struct StoredRollups {
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
+///
+/// Every row is keyed by `(tenant, store)`, and the tenant is never a request parameter: a `/v1`
+/// caller's tenant comes from its authenticated [`Grant`](crate::auth::apikey::Grant), so a caller
+/// can only ever read the rollups of a store within its own tenant. Guessing another tenant's
+/// `store_id` yields the default (empty) rollup, not that tenant's data — the isolation is a fact of
+/// the key, not of a check a handler might forget.
 pub trait RollupStore {
     /// Loads a store's materialised rollup, or the default (empty, no cursor) if none exists.
     fn load(
         &self,
+        tenant: TenantId,
         store_id: StoreId,
     ) -> impl Future<Output = Result<StoredRollups, RollupError>> + Send;
 
     /// Persists a store's materialised rollup.
     fn save(
         &self,
+        tenant: TenantId,
         store_id: StoreId,
         rollups: &StoredRollups,
     ) -> impl Future<Output = Result<(), RollupError>> + Send;
@@ -83,6 +91,10 @@ pub struct ProjectReport {
 
 /// Brings `store_id`'s materialised rollup up to date by folding every event after its stored cursor.
 ///
+/// The `(tenant, store_id)` pair is the caller's own — the projector is driven per store from the
+/// fleet, which knows each store's tenant — and is the key the rollup is stored under, the same key
+/// [`dashboard`] reads back for that tenant.
+///
 /// Idempotent: a second pass with no new events folds nothing and leaves the rollup unchanged,
 /// because the cursor only moves forward and the store returns only events after it.
 ///
@@ -93,13 +105,14 @@ pub struct ProjectReport {
 pub async fn project<E, R>(
     events: &E,
     rollups: &R,
+    tenant: TenantId,
     store_id: StoreId,
 ) -> Result<ProjectReport, RollupError>
 where
     E: EventStore,
     R: RollupStore,
 {
-    let mut state = rollups.load(store_id).await?;
+    let mut state = rollups.load(tenant, store_id).await?;
     let page = NonZeroU32::new(PROJECT_PAGE).unwrap_or(NonZeroU32::MIN);
     let page_len = usize::try_from(PROJECT_PAGE).unwrap_or(usize::MAX);
     let mut folded: u64 = 0;
@@ -124,21 +137,28 @@ where
         }
     }
 
-    rollups.save(store_id, &state).await?;
+    rollups.save(tenant, store_id, &state).await?;
     Ok(ProjectReport { folded })
 }
 
 /// Answers a store's dashboard from the materialised rollup — oldest trading day first, and with no
 /// event-log scan (there is no `EventStore` here to scan).
 ///
+/// `tenant` is the caller's authenticated tenant, so the read is confined to that tenant's rollups:
+/// a `store_id` outside the tenant simply has no row and reads back empty.
+///
 /// # Errors
 ///
 /// [`RollupError::Store`] if the rollup store cannot be read.
-pub async fn dashboard<R>(rollups: &R, store_id: StoreId) -> Result<Vec<DailyRollup>, RollupError>
+pub async fn dashboard<R>(
+    rollups: &R,
+    tenant: TenantId,
+    store_id: StoreId,
+) -> Result<Vec<DailyRollup>, RollupError>
 where
     R: RollupStore,
 {
-    let state = rollups.load(store_id).await?;
+    let state = rollups.load(tenant, store_id).await?;
     Ok(render(state.days))
 }
 
@@ -155,13 +175,17 @@ mod tests {
     use pos_ports::{Transactional as _, TxContext as _};
     use pos_proto::BusinessDate;
     use pos_proto::envelope::{EventEnvelope, RawPayload};
-    use pos_proto::ids::StoreId;
+    use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::ulid::Ulid;
 
     use crate::cloud::Cloud;
 
     fn store_id() -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
+    }
+
+    fn tenant() -> TenantId {
+        TenantId::new(Ulid::from_u128(0x7E11A))
     }
 
     /// A run of activation events re-dated onto one trading day.
@@ -186,32 +210,37 @@ mod tests {
         tx.commit().await.expect("commit");
     }
 
-    /// An in-memory materialised-rollup store.
+    /// An in-memory materialised-rollup store, keyed by `(tenant, store)` exactly as the real table.
     #[derive(Default)]
     struct FakeRollups {
-        rows: Mutex<HashMap<StoreId, StoredRollups>>,
+        rows: Mutex<HashMap<(TenantId, StoreId), StoredRollups>>,
     }
 
     impl RollupStore for FakeRollups {
-        async fn load(&self, store_id: StoreId) -> Result<StoredRollups, RollupError> {
+        async fn load(
+            &self,
+            tenant: TenantId,
+            store_id: StoreId,
+        ) -> Result<StoredRollups, RollupError> {
             Ok(self
                 .rows
                 .lock()
                 .expect("lock")
-                .get(&store_id)
+                .get(&(tenant, store_id))
                 .cloned()
                 .unwrap_or_default())
         }
 
         async fn save(
             &self,
+            tenant: TenantId,
             store_id: StoreId,
             rollups: &StoredRollups,
         ) -> Result<(), RollupError> {
             self.rows
                 .lock()
                 .expect("lock")
-                .insert(store_id, rollups.clone());
+                .insert((tenant, store_id), rollups.clone());
             Ok(())
         }
     }
@@ -223,10 +252,12 @@ mod tests {
         append(&events, &dated(100, 2, 2026, 7, 1)).await;
         let rollups = FakeRollups::default();
 
-        project(&events, &rollups, store_id())
+        project(&events, &rollups, tenant(), store_id())
             .await
             .expect("project");
-        let materialised = dashboard(&rollups, store_id()).await.expect("dashboard");
+        let materialised = dashboard(&rollups, tenant(), store_id())
+            .await
+            .expect("dashboard");
 
         // The authoritative answer is the full from-log fold. `project` only borrowed `events`, so it
         // can be moved into a Cloud now.
@@ -246,18 +277,24 @@ mod tests {
         append(&events, &dated(1, 4, 2026, 3, 15)).await;
         let rollups = FakeRollups::default();
 
-        let first = project(&events, &rollups, store_id()).await.expect("first");
+        let first = project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("first");
         assert_eq!(first.folded, 4);
-        let before = dashboard(&rollups, store_id()).await.expect("read");
+        let before = dashboard(&rollups, tenant(), store_id())
+            .await
+            .expect("read");
 
-        let second = project(&events, &rollups, store_id())
+        let second = project(&events, &rollups, tenant(), store_id())
             .await
             .expect("second");
         assert_eq!(
             second.folded, 0,
             "the cursor is at the end, so nothing is refolded"
         );
-        let after = dashboard(&rollups, store_id()).await.expect("read");
+        let after = dashboard(&rollups, tenant(), store_id())
+            .await
+            .expect("read");
         assert_eq!(
             before, after,
             "an idempotent projection does not change the rollup"
@@ -269,16 +306,20 @@ mod tests {
         let events = FakeStore::new();
         append(&events, &dated(1, 3, 2026, 3, 15)).await;
         let rollups = FakeRollups::default();
-        project(&events, &rollups, store_id()).await.expect("first");
+        project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("first");
 
         // More events arrive on a second day; only they are folded on the next pass.
         append(&events, &dated(100, 5, 2026, 3, 16)).await;
-        let report = project(&events, &rollups, store_id())
+        let report = project(&events, &rollups, tenant(), store_id())
             .await
             .expect("second");
         assert_eq!(report.folded, 5, "only the new events were folded");
 
-        let days = dashboard(&rollups, store_id()).await.expect("read");
+        let days = dashboard(&rollups, tenant(), store_id())
+            .await
+            .expect("read");
         assert_eq!(days.len(), 2);
         let total: u64 = days.iter().map(|day| day.total_events).sum();
         assert_eq!(total, 8, "both days are reflected");
@@ -291,9 +332,14 @@ mod tests {
         let rollups = FakeRollups::default();
         let mut state = StoredRollups::default();
         crate::dashboard::rollup::fold_event(&mut state.days, &dated(1, 2, 2026, 3, 15)[0]);
-        rollups.save(store_id(), &state).await.expect("save");
+        rollups
+            .save(tenant(), store_id(), &state)
+            .await
+            .expect("save");
 
-        let days = dashboard(&rollups, store_id()).await.expect("read");
+        let days = dashboard(&rollups, tenant(), store_id())
+            .await
+            .expect("read");
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].business_date, "2026-03-15");
     }
