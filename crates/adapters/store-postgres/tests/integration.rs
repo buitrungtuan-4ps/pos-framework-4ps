@@ -134,7 +134,7 @@ impl EventStoreHarness for StoreHarness {
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 config_trees RESTART IDENTITY;",
+                 config_trees, subjects RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -176,7 +176,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees RESTART IDENTITY",
+             config_trees, subjects RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -725,6 +725,72 @@ mod config_tree_store {
                     .expect("load")
                     .is_none(),
                 "the load is scoped to the tenant"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The subject store: retention / PII masking (ADR-0035).
+// ---------------------------------------------------------------------------
+
+mod subjects_store {
+    use super::{block_on, prepared};
+
+    /// A due row is fetched, masking scrubs it and stamps `masked_at`, and a masked row is neither
+    /// re-fetched nor re-masked (the sweep's idempotence at the database).
+    #[test]
+    fn fetch_due_then_mask_is_idempotent() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let subjects = store.subjects();
+
+            // Seed one unmasked subject collected at t=1000ms with obviously-fake placeholder PII.
+            let id: &str = "SUBJECT0000000000000000AA";
+            let tenant: &str = "TENANT000000000000000000AA";
+            let collected: i64 = 1000;
+            let fields: &str = r#"{"name":"name-placeholder","phone":"phone-placeholder"}"#;
+            admin
+                .execute(
+                    "INSERT INTO subjects (subject_id, tenant_id, collected_at, fields) \
+                     VALUES ($1, $2, $3, $4::jsonb)",
+                    &[&id, &tenant, &collected, &fields],
+                )
+                .await
+                .expect("seed a subject");
+
+            // Not yet due before its collection instant; due at or after it.
+            assert!(
+                subjects
+                    .fetch_due(999, 100)
+                    .await
+                    .expect("fetch")
+                    .is_empty(),
+                "a record is not due before its collection instant"
+            );
+            let due = subjects.fetch_due(2000, 100).await.expect("fetch");
+            assert_eq!(due.len(), 1);
+            assert_eq!(due.first().expect("one row").subject_id, id);
+
+            // Mask it: redact the values in place and stamp masked_at.
+            let redacted: &str = r#"{"name":"[REDACTED]","phone":"[REDACTED]"}"#;
+            assert!(
+                subjects.mask(id, redacted, 5000).await.expect("mask"),
+                "an unmasked row is masked"
+            );
+
+            // A masked row is neither returned by a sweep nor masked a second time.
+            assert!(
+                subjects
+                    .fetch_due(9999, 100)
+                    .await
+                    .expect("fetch")
+                    .is_empty(),
+                "masked rows are excluded, which is what makes the sweep idempotent"
+            );
+            assert!(
+                !subjects.mask(id, redacted, 6000).await.expect("re-mask"),
+                "an already-masked row is not re-masked"
             );
         });
     }

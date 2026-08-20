@@ -64,7 +64,17 @@ analytics. These are recorded in the data-protection posture (A6), not in code.
   original value, and the sweep masks exactly the records past retention and no others. Per the
   data-handling rules, the tests use only obvious placeholder values, never data resembling a real
   person.
-- **Deliberately not here yet:** the subject store's schema and its `store-postgres` implementation,
-  and the wiring that reads the retention period from the config tree / country default and starts
-  the daily runner in `main`. This slice is the enforcement engine and its contract; persistence and
-  provisioning follow with the subject-store schema (P10's corporate-invoice buyer fields land there).
+- **Landed since:** persistence and wiring. `store-postgres` migration `0005` adds the `subjects`
+  table (`subject_id` PK, `tenant_id`, `collected_at`/`masked_at` as epoch-ms, `fields` jsonb;
+  RLS-isolated by tenant, with a partial index answering the sweep's "unmasked, past cutoff" query),
+  and `PostgresSubjects` implements the `SubjectStore` seam — masking overwrites the field values in
+  the row, so the PII is gone from the database, not merely flagged, and the `masked_at IS NULL`
+  guard makes the write idempotent at the database too. `main` starts the daily runner **only when a
+  retention period is configured** (`retention_days`); with none set the cron stays off (no code
+  default — masking on a guessed schedule would erase early or keep too long). Proven by a
+  `store-postgres` integration test (fetch-due → mask → not-re-fetched → not-re-masked) and a
+  `pos-cloud` runner test (one sweep, then clean shutdown).
+- **Deliberately not here yet:** the *writer* that populates the subject store — a marketplace
+  order's or corporate invoice's buyer fields land there with P10/P11 — and reading the period from
+  the country module's default rather than the process config. This ADR's engine, persistence, and
+  cron are complete; what remains is the data source feeding it.

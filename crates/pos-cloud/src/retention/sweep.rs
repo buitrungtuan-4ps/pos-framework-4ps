@@ -182,15 +182,17 @@ mod tests {
         }
     }
 
-    /// An in-memory subject store honouring the "only unmasked before cutoff" contract.
+    /// An in-memory subject store honouring the "only unmasked before cutoff" contract. Arc-backed
+    /// and `Clone`, so a test can keep a handle after [`run`] takes the store by value.
+    #[derive(Clone)]
     struct FakeStore {
-        rows: Mutex<Vec<SubjectRecord>>,
+        rows: std::sync::Arc<Mutex<Vec<SubjectRecord>>>,
     }
 
     impl FakeStore {
         fn with(rows: Vec<SubjectRecord>) -> Self {
             Self {
-                rows: Mutex::new(rows),
+                rows: std::sync::Arc::new(Mutex::new(rows)),
             }
         }
 
@@ -270,6 +272,30 @@ mod tests {
         assert_eq!(first.masked, 2);
         let second = sweep(&store, policy, now).await.expect("second sweep");
         assert_eq!(second.masked, 0, "already-masked records are not revisited");
+    }
+
+    #[tokio::test]
+    async fn run_sweeps_once_then_stops_on_an_already_fired_shutdown() {
+        use core::time::Duration;
+
+        let store = FakeStore::with(vec![record(1, 0)]); // ancient → due
+        let handle = store.clone();
+        let clock = pos_fakes::FakeClock::new(at(100 * DAY_MS));
+        // The loop body sweeps, then the biased `select!` takes the already-resolved shutdown branch
+        // and returns — so `run` masks once and then terminates rather than looping forever.
+        super::run(
+            store,
+            RetentionPolicy::from_days(1),
+            clock,
+            Duration::from_secs(3600),
+            core::future::ready(()),
+        )
+        .await;
+        let rows = handle.snapshot();
+        assert!(
+            rows[0].is_masked(),
+            "the runner performed one sweep before shutting down"
+        );
     }
 
     #[tokio::test]

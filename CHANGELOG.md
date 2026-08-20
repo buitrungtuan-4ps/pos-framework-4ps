@@ -650,6 +650,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   config-tree store as a sixth collaborator. Router tests cover publish → override → effective-merge,
   the incoherent-config `422`, the cookieless `401`, and the unpublished-store `404`. The publish
   path that delivers a `ConfigUpdate` to a store over the wire remains the next slice.
+- `pos-cloud` / `store-postgres` (P7 / Track A6): the **retention / PII-masking cron is wired**
+  (ADR-0035). `store-postgres` migration `0005` adds the `subjects` table — the one place personal
+  data lives, keyed by a globally-unique `subject_id`, with `collected_at`/`masked_at` as epoch-ms and
+  `fields` as jsonb, RLS-isolated by tenant and carrying a partial index for the sweep's "unmasked,
+  past cutoff" query — and `PostgresSubjects` implements the `SubjectStore` seam. Masking overwrites
+  the field values in the row (the PII is gone from the database, not flagged), and the
+  `masked_at IS NULL` write guard makes it idempotent at the database. `main` starts the daily runner
+  **only when `retention_days` is configured**: the period is a legal decision, not a code default, so
+  with none set the cron stays off (masking on a guessed schedule would erase early or keep too long,
+  both violations); the sweep interval defaults to daily. The cron masks (never deletes) so the books
+  stay reconcilable, touches only customer/buyer data (never employee data — there is no
+  employee-behaviour monitoring), and is not the path for an individual's erasure/access request —
+  those stay escalated to the Data Protection contact. Adds no dependency. Proven by a `store-postgres`
+  integration test (fetch-due → mask → not-re-fetched → not-re-masked) and a `pos-cloud` runner test
+  (one sweep, then clean shutdown). The writer that populates the subject store lands with P10/P11.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

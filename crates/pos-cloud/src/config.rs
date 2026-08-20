@@ -33,6 +33,12 @@ const fn default_admin_session_ttl_secs() -> u64 {
     8 * 60 * 60
 }
 
+/// How often the retention cron sweeps for records past their period, in seconds, when the config
+/// does not say — daily, ample for a period measured in months ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+const fn default_retention_sweep_interval_secs() -> u64 {
+    24 * 60 * 60
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -52,6 +58,16 @@ pub struct CloudConfig {
     /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
     #[serde(default = "default_admin_session_ttl_secs")]
     pub admin_session_ttl_secs: u64,
+    /// How long personal data is retained before the cron masks it, in days
+    /// ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)). **No default**: the period
+    /// is a legal decision, not a code guess, so when it is absent the retention cron does not run at
+    /// all (masking on a guessed schedule would erase data early or keep it too long, both
+    /// violations). Set it from the country's configured value.
+    #[serde(default)]
+    pub retention_days: Option<u32>,
+    /// How often the retention cron sweeps for records past their period, in seconds.
+    #[serde(default = "default_retention_sweep_interval_secs")]
+    pub retention_sweep_interval_secs: u64,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -109,6 +125,15 @@ mod tests {
             config.admin_session_ttl_secs,
             8 * 60 * 60,
             "the admin session TTL defaults to eight hours when unset"
+        );
+        assert_eq!(
+            config.retention_days, None,
+            "with no configured retention period the cron stays off — never a code default"
+        );
+        assert_eq!(
+            config.retention_sweep_interval_secs,
+            24 * 60 * 60,
+            "the retention sweep interval defaults to daily when unset"
         );
     }
 

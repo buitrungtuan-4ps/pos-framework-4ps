@@ -26,6 +26,9 @@ const MIGRATION_0003: &str = include_str!("../migrations/0003_cloud_admin.sql");
 /// The four-level configuration-tree schema ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
 const MIGRATION_0004: &str = include_str!("../migrations/0004_cloud_config_trees.sql");
 
+/// The subject store: where personal data lives and is masked ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+const MIGRATION_0005: &str = include_str!("../migrations/0005_cloud_subjects.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -96,6 +99,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0004)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0005)
+            .await
             .map_err(unavailable)
     }
 
@@ -129,6 +136,14 @@ impl PostgresStore {
     #[must_use]
     pub fn config_trees(&self) -> crate::config_trees::PostgresConfigTrees {
         crate::config_trees::PostgresConfigTrees::new(self.pool.clone())
+    }
+
+    /// The subject store over this pool ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `SubjectStore` seam over it.
+    #[must_use]
+    pub fn subjects(&self) -> crate::subjects::PostgresSubjects {
+        crate::subjects::PostgresSubjects::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

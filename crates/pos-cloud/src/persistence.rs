@@ -5,8 +5,9 @@
 //!
 //! The `RollupStore` ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)), `ApiKeyStore`
 //! ([ADR-0037](../../../docs/adr/0037-api-keys.md)), `AdminStore`
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) and `ConfigTreeStore`
-//! ([ADR-0033](../../../docs/adr/0033-config-tree.md)) traits live here in the cloud, where the
+//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)), `ConfigTreeStore`
+//! ([ADR-0033](../../../docs/adr/0033-config-tree.md)) and `SubjectStore`
+//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -14,13 +15,17 @@
 //! adapter; all domain conversion stays here — the adapter never learns a cloud type, and the cloud
 //! never writes SQL.
 
+use std::collections::BTreeMap;
+
 use store_postgres::{
     PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresRollups, PostgresStore,
+    PostgresSubjects,
 };
 
 use pos_ports::PortError;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{StoreId, SubjectId, TenantId};
 use pos_proto::time::Timestamp;
+use pos_proto::ulid::Ulid;
 
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
@@ -31,6 +36,7 @@ use crate::auth::totp::TotpSecret;
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
+use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 
 impl RollupStore for PostgresRollups {
     async fn load(
@@ -70,6 +76,71 @@ impl RollupStore for PostgresRollups {
 impl StoreCatalog for PostgresStore {
     async fn active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
         self.list_active_stores().await
+    }
+}
+
+impl SubjectStore for PostgresSubjects {
+    async fn due_before(
+        &self,
+        cutoff: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<SubjectRecord>, RetentionError> {
+        let rows = self
+            .fetch_due(cutoff.as_milliseconds_since_epoch(), i64::from(limit))
+            .await
+            .map_err(|error| RetentionError::new(error.to_string()))?;
+        let mut records = Vec::with_capacity(rows.len());
+        for row in rows {
+            let subject_id = row
+                .subject_id
+                .parse::<Ulid>()
+                .map(SubjectId::new)
+                .map_err(|_| {
+                    RetentionError::new(format!("subject id is not a ULID: {}", row.subject_id))
+                })?;
+            let collected_at = Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
+                .map_err(|_| RetentionError::new("a subject's collected_at is out of range"))?;
+            let fields: BTreeMap<String, String> =
+                serde_json::from_str(&row.fields_json).map_err(|error| {
+                    RetentionError::new(format!("decoding a subject's fields failed: {error}"))
+                })?;
+            // `fetch_due` returns only unmasked rows, so `masked_at` is `None` by construction.
+            records.push(SubjectRecord {
+                subject_id,
+                collected_at,
+                fields,
+                masked_at: None,
+            });
+        }
+        Ok(records)
+    }
+
+    async fn save_masked(&self, records: &[SubjectRecord]) -> Result<u64, RetentionError> {
+        let mut saved: u64 = 0;
+        for record in records {
+            // A record handed here has been through `SubjectRecord::masked`, so `masked_at` is set; a
+            // record without it is not a masking to write, so skip it rather than stamp a guess.
+            let Some(masked_at) = record.masked_at else {
+                continue;
+            };
+            let fields_json = serde_json::to_string(&record.fields).map_err(|error| {
+                RetentionError::new(format!(
+                    "encoding a masked subject's fields failed: {error}"
+                ))
+            })?;
+            let updated = self
+                .mask(
+                    &record.subject_id.to_string(),
+                    &fields_json,
+                    masked_at.as_milliseconds_since_epoch(),
+                )
+                .await
+                .map_err(|error| RetentionError::new(error.to_string()))?;
+            if updated {
+                saved = saved.saturating_add(1);
+            }
+        }
+        Ok(saved)
     }
 }
 

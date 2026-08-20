@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
+use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, dashboard, http};
 use store_postgres::PostgresStore;
 
@@ -93,6 +94,33 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal(),
     ));
 
+    // The retention / PII-masking cron, only if a retention period is configured. The period is a
+    // legal decision, not a code default (ADR-0035), so an absent `retention_days` leaves the cron
+    // off rather than masking on a guessed schedule. When on, it sweeps the subject store fleet-wide
+    // and masks every record past its period; masking (not deletion) keeps the books reconcilable,
+    // and erasure/access requests stay escalated to the Data Protection contact, never on this cron.
+    let retention_task = config.retention_days.map(|days| {
+        let interval = Duration::from_secs(config.retention_sweep_interval_secs);
+        tracing::info!(
+            retention_days = days,
+            interval_secs = config.retention_sweep_interval_secs,
+            "retention/PII-masking cron started"
+        );
+        tokio::spawn(retention::run(
+            store.subjects(),
+            RetentionPolicy::from_days(days),
+            SystemClock,
+            interval,
+            shutdown_signal(),
+        ))
+    });
+    if retention_task.is_none() {
+        tracing::warn!(
+            "no retention_days configured; the PII-masking cron is off (set it from the country's \
+             configured retention period — ADR-0035)"
+        );
+    }
+
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
     axum::serve(listener, http::router(app))
@@ -107,6 +135,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     projector_task.abort();
     let _ = projector_task.await;
+    if let Some(task) = retention_task {
+        task.abort();
+        let _ = task.await;
+    }
     Ok(())
 }
 

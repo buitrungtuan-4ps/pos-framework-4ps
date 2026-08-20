@@ -34,12 +34,15 @@
 //! The config tree ([`config_tree`]) now persists and is authored over `/admin`: a `ConfigTreeStore`
 //! seam and a `store-postgres` table round-trip a store's whole tree, and the `/admin/stores/{id}/config`
 //! routes publish a level (validated, versioned) and read the effective document (ADR-0033).
+//! [`retention`] is wired too: the `SubjectStore` seam is backed by a `store-postgres` `subjects`
+//! table, and the daily masking runner starts in `main` whenever a retention period is configured
+//! (ADR-0035).
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's publish path that
-//! delivers a `ConfigUpdate` to a store over the wire (ADR-0033), the subject-store schema and the
-//! retention runner's wiring into `main` (ADR-0035), and the super-admin's TOTP enrolment/provisioning
-//! and first-boot seeding (ADR-0034, P8 bootstrap).
+//! delivers a `ConfigUpdate` to a store over the wire (ADR-0033), the subject-store *writer* that
+//! populates personal data (P10/P11 marketplace and corporate-invoice buyer fields, ADR-0035), and
+//! the super-admin's TOTP enrolment/provisioning and first-boot seeding (ADR-0034, P8 bootstrap).
 
 #![forbid(unsafe_code)]
 
