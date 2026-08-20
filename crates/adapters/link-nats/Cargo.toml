@@ -23,6 +23,9 @@ serde_json.workspace = true
 # is load-bearing — every sale eventually travels it — so this is the one adapter that carries a real
 # client dependency.
 async-nats = "0.50"
+# The consumer iterates a JetStream batch, which async-nats delivers as a `Stream`; `StreamExt::next`
+# drives it. Already in the tree via the async stack; no new version.
+futures-util = "0.3"
 
 [dev-dependencies]
 pos-contract-tests = { path = "../../pos-contract-tests" }

@@ -432,6 +432,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   opt-in idiom (`POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-cloud openapi`) as `pos-proto`'s
   event-catalogue snapshot, so the document can never disagree with the code. `/internal/*` stays out
   of the external contract by construction.
+- `pos-cloud` (P7): the **NATS cursor** — the production ingest feed. `link-nats` gains a
+  `NatsConsumer`, the read counterpart of `NatsLink`: a durable JetStream pull consumer whose delivery
+  position lives server-side (the "cursor over the event log" a later slice resets to replay), which
+  hands the caller each decoded batch *with* its message handles and acknowledges only after the
+  caller has stored it — at-least-once with exactly-once effect, given idempotent ingest. A frame
+  that is not a valid envelope can never be ingested, so it is terminated and counted (loudly, never
+  silently) rather than wedging the cursor. `pos-cloud`'s `cursor` loop drives `Cloud::ingest` from it
+  and applies the ack policy (advance on commit, redeliver otherwise, never drop); the policy is a
+  pure function tested without a broker, and the whole path is proven against real JetStream by
+  `link-nats`'s and `pos-cloud`'s `integration` suites. The binary starts the cursor when a `[nats]`
+  config section is present and shuts it down with the HTTP server; absent that section it serves
+  reconciliation re-pushes only. ADR-0031 is amended to record the consumer and its testing.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

@@ -15,13 +15,22 @@
 //! version-overlap rule is [ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md)'s.
 //! There is no responder to wait on; the cloud validates versions when it reads.
 //!
-//! Back-pressure is the subtle obligation: a full stream must halt synchronisation *visibly* —
-//! [`NatsLink::publish`] returns `resource_exhausted` (retryable, so the events stay in the outbox)
-//! and [`NatsLink::capacity`] reports the fill level the 80% alert reads. The stream is configured
+//! Back-pressure is the subtle obligation: a full stream must halt synchronisation *visibly* — the
+//! link's `publish` returns `resource_exhausted` (retryable, so the events stay in the outbox) and
+//! its `capacity` reports the fill level the 80% alert reads. The stream is configured
 //! `discard: new`, so a full stream refuses new messages rather than silently dropping the oldest.
+
+//! # The two ends of the link
+//!
+//! [`NatsLink`] is the **edge** end — the store's `MessageLink`, which publishes. [`NatsConsumer`]
+//! is the **cloud** end — the durable cursor that reads the stream back and feeds idempotent ingest
+//! (`docs/roadmap.md` P7). Both live here so all JetStream wire code is in one adapter, per the
+//! one-adapter-per-external-system rule.
 
 #![forbid(unsafe_code)]
 
+mod consumer;
 mod link;
 
+pub use consumer::{ConsumedBatch, ConsumerConfig, NatsConsumer};
 pub use link::{NatsConfig, NatsLink};

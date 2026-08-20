@@ -30,6 +30,17 @@ The three ports sit very differently against that rule, so one blanket answer wo
   is [ADR-0024](0024-protocol-version-negotiation.md)'s and not a re-statement of it. There is no
   responder to wait on; the cloud consumer validates versions when it reads.
 
+  The **read** counterpart lives in the same crate (`NatsConsumer`, `consumer.rs`), so all JetStream
+  wire code is in one adapter. It is a **durable pull consumer**: JetStream tracks the delivery
+  position server-side, which is exactly "the cursor over the event log" (`docs/roadmap.md` P7) and
+  what a later slice resets to replay. It hands the caller the decoded batch *with* the message
+  handles and acknowledges only after the caller has stored it, so with idempotent ingest
+  ([ADR-0026](0026-port-shapes.md) §4) the link is at-least-once with exactly-once effect. The one
+  thing it discards is a frame that is not a valid envelope — it can never be ingested, so it is
+  *terminated* (not left to wedge the cursor) and counted, loudly, never silently. The consume loop
+  itself (ack on commit, redeliver otherwise) lives in `pos-cloud` (`cursor.rs`), which owns the
+  application it drives; `link-nats` provides only the mechanics.
+
 - **`blob-garage` hand-rolls minimal S3** — SigV4 request signing and HTTP/1.1 over `tokio`, no S3
   SDK. This is the ADR-0007 case in its purest form:
   [ADR-0007](0007-in-house-vs-dependency.md) records that object storage exists in this system
@@ -55,10 +66,15 @@ The three ports sit very differently against that rule, so one blanket answer wo
 [ADR-0016](0016-postgres-access.md) set for `store-postgres`):
 
 - **Backend semantics under test → a real backend.** `link-nats` and `blob-garage` run the shared
-  port contract suites against a real `nats-server -js` and a real S3 server (MinIO/Garage). These
-  live behind each crate's `integration` Cargo feature, off by default, so the ten-minute
+  port contract suites against a real `nats-server -js` and a real S3 server (MinIO/Garage). The
+  cursor gets its own real-JetStream suite (`link-nats` `tests/consumer.rs`: read-back, ack advances
+  the durable cursor, nak redelivers, poison is terminated) and an end-to-end proof that it drives
+  ingest idempotently against a real broker (`pos-cloud` `tests/cursor.rs`, over the fake store).
+  These live behind each crate's `integration` Cargo feature, off by default, so the ten-minute
   pull-request gate neither compiles nor runs them; the merge-to-`main` `integration` job runs them
-  against pinned service containers, and a developer runs them locally with the server reachable.
+  against pinned service containers, and a developer runs them locally with the server reachable. The
+  ack **policy** — the one bit of decision logic — is a pure function tested in the ordinary `test`
+  job, so a broker is needed only to prove the wire, not the rule.
 - **Adapter logic under test → in process.** `metrics-vm`'s contract is its own queueing and
   back-pressure, not VictoriaMetrics' storage, so its suite runs against an in-process capturing
   transport in the ordinary `test` job, and a separate in-process HTTP mock pins the exact import

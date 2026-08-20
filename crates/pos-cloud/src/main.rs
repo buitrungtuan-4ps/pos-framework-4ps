@@ -6,11 +6,13 @@
 //! Thin by design ([ADR-0013](../../../docs/adr/0013-async-strategy.md)) — the ingest and rollup
 //! logic lives in the library ([`pos_cloud`]) so it is tested against the fakes without a database.
 
+use core::time::Duration;
 use std::process::ExitCode;
 
 use tracing_subscriber::EnvFilter;
 
-use pos_cloud::{Cloud, CloudConfig, http};
+use link_nats::{ConsumerConfig, NatsConsumer};
+use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, http};
 use store_postgres::PostgresStore;
 
 #[tokio::main]
@@ -39,9 +41,54 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
+    let cloud = Cloud::new(store);
+
+    // The production ingest feed, if configured: a durable NATS cursor driving the same
+    // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
+    // cloud still serves and still ingests re-pushes — useful for a reconciliation-only deployment.
+    let cursor_task = if let Some(nats) = config.nats.clone() {
+        let consumer = NatsConsumer::connect(&nats.url, consumer_config(&nats))
+            .await
+            .map_err(|error| error.to_string())?;
+        tracing::info!(stream = %nats.stream, durable = %nats.durable, "ingest cursor started");
+        Some(tokio::spawn(cursor::run(
+            consumer,
+            cloud.clone(),
+            shutdown_signal(),
+        )))
+    } else {
+        tracing::info!("no [nats] config; ingest cursor off (reconciliation re-push only)");
+        None
+    };
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
-    axum::serve(listener, http::router(Cloud::new(store))).await?;
+    axum::serve(listener, http::router(cloud))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    // The server has stopped, so wind the cursor down too. Its own shutdown signal has already
+    // fired (same SIGINT); this awaits its clean exit, or aborts a stuck pull.
+    if let Some(task) = cursor_task {
+        task.abort();
+        let _ = task.await;
+    }
     Ok(())
+}
+
+/// Maps the config's NATS section to `link-nats`'s consumer configuration.
+fn consumer_config(nats: &NatsIngestConfig) -> ConsumerConfig {
+    ConsumerConfig {
+        stream: nats.stream.clone(),
+        durable: nats.durable.clone(),
+        filter_subject: nats.filter_subject.clone(),
+        batch: nats.batch,
+        expires: Duration::from_secs(nats.expires_secs),
+    }
+}
+
+/// Resolves when the process is asked to stop (SIGINT / Ctrl-C), so both the HTTP server and the
+/// ingest cursor shut down together.
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }

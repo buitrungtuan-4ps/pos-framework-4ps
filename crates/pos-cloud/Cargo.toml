@@ -8,6 +8,12 @@ license.workspace      = true
 publish.workspace      = true
 repository.workspace   = true
 
+[features]
+# The end-to-end cursor test needs a live NATS server with JetStream, so it is gated off the PR
+# `test` job. The merge-to-`main` integration job and a developer with NATS_URL set enable it:
+# `cargo test -p pos-cloud --features integration`.
+integration = []
+
 # Like pos-edge, most of this is a library so the HTTP surface and the ingest/rollup spine are
 # testable against the in-memory fakes without a database or a socket (tests/cloud.rs); main.rs is
 # the thin entry point that composes store-postgres and binds the server.
@@ -25,6 +31,10 @@ pos-proto = { path = "../pos-proto" }
 # The real cloud composes the PostgreSQL event store (ADR-0016); main.rs opens it. Tests compose
 # pos-fakes instead — the same ingest and rollup code runs against both (ADR-0026).
 store-postgres = { path = "../adapters/store-postgres" }
+# The production ingest feed: a durable NATS cursor over the event log (ADR-0031). The consume loop
+# (src/cursor.rs) drives Cloud::ingest; the ack policy is tested without a broker, and the loop is
+# proven against real JetStream by link-nats's own integration test.
+link-nats = { path = "../adapters/link-nats" }
 
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
 # test proves they never reach pos-core.

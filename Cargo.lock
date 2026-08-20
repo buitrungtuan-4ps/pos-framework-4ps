@@ -1037,6 +1037,7 @@ name = "link-nats"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "futures-util",
  "pos-contract-tests",
  "pos-ports",
  "pos-proto",
@@ -1370,6 +1371,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "link-nats",
  "pos-contract-tests",
  "pos-fakes",
  "pos-ports",

@@ -3,8 +3,9 @@ name: main
 # What runs once a change has landed. Everything here is too slow or too stateful
 # for the ten-minute pull-request gate, and none of it is a substitute for it.
 #
-# The `integration` job runs the adapters that need a real backing service against
-# one — `store-postgres` (P7) against PostgreSQL today, `link-nats` next. The
+# The `integration` job runs the code that needs a real backing service against
+# one — `store-postgres` against PostgreSQL, `blob-garage` against S3 (MinIO),
+# `link-nats` and the `pos_cloud` ingest cursor against NATS JetStream (all P7). The
 # service image is pinned by digest, not tag: a tag is mutable, and a silently
 # changed database version is a long afternoon. These tests are behind each
 # adapter's `integration` Cargo feature, so the ten-minute pull-request gate
@@ -105,6 +106,12 @@ jobs:
         env:
           NATS_URL: "127.0.0.1:4222"
         run: cargo test -p link-nats --features integration --locked
+      - name: pos_cloud ingest cursor against a real NATS
+        # The end-to-end proof that the durable cursor drives Cloud::ingest idempotently against real
+        # JetStream (over the fake store, so this step needs only NATS). See tests/cursor.rs.
+        env:
+          NATS_URL: "127.0.0.1:4222"
+        run: cargo test -p pos-cloud --features integration --locked --test cursor
 
   # ---------------------------------------------------------------------------
   # Contract tests: every implementation of every port runs the same suite. This
