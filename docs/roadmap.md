@@ -333,6 +333,33 @@ anywhere) · the dashboard screens, including the eight-item backlog the archive
 convention; dashboards answer from rollups under 10 ms; a dead webhook endpoint falls
 behind without any memory growth; OpenAPI drift check green.
 
+**Substantially done** — the cloud scope has landed across `store-postgres` migrations `0001`–`0008`
+and `pos-cloud`. Adapters: `store-postgres` (partitioning, RLS, jsonb, rollups), `link-nats`
+(JetStream cursor + publish), `blob-garage` (thin S3), `metrics-vm` (bounded-queue VictoriaMetrics
+sink). `pos_cloud`: super-admin Argon2 + mandatory-TOTP login → host-only session (ADR-0034); scoped
+per-tenant API keys, issue/list/revoke (ADR-0037); the four-level config tree with delta/snapshot
+publishing (ADR-0033) and its store-facing pull delivery (ADR-0039); idempotent ingest → rollups with
+a background projector (ADR-0036); the `/v1` API with generated OpenAPI and a drift test (ADR-0019);
+webhooks — the cursor engine, endpoint persistence, admin CRUD, the TLS sender, and the dispatch task
+(ADR-0032, ADR-0038); the NATS cursor feed (ADR-0031); nightly reconciliation's missing-id diff
+(ADR-0040); reset-cursor-and-replay; the image pipeline (ADR-0042); the translation grid (ADR-0043);
+the retention/PII-masking cron (ADR-0035); and the device discover→propose→approve flow (ADR-0041).
+Every P7 exit criterion is met by a test: ingest idempotency and cross-tenant RLS
+(`store-postgres`'s integration suite + `pos-cloud`'s ingest test), a dead webhook falling behind
+without memory growth (`webhook::dispatch`), and the OpenAPI drift check (`pos-cloud` `tests`); the
+rollup read is O(days) by construction, its measured latency a P12 concern.
+
+**Deliberately deferred, and where they belong.** The **store-side halves** of the cloud↔edge loops —
+the `pos_edge` config-sync poller, the translation fetch, the mDNS device-discovery loop, and the
+reconciliation manifest sender — are P9 fleet wiring; P7 landed the cloud endpoints each calls, and
+the request/response shapes are the contract between them. The **`metrics-vm` sparse-sampling profile**
+(monitoring off below ~50 stores, sparse straight into PostgreSQL above) is not built: the cloud emits
+no metrics yet (`MetricsSink` is not wired into `main`), so a second sink would be infrastructure with
+no producer, and its sampling stride is meant to be sized against P12's measured capacity — it lands
+with metrics integration at scale, not at pilot. The **dashboard screens** are P6-family UI over the
+`/v1` read model. A shared Tenant/Brand config layer that fans out to every store is a later modeling
+step (ADR-0033).
+
 #### P8 · Fork-and-deploy — *L*
 `deploy/compose.yml` (images pinned by digest, log size and file caps, ~1.2–1.5 GB across
 four containers), `Caddyfile`, idempotent `bootstrap.sh` that **generates operational

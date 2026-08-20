@@ -795,6 +795,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   a pure `keys_missing_fallback` unit test and a router round-trip (`PUT` → `GET`, the `422` on a grid
   missing `en`, and the `401` without a session). The store-facing `/sync` fetch that hands the edge
   its grid is the next slice, the same split config delivery drew.
+- `docs/roadmap.md` (P7): records the cloud phase as **substantially complete** — every P7 cloud
+  feature has landed (adapters; super-admin auth; API keys; the config tree with delta/snapshot
+  publishing and store-facing pull; idempotent ingest → rollups + projector; the generated `/v1`
+  OpenAPI; the full webhook stack; the NATS cursor feed; reconciliation; reset-cursor-and-replay; the
+  image pipeline; the translation grid; the retention cron; device onboarding) and every P7 exit
+  criterion is met by a test. Records the deliberate deferrals with their real homes: the store-side
+  halves of the cloud↔edge loops (edge pollers) are P9 fleet wiring, and the `metrics-vm`
+  sparse-sampling profile waits for metrics integration at scale (the cloud emits no metrics yet, so a
+  second sink would have no producer; its stride is sized against P12's measured capacity).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
