@@ -410,6 +410,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   0.103 line; 0.38's 0.102 carried fresh RUSTSEC advisories); its `webpki-roots` (Mozilla CA bundle,
   `CDLA-Permissive-2.0`) is a scoped, reviewed `deny.toml` licence exception, and a
   `skip-tree = async-nats` collapses the transient version straddles its stack introduces.
+- `pos-cloud` (P7, first slice): the cloud binary, and its ingest→rollup spine. `Cloud::ingest`
+  stores a batch idempotently in one transaction — a replay adds `duplicates`, not `appended`, and
+  grows the log by nothing (ADR-0026 §4) — and `Cloud::daily_rollups` folds the log into per-store,
+  per-trading-day activity counts (the read model dashboards will answer from, `docs/roadmap.md`
+  P7). Both are generic over the `EventStore`, so the same code runs against `pos-fakes` in tests
+  and `store-postgres` in the cloud (ADR-0026); the spine is verified against the fake with no
+  database. The binary loads config, opens and migrates the PostgreSQL store, and serves an axum
+  router (`/health` and `/internal/ingest`, the reconciliation re-push target). Deliberately later,
+  each its own slice: the public `/v1` API and generated OpenAPI (ADR-0019), the NATS cursor
+  consumer that drives ingest in production, webhooks, super-admin auth (Argon2 + TOTP), the
+  four-level config tree, the retention/PII-masking cron, and the dashboard screens with
+  materialised rollups.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

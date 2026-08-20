@@ -1,0 +1,77 @@
+[package]
+name        = "pos-cloud"
+version     = "0.0.0"
+description = "The cloud binary: idempotent event ingest into PostgreSQL, feeding rollups."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Like pos-edge, most of this is a library so the HTTP surface and the ingest/rollup spine are
+# testable against the in-memory fakes without a database or a socket (tests/cloud.rs); main.rs is
+# the thin entry point that composes store-postgres and binds the server.
+[lib]
+name = "pos_cloud"
+
+[[bin]]
+name = "pos-cloud"
+path = "src/main.rs"
+
+[dependencies]
+# The backbone and the cloud store this binary composes. Paths, not versions.
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+# The real cloud composes the PostgreSQL event store (ADR-0016); main.rs opens it. Tests compose
+# pos-fakes instead — the same ingest and rollup code runs against both (ADR-0026).
+store-postgres = { path = "../adapters/store-postgres" }
+
+# The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
+# test proves they never reach pos-core.
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum       = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+toml       = "1"
+
+[dev-dependencies]
+# Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The ingest and rollup code runs against the in-memory fakes in tests, exactly as it will against
+# store-postgres in the cloud; the fixtures build the event batches.
+pos-fakes = { path = "../pos-fakes" }
+pos-contract-tests = { path = "../pos-contract-tests" }
+
+# A shipped binary, not a library, so it declares its own lint table (Cargo rejects a manifest that
+# both inherits [workspace.lints] and adds to it). Money, no-PII-to-stdout and no-float rules stay
+# on; unwrap/expect/panic are left at their defaults so the startup path may use them where a
+# failure is fatal anyway.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
