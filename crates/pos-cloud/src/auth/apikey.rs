@@ -220,6 +220,31 @@ impl StoredApiKey {
             expires_at,
         })
     }
+
+    /// The stored `SHA-256(secret)` — for the persistence adapter to write on [`issue`]. This is the
+    /// hash, never the secret (which is unrecoverable after issuance).
+    #[must_use]
+    pub const fn secret_hash(&self) -> [u8; 32] {
+        self.secret_hash
+    }
+
+    /// The granted scopes as their wire names, sorted — for the persistence adapter to write and for
+    /// a listing to show.
+    #[must_use]
+    pub fn scope_wire_names(&self) -> Vec<String> {
+        // `scopes` is a `BTreeSet`, so this is already sorted and deduplicated.
+        self.scopes
+            .iter()
+            .map(|scope| scope.as_wire().to_owned())
+            .collect()
+    }
+
+    /// The expiry as milliseconds since the Unix epoch, or `None` if the key never expires — for the
+    /// persistence adapter.
+    #[must_use]
+    pub fn expires_at_ms(&self) -> Option<i64> {
+        self.expires_at.map(Timestamp::as_milliseconds_since_epoch)
+    }
 }
 
 /// Issues a new key: builds the record to store and the one-time token to return.
@@ -337,6 +362,58 @@ pub trait ApiKeyStore {
         &self,
         id: ApiKeyId,
     ) -> impl Future<Output = Result<Option<StoredApiKey>, ApiKeyStoreError>> + Send;
+}
+
+/// The write side of the API-key store: provisioning, listing, and revoking keys
+/// ([ADR-0037](../../../docs/adr/0037-api-keys.md)). Kept separate from [`ApiKeyStore`] so the
+/// per-request bearer read path depends only on `lookup` and nothing on the far larger admin surface.
+///
+/// The super-admin drives all three, through the [`super::admin`]-guarded `/admin/api-keys` routes;
+/// the tenant a key acts for is named by the admin, since the super-admin is global.
+pub trait ApiKeyAdminStore {
+    /// Persists a freshly [`issue`]d key. The secret is already gone — only [`StoredApiKey`] (its
+    /// hash and metadata) is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiKeyStoreError`] if the store could not be written (including a duplicate id, which a
+    /// CSPRNG id makes astronomically unlikely).
+    fn insert(
+        &self,
+        key: &StoredApiKey,
+    ) -> impl Future<Output = Result<(), ApiKeyStoreError>> + Send;
+
+    /// Lists a tenant's keys as metadata only — never a secret or its hash.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiKeyStoreError`] if the store could not be read.
+    fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<ApiKeySummary>, ApiKeyStoreError>> + Send;
+
+    /// Revokes the key with `id`, returning whether a key was found to revoke. Idempotent: revoking
+    /// an already-revoked or absent key is `Ok(false)`, not an error.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiKeyStoreError`] if the store could not be written.
+    fn revoke(&self, id: ApiKeyId) -> impl Future<Output = Result<bool, ApiKeyStoreError>> + Send;
+}
+
+/// A key's metadata for a listing — everything but the secret and its hash, which never leave the
+/// store. Serialises to the `/admin/api-keys` list response.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ApiKeySummary {
+    /// The public id (the ULID half of the token).
+    pub id: String,
+    /// The granted scopes, as their wire names, sorted.
+    pub scopes: Vec<String>,
+    /// Whether the key has been revoked.
+    pub revoked: bool,
+    /// When the key expires, in milliseconds since the Unix epoch, if ever.
+    pub expires_at_ms: Option<i64>,
 }
 
 /// A failure of the API-key store itself — the database is unreachable — as distinct from a key

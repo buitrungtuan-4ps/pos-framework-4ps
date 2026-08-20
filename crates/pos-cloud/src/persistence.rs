@@ -21,7 +21,9 @@ use pos_proto::time::Timestamp;
 
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
-use crate::auth::apikey::{ApiKeyId, ApiKeyStore, ApiKeyStoreError, StoredApiKey};
+use crate::auth::apikey::{
+    ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
+};
 use crate::auth::totp::TotpSecret;
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
@@ -117,6 +119,45 @@ impl AdminStore for PostgresAdmin {
         self.delete_session(&token_hash)
             .await
             .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+}
+
+impl ApiKeyAdminStore for PostgresApiKeys {
+    async fn insert(&self, key: &StoredApiKey) -> Result<(), ApiKeyStoreError> {
+        PostgresApiKeys::insert(
+            self,
+            &key.id.to_string(),
+            &key.tenant_id.to_string(),
+            &key.secret_hash(),
+            &key.scope_wire_names(),
+            key.expires_at_ms(),
+        )
+        .await
+        .map_err(|error| ApiKeyStoreError::new(error.to_string()))
+    }
+
+    async fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ApiKeySummary>, ApiKeyStoreError> {
+        let rows = PostgresApiKeys::list_for_tenant(self, &tenant_id.to_string())
+            .await
+            .map_err(|error| ApiKeyStoreError::new(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ApiKeySummary {
+                id: row.id,
+                scopes: row.scopes,
+                revoked: row.revoked,
+                expires_at_ms: row.expires_at_ms,
+            })
+            .collect())
+    }
+
+    async fn revoke(&self, id: ApiKeyId) -> Result<bool, ApiKeyStoreError> {
+        PostgresApiKeys::revoke(self, &id.to_string())
+            .await
+            .map_err(|error| ApiKeyStoreError::new(error.to_string()))
     }
 }
 

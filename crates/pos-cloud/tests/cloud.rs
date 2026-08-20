@@ -21,7 +21,8 @@ use argon2::password_hash::SaltString;
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
 use pos_cloud::auth::apikey::{
-    ApiKeyId, ApiKeyStore, ApiKeyStoreError, Scope, StoredApiKey, issue,
+    ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
+    issue,
 };
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
@@ -124,6 +125,43 @@ impl FakeKeys {
 impl ApiKeyStore for FakeKeys {
     async fn lookup(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
         Ok(self.rows.lock().expect("lock").get(&id).cloned())
+    }
+}
+
+impl ApiKeyAdminStore for FakeKeys {
+    async fn insert(&self, key: &StoredApiKey) -> Result<(), ApiKeyStoreError> {
+        self.rows.lock().expect("lock").insert(key.id, key.clone());
+        Ok(())
+    }
+
+    async fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ApiKeySummary>, ApiKeyStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .values()
+            .filter(|key| key.tenant_id == tenant_id)
+            .map(|key| ApiKeySummary {
+                id: key.id.to_string(),
+                scopes: key.scope_wire_names(),
+                revoked: key.revoked,
+                expires_at_ms: key.expires_at_ms(),
+            })
+            .collect())
+    }
+
+    async fn revoke(&self, id: ApiKeyId) -> Result<bool, ApiKeyStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        match rows.get_mut(&id) {
+            Some(key) if !key.revoked => {
+                key.revoked = true;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -282,6 +320,60 @@ fn post_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
 /// The `name=value` pair from a `Set-Cookie` header value (its first `;`-separated segment).
 fn cookie_pair(set_cookie: &str) -> &str {
     set_cookie.split(';').next().unwrap_or(set_cookie)
+}
+
+/// A POST request for `uri` with a JSON body and a `Cookie` header.
+fn post_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A DELETE request for `uri` carrying a `Cookie` header.
+fn delete_with_cookie(uri: &str, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .method("DELETE")
+        .uri(uri)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .expect("build the request")
+}
+
+/// Logs the provisioned admin in and returns the session cookie pair.
+async fn admin_cookie(router: &axum::Router) -> String {
+    let body = serde_json::json!({ "password": ADMIN_PASSWORD, "totp_code": admin_totp_code() });
+    let login = router
+        .clone()
+        .oneshot(post_json("/admin/login", &body))
+        .await
+        .expect("route the login");
+    assert_eq!(login.status(), StatusCode::NO_CONTENT, "the login succeeds");
+    cookie_pair(
+        login
+            .headers()
+            .get("set-cookie")
+            .expect("a session cookie")
+            .to_str()
+            .expect("ascii"),
+    )
+    .to_owned()
+}
+
+/// Reads a response body as JSON.
+async fn json_body(response: axum::response::Response) -> serde_json::Value {
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    serde_json::from_slice(&bytes).expect("parse the body as JSON")
 }
 
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
@@ -727,5 +819,154 @@ async fn logout_clears_the_cookie_and_revokes_the_session() {
         session.status(),
         StatusCode::UNAUTHORIZED,
         "a revoked session is no longer accepted"
+    );
+}
+
+// --- API-key provisioning (`/admin/api-keys`, behind the session guard) -------------------------
+
+#[tokio::test]
+async fn a_provisioned_key_authenticates_v1_then_stops_after_revoke() {
+    let cloud = Cloud::new(FakeStore::new());
+    cloud
+        .ingest(&dated(1, 3, 2026, 3, 15))
+        .await
+        .expect("ingest");
+    let rollups = FakeRollups::default();
+    project(cloud.store(), &rollups, tenant(), store_id())
+        .await
+        .expect("project");
+    let router = http::router(app_with_admin(
+        cloud,
+        rollups,
+        FakeKeys::default(),
+        provisioned_admin(),
+    ));
+    let cookie = admin_cookie(&router).await;
+
+    // Provision a read_rollups key for the tenant.
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "scopes": ["read_rollups"],
+    });
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/api-keys", &body, &cookie))
+        .await
+        .expect("route the provisioning");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    let token = created["token"]
+        .as_str()
+        .expect("a one-time token")
+        .to_owned();
+    let id = created["id"].as_str().expect("the key id").to_owned();
+    assert!(
+        token.starts_with("pos_"),
+        "the token is the real value, shown once"
+    );
+
+    // The issued token authenticates a /v1 read for its tenant.
+    let ulid = store_id().as_ulid().to_string();
+    let read = router
+        .clone()
+        .oneshot(get(
+            &format!("/v1/stores/{ulid}/rollups/daily"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        read.status(),
+        StatusCode::OK,
+        "the freshly issued key authenticates the public API"
+    );
+
+    // It appears in the tenant's listing, without any secret.
+    let list = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/api-keys?tenant_id={}", tenant().as_ulid()),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = json_body(list).await;
+    let keys = list.as_array().expect("an array of summaries");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["id"], id);
+    assert_eq!(keys[0]["scopes"][0], "read_rollups");
+    assert!(
+        keys[0].get("secret").is_none() && keys[0].get("secret_hash").is_none(),
+        "a listing never carries the secret or its hash"
+    );
+
+    // Revoke it, and the same token no longer authenticates.
+    let revoked = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/api-keys/{id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the revoke");
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+    let read_after = router
+        .oneshot(get(
+            &format!("/v1/stores/{ulid}/rollups/daily"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        read_after.status(),
+        StatusCode::UNAUTHORIZED,
+        "a revoked key is refused"
+    );
+}
+
+#[tokio::test]
+async fn provisioning_without_a_session_is_unauthorised() {
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "scopes": ["read_rollups"],
+    });
+    let response = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ))
+    .oneshot(post_json("/admin/api-keys", &body))
+    .await
+    .expect("route the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "provisioning is closed without an admin session"
+    );
+}
+
+#[tokio::test]
+async fn provisioning_with_an_unknown_scope_is_rejected() {
+    let router = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "scopes": ["not_a_real_scope"],
+    });
+    let response = router
+        .oneshot(post_with_cookie("/admin/api-keys", &body, &cookie))
+        .await
+        .expect("route the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "an unknown scope name is a 400, never a silent no-op grant"
     );
 }

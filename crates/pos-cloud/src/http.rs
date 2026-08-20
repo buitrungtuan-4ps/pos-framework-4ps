@@ -16,8 +16,10 @@
 //!    it ([ADR-0019](../../../docs/adr/0019-openapi-generation.md)).
 //!  * `/admin/*` — the **interactive** super-admin surface ([`crate::auth::admin`],
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
-//!    host-only session cookie, and the session guard the rest of the admin routes stand behind. Not
-//!    part of the public contract, so — like `/internal` — it is absent from the OpenAPI document.
+//!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
+//!    behind that guard — provisioning of scoped per-tenant API keys ([ADR-0037](../../../docs/adr/0037-api-keys.md)):
+//!    issue (returning the token once), list, and revoke. Not part of the public contract, so — like
+//!    `/internal` — it is absent from the OpenAPI document.
 //!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
 //! [`ApiKeyStore`], the [`AdminStore`], and the [`ClockSource`] — bundled in [`CloudApp`]. Tests
@@ -26,24 +28,26 @@
 
 use core::fmt;
 use core::fmt::Write as _;
+use std::collections::BTreeSet;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 
 use pos_ports::PortError;
 use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::StoreId;
+use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
-use crate::auth::apikey::{ApiKeyStore, Scope};
+use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope};
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::cloud::{Cloud, DailyRollup};
@@ -129,7 +133,7 @@ where
     S: EventStore + Clone + Send + Sync + 'static,
     S::Tx: Send,
     R: RollupStore + Clone + Send + Sync + 'static,
-    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + ApiKeyAdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
 {
@@ -144,6 +148,14 @@ where
         .route("/admin/login", post(admin_login::<S, R, K, C, A>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A>))
+        .route(
+            "/admin/api-keys",
+            post(admin_create_api_key::<S, R, K, C, A>).get(admin_list_api_keys::<S, R, K, C, A>),
+        )
+        .route(
+            "/admin/api-keys/{id}",
+            delete(admin_revoke_api_key::<S, R, K, C, A>),
+        )
         .with_state(app)
 }
 
@@ -327,6 +339,192 @@ where
     }
 }
 
+/// A super-admin request to provision a new API key for a tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateApiKeyRequest {
+    /// The tenant the key will act for (a 26-character ULID).
+    tenant_id: String,
+    /// The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these.
+    scopes: Vec<String>,
+    /// An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires.
+    #[serde(default)]
+    expires_at_ms: Option<i64>,
+}
+
+/// The one-time response to a provisioning request: the id, and the token shown exactly once.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CreateApiKeyResponse {
+    /// The key's public id (the ULID half of the token).
+    id: String,
+    /// The full `pos_<id>_<secret>` token. **Shown once** — only its hash is stored, so it cannot be
+    /// recovered later.
+    token: String,
+}
+
+/// The tenant a listing is scoped to.
+#[derive(Debug, Clone, Deserialize)]
+struct ListApiKeysQuery {
+    /// The tenant whose keys to list (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// Provisions a new scoped per-tenant API key and returns the one-time token (super-admin only).
+///
+/// Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and
+/// persists it (storing only the secret's hash). The token in the `201` body is the only time the
+/// secret is visible.
+async fn admin_create_api_key<S, R, K, C, A>(
+    State(app): State<CloudApp<S, R, K, C, A>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApiKeyRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    // Strict: an unknown scope name is a `400`, not a silent drop — the admin is granting explicitly,
+    // so a typo must not quietly issue a key that authorises nothing.
+    let scopes = match parse_scopes(&request.scopes) {
+        Ok(scopes) => scopes,
+        Err(unknown) => {
+            return (StatusCode::BAD_REQUEST, format!("unknown scope: {unknown}")).into_response();
+        }
+    };
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(secret)) = (mint_api_key_id(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint an API key");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the provisioning service is unavailable",
+        )
+            .into_response();
+    };
+    let expires_at = match request.expires_at_ms {
+        Some(ms) => match pos_proto::time::Timestamp::from_milliseconds_since_epoch(ms) {
+            Ok(timestamp) => Some(timestamp),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "expires_at_ms is out of range").into_response();
+            }
+        },
+        None => None,
+    };
+    let (stored, token) = issue(id, tenant_id, scopes, &secret, expires_at);
+    if let Err(error) = app.keys.insert(&stored).await {
+        tracing::error!(%error, "persisting a new API key failed");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the provisioning service is unavailable",
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(CreateApiKeyResponse {
+            id: id.to_string(),
+            token,
+        }),
+    )
+        .into_response()
+}
+
+/// Lists a tenant's API keys as metadata only — never a secret (super-admin only).
+async fn admin_list_api_keys<S, R, K, C, A>(
+    State(app): State<CloudApp<S, R, K, C, A>>,
+    headers: HeaderMap,
+    Query(query): Query<ListApiKeysQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match app.keys.list_for_tenant(tenant_id).await {
+        Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing API keys failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the provisioning service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking
+/// is idempotent, and telling the caller which it was is a needless enumeration signal.
+async fn admin_revoke_api_key<S, R, K, C, A>(
+    State(app): State<CloudApp<S, R, K, C, A>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(id) = id.parse::<Ulid>().map(ApiKeyId::new) else {
+        return (StatusCode::BAD_REQUEST, "the key id is not a ULID").into_response();
+    };
+    match app.keys.revoke(id).await {
+        Ok(_found) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "revoking an API key failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the provisioning service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Parses wire scope names strictly, returning the first unknown name rather than dropping it — the
+/// deny-by-default read tolerance is wrong for a write, where a typo would silently grant nothing.
+fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
+    let mut scopes = BTreeSet::new();
+    for name in names {
+        let scope = Scope::from_wire(name).ok_or_else(|| name.clone())?;
+        scopes.insert(scope);
+    }
+    Ok(scopes)
+}
+
+/// Mints an API-key id: a ULID from `now_ms` and 80 CSPRNG bits, or `None` if the OS entropy source
+/// is unavailable (the caller then fails closed rather than mint a guessable id).
+fn mint_api_key_id(now_ms: i64) -> Option<ApiKeyId> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
+    // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
+    Some(ApiKeyId::new(Ulid::from_parts(
+        ms,
+        u128::from_le_bytes(bytes),
+    )))
+}
+
 /// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid
 /// header value, so a failure to parse it is impossible; the `unwrap_or_else` keeps a fabricated
 /// bad value from taking the process down rather than papering over a real one.
@@ -338,9 +536,16 @@ fn set_cookie_response(status: StatusCode, cookie: &str) -> Response {
     response
 }
 
-/// Mints a session token: 32 CSPRNG bytes as lowercase hex, or `None` if the OS entropy source is
+/// Mints a session token: 256 CSPRNG bits as lowercase hex, or `None` if the OS entropy source is
 /// unavailable — in which case the caller must fail closed rather than issue a guessable token.
 fn mint_session_token() -> Option<String> {
+    random_hex_32()
+}
+
+/// 32 CSPRNG bytes (256 bits) as a 64-character lowercase hex string, or `None` if the OS entropy
+/// source is unavailable. Used for both the session token and an API-key secret — both need a long,
+/// unguessable, ASCII-safe value.
+fn random_hex_32() -> Option<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).ok()?;
     let mut hex = String::with_capacity(bytes.len() * 2);

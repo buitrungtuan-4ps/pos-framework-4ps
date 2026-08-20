@@ -576,3 +576,64 @@ mod admin_store {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// The scoped per-tenant API-key store (ADR-0037).
+// ---------------------------------------------------------------------------
+
+mod api_keys_store {
+    use super::{block_on, prepared};
+
+    /// Insert reads back by id, lists by tenant without the secret, and revoke is idempotent.
+    #[test]
+    fn insert_fetch_list_and_revoke_round_trip() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let keys = store.api_keys();
+            let hash: &[u8] = &[3_u8; 32];
+            let scopes = vec!["read_rollups".to_owned(), "read_events".to_owned()];
+
+            keys.insert("KEY0000000000000000000001", "TENANT000000000000000000AA", hash, &scopes, None)
+                .await
+                .expect("insert the key");
+
+            let row = keys
+                .fetch("KEY0000000000000000000001")
+                .await
+                .expect("fetch")
+                .expect("the inserted key is present");
+            assert_eq!(row.tenant_id, "TENANT000000000000000000AA");
+            assert_eq!(row.secret_hash, vec![3_u8; 32]);
+            assert!(!row.revoked, "a fresh key is live");
+            assert_eq!(row.expires_at_ms, None);
+
+            let listed = keys
+                .list_for_tenant("TENANT000000000000000000AA")
+                .await
+                .expect("list");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, "KEY0000000000000000000001");
+            assert_eq!(listed[0].scopes, scopes, "the granted scopes are listed");
+
+            // Another tenant sees nothing.
+            let other = keys
+                .list_for_tenant("TENANT000000000000000000BB")
+                .await
+                .expect("list other");
+            assert!(other.is_empty(), "the listing is scoped to the tenant");
+
+            // Revoke: the first call changes a row, the second is a no-op, and the key reads revoked.
+            assert!(keys.revoke("KEY0000000000000000000001").await.expect("revoke"));
+            assert!(
+                !keys.revoke("KEY0000000000000000000001").await.expect("revoke again"),
+                "revoking an already-revoked key changes nothing"
+            );
+            let row = keys
+                .fetch("KEY0000000000000000000001")
+                .await
+                .expect("fetch")
+                .expect("still present");
+            assert!(row.revoked, "the key now reads revoked");
+        });
+    }
+}

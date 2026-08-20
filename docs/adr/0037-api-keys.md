@@ -57,8 +57,13 @@ than the integration needs.
   revoked, expiry (inclusive), malformed tokens, deny-by-default scoping, and that neither a
   presented nor a stored key leaks its secret through `Debug`. Test fixtures use an obviously-fake,
   low-entropy secret so no real key material is committed.
-- **Deliberately not here yet:** the `store-postgres` table that persists keys and the lookup by id,
-  the key-provisioning admin route (which generates the CSPRNG id + secret and returns the one-time
-  token), and the `/v1` extractor that pulls the bearer token, verifies it, and enforces
-  `tenant()` + the required `Scope` on each route. Those are the wiring; this slice is the credential
-  and its checks.
+- **Landed since:** the full wiring. The `store-postgres` `api_keys` table (migration `0002`) persists
+  keys and answers the lookup-by-id; the `/v1` bearer extractor ([`auth::bearer`](../../crates/pos-cloud/src/auth/bearer.rs))
+  pulls the token, verifies it, and enforces `tenant()` + the required `Scope` on each route; and the
+  key-provisioning admin surface — `POST /admin/api-keys` (mints the CSPRNG id + secret, returns the
+  one-time token), `GET /admin/api-keys?tenant_id=…` (metadata only, never a secret), and
+  `DELETE /admin/api-keys/{id}` (idempotent revoke) — sits behind the super-admin session guard
+  ([ADR-0034](0034-super-admin-auth.md)). An unknown scope name on provisioning is a `400`, not a
+  silent drop (the deny-by-default read tolerance would wrongly issue a key granting nothing).
+- **Deliberately not here yet:** a tenant self-service surface for managing its own keys (all
+  provisioning is super-admin-driven for now), and per-key usage metering.

@@ -25,6 +25,6 @@ mod rollups;
 mod store;
 
 pub use admin::{AdminCredentialRow, PostgresAdmin};
-pub use apikeys::{ApiKeyRow, PostgresApiKeys};
+pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};

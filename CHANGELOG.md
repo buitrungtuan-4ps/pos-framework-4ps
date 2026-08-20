@@ -612,6 +612,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   cover login→cookie→guard, a cookieless `401`, a wrong password, and logout; and a `store-postgres`
   integration test proves the credential round-trip, the monotonic step advance, and the session
   lifecycle against a real database.
+- `pos-cloud` (P7): the **API-key provisioning surface** is wired (ADR-0037), completing the machine
+  side of `/v1` auth. Behind the super-admin session guard: `POST /admin/api-keys` mints a CSPRNG id
+  (a ULID) and a 256-bit secret at the edge, `issue`s the key, persists only the secret's hash
+  (`store-postgres`, migration `0002` table), and returns the full `pos_<id>_<secret>` token **once**
+  in the `201` body — it is never recoverable after; `GET /admin/api-keys?tenant_id=…` lists a
+  tenant's keys as metadata only (id, scopes, revoked, expiry — never a secret or its hash); and
+  `DELETE /admin/api-keys/{id}` revokes idempotently. An unknown scope name on provisioning is a
+  `400`, not the silent drop the deny-by-default *read* path applies, so a typo cannot issue a key
+  that grants nothing. A new `ApiKeyAdminStore` seam (insert / list / revoke) sits beside the
+  read-only `ApiKeyStore`, so the per-request bearer path stays minimal. Adds no dependency. Router
+  tests prove a provisioned token then authenticates a real `/v1` read and stops the moment it is
+  revoked, that provisioning is closed without a session (`401`), and that an unknown scope is
+  refused (`400`); the `store-postgres` integration suite covers insert → list → revoke.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
