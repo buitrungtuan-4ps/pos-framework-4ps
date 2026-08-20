@@ -88,6 +88,12 @@ getrandom = "0.3"
 # the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.
 utoipa = "5"
 
+# The menu-image pipeline (P7, ADR-0042). Decoding, resizing and re-encoding a tenant-uploaded image
+# to the ≤30 KB thumbnail / ≤150 KB detail budgets is the "genuinely hard and general" work ADR-0007
+# says to buy, not hand-roll. Minimal codecs only — `png`+`jpeg` decode, `jpeg` encode — so the
+# dependency tree stays as small as the pipeline needs.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }

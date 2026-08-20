@@ -59,6 +59,7 @@ pub mod cursor;
 pub mod dashboard;
 pub mod devices;
 pub mod http;
+pub mod images;
 mod openapi;
 mod persistence;
 pub mod reconcile;

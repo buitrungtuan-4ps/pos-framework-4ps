@@ -771,6 +771,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   approve → approved list; scope/`session` closes) and by a gated `store-postgres` integration test
   (propose → list by status → one-way resolve → cross-tenant no-op). The `pos_edge` mDNS discovery
   loop is store-side wiring (P5/P9).
+- `pos-cloud` (P7): the **menu-image pipeline** (ADR-0042, a new ADR). `images::render` turns a
+  tenant-uploaded image into two JPEG renditions under hard byte budgets — a **≤30 KB thumbnail** and
+  a **≤150 KB detail**. Because JPEG size is not a closed form of dimension and quality, each rendition
+  walks a descending `(max_edge, quality)` ladder and takes the first attempt at or under budget; the
+  ladders end aggressively enough that any real image fits, and an image that somehow does not is a
+  `Budget` error rather than an over-budget object. It buys the `image` crate for the codec/resize work
+  (ADR-0007: the genuinely-hard-and-general thing to buy), with **minimal features** (`png`+`jpeg`
+  only) so `cargo-deny` passes with no new entry. The transform is pure `bytes → bytes` — no I/O — and
+  unit-tested (a synthetic image yields two in-budget renditions that both decode; the thumbnail fits
+  its pixel bound; a non-image upload is a clean `Decode` error). Where renditions are stored (a
+  Postgres `bytea` table rather than the deletion-scheduled `blob-garage` port) and the admin upload
+  route are the next slice.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
