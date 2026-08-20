@@ -373,6 +373,24 @@ Cloudflare rules: all records grey, DNS-01 preferred, **"Flexible" SSL forbidden
 in ~15 minutes with **no command typed on the server**; re-running with an older tag is a
 complete rollback.
 
+**Status: substantially done.** The stack and its pipeline have landed. `deploy/` carries the
+multi-stage `Dockerfile`, `compose.yml` (Caddy TLS ingress in front of the four version-pinned
+backends — `pos_cloud`, `postgres`, `nats` JetStream, `garage` — on an `internal` network, with
+log/mem/cpu/pids caps summing ~1.4 GB), the `Caddyfile` + `caddy.Dockerfile` (DNS-01 TLS with the
+sslip.io HTTP-01 fallback), and the idempotent `bootstrap.sh` that mints every operational secret on
+the box and never returns it to GitHub (ADR-0044). First-boot super-admin enrolment exists — the
+token-gated `POST /admin/setup` and the `AdminStore` provisioning writer (ADR-0045) — so the
+"admin UI live with a one-time setup token" exit is met; `.github/workflows/deploy.yml` builds the
+images, ships them over SSH, runs bootstrap, and carries the `reset_admin=true` break-glass behind the
+`production` Environment. Durability has landed too: continuous WAL archiving, `backup.sh` with the
+off-box rclone tier and the `.pre-update` snapshot, the four backup classes, and `restore-drill.sh`
+wired into `nightly.yml` (ADR-0046). Cloudflare rules, the fork-to-UI runbook
+(`docs/deploy-runbook.md`), and the optional `k8s/` lane are recorded. Deferred with a real home: the
+**store-backup half of the restore drill** is edge WAL shipping (P9, spike A4), and the **true
+end-to-end fork test** — a human forking, setting the secrets, running the workflow, and reaching the
+UI — is the one layer the roadmap always said needs a human, since this environment has no Docker
+daemon to run the stack. The `k8s/` lane is a starting skeleton, not the exit-criterion path.
+
 #### P9 · Fleet, OTA and machine replacement — *L*
 In-house minisign verification over a vetted Ed25519 crate, both public keys baked into the
 binary, the cloud-published revocation list · rings (lab → pilot → fleet, with a 25% ring

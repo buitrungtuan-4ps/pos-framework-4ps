@@ -870,6 +870,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   against a service Postgres seeded with a synthetic dataset (it was a placeholder echo). The
   store-backup half of the drill is edge WAL shipping (P9, spike A4) and joins when that lands.
   `/backups/` is git-ignored — a dump holds T1/T2 data and must never be committed.
+- `k8s/` + `docs/deploy-runbook.md` (P8, ADR-0044): the **optional Kubernetes lane** and the
+  **fork-to-UI runbook**. `k8s/pos-cloud.yaml` mirrors the Compose stack as a starting skeleton — the
+  four backends as Deployments with PVCs and the Recreate strategy, `pos_cloud` running as the
+  non-root uid `10001` with a `/health` readiness probe, an Ingress for DNS-01 TLS — with every
+  environment-specific line (`storageClassName`, `ingressClassName`, the issuer, the image) marked
+  `# ADAPT`; `k8s/README.md` documents the create-secrets-in-cluster model and that Compose stays the
+  supported default. `docs/deploy-runbook.md` is the ordered checklist a forker follows: the
+  Cloudflare rules (grey-clouded record, a scoped DNS token, "Flexible" SSL forbidden), the 4–6 GitHub
+  secrets, the `production` Environment with a required reviewer, running the deploy, and enrolling the
+  first super-admin. `docs/roadmap.md` records P8 as **substantially done**, with the store-backup half
+  of the restore drill (P9) and the human end-to-end fork test as the noted deferrals.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
