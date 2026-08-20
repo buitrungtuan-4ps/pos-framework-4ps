@@ -53,7 +53,17 @@ allow = [
 ]
 # AGPL-3.0, GPL-*, and SSPL-1.0 are absent from `allow`, so they are a hard
 # failure. Do not add them.
-exceptions = []
+#
+# `webpki-roots` is Mozilla's root-CA trust bundle — *data*, not code — pulled (not feature-gated)
+# by async-nats's `tokio-websockets` transport (P7, ADR-0031). It is licensed `CDLA-Permissive-2.0`,
+# a permissive data-sharing licence with no copyleft or share-alike, so it imposes nothing on our
+# own source; it is kept as a scoped exception rather than added to `allow` so the permission is
+# reviewed per-crate rather than opening CDLA workspace-wide. Flagged in ADR-0031. If the cloud is
+# later configured to trust only the OS certificate store, this dependency drops and the exception
+# with it.
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
 
 [bans]
 multiple-versions = "deny"
@@ -95,6 +105,13 @@ skip-tree = [
     # stable line (sha1 0.10 -> digest 0.10, ...). Skipping the 0.11 subtree leaves
     # the 0.10 line unique. review: 2026-11-19
     { crate = "sha2@0.11", reason = "new RustCrypto line pulled by rust-embed; stable line still used by axum" },
+    # async-nats (P7 link-nats) is one large dependency that drags in its own rustls, rand, and
+    # error-handling stack at versions that straddle what axum and the RustCrypto crates already use
+    # (getrandom, rand, rand_chacha, rustls-webpki, rustls-native-certs, openssl-probe, thiserror,
+    # thiserror-impl). Skipping the async-nats subtree collapses all of those into one reviewed entry
+    # rather than a dozen; the cloud is where these land, and the JetStream client is worth the tree
+    # (ADR-0031). review: 2026-11-19
+    { crate = "async-nats", reason = "the JetStream client's rustls/rand/thiserror stack straddles versions the rest of the tree uses" },
     # The rand 0.10 line (rand_core 0.10, getrandom 0.4, chacha20) arrives with the tokio-postgres
     # stack (P7): postgres-protocol uses it for the SCRAM authentication nonce. The edge's tungstenite
     # is still on rand 0.9. They are in different binaries — pos_cloud vs pos_edge — so no single

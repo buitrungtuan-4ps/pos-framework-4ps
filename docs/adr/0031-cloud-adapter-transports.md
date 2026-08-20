@@ -69,7 +69,19 @@ The three ports sit very differently against that rule, so one blanket answer wo
 
 - `async-nats` and its transitive tree (a rustls stack, `nkeys`, its own `tokio` features) join the
   dependency surface — the one large addition here, and `cargo-deny` reviews it like any other. The
-  edge links it too, because the store is what publishes.
+  edge links it too, because the store is what publishes. Three consequences fall out of that tree,
+  each recorded where CI enforces it:
+  - It is pinned to a version (**0.50**) whose `rustls-webpki` is on the patched `0.103` line;
+    the older `0.38` pulled a `0.102` webpki carrying fresh 2026 RUSTSEC advisories, so this is a
+    security floor, not a preference.
+  - Its `tokio-websockets` transport pulls **`webpki-roots`** (Mozilla's root-CA bundle), licensed
+    `CDLA-Permissive-2.0` — a permissive *data* licence with no copyleft. It is admitted as one
+    scoped, reviewed `deny.toml` exception rather than added to the workspace `allow` list. **A
+    reviewer should confirm this licence is acceptable for the shipped cloud binary.** It disappears
+    if the cloud is later configured to trust only the OS certificate store.
+  - The stack straddles several crate versions the rest of the tree already uses (rand, rustls
+    pieces, thiserror); a single `skip-tree = { crate = "async-nats" }` in `deny.toml` collapses
+    those into one reviewed entry.
 - `hmac` and `sha2` (0.10 line, matching what is already in the tree) join for S3 signing; no HTTP
   client crate is added for `blob-garage` or `metrics-vm`.
 - Hand-written SigV4 and HTTP mean a wire bug reaches a test rather than the compiler; the contract

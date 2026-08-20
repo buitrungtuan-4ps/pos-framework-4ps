@@ -396,6 +396,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   filter, in the ordinary `test` job), and — behind the `integration` feature — the same suite
   against a real MinIO in the merge-to-`main` job. Signing uses `hmac`/`sha2` pinned to the
   RustCrypto line already in the tree, so no new duplicate version is introduced.
+- `link-nats` (P7): the store→cloud `MessageLink` over NATS JetStream, on `async-nats` — the one
+  cloud adapter that carries a real client dependency, because the JetStream protocol is the hard,
+  general infrastructure ADR-0007 says to buy (ADR-0031). Outbound only and at-least-once: no
+  transaction across NATS and the edge database, so the outbox makes a crash between commit and
+  publish safe. The handshake is local — reachability, stream existence, and `pos_proto`'s
+  `negotiate` — so the link stays one-directional with no cloud responder. Back-pressure is visible:
+  the stream is `discard: new`, a full stream returns `resource_exhausted` (retryable, so the outbox
+  holds), and `capacity` reports the fill level the 80% alert reads. Verified against a **real NATS
+  server with JetStream** (behind the `integration` feature, wired into the merge-to-`main` job as a
+  `docker run -js` step) — all six `MessageLink` contract cases including the severed-link and
+  full-stream obligations. `async-nats` is pinned to 0.50 (its `rustls-webpki` is on the patched
+  0.103 line; 0.38's 0.102 carried fresh RUSTSEC advisories); its `webpki-roots` (Mozilla CA bundle,
+  `CDLA-Permissive-2.0`) is a scoped, reviewed `deny.toml` licence exception, and a
+  `skip-tree = async-nats` collapses the transient version straddles its stack introduces.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

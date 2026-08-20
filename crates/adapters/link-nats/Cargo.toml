@@ -1,0 +1,33 @@
+[package]
+name        = "link-nats"
+version     = "0.1.0"
+description = "The store to cloud MessageLink over NATS JetStream (async-nats)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[features]
+# The tests that need a live NATS server with JetStream are gated here, so the pull-request `test`
+# job neither compiles nor runs them. The merge-to-`main` integration job and a developer with
+# NATS_URL set enable it: `cargo test -p link-nats --features integration`.
+integration = []
+
+[dependencies]
+pos-proto = { path = "../../pos-proto" }
+pos-ports = { path = "../../pos-ports" }
+serde_json.workspace = true
+# ADR-0031: the JetStream client protocol (framing, publish acks, flow control, stream management,
+# reconnection) is the "genuinely hard and general" infrastructure ADR-0007 says to buy, and the link
+# is load-bearing — every sale eventually travels it — so this is the one adapter that carries a real
+# client dependency.
+async-nats = "0.50"
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../pos-contract-tests" }
+# The contract suite supplies its own block_on; async-nats needs a multi-thread runtime with IO.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

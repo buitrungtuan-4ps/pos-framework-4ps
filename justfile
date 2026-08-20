@@ -51,13 +51,16 @@ test:
     cargo test --workspace --locked
     cargo test --workspace --doc
 
-# Needs a real PostgreSQL (and, later, NATS) — not fakes. Set DATABASE_URL to a
-# libpq string, e.g. `host=localhost port=5432 user=pos password=pos dbname=poscloud`.
-# Each adapter's database tests are behind its `integration` Cargo feature and share
-# one database, so they run single-threaded. This is the merge-to-`main` `integration`
-# job (.github/workflows/main.yml), runnable locally against your own PostgreSQL.
+# Needs the real backing services — not fakes — reachable and pointed at by env:
+#   DATABASE_URL   e.g. host=localhost port=5432 user=pos password=pos dbname=poscloud
+#   S3_ENDPOINT    e.g. http://localhost:9000  (+ S3_ACCESS_KEY / S3_SECRET_KEY)
+#   NATS_URL       e.g. 127.0.0.1:4222
+# Each adapter's tests are behind its `integration` Cargo feature. store-postgres shares one
+# database so it runs single-threaded. This mirrors the merge-to-`main` `integration` job.
 test-integration:
     cargo test -p store-postgres --features integration --locked -- --test-threads=1
+    cargo test -p blob-garage --features integration --locked
+    cargo test -p link-nats --features integration --locked
 
 deny:
     cargo deny --all-features check advisories licenses bans sources
