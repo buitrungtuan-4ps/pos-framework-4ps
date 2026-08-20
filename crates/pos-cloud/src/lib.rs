@@ -15,12 +15,15 @@
 //! [`config_tree`] is the other direction — the four-level Tenant→Brand→Store→Device configuration
 //! the cloud composes, validates, versions, and publishes to each store as a delta or a snapshot.
 //! [`auth`] guards the admin surface: an Argon2id password with a mandatory TOTP second factor, and
-//! a host-only session cookie.
+//! a host-only session cookie. [`retention`] is the data-protection cron: it masks personal data in
+//! the subject store once it is past its configured retention period (PDPD/GDPR/CCPA), keeping the
+//! books reconcilable.
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
 //! routes (ADR-0033), the super-admin login route + credential persistence and per-tenant API keys
-//! (ADR-0034), the retention/PII-masking cron, and the dashboard screens with materialised rollups.
+//! (ADR-0034), the subject-store schema and the retention runner's wiring into `main` (ADR-0035),
+//! and the dashboard screens with materialised rollups.
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +34,7 @@ pub mod config_tree;
 pub mod cursor;
 pub mod http;
 mod openapi;
+pub mod retention;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};

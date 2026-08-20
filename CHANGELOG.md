@@ -490,6 +490,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   secret redaction from `Debug`, the mandatory-second-factor/no-oracle rules, replay refusal, and the
   cookie attributes. Adds `argon2` (already at the edge); no new crypto crate for TOTP. The login
   route, credential persistence, TOTP enrolment, and per-tenant API keys are later slices.
+- `pos-cloud` (P7 / Track A6): the **retention + PII-masking cron** (ADR-0035) — the data-protection
+  enforcement PDPD (Decree 13/2023), GDPR, and CCPA require. Personal data (a marketplace order's
+  name/phone/address, a corporate invoice's buyer fields) lives in the `SubjectId`-keyed subject
+  store, never in the event log; once a record is past its retention period the cron **masks** it —
+  personal field values become `[REDACTED]` while the `subject_id` and timestamps survive, so
+  invoices still reference a subject and the books still reconcile. Masking (not row-deletion) is
+  chosen precisely to keep that reference; it is one-way and idempotent. The retention period is
+  **configuration** (per-country default, ADR-0027), never a code guess. The daily sweep is bounded
+  (paged, no whole-table load) and idempotent (only unmasked records are read), and a failed run is
+  retried rather than crashing the cloud. Scope is deliberate: it enforces the *automatic, time-based*
+  policy over customer/buyer data only — never employee data (there is no behaviour monitoring), and
+  it is **not** the path for an individual's erasure/access/portability request, which stays escalated
+  to the Data Protection contact. The engine is pure behind a `SubjectStore` seam and unit-tested with
+  no database or clock (masking scrubs every value yet preserves the id, is idempotent, leaks no
+  original value; the sweep masks exactly the records past retention), using only placeholder test
+  data. No new dependencies. The subject-store schema and the runner's wiring into `main` are later
+  slices (the corporate-invoice buyer fields land with P10).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
