@@ -62,6 +62,19 @@ url  = "2"
 hmac = "0.13"
 sha2 = "0.11"
 
+# The webhook TLS sender (ADR-0038). Every crate here is already in the tree at these versions — the
+# HTTP/1.1 client (`hyper` + `hyper-util` + `http-body-util` + `bytes`) via `axum`, and the TLS stack
+# (`tokio-rustls` + `webpki-roots`, the `ring` provider) via `async-nats` (ADR-0031) — so the sender
+# adds direct-dependency lines, not a new subtree, and no new `cargo-deny` entry. `tokio-rustls`
+# carries `default-features = false` with only `ring`/`tls12`/`logging` so the `aws-lc-rs` provider
+# cannot enter through feature unification.
+hyper           = { version = "1", features = ["client", "http1"] }
+hyper-util      = { version = "0.1", features = ["tokio"] }
+http-body-util  = "0.1"
+bytes           = "1"
+tokio-rustls    = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots    = "1"
+
 # Super-admin auth (P7, ADR-0034). `argon2` (same version/idiom the edge uses for PIN hashes) hashes
 # and verifies the password. RFC 6238 TOTP runs over HMAC-SHA256 using the `sha2`+`hmac` already
 # added above for webhooks, so it adds no crypto crate (ADR-0034 explains the SHA256 choice).

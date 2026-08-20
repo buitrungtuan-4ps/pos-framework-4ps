@@ -693,6 +693,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   register → list → delete and the SSRF/plaintext refusals over the fakes, using IP-literal
   destinations so vetting needs no DNS. The concrete TLS sender and the dispatch background task remain
   the next slice.
+- `pos-cloud` (P7): the **concrete webhook TLS sender** (ADR-0038, a new ADR) — `TlsWebhookSender`, the
+  `WebhookTransport` that turns a signed body into one HTTPS `POST`. It is built on the rustls/hyper
+  stack **already in the tree** (`hyper`/`hyper-util` via axum; `tokio-rustls`/`webpki-roots`/`ring`
+  via async-nats), so it adds direct-dependency lines — `hyper`, `hyper-util`, `http-body-util`,
+  `bytes`, `tokio-rustls`, `webpki-roots` — not a new subtree, and no new `cargo-deny` entry. The
+  sender **owns its dial**: it opens a TCP connection to one of the endpoint's *pre-vetted* addresses
+  and performs the TLS handshake against the URL's hostname, never re-resolving — so it closes the
+  DNS-rebinding gap between the SSRF check and the connect by construction. The `ring` crypto provider
+  is selected explicitly (and `tokio-rustls` pinned with `default-features = false`) so `aws-lc-rs`
+  cannot enter through feature unification; roots are the bundled Mozilla set (hermetic, no
+  base-image `ca-certificates` dependency). Each delivery is bounded by a timeout — a black-hole
+  endpoint cannot wedge the dispatch loop; a timeout is an ordinary failed delivery. The pure
+  request-derivation (host/SNI, origin-form target, `ip:port` dial set, the two signature headers) is
+  unit-tested without a network; the handshake belongs to the gated integration lane and the soak. The
+  dispatch background task that drives this across the enabled fleet remains the next slice.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

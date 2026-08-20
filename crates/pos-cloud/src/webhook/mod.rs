@@ -20,15 +20,16 @@
 //! Endpoints are isolated: one cursor and one breaker each, so no receiver can affect another's
 //! delivery. [`store`] persists the durable facts of a subscription — the URL, the signing secret,
 //! the cursor, the disabled flag — behind a `store-postgres` table, so registrations survive a
-//! restart. The concrete TLS transport that turns a signed body into bytes on the wire is a
-//! [`dispatch::WebhookTransport`] implementation — a separate, later piece (ADR-0032); the delivery
-//! engine here is proven against a fake.
+//! restart. [`transport`] is the concrete TLS sender that turns a signed body into bytes on the wire
+//! ([`TlsWebhookSender`], ADR-0038): one HTTPS `POST` per delivery, over the rustls/hyper stack
+//! already in the tree, dialing only the pre-vetted address.
 
 pub mod breaker;
 pub mod dispatch;
 pub mod sign;
 pub mod ssrf;
 pub mod store;
+pub mod transport;
 
 pub use dispatch::{
     DeliveryError, DeliveryOutcome, WebhookEndpoint, WebhookError, WebhookTransport, deliver_next,
@@ -38,3 +39,4 @@ pub use ssrf::{SsrfRejection, VettedUrl, vet};
 pub use store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
+pub use transport::TlsWebhookSender;
