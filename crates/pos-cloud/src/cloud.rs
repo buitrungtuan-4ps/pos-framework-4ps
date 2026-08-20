@@ -100,9 +100,10 @@ impl<S: EventStore> Cloud<S> {
 
     /// The per-day activity rollup for one store, oldest day first.
     ///
-    /// Reads the store's log in pages and folds each event into its trading day. Correctness, not
-    /// speed: this is the read model the dashboard slice will materialise, but computing it from the
-    /// log keeps it verifiable against the in-memory fake here.
+    /// Reads the store's log in pages and folds each event into its trading day with the shared
+    /// [`fold_event`](crate::dashboard::rollup::fold_event). This computes the rollup from the log
+    /// every call — correct but O(events); the dashboard read path materialises the *same* fold and
+    /// answers in O(days) ([`crate::dashboard`], [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
     ///
     /// # Errors
     ///
@@ -122,19 +123,7 @@ impl<S: EventStore> Cloud<S> {
                 break;
             }
             for event in &batch {
-                let day = days
-                    .entry(event.business_date.to_string())
-                    .or_insert_with(|| DailyRollup {
-                        business_date: event.business_date.to_string(),
-                        total_events: 0,
-                        by_type: BTreeMap::new(),
-                    });
-                day.total_events = day.total_events.saturating_add(1);
-                let type_count = day
-                    .by_type
-                    .entry(event.event_type.as_str().to_owned())
-                    .or_insert(0);
-                *type_count = type_count.saturating_add(1);
+                crate::dashboard::rollup::fold_event(&mut days, event);
             }
             let short = batch.len() < page_len;
             cursor = batch.last().map(|event| event.event_id);
@@ -142,6 +131,6 @@ impl<S: EventStore> Cloud<S> {
                 break;
             }
         }
-        Ok(days.into_values().collect())
+        Ok(crate::dashboard::rollup::render(days))
     }
 }

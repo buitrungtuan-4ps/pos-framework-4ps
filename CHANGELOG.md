@@ -507,6 +507,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   original value; the sweep masks exactly the records past retention), using only placeholder test
   data. No new dependencies. The subject-store schema and the runner's wiring into `main` are later
   slices (the corporate-invoice buyer fields land with P10).
+- `pos-cloud` (P7): **dashboards answered from materialised rollups** (ADR-0036) — the P7 exit
+  criterion (a dashboard answers in under 10 ms). `Cloud::daily_rollups` computes the rollup from the
+  log every call (O(events)); the new `dashboard` module keeps the rollup **materialised**: a
+  projector cursor folds each event exactly once (idempotent, incremental, rebuildable by resetting
+  the cursor), and the dashboard read answers from that stored rollup — its signature takes no
+  `EventStore`, so it is O(days) and *cannot* scan the log. Both paths fold with one shared
+  `fold_event` (`daily_rollups` was refactored onto it, behaviour unchanged), so the materialised
+  rollup equals a full re-scan **by construction** — asserted by a test comparing the two, alongside
+  idempotency, incremental-across-appends, and reads-only-the-rollup-store. Pure and I/O-free behind a
+  `RollupStore` seam; no new dependencies. The `store-postgres` rollup table, the background projector
+  task, and pointing `/v1/stores/{id}/rollups/daily` at the materialised read (same response shape,
+  so no OpenAPI change) are the remaining wiring.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
