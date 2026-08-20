@@ -38,6 +38,7 @@ pub mod cursor;
 pub mod dashboard;
 pub mod http;
 mod openapi;
+mod persistence;
 pub mod retention;
 pub mod webhook;
 

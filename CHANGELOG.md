@@ -552,6 +552,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   back empty rather than that tenant's data — tenant isolation is a fact of the key, not of a check a
   handler might forget. Library-only refinement (no route or binary yet on it); the from-log
   `Cloud::daily_rollups` reconciliation path is unchanged.
+- `store-postgres` (P7): the **deferred cloud persistence** now has its tables and query types.
+  Migration `0002` adds `rollups` — one `jsonb` row per `(tenant_id, store_id)` holding the whole
+  materialised `StoredRollups` (cursor + per-day counts), so a dashboard read is one primary-key
+  lookup, not a log scan (ADR-0036) — and `api_keys` — `id` (the public ULID), `tenant_id`,
+  `secret_hash` (bytea, SHA-256), `scopes` (text array of wire names), `revoked`, `expires_at`
+  (epoch milliseconds), looked up by primary key (ADR-0037). Both are additive and idempotent; the
+  rollup table carries RLS on `tenant_id` like the event log. New `PostgresRollups` and
+  `PostgresApiKeys` handles (built from `PostgresStore::rollups()` / `.api_keys()`, sharing the pool)
+  hold the SQL and return plain rows; `pos-cloud` implements its `RollupStore` and `ApiKeyStore`
+  seams over them in a `persistence` module that does the domain conversion — all SQL in the adapter,
+  all conversion in the cloud, no cloud type crossing into the adapter. `Scope` gained wire-name
+  mapping (`read_rollups`/`read_events`/`manage_webhooks`, unknown names dropped deny-by-default) and
+  `StoredApiKey::from_parts` rehydrates a key from a row.
+- `store-postgres` (P7): a **cross-tenant isolation test for the rollup table** on real PostgreSQL —
+  tenant A's `save_state` is invisible to tenant B naming the same `store_id` (the `(tenant, store)`
+  key is the boundary the `/v1` dashboard rests on), and an `app_tenant`-role session scoped to one
+  tenant sees only that tenant's rollup rows via RLS. Alongside the existing event-log RLS cases,
+  this closes the "cross-tenant isolation proven by tests" half of the P7 exit criterion. Gated
+  behind the `integration` feature; runs in the merge-to-`main` job against `postgres:16`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

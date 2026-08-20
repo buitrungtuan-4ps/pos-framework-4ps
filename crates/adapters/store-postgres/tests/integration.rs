@@ -46,7 +46,7 @@ use std::future::Future;
 
 use pos_contract_tests::fixtures;
 use pos_contract_tests::harness::{EventStoreHarness, HarnessError, Setup};
-use pos_proto::{BusinessDate, StoreId, Ulid};
+use pos_proto::{BusinessDate, StoreId, TenantId, Ulid};
 use store_postgres::PostgresStore;
 use tokio_postgres::{Client, NoTls};
 
@@ -133,7 +133,7 @@ impl EventStoreHarness for StoreHarness {
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
-                 TRUNCATE events, event_outbox RESTART IDENTITY;",
+                 TRUNCATE events, event_outbox, rollups, api_keys RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -173,7 +173,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     store.migrate().await.map_err(port_err)?;
     let admin = admin().await?;
     admin
-        .batch_execute("TRUNCATE events, event_outbox RESTART IDENTITY")
+        .batch_execute("TRUNCATE events, event_outbox, rollups, api_keys RESTART IDENTITY")
         .await
         .map_err(db_err)?;
     Ok((store, admin))
@@ -362,4 +362,102 @@ async fn partition_of(admin: &Client, event_id: &str) -> String {
         .await
         .expect("the row is somewhere")
         .get(0)
+}
+
+// ---------------------------------------------------------------------------
+// The materialised-rollup table (ADR-0036): the read path the public /v1 dashboard uses.
+// ---------------------------------------------------------------------------
+
+/// A rollup is keyed by `(tenant, store)`, so a read names its own tenant and can only return that
+/// tenant's row. This is the isolation the `/v1` dashboard rests on: the tenant comes from the
+/// caller's authenticated grant, never the request, and a guessed foreign `store_id` finds nothing.
+#[test]
+fn rollups_are_isolated_by_the_tenant_store_key() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let rollups = store.rollups();
+        let tenant_a = TenantId::new(Ulid::from_u128(0x0A));
+        let tenant_b = TenantId::new(Ulid::from_u128(0x0B));
+        let store_id = StoreId::new(Ulid::from_u128(0x5));
+
+        // Tenant A materialises a rollup for the store.
+        rollups
+            .save_state(
+                tenant_a,
+                store_id,
+                r#"{"cursor":null,"days":{"2026-01-01":{"business_date":"2026-01-01","total_events":7,"by_type":{}}}}"#,
+            )
+            .await
+            .expect("tenant A saves its rollup");
+
+        let a = rollups
+            .load_state(tenant_a, store_id)
+            .await
+            .expect("load for A")
+            .expect("tenant A sees the rollup it saved");
+        let value: serde_json::Value = serde_json::from_str(&a).expect("valid jsonb");
+        let total = value
+            .pointer("/days/2026-01-01/total_events")
+            .and_then(serde_json::Value::as_i64);
+        assert_eq!(total, Some(7), "A reads back exactly what it stored");
+
+        // Tenant B, naming the very same store id, finds no row — the key includes the tenant.
+        let b = rollups
+            .load_state(tenant_b, store_id)
+            .await
+            .expect("load for B");
+        assert!(
+            b.is_none(),
+            "a foreign tenant's read of the same store id returns nothing, not A's data"
+        );
+    });
+}
+
+/// Belt-and-suspenders behind the key: the rollup table also carries RLS, so a query role assuming
+/// `app_tenant` sees only its own tenant's rollup rows even across the same store id.
+#[test]
+fn rls_isolates_rollup_rows_by_tenant() {
+    block_on(async {
+        let (store, admin) = prepared().await.expect("prepare the database");
+        let rollups = store.rollups();
+        let tenant_a = TenantId::new(Ulid::from_u128(0x0A));
+        let tenant_b = TenantId::new(Ulid::from_u128(0x0B));
+        let store_id = StoreId::new(Ulid::from_u128(0x5));
+
+        rollups
+            .save_state(tenant_a, store_id, r#"{"cursor":null,"days":{}}"#)
+            .await
+            .expect("A saves");
+        rollups
+            .save_state(tenant_b, store_id, r#"{"cursor":null,"days":{}}"#)
+            .await
+            .expect("B saves");
+
+        admin
+            .batch_execute("SET ROLE app_tenant")
+            .await
+            .expect("assume the app_tenant role");
+        admin
+            .execute(
+                "SELECT set_config('app.tenant_id', $1, false)",
+                &[&tenant_a.to_string()],
+            )
+            .await
+            .expect("scope the session to tenant A");
+        let a_count: i64 = admin
+            .query_one("SELECT count(*) FROM rollups", &[])
+            .await
+            .expect("count A's rollup rows")
+            .get(0);
+        admin
+            .batch_execute("RESET ROLE")
+            .await
+            .expect("reset the role");
+
+        assert_eq!(
+            a_count, 1,
+            "app_tenant scoped to A sees only A's rollup row, though both tenants have one for the \
+             same store"
+        );
+    });
 }

@@ -5,7 +5,7 @@
 
 use std::num::NonZeroU32;
 
-use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
 use tokio_postgres::NoTls;
 
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
@@ -15,6 +15,10 @@ use pos_proto::ids::{EventId, StoreId};
 
 /// The cloud schema, applied idempotently at start-up ([ADR-0017](../../../docs/adr/0017-migrations.md)).
 const MIGRATION_0001: &str = include_str!("../migrations/0001_cloud_events.sql");
+
+/// The rollup read model and the API-key table (P7), applied after 0001 and on the same idempotent
+/// terms.
+const MIGRATION_0002: &str = include_str!("../migrations/0002_cloud_rollups_apikeys.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -74,7 +78,27 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0001)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0002)
+            .await
             .map_err(unavailable)
+    }
+
+    /// The materialised-rollup store over this pool ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `RollupStore` seam over it.
+    #[must_use]
+    pub fn rollups(&self) -> crate::rollups::PostgresRollups {
+        crate::rollups::PostgresRollups::new(self.pool.clone())
+    }
+
+    /// The API-key store over this pool ([ADR-0037](../../../docs/adr/0037-api-keys.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ApiKeyStore` seam over it.
+    #[must_use]
+    pub fn api_keys(&self) -> crate::apikeys::PostgresApiKeys {
+        crate::apikeys::PostgresApiKeys::new(self.pool.clone())
     }
 
     /// Creates the monthly partition covering `business_date` (an `YYYY-MM-DD` string), ahead of
@@ -97,10 +121,7 @@ impl PostgresStore {
     }
 
     async fn connection(&self) -> Result<Object, PortError> {
-        self.pool.get().await.map_err(|error| {
-            PortError::unavailable(PortName::EventStore, "the cloud database is unavailable")
-                .with_source(error)
-        })
+        self.pool.get().await.map_err(pool_unavailable)
     }
 }
 
@@ -309,8 +330,14 @@ impl EventStore for PostgresStore {
 }
 
 /// Maps a database error to the port's unavailable status.
-fn unavailable(error: tokio_postgres::Error) -> PortError {
+pub(crate) fn unavailable(error: tokio_postgres::Error) -> PortError {
     PortError::unavailable(PortName::EventStore, "the cloud database failed").with_source(error)
+}
+
+/// Maps a pool checkout failure (no connection available) to the port's unavailable status.
+pub(crate) fn pool_unavailable(error: PoolError) -> PortError {
+    PortError::unavailable(PortName::EventStore, "the cloud database is unavailable")
+        .with_source(error)
 }
 
 /// Maps an envelope (de)serialisation failure to the port's internal status.

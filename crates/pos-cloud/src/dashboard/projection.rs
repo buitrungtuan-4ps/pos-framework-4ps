@@ -18,6 +18,8 @@ use core::future::Future;
 use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
@@ -30,7 +32,11 @@ use super::rollup::{fold_event, render};
 const PROJECT_PAGE: u32 = 512;
 
 /// One store's materialised rollup: the folded days, and how far into the log they reflect.
-#[derive(Debug, Clone, Default)]
+///
+/// (De)serialises whole to and from the `state` jsonb column of the rollup table — the cursor and the
+/// days together — so the persistence seam stores one blob per `(tenant, store)` and rebuilds it
+/// intact.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredRollups {
     /// The last event folded, or `None` if nothing has been projected yet. Advancing only forward is
     /// what keeps each event counted exactly once.

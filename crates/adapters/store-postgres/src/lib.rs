@@ -19,6 +19,10 @@
 
 #![forbid(unsafe_code)]
 
+mod apikeys;
+mod rollups;
 mod store;
 
+pub use apikeys::{ApiKeyRow, PostgresApiKeys};
+pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};

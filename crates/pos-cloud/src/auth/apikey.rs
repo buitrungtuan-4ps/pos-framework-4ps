@@ -48,6 +48,34 @@ pub enum Scope {
     ManageWebhooks,
 }
 
+impl Scope {
+    /// This scope's wire name — how it is stored in the key's `scopes` column and named when a key is
+    /// provisioned. `snake_case`, per the naming standard.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::ReadRollups => "read_rollups",
+            Self::ReadEvents => "read_events",
+            Self::ManageWebhooks => "manage_webhooks",
+        }
+    }
+
+    /// Parses a wire name back to a scope, or `None` for a name this build does not know.
+    ///
+    /// Deny-by-default on read: an unrecognised name — a capability a newer issuer granted that this
+    /// binary predates — is dropped rather than guessed at, so an older reader can never
+    /// over-authorise a key it does not fully understand.
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        match name {
+            "read_rollups" => Some(Self::ReadRollups),
+            "read_events" => Some(Self::ReadEvents),
+            "manage_webhooks" => Some(Self::ManageWebhooks),
+            _ => None,
+        }
+    }
+}
+
 /// A key's public identifier — travels in the token in the clear and looks the key up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ApiKeyId(Ulid);
@@ -144,6 +172,53 @@ impl fmt::Debug for StoredApiKey {
             .field("revoked", &self.revoked)
             .field("expires_at", &self.expires_at)
             .finish()
+    }
+}
+
+impl StoredApiKey {
+    /// Rebuilds a stored key from its persisted columns — the inverse of what a row holds, used by
+    /// the persistence adapter to rehydrate a key on lookup.
+    ///
+    /// Unknown scope names are dropped ([`Scope::from_wire`], deny-by-default). This does not check
+    /// the secret; the caller [`verify`]s a presented secret against the rebuilt record.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable message if `tenant_id` is not a ULID, `secret_hash` is not exactly 32 bytes,
+    /// or `expires_at_ms` is out of the representable range.
+    pub fn from_parts(
+        id: ApiKeyId,
+        tenant_id: &str,
+        secret_hash: &[u8],
+        scopes: &[String],
+        revoked: bool,
+        expires_at_ms: Option<i64>,
+    ) -> Result<Self, String> {
+        let tenant_id: TenantId = tenant_id
+            .parse()
+            .map_err(|_| format!("api key {id}: tenant id is not a ULID"))?;
+        let secret_hash: [u8; 32] = secret_hash
+            .try_into()
+            .map_err(|_| format!("api key {id}: secret hash is not 32 bytes"))?;
+        let scopes = scopes
+            .iter()
+            .filter_map(|name| Scope::from_wire(name))
+            .collect();
+        let expires_at = match expires_at_ms {
+            Some(milliseconds) => Some(
+                Timestamp::from_milliseconds_since_epoch(milliseconds)
+                    .map_err(|_| format!("api key {id}: expiry is out of range"))?,
+            ),
+            None => None,
+        };
+        Ok(Self {
+            id,
+            tenant_id,
+            secret_hash,
+            scopes,
+            revoked,
+            expires_at,
+        })
     }
 }
 
