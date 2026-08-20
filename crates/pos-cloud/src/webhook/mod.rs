@@ -22,10 +22,12 @@
 //! the cursor, the disabled flag — behind a `store-postgres` table, so registrations survive a
 //! restart. [`transport`] is the concrete TLS sender that turns a signed body into bytes on the wire
 //! ([`TlsWebhookSender`], ADR-0038): one HTTPS `POST` per delivery, over the rustls/hyper stack
-//! already in the tree, dialing only the pre-vetted address.
+//! already in the tree, dialing only the pre-vetted address. [`runner`] is the background task that
+//! ties it all together — load the enabled fleet, re-vet, deliver after the cursor, persist progress.
 
 pub mod breaker;
 pub mod dispatch;
+pub mod runner;
 pub mod sign;
 pub mod ssrf;
 pub mod store;

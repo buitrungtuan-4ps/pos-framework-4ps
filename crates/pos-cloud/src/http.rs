@@ -33,7 +33,6 @@
 use core::fmt;
 use core::fmt::Write as _;
 use std::collections::BTreeSet;
-use std::net::IpAddr;
 
 use axum::extract::{Path, Query, State};
 use axum::http::header::SET_COOKIE;
@@ -796,7 +795,11 @@ where
     // addresses are not kept — the delivery slice re-vets before each connect (ADR-0032) — but a
     // structurally unsafe or inward-pointing URL is refused up front rather than at first delivery.
     let raw_url = request.url.clone();
-    let vetted = match tokio::task::spawn_blocking(move || vet(&raw_url, resolve_host)).await {
+    let vetted = match tokio::task::spawn_blocking(move || {
+        vet(&raw_url, crate::webhook::ssrf::resolve_host)
+    })
+    .await
+    {
         Ok(Ok(vetted)) => vetted,
         Ok(Err(rejection)) => {
             return (
@@ -928,17 +931,6 @@ where
                 .into_response()
         }
     }
-}
-
-/// Resolves `host` to its IP addresses via the OS resolver (`getaddrinfo`), for SSRF vetting. It
-/// blocks, so it is only ever called on the blocking pool. The port is immaterial — [`vet`] uses only
-/// the addresses — so an arbitrary one (443) stands in.
-fn resolve_host(host: &str) -> std::io::Result<Vec<IpAddr>> {
-    use std::net::ToSocketAddrs as _;
-    Ok((host, 443_u16)
-        .to_socket_addrs()?
-        .map(|address| address.ip())
-        .collect())
 }
 
 /// Mints a webhook endpoint id from `now_ms`, or `None` if the OS entropy source is unavailable.

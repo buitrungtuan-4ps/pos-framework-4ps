@@ -117,14 +117,34 @@ impl WebhookEndpoint {
     /// `destination` ([`super::ssrf::vet`]).
     #[must_use]
     pub fn register(store_id: StoreId, destination: VettedUrl, secret: SigningSecret) -> Self {
+        Self::rehydrate(store_id, destination, secret, None)
+    }
+
+    /// Rehydrates an endpoint at a persisted `cursor`, for the dispatch task to resume a subscription
+    /// after a restart without replaying from the start of the log. The breaker starts closed — it is
+    /// ephemeral in-memory state, and a disabled endpoint is not loaded at all (`load_enabled`).
+    #[must_use]
+    pub fn rehydrate(
+        store_id: StoreId,
+        destination: VettedUrl,
+        secret: SigningSecret,
+        cursor: Option<EventId>,
+    ) -> Self {
         Self {
             store_id,
             destination,
             secret,
-            cursor: None,
+            cursor,
             page: NonZeroU32::new(DEFAULT_PAGE).unwrap_or(NonZeroU32::MIN),
             breaker: CircuitBreaker::new(BreakerConfig::default()),
         }
+    }
+
+    /// Points the endpoint at a freshly re-vetted `destination`, leaving the cursor and breaker
+    /// untouched. The dispatch task re-vets before each delivery batch (so DNS rebinding cannot slip a
+    /// stale address through), then hands the new addresses here.
+    pub fn retarget(&mut self, destination: VettedUrl) {
+        self.destination = destination;
     }
 
     /// The last event this endpoint has delivered, or `None` if it has delivered nothing.

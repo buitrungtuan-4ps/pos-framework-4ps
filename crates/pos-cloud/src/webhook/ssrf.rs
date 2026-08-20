@@ -218,6 +218,23 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     }
 }
 
+/// Resolves `host` to its IP addresses via the OS resolver (`getaddrinfo`) — the real resolver
+/// [`vet`] takes in production, at both registration and each delivery.
+///
+/// It blocks, so callers run it on a blocking pool (`tokio::task::spawn_blocking`). The port is
+/// immaterial — [`vet`] uses only the addresses — so an arbitrary one (443) stands in.
+///
+/// # Errors
+///
+/// Any `std::io::Error` the OS resolver returns (an unknown host, a resolver outage).
+pub(crate) fn resolve_host(host: &str) -> std::io::Result<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs as _;
+    Ok((host, 443_u16)
+        .to_socket_addrs()?
+        .map(|address| address.ip())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ForbiddenReason, SsrfRejection, classify_ip, vet};

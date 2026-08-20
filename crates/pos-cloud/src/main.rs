@@ -15,6 +15,7 @@ use link_nats::{ConsumerConfig, NatsConsumer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::retention::{self, RetentionPolicy};
+use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, dashboard, http};
 use store_postgres::PostgresStore;
 
@@ -122,6 +123,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // The webhook dispatcher: loads the enabled endpoints fleet-wide each tick, re-vets each URL,
+    // delivers the events after each cursor over TLS, and persists progress (ADR-0032, ADR-0038). It
+    // always runs — with no registered endpoints it is a cheap per-tick no-op — and reads the same
+    // event log the projector does, as the trusted role.
+    let webhook_interval = Duration::from_secs(config.webhook_dispatch_interval_secs);
+    let webhook_timeout = Duration::from_secs(config.webhook_delivery_timeout_secs);
+    tracing::info!(
+        interval_secs = config.webhook_dispatch_interval_secs,
+        delivery_timeout_secs = config.webhook_delivery_timeout_secs,
+        "webhook dispatcher started"
+    );
+    let webhook_task = tokio::spawn(webhook::runner::run(
+        store.clone(),
+        store.webhooks(),
+        TlsWebhookSender::new(webhook_timeout),
+        SystemClock,
+        webhook_interval,
+        shutdown_signal(),
+    ));
+
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
     axum::serve(listener, http::router(app))
@@ -140,6 +161,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         task.abort();
         let _ = task.await;
     }
+    webhook_task.abort();
+    let _ = webhook_task.await;
     Ok(())
 }
 

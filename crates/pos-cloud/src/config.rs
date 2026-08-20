@@ -39,6 +39,20 @@ const fn default_retention_sweep_interval_secs() -> u64 {
     24 * 60 * 60
 }
 
+/// How often the webhook dispatcher sweeps the enabled fleet, in seconds, when the config does not
+/// say — ten seconds, prompt enough that a subscriber sees an event soon after it lands
+/// ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+const fn default_webhook_dispatch_interval_secs() -> u64 {
+    10
+}
+
+/// How long one webhook delivery may take before it is abandoned as failed, in seconds, when the
+/// config does not say — ten seconds, so a black-hole endpoint cannot wedge the dispatch loop
+/// ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)).
+const fn default_webhook_delivery_timeout_secs() -> u64 {
+    10
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -68,6 +82,14 @@ pub struct CloudConfig {
     /// How often the retention cron sweeps for records past their period, in seconds.
     #[serde(default = "default_retention_sweep_interval_secs")]
     pub retention_sweep_interval_secs: u64,
+    /// How often the webhook dispatcher sweeps the enabled fleet, in seconds
+    /// ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+    #[serde(default = "default_webhook_dispatch_interval_secs")]
+    pub webhook_dispatch_interval_secs: u64,
+    /// How long one webhook delivery may take before it is abandoned as failed, in seconds
+    /// ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)).
+    #[serde(default = "default_webhook_delivery_timeout_secs")]
+    pub webhook_delivery_timeout_secs: u64,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -134,6 +156,14 @@ mod tests {
             config.retention_sweep_interval_secs,
             24 * 60 * 60,
             "the retention sweep interval defaults to daily when unset"
+        );
+        assert_eq!(
+            config.webhook_dispatch_interval_secs, 10,
+            "the webhook dispatch interval defaults to ten seconds when unset"
+        );
+        assert_eq!(
+            config.webhook_delivery_timeout_secs, 10,
+            "the webhook delivery timeout defaults to ten seconds when unset"
         );
     }
 

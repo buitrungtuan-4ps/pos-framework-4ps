@@ -65,8 +65,9 @@ get it dangerously wrong:
     [ADR-0031](0031-cloud-adapter-transports.md) already faced), is a dependency decision that earns
     its own ADR rather than being bolted on here.
   - **Endpoint persistence and the admin CRUD** (which URL, which secret, the cursor position) land
-    in later slices; here endpoints are in-memory runtime state. *(Both have since landed — see the
-    Consequences below; only the TLS sender remains.)*
+    in later slices; here endpoints are in-memory runtime state. *(All the deferred pieces —
+    persistence, the admin CRUD, the TLS sender, and the dispatch task — have since landed; see the
+    Consequences below.)*
 
 **Rejected.**
 
@@ -120,6 +121,14 @@ get it dangerously wrong:
   one tenant deleting another's. `CloudApp` gains the webhook-endpoint store as a seventh collaborator.
   Router tests cover register → list → delete over the fakes, and prove a loopback or plaintext URL is
   refused up front; they use IP-literal destinations so vetting needs no DNS.
-- **Still owed:** the TLS-client ADR + the concrete `WebhookTransport`, and the dispatch background
-  task that loads the enabled fleet, re-vets, delivers, and persists each cursor/disable — its own
-  slice.
+- **Landed since:** the concrete TLS sender and the dispatch task that closes the loop. The
+  client-dependency decision is [ADR-0038](0038-webhook-tls-sender.md) — `TlsWebhookSender`, the
+  `WebhookTransport` built on the rustls/hyper stack already in the tree, dialing only the pre-vetted
+  address. The **dispatch background task** ([`webhook::runner`](../../crates/pos-cloud/src/webhook/runner.rs))
+  wired into `main` drives it across the fleet: each tick it loads the enabled endpoints, re-vets each
+  URL, holds the live endpoints (with their cursors and **breakers**) in memory across ticks so the
+  breaker windows accumulate, delivers pages after each cursor with `deliver_next`, and persists each
+  cursor advance and any 24-hour auto-disable. It always runs — a cheap no-op with no registered
+  endpoints — bounded per endpoint per tick so one far-behind subscriber cannot starve the fleet. The
+  sweep logic is unit-tested over the fakes (deliver + persist cursor + idle; a now-unsafe URL is
+  skipped, not delivered to). **The webhook feature is now complete end to end.**

@@ -708,6 +708,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   request-derivation (host/SNI, origin-form target, `ip:port` dial set, the two signature headers) is
   unit-tested without a network; the handshake belongs to the gated integration lane and the soak. The
   dispatch background task that drives this across the enabled fleet remains the next slice.
+- `pos-cloud` (P7): the **webhook dispatch background task** is wired into `main` (ADR-0032), closing
+  the webhook feature end to end. Each tick it loads the enabled endpoints fleet-wide (as the trusted
+  role, like the projector and the retention sweep), **re-vets** each URL so it can only connect to a
+  currently-approved address (closing the DNS-rebinding gap before every delivery batch, not just at
+  registration), and delivers the events after each cursor over TLS with the `TlsWebhookSender`,
+  persisting each cursor advance so a restart resumes where it left off and persisting a 24-hour
+  auto-disable so a dead endpoint drops out of the fleet. The live endpoints — with their cursors and
+  **breakers** — are held in memory across ticks (breaker windows accumulate rather than resetting);
+  the database holds only the durable facts. It always runs (a cheap no-op with no endpoints) and is
+  bounded per endpoint per tick so one far-behind subscriber cannot starve the fleet. Two config knobs,
+  both with defaults: `webhook_dispatch_interval_secs` (10s) and `webhook_delivery_timeout_secs` (10s,
+  so a black-hole endpoint cannot wedge the loop). The sweep logic is unit-tested over the fakes
+  (deliver → persist cursor → idle; a now-unsafe URL is skipped, not delivered to).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
