@@ -162,6 +162,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "blob-garage"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "jiff",
+ "pos-contract-tests",
+ "pos-ports",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

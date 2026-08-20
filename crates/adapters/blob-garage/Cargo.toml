@@ -1,0 +1,35 @@
+[package]
+name        = "blob-garage"
+version     = "0.1.0"
+description = "The cloud BlobStore over Garage/S3 (hand-rolled SigV4 and HTTP, no S3 SDK)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[features]
+# The tests that need a live S3 server (MinIO/Garage) are gated here, so the pull-request `test`
+# job neither compiles nor runs them. The SigV4 signer's own unit test — against AWS's published
+# vector — always runs, so the signing math is verified with no server. The merge-to-`main`
+# integration job and a developer with S3_ENDPOINT set enable this feature.
+integration = []
+
+[dependencies]
+pos-ports = { path = "../../pos-ports" }
+# ADR-0031: this port is thin and scheduled for deletion once WAL shipping is in-house (ADR-0007),
+# so it hand-rolls SigV4 signing and HTTP/1.1 rather than carrying an S3 SDK. `hmac`+`sha2` are the
+# signing primitives, pinned to the same RustCrypto line already in the tree (hmac 0.13 / sha2 0.11
+# / digest 0.11) so no new duplicate version is introduced; `jiff` (workspace) formats the request
+# timestamp; `tokio` is the socket.
+hmac = "0.13"
+sha2 = "0.11"
+jiff.workspace = true
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros"] }
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../pos-contract-tests" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+
+[lints]
+workspace = true

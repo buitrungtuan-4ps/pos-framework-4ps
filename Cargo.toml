@@ -11,6 +11,7 @@ members = [
     "crates/adapters/store-sqlite",
     "crates/adapters/store-postgres",
     "crates/adapters/metrics-vm",
+    "crates/adapters/blob-garage",
     "crates/adapters/printer-escpos",
     "crates/pos-edge",
     "examples/minimal-edge",

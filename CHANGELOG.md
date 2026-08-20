@@ -384,6 +384,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   against a capturing transport in the ordinary `test` job, and a separate in-process HTTP mock pins
   the exact import bytes — no live `VictoriaMetrics` needed to verify it. Adds no new external
   dependencies (`tokio` and `serde_json` were already in the tree).
+- `blob-garage` (P7): the cloud `BlobStore` over Garage / S3. Thin and temporary by design — object
+  storage exists only for Litestream and the port is deleted once WAL shipping is in-house (ADR-0007)
+  — so rather than an S3 SDK it hand-rolls SigV4 signing and HTTP/1.1 over `tokio` (ADR-0031),
+  path-style, plain `http://`. `put`/`get`/`delete` are idempotent (a repeated put overwrites, an
+  absent get is `Ok(None)`, a repeated delete succeeds), and `list` is segment-aware: S3's `prefix`
+  is a string match that also returns `stores/10` for `stores/1`, so the adapter filters the result
+  through `BlobKey::is_under`, which is what keeps one tenant's listing out of another's. Verified
+  three ways: the SigV4 signer's arithmetic against AWS's published `get-vanilla` vector (no server),
+  the full contract suite against an in-process S3 mock (request/response framing and the prefix
+  filter, in the ordinary `test` job), and — behind the `integration` feature — the same suite
+  against a real MinIO in the merge-to-`main` job. Signing uses `hmac`/`sha2` pinned to the
+  RustCrypto line already in the tree, so no new duplicate version is introduced.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
