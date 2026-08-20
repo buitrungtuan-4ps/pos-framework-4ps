@@ -665,6 +665,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   those stay escalated to the Data Protection contact. Adds no dependency. Proven by a `store-postgres`
   integration test (fetch-due → mask → not-re-fetched → not-re-masked) and a `pos-cloud` runner test
   (one sweep, then clean shutdown). The writer that populates the subject store lands with P10/P11.
+- `pos-cloud` / `store-postgres` (P7): **webhook endpoints now persist** (ADR-0032). A webhook is a
+  cursor over the event log, so a subscription is only its durable facts — destination, signing
+  secret, cursor, disabled flag — never a backlog. `store-postgres` migration `0006` adds the
+  `webhook_endpoints` table (`id` ULID PK, `tenant_id`, `store_id`, `url`, `secret`, `cursor` NULL
+  until first delivery, `disabled`), RLS-isolated by tenant, with a `tenant_id` index for the admin
+  listing and a partial index (`WHERE disabled = false`) for the delivery task's enabled-load. Unlike
+  an API-key secret (stored as a hash), the signing secret is kept **in full** because the cloud
+  *signs* every delivery with it, so it must be recoverable; `SigningSecret` gains an `expose_secret`
+  accessor for the persistence layer alone. `pos-cloud` fills its new `webhook::store::WebhookEndpointStore`
+  seam over `PostgresWebhooks`: the tenant-scoped listing never carries the secret, while the delivery
+  task loads the enabled fleet **fleet-wide as the trusted role** (RLS bypassed), the same posture as
+  the rollup projector and the retention sweep. Adds no dependency. Proven by a `store-postgres`
+  integration test (register → tenant-scoped list → fleet-wide enabled load → advance cursor →
+  auto-disable suppresses → scoped delete). The admin CRUD routes and the concrete TLS sender remain
+  their own later slices (ADR-0032).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

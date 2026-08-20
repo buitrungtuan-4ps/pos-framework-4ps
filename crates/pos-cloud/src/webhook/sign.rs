@@ -52,6 +52,15 @@ impl SigningSecret {
     fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
+
+    /// The secret string, for the persistence layer to store and reload — the cloud must keep this
+    /// secret because it *signs* deliveries with it (unlike an API-key secret, which the cloud only
+    /// ever verifies and so stores as a hash, [ADR-0037](../../../docs/adr/0037-api-keys.md)). Named to
+    /// make every read of the raw secret conspicuous at the call site.
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Debug for SigningSecret {

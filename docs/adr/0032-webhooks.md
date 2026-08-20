@@ -65,7 +65,8 @@ get it dangerously wrong:
     [ADR-0031](0031-cloud-adapter-transports.md) already faced), is a dependency decision that earns
     its own ADR rather than being bolted on here.
   - **Endpoint persistence and the admin CRUD** (which URL, which secret, the cursor position) land
-    with the config-tree/admin slice; here endpoints are in-memory runtime state.
+    in later slices; here endpoints are in-memory runtime state. *(Persistence has since landed — see
+    the Consequences below; the admin CRUD is still owed.)*
 
 **Rejected.**
 
@@ -96,5 +97,19 @@ get it dangerously wrong:
   ([ADR-0026](0026-port-shapes.md), `pos-proto`) hold no personal data; a webhook is therefore not a
   channel for exfiltrating PII, which keeps it out of the data-protection blast radius even though it
   sends data off-platform.
-- Two follow-ups are now owed and named: the TLS-client ADR + the concrete `WebhookTransport`, and
-  the endpoint persistence + admin routes.
+- **Landed since:** endpoint persistence. `store-postgres` migration `0006` adds the
+  `webhook_endpoints` table — `id` (a ULID PK), `tenant_id`, `store_id`, `url`, `secret`, `cursor`
+  (NULL until the first delivery), `disabled` — RLS-isolated by tenant, with a `tenant_id` index for
+  the admin listing and a partial index (`WHERE disabled = false`) answering the delivery task's
+  enabled-load without a scan. Unlike an API-key secret (stored as a hash, [ADR-0037](0037-api-keys.md)),
+  the signing secret is kept **in full**: the cloud *signs* every delivery with it, so it must be
+  recoverable. `pos-cloud` fills its [`webhook::store::WebhookEndpointStore`](../../crates/pos-cloud/src/webhook/store.rs)
+  seam over `PostgresWebhooks`, converting rows to and from `PersistedWebhook` / `WebhookSummary`; the
+  listing is tenant-scoped and never carries the secret, while the delivery task loads the enabled
+  fleet **fleet-wide as the trusted role** (RLS bypassed), the same posture as the rollup projector and
+  the retention sweep. A `store-postgres` integration test proves the round-trip: register →
+  tenant-scoped list → fleet-wide enabled load → advance cursor → auto-disable suppresses → scoped
+  delete.
+- **Still owed**, each its own slice: the TLS-client ADR + the concrete `WebhookTransport`, and the
+  admin CRUD routes (register/list/revoke) that mint an endpoint's id and signing secret over the seam
+  that now exists.

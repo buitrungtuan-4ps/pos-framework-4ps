@@ -36,13 +36,17 @@
 //! routes publish a level (validated, versioned) and read the effective document (ADR-0033).
 //! [`retention`] is wired too: the `SubjectStore` seam is backed by a `store-postgres` `subjects`
 //! table, and the daily masking runner starts in `main` whenever a retention period is configured
-//! (ADR-0035).
+//! (ADR-0035). Webhook endpoints now persist: the [`webhook::store`] `WebhookEndpointStore` seam is
+//! backed by a `store-postgres` `webhook_endpoints` table that holds a subscription's durable facts —
+//! destination, signing secret, cursor, disabled flag — so the admin CRUD lists a tenant's endpoints
+//! and the delivery task can reload the enabled fleet across a restart (ADR-0032).
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
-//! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's publish path that
-//! delivers a `ConfigUpdate` to a store over the wire (ADR-0033), the subject-store *writer* that
-//! populates personal data (P10/P11 marketplace and corporate-invoice buyer fields, ADR-0035), and
-//! the super-admin's TOTP enrolment/provisioning and first-boot seeding (ADR-0034, P8 bootstrap).
+//! concrete TLS sender and the admin CRUD routes that register and revoke endpoints over the seam
+//! that now exists (ADR-0032), the config tree's publish path that delivers a `ConfigUpdate` to a
+//! store over the wire (ADR-0033), the subject-store *writer* that populates personal data
+//! (P10/P11 marketplace and corporate-invoice buyer fields, ADR-0035), and the super-admin's TOTP
+//! enrolment/provisioning and first-boot seeding (ADR-0034, P8 bootstrap).
 
 #![forbid(unsafe_code)]
 

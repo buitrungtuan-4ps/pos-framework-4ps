@@ -18,17 +18,23 @@
 //!    that fails for a day is disabled until a human intervenes.
 //!
 //! Endpoints are isolated: one cursor and one breaker each, so no receiver can affect another's
-//! delivery. The concrete TLS transport that turns a signed body into bytes on the wire is a
-//! [`dispatch::WebhookTransport`] implementation — a separate, later piece (ADR-0032); everything
-//! here is proven against a fake.
+//! delivery. [`store`] persists the durable facts of a subscription — the URL, the signing secret,
+//! the cursor, the disabled flag — behind a `store-postgres` table, so registrations survive a
+//! restart. The concrete TLS transport that turns a signed body into bytes on the wire is a
+//! [`dispatch::WebhookTransport`] implementation — a separate, later piece (ADR-0032); the delivery
+//! engine here is proven against a fake.
 
 pub mod breaker;
 pub mod dispatch;
 pub mod sign;
 pub mod ssrf;
+pub mod store;
 
 pub use dispatch::{
     DeliveryError, DeliveryOutcome, WebhookEndpoint, WebhookError, WebhookTransport, deliver_next,
 };
 pub use sign::{Signature, SigningSecret};
 pub use ssrf::{SsrfRejection, VettedUrl, vet};
+pub use store::{
+    PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
+};

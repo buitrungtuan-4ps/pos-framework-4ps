@@ -25,6 +25,7 @@ mod config_trees;
 mod rollups;
 mod store;
 mod subjects;
+mod webhooks;
 
 pub use admin::{AdminCredentialRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
@@ -32,3 +33,4 @@ pub use config_trees::PostgresConfigTrees;
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};
 pub use subjects::{PostgresSubjects, SubjectRow};
+pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};
