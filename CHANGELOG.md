@@ -369,6 +369,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   test-integration` runs them locally against your own PostgreSQL. `deny.toml` gains three reasoned,
   dated skips for the transient version duplications the `tokio-postgres` stack brings in (the rand
   0.10 line for its SCRAM nonce, and `fallible-iterator` mid-migration).
+- ADR-0031 — cloud adapter transports: `async-nats` for `link-nats` (the JetStream client protocol is
+  the "genuinely hard and general" infrastructure ADR-0007 says to buy); hand-rolled SigV4+HTTP for
+  `blob-garage` (thin and scheduled for deletion once WAL shipping is in-house, so no S3 SDK); a
+  bounded-queue HTTP importer for `metrics-vm` (off the sales path, so `record` never blocks).
+  Registered in the ADR index and the engineering guide.
+- `metrics-vm` (P7): the cloud `MetricsSink` over `VictoriaMetrics`. `record` enqueues into a bounded
+  in-memory queue and returns without waiting; a background task flushes batches through a
+  transport, so a slow or dead metrics backend drops samples rather than blocking a sale (ADR-0026
+  contract 1). No floating point — a sample is an `i64` and a unit, and the unit rides across as a
+  label. The transport is hand-rolled HTTP/1.1 over `tokio` to `VictoriaMetrics`' JSON line import
+  (`/api/v1/import`), no client crate (ADR-0031). Because the port's contract is this adapter's
+  queueing rather than `VictoriaMetrics`' storage, its shared contract suite runs **in process**
+  against a capturing transport in the ordinary `test` job, and a separate in-process HTTP mock pins
+  the exact import bytes — no live `VictoriaMetrics` needed to verify it. Adds no new external
+  dependencies (`tokio` and `serde_json` were already in the tree).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

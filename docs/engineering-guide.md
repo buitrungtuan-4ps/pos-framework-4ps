@@ -173,6 +173,7 @@ Recorded so far:
 | 0017 | Migrations: forward-only, additive, enforced by a `cargo xtask migrations` gate |
 | 0018 | Edge HTTP/WebSocket stack: axum + tower, a `broadcast` fan-out under 50 ms, the UI embedded with `rust-embed` |
 | 0030 | Edge discovery (QR raw-IP + manual, mDNS behind a trait), single-use pairing code, offline PIN against synced Argon2id hashes with a local lockout |
+| 0031 | Cloud adapter transports: `async-nats` for `link-nats`; hand-rolled SigV4+HTTP for `blob-garage` (thin, soon-deleted); bounded-queue HTTP for `metrics-vm` (off the sales path) |
 | 0020 | i18n runtime: ICU MessageFormat via `@formatjs/intl-messageformat` over the platform `Intl`; `en` is the enforced fallback; a TypeScript-AST lint bans hardcoded user-visible strings |
 | 0016 | Cloud PostgreSQL access: `tokio-postgres` + `deadpool`, hand-written SQL, RLS set per transaction, no build-time database |
 | 0022 | Events partitioned monthly by `business_date`; tenant isolation is RLS (a column and a policy), not the partition key; retention drops whole partitions |
