@@ -29,12 +29,15 @@ use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::http::CloudApp;
+use pos_cloud::webhook::{
+    PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
+};
 use pos_cloud::{Cloud, IngestOutcome, http};
 use pos_contract_tests::fixtures;
 use pos_fakes::{FakeClock, FakeStore};
 use pos_proto::BusinessDate;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{EventId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
@@ -302,8 +305,91 @@ impl ConfigTreeStore for FakeConfigTrees {
     }
 }
 
+/// The webhook-endpoint store, a flat list exactly as `fetch_enabled`/`list_for_tenant` read the
+/// real table.
+#[derive(Clone, Default)]
+struct FakeWebhooks {
+    rows: Arc<Mutex<Vec<PersistedWebhook>>>,
+}
+
+impl WebhookEndpointStore for FakeWebhooks {
+    async fn insert(&self, endpoint: &PersistedWebhook) -> Result<(), WebhookStoreError> {
+        self.rows.lock().expect("lock").push(endpoint.clone());
+        Ok(())
+    }
+
+    async fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<WebhookSummary>, WebhookStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .map(|row| WebhookSummary {
+                id: row.id.to_string(),
+                store_id: row.store_id.to_string(),
+                url: row.url.clone(),
+                cursor: row.cursor.as_ref().map(ToString::to_string),
+                disabled: row.disabled,
+            })
+            .collect())
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        id: WebhookEndpointId,
+    ) -> Result<bool, WebhookStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| !(row.tenant_id == tenant_id && row.id == id));
+        Ok(rows.len() != before)
+    }
+
+    async fn load_enabled(&self) -> Result<Vec<PersistedWebhook>, WebhookStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| !row.disabled)
+            .cloned()
+            .collect())
+    }
+
+    async fn save_cursor(
+        &self,
+        id: WebhookEndpointId,
+        cursor: EventId,
+    ) -> Result<(), WebhookStoreError> {
+        for row in self.rows.lock().expect("lock").iter_mut() {
+            if row.id == id {
+                row.cursor = Some(cursor);
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_disabled(
+        &self,
+        id: WebhookEndpointId,
+        disabled: bool,
+    ) -> Result<(), WebhookStoreError> {
+        for row in self.rows.lock().expect("lock").iter_mut() {
+            if row.id == id {
+                row.disabled = disabled;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The full application state type over the fakes.
-type FakeApp = CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin, FakeConfigTrees>;
+type FakeApp =
+    CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin, FakeConfigTrees, FakeWebhooks>;
 
 /// Builds an application state over the fakes, with an unprovisioned admin (the `/admin` routes are
 /// reachable but no login can succeed) — enough for the ingest and `/v1` tests.
@@ -330,7 +416,27 @@ fn app_full(
     admin: FakeAdmin,
     config_trees: FakeConfigTrees,
 ) -> FakeApp {
-    CloudApp::new(cloud, rollups, keys, clock(), admin, config_trees)
+    app_all(
+        cloud,
+        rollups,
+        keys,
+        admin,
+        config_trees,
+        FakeWebhooks::default(),
+    )
+}
+
+/// Builds an application state over the fakes with a specific webhook store too, for the webhook
+/// admin-route tests that inspect what was registered.
+fn app_all(
+    cloud: Cloud<FakeStore>,
+    rollups: FakeRollups,
+    keys: FakeKeys,
+    admin: FakeAdmin,
+    config_trees: FakeConfigTrees,
+    webhooks: FakeWebhooks,
+) -> FakeApp {
+    CloudApp::new(cloud, rollups, keys, clock(), admin, config_trees, webhooks)
 }
 
 /// A GET request for `uri`, optionally carrying a `Bearer` token.
@@ -1173,5 +1279,150 @@ async fn config_routes_require_a_session() {
         read.status(),
         StatusCode::NOT_FOUND,
         "a store with no published config has no effective document"
+    );
+}
+
+// --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
+
+/// Registering returns the signing secret once, the listing shows the endpoint without any secret,
+/// and deleting removes it. IP-literal URLs are used throughout so `vet` classifies them without a
+/// DNS lookup — the test needs no network.
+#[tokio::test]
+async fn webhook_register_lists_and_deletes() {
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Register a public IP-literal destination (no DNS needed to vet it).
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "url": "https://93.184.216.34/hook",
+    });
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/webhooks", &body, &cookie))
+        .await
+        .expect("route the registration");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    let id = created["id"].as_str().expect("an id").to_owned();
+    assert!(
+        created["signing_secret"]
+            .as_str()
+            .is_some_and(|secret| secret.len() == 64),
+        "the 256-bit signing secret is returned once, as 64 hex chars"
+    );
+    assert_eq!(created["url"], "https://93.184.216.34/hook");
+
+    // The listing shows the endpoint as metadata only — never a secret.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/webhooks?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = json_body(listed).await;
+    let rows = listed.as_array().expect("an array");
+    assert_eq!(rows.len(), 1, "the one registered endpoint is listed");
+    let only = rows.first().expect("one row");
+    assert_eq!(only["id"], id);
+    assert_eq!(only["url"], "https://93.184.216.34/hook");
+    assert!(only["cursor"].is_null(), "nothing delivered yet");
+    assert_eq!(only["disabled"], false);
+    assert!(
+        only.get("secret").is_none() && only.get("signing_secret").is_none(),
+        "a listing never carries the signing secret"
+    );
+
+    // Delete it; the listing is then empty.
+    let deleted = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/webhooks/{id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the delete");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/webhooks?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the re-listing");
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 0);
+}
+
+/// Registration is closed without a session, and an inward-pointing or plaintext URL is refused.
+#[tokio::test]
+async fn webhook_register_requires_a_session_and_refuses_ssrf() {
+    let router = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ));
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let good = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "url": "https://93.184.216.34/hook",
+    });
+
+    // No cookie: closed.
+    let unauth = router
+        .clone()
+        .oneshot(post_json("/admin/webhooks", &good))
+        .await
+        .expect("route the request");
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = admin_cookie(&router).await;
+
+    // Loopback: the classic SSRF target, refused as a bad request (IP literal, so no DNS).
+    let loopback = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "url": "https://127.0.0.1/hook",
+    });
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/webhooks", &loopback, &cookie))
+        .await
+        .expect("route the request");
+    assert_eq!(
+        refused.status(),
+        StatusCode::BAD_REQUEST,
+        "a loopback destination is refused before anything is stored"
+    );
+
+    // Plaintext http is refused even to a public address.
+    let plaintext = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "url": "http://93.184.216.34/hook",
+    });
+    let refused = router
+        .oneshot(post_with_cookie("/admin/webhooks", &plaintext, &cookie))
+        .await
+        .expect("route the request");
+    assert_eq!(
+        refused.status(),
+        StatusCode::BAD_REQUEST,
+        "a webhook must use https"
     );
 }

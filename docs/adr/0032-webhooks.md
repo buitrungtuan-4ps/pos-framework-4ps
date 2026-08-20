@@ -65,8 +65,8 @@ get it dangerously wrong:
     [ADR-0031](0031-cloud-adapter-transports.md) already faced), is a dependency decision that earns
     its own ADR rather than being bolted on here.
   - **Endpoint persistence and the admin CRUD** (which URL, which secret, the cursor position) land
-    in later slices; here endpoints are in-memory runtime state. *(Persistence has since landed — see
-    the Consequences below; the admin CRUD is still owed.)*
+    in later slices; here endpoints are in-memory runtime state. *(Both have since landed — see the
+    Consequences below; only the TLS sender remains.)*
 
 **Rejected.**
 
@@ -110,6 +110,16 @@ get it dangerously wrong:
   the retention sweep. A `store-postgres` integration test proves the round-trip: register →
   tenant-scoped list → fleet-wide enabled load → advance cursor → auto-disable suppresses → scoped
   delete.
-- **Still owed**, each its own slice: the TLS-client ADR + the concrete `WebhookTransport`, and the
-  admin CRUD routes (register/list/revoke) that mint an endpoint's id and signing secret over the seam
-  that now exists.
+- **Landed since:** the admin CRUD, behind the super-admin session guard
+  ([ADR-0034](0034-super-admin-auth.md)). `POST /admin/webhooks` SSRF-vets the destination on the
+  blocking pool (a real `getaddrinfo` resolver, the same `vet` the engine uses), mints a CSPRNG id and
+  signing secret at the edge, persists the endpoint, and returns the signing secret **once** — the
+  tenant's copy of what the cloud signs with. `GET /admin/webhooks?tenant_id=…` lists a tenant's
+  endpoints as metadata only (never the secret), and `DELETE /admin/webhooks/{id}?tenant_id=…` removes
+  one within its tenant, returning `204` either way — deletion is idempotent and the tenant scope stops
+  one tenant deleting another's. `CloudApp` gains the webhook-endpoint store as a seventh collaborator.
+  Router tests cover register → list → delete over the fakes, and prove a loopback or plaintext URL is
+  refused up front; they use IP-literal destinations so vetting needs no DNS.
+- **Still owed:** the TLS-client ADR + the concrete `WebhookTransport`, and the dispatch background
+  task that loads the enabled fleet, re-vets, delivers, and persists each cursor/disable — its own
+  slice.

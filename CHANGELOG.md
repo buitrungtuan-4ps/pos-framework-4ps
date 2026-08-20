@@ -680,6 +680,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   integration test (register → tenant-scoped list → fleet-wide enabled load → advance cursor →
   auto-disable suppresses → scoped delete). The admin CRUD routes and the concrete TLS sender remain
   their own later slices (ADR-0032).
+- `pos-cloud` (P7): the **webhook admin routes** are wired (ADR-0032), behind the super-admin session
+  guard. `POST /admin/webhooks` SSRF-vets the destination first — `https` only, no credentials, and
+  every resolved address must be public unicast — running `vet` with a real `getaddrinfo` resolver on
+  the blocking pool, then mints a CSPRNG id and signing secret, persists the endpoint, and returns the
+  signing secret **once** (the tenant's copy of what the cloud signs deliveries with). A loopback,
+  link-local (the `169.254.169.254` metadata range), private, or plaintext URL is a `400` before
+  anything is stored. `GET /admin/webhooks?tenant_id=…` lists a tenant's endpoints as metadata only
+  (never the secret) and `DELETE /admin/webhooks/{id}?tenant_id=…` removes one within its tenant,
+  returning `204` either way — deletion is idempotent and the tenant scope stops one tenant deleting
+  another's. `CloudApp` gains the webhook-endpoint store as a seventh collaborator. Router tests cover
+  register → list → delete and the SSRF/plaintext refusals over the fakes, using IP-literal
+  destinations so vetting needs no DNS. The concrete TLS sender and the dispatch background task remain
+  the next slice.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

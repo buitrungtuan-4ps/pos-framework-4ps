@@ -18,19 +18,22 @@
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
 //!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
 //!    behind that guard — provisioning of scoped per-tenant API keys ([ADR-0037](../../../docs/adr/0037-api-keys.md)):
-//!    issue (returning the token once), list, and revoke; and authoring the four-level configuration
+//!    issue (returning the token once), list, and revoke; authoring the four-level configuration
 //!    tree ([ADR-0033](../../../docs/adr/0033-config-tree.md)): publish a level of a store's tree
-//!    (validated, versioned) and read its effective document. Not part of the public contract, so —
-//!    like `/internal` — it is absent from the OpenAPI document.
+//!    (validated, versioned) and read its effective document; and registering webhook endpoints
+//!    ([ADR-0032](../../../docs/adr/0032-webhooks.md)): register a destination (SSRF-vetted, returning
+//!    the signing secret once), list, and delete. Not part of the public contract, so — like
+//!    `/internal` — it is absent from the OpenAPI document.
 //!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
-//! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], and the [`ClockSource`] — bundled in
-//! [`CloudApp`]. Tests drive it against `pos-fakes` and the binary serves it over `store-postgres`
-//! with the identical handler code (ADR-0026).
+//! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], the [`WebhookEndpointStore`], and the
+//! [`ClockSource`] — bundled in [`CloudApp`]. Tests drive it against `pos-fakes` and the binary serves
+//! it over `store-postgres` with the identical handler code (ADR-0026).
 
 use core::fmt;
 use core::fmt::Write as _;
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 
 use axum::extract::{Path, Query, State};
 use axum::http::header::SET_COOKIE;
@@ -58,6 +61,9 @@ use crate::config_tree::{
 };
 use crate::dashboard::{RollupError, RollupStore, dashboard};
 use crate::openapi::ApiDoc;
+use crate::webhook::{
+    PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
+};
 use utoipa::OpenApi as _;
 
 /// The super-admin session TTL a [`CloudApp`] uses when the binary does not override it. Eight hours,
@@ -68,21 +74,23 @@ const DEFAULT_ADMIN_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 /// Everything a request handler needs, bundled so the router carries one state type: the event
 /// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
 /// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
-/// store the `/admin` config routes author, and the clock the checks verify time against.
+/// store the `/admin` config routes author, the webhook-endpoint store the `/admin` webhook routes
+/// register into, and the clock the checks verify time against.
 ///
 /// Cloneable and cheap to clone — each collaborator is itself a shared handle (a pool, an `Arc`), so
 /// a clone talks to the same backing store.
-pub struct CloudApp<S, R, K, C, A, T> {
+pub struct CloudApp<S, R, K, C, A, T, W> {
     cloud: Cloud<S>,
     rollups: R,
     keys: K,
     clock: C,
     admin: A,
     config_trees: T,
+    webhooks: W,
     admin_session_ttl_secs: u64,
 }
 
-impl<S, R, K, C, A, T> fmt::Debug for CloudApp<S, R, K, C, A, T> {
+impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // The collaborators are opaque handles — a pool, a key store, a clock — and some hold
         // secrets, so the fields are deliberately elided rather than rendered.
@@ -90,7 +98,7 @@ impl<S, R, K, C, A, T> fmt::Debug for CloudApp<S, R, K, C, A, T> {
     }
 }
 
-impl<S, R, K, C, A, T> Clone for CloudApp<S, R, K, C, A, T>
+impl<S, R, K, C, A, T, W> Clone for CloudApp<S, R, K, C, A, T, W>
 where
     S: Clone,
     R: Clone,
@@ -98,6 +106,7 @@ where
     C: Clone,
     A: Clone,
     T: Clone,
+    W: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -107,12 +116,13 @@ where
             clock: self.clock.clone(),
             admin: self.admin.clone(),
             config_trees: self.config_trees.clone(),
+            webhooks: self.webhooks.clone(),
             admin_session_ttl_secs: self.admin_session_ttl_secs,
         }
     }
 }
 
-impl<S, R, K, C, A, T> CloudApp<S, R, K, C, A, T> {
+impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     /// Bundles the collaborators into one shareable application state, with the default super-admin
     /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it).
     pub const fn new(
@@ -122,6 +132,7 @@ impl<S, R, K, C, A, T> CloudApp<S, R, K, C, A, T> {
         clock: C,
         admin: A,
         config_trees: T,
+        webhooks: W,
     ) -> Self {
         Self {
             cloud,
@@ -130,6 +141,7 @@ impl<S, R, K, C, A, T> CloudApp<S, R, K, C, A, T> {
             clock,
             admin,
             config_trees,
+            webhooks,
             admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
         }
     }
@@ -144,7 +156,7 @@ impl<S, R, K, C, A, T> CloudApp<S, R, K, C, A, T> {
 }
 
 /// Builds the cloud router over `app`.
-pub fn router<S, R, K, C, A, T>(app: CloudApp<S, R, K, C, A, T>) -> Router
+pub fn router<S, R, K, C, A, T, W>(app: CloudApp<S, R, K, C, A, T, W>) -> Router
 where
     S: EventStore + Clone + Send + Sync + 'static,
     S::Tx: Send,
@@ -153,34 +165,44 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/health", get(health))
-        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T>))
+        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
         .route(
             "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<S, R, K, C, A, T>),
+            get(daily_rollups::<S, R, K, C, A, T, W>),
         )
         .route("/v1/openapi.json", get(openapi))
-        .route("/admin/login", post(admin_login::<S, R, K, C, A, T>))
-        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T>))
-        .route("/admin/session", get(admin_session::<S, R, K, C, A, T>))
+        .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
+        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
+        .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
         .route(
             "/admin/api-keys",
-            post(admin_create_api_key::<S, R, K, C, A, T>)
-                .get(admin_list_api_keys::<S, R, K, C, A, T>),
+            post(admin_create_api_key::<S, R, K, C, A, T, W>)
+                .get(admin_list_api_keys::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/api-keys/{id}",
-            delete(admin_revoke_api_key::<S, R, K, C, A, T>),
+            delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/config",
-            get(admin_config_effective::<S, R, K, C, A, T>),
+            get(admin_config_effective::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/config/{level}",
-            axum::routing::put(admin_config_publish::<S, R, K, C, A, T>),
+            axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/webhooks",
+            post(admin_register_webhook::<S, R, K, C, A, T, W>)
+                .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/webhooks/{id}",
+            delete(admin_delete_webhook::<S, R, K, C, A, T, W>),
         )
         .with_state(app)
 }
@@ -197,8 +219,8 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
 
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
 /// so it is deliberately absent from the public OpenAPI document and carries no authentication.
-async fn ingest<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn ingest<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     Json(events): Json<Vec<EventEnvelope<RawPayload>>>,
 ) -> Response
 where
@@ -211,6 +233,7 @@ where
     C: Clone + Send + Sync + 'static,
     A: Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     match app.cloud.ingest(&events).await {
         Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
@@ -239,8 +262,8 @@ where
     ),
     tag = "rollups",
 )]
-pub(crate) async fn daily_rollups<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
 ) -> Response
@@ -253,6 +276,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
     // read rollups at all? Only then does the request touch a resource.
@@ -285,8 +309,8 @@ where
 /// browser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a
 /// store outage is a `503`. Not in the OpenAPI document — this is the admin surface, not the public
 /// `/v1` API.
-async fn admin_login<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_login<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     Json(request): Json<LoginRequest>,
 ) -> Response
 where
@@ -297,6 +321,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     let Some(token) = mint_session_token() else {
         // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
@@ -329,8 +354,8 @@ where
 ///
 /// Idempotent — a request with no session, or one the store cannot reach, still clears the client
 /// cookie, so the browser is always logged out even if the server-side row lingers to its TTL.
-async fn admin_logout<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_logout<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
 where
@@ -340,6 +365,7 @@ where
     C: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(error) = logout(&app.admin, &headers).await {
         // The server-side revoke failed, but clearing the client cookie still logs the browser out;
@@ -352,8 +378,8 @@ where
 
 /// Confirms the caller holds a live super-admin session — the guard every other `/admin` route will
 /// stand behind, exposed here as a `204`/`401` "am I signed in?" check for the admin UI.
-async fn admin_session<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_session<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
 where
@@ -363,6 +389,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     match authenticate_session(&app.admin, &app.clock, &headers).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -404,8 +431,8 @@ struct ListApiKeysQuery {
 /// Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and
 /// persists it (storing only the secret's hash). The token in the `201` body is the only time the
 /// secret is visible.
-async fn admin_create_api_key<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_create_api_key<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Response
@@ -416,6 +443,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -469,8 +497,8 @@ where
 }
 
 /// Lists a tenant's API keys as metadata only — never a secret (super-admin only).
-async fn admin_list_api_keys<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_list_api_keys<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Query(query): Query<ListApiKeysQuery>,
 ) -> Response
@@ -481,6 +509,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -503,8 +532,8 @@ where
 
 /// Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking
 /// is idempotent, and telling the caller which it was is a needless enumeration signal.
-async fn admin_revoke_api_key<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_revoke_api_key<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response
@@ -515,6 +544,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -564,8 +594,8 @@ struct ConfigViolations {
 /// request body, and publishes — composing, validating, and (only if valid) appending a new version,
 /// which is then persisted. A rejected version is a `422` carrying the violations; nothing is stored
 /// and the last good version stays current ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
-async fn admin_config_publish<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_config_publish<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path((store_id, level)): Path<(String, String)>,
     Query(query): Query<ConfigTenantQuery>,
@@ -578,6 +608,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -641,8 +672,8 @@ where
 
 /// The current effective (composed, validated) config document for a store (super-admin only), or
 /// `404` if nothing has been published to it yet.
-async fn admin_config_effective<S, R, K, C, A, T>(
-    State(app): State<CloudApp<S, R, K, C, A, T>>,
+async fn admin_config_effective<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<ConfigTenantQuery>,
@@ -654,6 +685,7 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
         return denied.into_response();
@@ -687,6 +719,231 @@ where
             .into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+// --- Webhook endpoint administration (`/admin/webhooks`) ----------------------------------------
+
+/// A super-admin request to register a webhook endpoint for a tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct RegisterWebhookRequest {
+    /// The tenant the endpoint belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose event log the endpoint follows (a 26-character ULID).
+    store_id: String,
+    /// The destination URL. Must be `https`, must carry no credentials, and must resolve only to
+    /// public-unicast addresses — vetted here before the endpoint is stored ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+    url: String,
+}
+
+/// The one-time response to a registration: the id, the normalized URL, and the signing secret shown
+/// **exactly once** — the tenant needs it to verify the HMAC signature on every delivery, and the
+/// cloud keeps only its own copy thereafter.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RegisterWebhookResponse {
+    /// The endpoint's public id (a ULID).
+    id: String,
+    /// The normalized destination URL that was stored.
+    url: String,
+    /// The HMAC signing secret. Shown once; it is the tenant's copy of what the cloud signs with.
+    signing_secret: String,
+}
+
+/// The tenant a webhook listing or deletion is scoped to. The super-admin is global, so it names the
+/// tenant on the query string, exactly as API-key provisioning and config authoring do.
+#[derive(Debug, Clone, Deserialize)]
+struct WebhookTenantQuery {
+    /// The tenant whose endpoints to list or delete within (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// Registers a webhook endpoint and returns the one-time signing secret (super-admin only).
+///
+/// Behind the session guard. The destination is SSRF-vetted before anything is stored: `https` only,
+/// no credentials, and every resolved address must be public unicast — so a webhook URL can never
+/// become a probe into the cloud's own network ([ADR-0032](../../../docs/adr/0032-webhooks.md)). The
+/// id and signing secret are minted at the edge; the secret in the `201` body is the only time it is
+/// visible, because the cloud stores it to *sign* with rather than to verify a hash of.
+async fn admin_register_webhook<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterWebhookRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Vet the destination before it is ever stored. `vet` resolves the host with a real
+    // getaddrinfo-backed resolver, which blocks, so it runs on the blocking pool. The vetted
+    // addresses are not kept — the delivery slice re-vets before each connect (ADR-0032) — but a
+    // structurally unsafe or inward-pointing URL is refused up front rather than at first delivery.
+    let raw_url = request.url.clone();
+    let vetted = match tokio::task::spawn_blocking(move || vet(&raw_url, resolve_host)).await {
+        Ok(Ok(vetted)) => vetted,
+        Ok(Err(rejection)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("the webhook URL was rejected: {rejection}"),
+            )
+                .into_response();
+        }
+        Err(join_error) => {
+            tracing::error!(%join_error, "the SSRF vetting task failed to join");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response();
+        }
+    };
+
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(secret)) = (mint_webhook_id(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint a webhook endpoint");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the webhook service is unavailable",
+        )
+            .into_response();
+    };
+    let endpoint = PersistedWebhook {
+        id,
+        tenant_id,
+        store_id,
+        url: vetted.url.clone(),
+        secret: SigningSecret::new(secret.clone()),
+        cursor: None,
+        disabled: false,
+    };
+    if let Err(error) = app.webhooks.insert(&endpoint).await {
+        tracing::error!(%error, "persisting a new webhook endpoint failed");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the webhook service is unavailable",
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(RegisterWebhookResponse {
+            id: id.to_string(),
+            url: vetted.url,
+            signing_secret: secret,
+        }),
+    )
+        .into_response()
+}
+
+/// Lists a tenant's webhook endpoints as metadata only — never a secret (super-admin only).
+async fn admin_list_webhooks<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Query(query): Query<WebhookTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match app.webhooks.list_for_tenant(tenant_id).await {
+        Ok(summaries) => (StatusCode::OK, Json::<Vec<WebhookSummary>>(summaries)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing webhook endpoints failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Deletes a webhook endpoint by id within a tenant (super-admin only). `204` whether or not a live
+/// endpoint was found — deletion is idempotent, the tenant scope stops one tenant removing another's
+/// endpoint, and reporting which case it was is a needless enumeration signal.
+async fn admin_delete_webhook<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<WebhookTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        id.parse::<Ulid>().map(WebhookEndpointId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the endpoint id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.webhooks.delete(tenant_id, id).await {
+        Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "deleting a webhook endpoint failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Resolves `host` to its IP addresses via the OS resolver (`getaddrinfo`), for SSRF vetting. It
+/// blocks, so it is only ever called on the blocking pool. The port is immaterial — [`vet`] uses only
+/// the addresses — so an arbitrary one (443) stands in.
+fn resolve_host(host: &str) -> std::io::Result<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs as _;
+    Ok((host, 443_u16)
+        .to_socket_addrs()?
+        .map(|address| address.ip())
+        .collect())
+}
+
+/// Mints a webhook endpoint id from `now_ms`, or `None` if the OS entropy source is unavailable.
+fn mint_webhook_id(now_ms: i64) -> Option<WebhookEndpointId> {
+    mint_ulid(now_ms).map(WebhookEndpointId::new)
 }
 
 /// Maps a config-tree store failure to a retryable `503`, logging the detail rather than leaking it.
