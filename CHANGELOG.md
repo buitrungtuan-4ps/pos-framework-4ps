@@ -804,6 +804,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   halves of the cloud↔edge loops (edge pollers) are P9 fleet wiring, and the `metrics-vm`
   sparse-sampling profile waits for metrics integration at scale (the cloud emits no metrics yet, so a
   second sink would have no producer; its stride is sized against P12's measured capacity).
+- `deploy/` (P8, ADR-0044 — a new ADR): the **fork-and-deploy stack** for one country cell on a single
+  VPS. `deploy/Dockerfile` builds `pos_cloud` multi-stage (a Rust 1.94.1 builder → a `debian:bookworm-slim`
+  runtime carrying only the stripped binary and CA roots, running as a non-root uid `10001`).
+  `deploy/compose.yml` runs the four P7 backends (`pos_cloud`, `postgres:16.4`, `nats:2.10` with
+  JetStream, `dxflrs/garage`) behind a Caddy TLS ingress — every image pinned to an immutable tag, each
+  service with log-size/file and ~memory/CPU/pids caps (~1.4 GB across the four), on an `internal`
+  backend network so only Caddy faces the internet. `deploy/Caddyfile` + `deploy/caddy.Dockerfile`
+  (Caddy xcaddy-built with the Cloudflare DNS provider) terminate real TLS: DNS-01 by default (grey-cloud
+  the record, no inbound `:80` to ACME), with a documented `<vps-ip>.sslip.io` HTTP-01 fallback for a box
+  with no purchased domain; Cloudflare "Flexible" SSL is forbidden. Operational secrets are **not** in the
+  repo — `deploy/compose.yml` reads `deploy/secrets/{pos.env,cloud.toml,garage.toml,caddy.env}`, all
+  git-ignored and generated on the box by `bootstrap.sh` (P8b, next). A root `.dockerignore` keeps the
+  build context to the source cargo needs.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

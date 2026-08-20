@@ -1,0 +1,11 @@
+# Docker build context excludes (ADR-0044). The pos_cloud image builds from the repo
+# root, so keep the context to the source cargo actually needs — the two huge trees are
+# .git and target, and secrets must never enter an image layer. Every crate's Cargo.toml
+# and src/ stays in, because cargo reads the whole workspace to build one member.
+.git/
+target/
+ui/node_modules/
+ui/dist/
+deploy/secrets/
+vendor/
+**/*.rs.bk

@@ -1,0 +1,162 @@
+# Pizza 4P's — pos_cloud country cell, one VPS, Docker Compose (ADR-0044).
+#
+# Five containers: a Caddy TLS ingress in front of the four backends P7 targets —
+# pos_cloud, PostgreSQL, NATS (JetStream), Garage. Sized to ~1.4 GB across the four
+# backends so it fits a small VPS; Caddy adds a little on top. Only Caddy faces the
+# internet: the backend network is `internal`.
+#
+# Secrets are NEVER committed. Everything under ./secrets/ is generated on the box by
+# bootstrap.sh (P8b) and is git-ignored (/deploy/secrets/ in .gitignore). This file only
+# declares the topology and the files it expects:
+#
+#   secrets/pos.env      POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+#   secrets/cloud.toml   pos_cloud config: bind = "0.0.0.0:8080", database_url (with the
+#                        postgres password, host = "postgres"), optional [nats]. MUST be
+#                        chmod 600 AND chown 10001:10001 — the pos_cloud container runs as
+#                        uid 10001 and reads this file (root ignores the mode; the app
+#                        user needs it). bootstrap.sh sets both.
+#   secrets/garage.toml  Garage server config (rpc_secret, data/meta paths).
+#   secrets/caddy.env    DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN for TLS issuance.
+#
+# Bring-up, once bootstrap.sh has written ./secrets/*:  docker compose up -d --build
+name: pos-cloud
+
+# Every container caps its logs so a chatty day cannot fill the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: caddy.Dockerfile
+    image: ${CADDY_IMAGE:-pos-caddy:local}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 96m
+    cpus: 0.25
+    pids_limit: 128
+    env_file:
+      - ./secrets/caddy.env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontend
+    depends_on:
+      pos_cloud:
+        condition: service_started
+
+  pos_cloud:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ${POS_CLOUD_IMAGE:-pos-cloud:local}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 256
+    # SIGINT is what pos_cloud's shutdown handler waits on (main.rs shutdown_signal); tell
+    # Compose to send it, not the default SIGTERM, so `docker compose stop` drains
+    # gracefully — a committed sale is durable, an in-flight one was never acknowledged.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    environment:
+      POS_CLOUD_CONFIG: /etc/pos-cloud/cloud.toml
+      RUST_LOG: info
+    volumes:
+      - ./secrets/cloud.toml:/etc/pos-cloud/cloud.toml:ro
+    networks:
+      # On both networks: `backend` to reach postgres/nats/garage, `frontend` for the one
+      # outbound need — delivering webhooks (the backend network is internal, no egress).
+      - frontend
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      garage:
+        condition: service_started
+
+  postgres:
+    image: postgres:16.4-bookworm
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    env_file:
+      - ./secrets/pos.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      # $$ escapes Compose interpolation so the container shell expands the env-file vars.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nats:
+    image: nats:2.10.20-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    # JetStream on, durable store on the volume, monitoring endpoint on :8222 for the
+    # healthcheck. The -alpine tag carries a shell + busybox wget the check needs.
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    volumes:
+      - natsdata:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  garage:
+    image: dxflrs/garage:v1.0.1
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    # Reads /etc/garage.toml (rpc_secret, layout). bootstrap.sh writes it; the object
+    # layout and access keys are wired with backups in P8d.
+    volumes:
+      - ./secrets/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    networks:
+      - backend
+
+networks:
+  frontend: {}
+  # No route off the box: postgres, nats and garage never need egress, and pos_cloud's
+  # only outbound path is the frontend network.
+  backend:
+    internal: true
+
+volumes:
+  pgdata: {}
+  natsdata: {}
+  garage_meta: {}
+  garage_data: {}
+  caddy_data: {}
+  caddy_config: {}
