@@ -721,6 +721,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   both with defaults: `webhook_dispatch_interval_secs` (10s) and `webhook_delivery_timeout_secs` (10s,
   so a black-hole endpoint cannot wedge the loop). The sweep logic is unit-tested over the fakes
   (deliver → persist cursor → idle; a now-unsafe URL is skipped, not delivered to).
+- `pos-cloud` (P7): the **config publish-to-store path** (ADR-0039, a new ADR) — the cloud now
+  delivers a store its configuration, the half ADR-0033 had deferred. Because the store→cloud link is
+  outbound-only (ADR-0031, no cloud→store push channel exists), delivery is a store-initiated **pull**
+  on a new store-facing surface: `GET /sync/stores/{store_id}/config?held_version=…` runs the config
+  engine's `update_for` and returns `{"status":"up_to_date"}` or `{"status":"update","update":{…}}`
+  carrying the RFC-7386 delta (or a full snapshot past K versions behind). It is authenticated by an
+  API key with a new deny-by-default `read_config` scope and answers **only for the key's own tenant**
+  — the tenant comes from the verified grant, never the path — so a store reaches only its own trees;
+  an unknown or unpublished store reads `404`. `/sync` is a fifth route family (store operation, not
+  the public integrator API), so it is absent from the OpenAPI document, like `/admin` and
+  `/internal`. Reuses the existing API-key bearer and config-tree collaborators — no new dependency or
+  `CloudApp` generic. Router tests cover snapshot → up-to-date and the `401`/`403`/`404` closes. The
+  `pos_edge` loop that polls this and applies through `ConfigStore` is store-side fleet wiring (P9).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

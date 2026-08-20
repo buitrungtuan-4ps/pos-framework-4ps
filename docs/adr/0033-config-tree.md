@@ -84,7 +84,13 @@ must never reach it, and a store that has been offline for a while must be able 
   /admin/stores/{store_id}/config` returns the current effective document, or `404` if the store has
   none yet. The tenant is named on the query string (the super-admin is global), and the version id
   is a ULID minted at the edge.
-- **Deliberately not here yet:** the publish path that hands a [`ConfigUpdate`] to a store — the
-  store's apply side already exists behind `ConfigStore`, but the cloud does not yet deliver
-  `update_for`'s output over the wire. A shared Tenant/Brand layer that fans out to every store under
-  it is a future modeling step; today each store's tree holds its own four layers.
+- **Landed since:** the delivery path that hands a `ConfigUpdate` to a store
+  ([ADR-0039](0039-config-delivery.md)). Because the store→cloud link is outbound-only
+  ([ADR-0031](0031-cloud-adapter-transports.md)), delivery is a store-initiated **pull**:
+  `GET /sync/stores/{store_id}/config?held_version=…` runs `update_for` and returns
+  `{"status":"up_to_date"}` or the snapshot/delta to apply, authenticated by an API key with a new
+  `read_config` scope and answering only for the key's tenant. It is a store-facing surface, absent
+  from the public OpenAPI. The `pos_edge` loop that polls it and applies through `ConfigStore` is
+  store-side fleet wiring (P9).
+- **Deliberately not here yet:** a shared Tenant/Brand layer that fans out to every store under it is
+  a future modeling step; today each store's tree holds its own four layers.

@@ -3,7 +3,7 @@
 
 //! The cloud HTTP surface.
 //!
-//! Four kinds of route:
+//! Five kinds of route:
 //!
 //!  * `/health` — liveness.
 //!  * `/internal/*` — the ingest re-push target the reconciliation loop uses (`docs/roadmap.md`
@@ -14,6 +14,10 @@
 //!    Every `/v1` handler carries a [`utoipa::path`] annotation and every response type derives
 //!    `utoipa::ToSchema`, so `/v1/openapi.json` is generated from the code and can never drift from
 //!    it ([ADR-0019](../../../docs/adr/0019-openapi-generation.md)).
+//!  * `/sync/*` — the **store-facing** surface a first-party store pulls its own configuration from
+//!    ([ADR-0039](../../../docs/adr/0039-config-delivery.md)): bearer-authed with a `read_config`
+//!    scope, tenant-isolated, and — being store operation rather than an integrator API — absent
+//!    from the public OpenAPI document, like `/admin` and `/internal`.
 //!  * `/admin/*` — the **interactive** super-admin surface ([`crate::auth::admin`],
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
 //!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
@@ -43,6 +47,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use pos_ports::PortError;
+use pos_ports::config_store::ConfigUpdate;
 use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
@@ -56,7 +61,7 @@ use crate::auth::bearer::{authenticate, require_scope};
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
-    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore,
+    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
 };
 use crate::dashboard::{RollupError, RollupStore, dashboard};
 use crate::openapi::ApiDoc;
@@ -174,6 +179,10 @@ where
             get(daily_rollups::<S, R, K, C, A, T, W>),
         )
         .route("/v1/openapi.json", get(openapi))
+        .route(
+            "/sync/stores/{store_id}/config",
+            get(edge_config_sync::<S, R, K, C, A, T, W>),
+        )
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
@@ -296,6 +305,89 @@ where
     match dashboard(&app.rollups, grant.tenant(), store_id).await {
         Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
         Err(error) => rollup_error_response(&error),
+    }
+}
+
+// --- The store-facing configuration surface (`/sync`) -------------------------------------------
+
+/// The version a store reports it currently holds, if any.
+#[derive(Debug, Clone, Deserialize)]
+struct ConfigSyncQuery {
+    /// The config version the store holds (a ULID), or absent if it holds none yet.
+    #[serde(default)]
+    held_version: Option<String>,
+}
+
+/// What a store should do to reach the current configuration — the wire form of a
+/// [`SyncOutcome`](crate::config_tree::SyncOutcome).
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ConfigSyncResponse {
+    /// The store already holds the current version; it applies nothing.
+    UpToDate,
+    /// The store should apply this snapshot or delta.
+    Update {
+        /// The snapshot or collapsed delta to apply ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+        update: ConfigUpdate,
+    },
+}
+
+/// Serves a store its own configuration update: nothing (up to date), a delta, or a full snapshot
+/// past *K* versions behind ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
+///
+/// Requires a valid API key with the `read_config` scope, and answers **only** for that key's tenant:
+/// the tenant comes from the verified grant, never the path, so a store can pull a `store_id` only
+/// within its own tenant. A store outside the tenant, or one with nothing published, reads `404`.
+async fn edge_config_sync<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigSyncQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    let held = match query.held_version {
+        None => None,
+        Some(ref raw) => match raw.parse::<Ulid>().map(ConfigVersionId::new) {
+            Ok(version) => Some(version),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "held_version is not a ULID").into_response();
+            }
+        },
+    };
+    // The tenant is the grant's, not the path's — a store reaches only its own tenant's trees.
+    match app.config_trees.load(grant.tenant(), store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            let response = match tree.update_for(held) {
+                SyncOutcome::UpToDate => ConfigSyncResponse::UpToDate,
+                SyncOutcome::Deliver(update) => ConfigSyncResponse::Update { update },
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
     }
 }
 

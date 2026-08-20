@@ -170,8 +170,15 @@ impl ApiKeyAdminStore for FakeKeys {
 }
 
 /// Issues a key for `tenant_id` with `scopes` into `keys`, and returns the one-time token to present.
+///
+/// Each call mints a distinct id, so a test issuing more than one key does not have the second
+/// silently overwrite the first in the fake's map.
 fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
-    let id = ApiKeyId::new(Ulid::from_u128(0xA11CE));
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0x00A1_1CE0);
+    let id = ApiKeyId::new(Ulid::from_u128(u128::from(
+        NEXT_ID.fetch_add(1, Ordering::Relaxed),
+    )));
     let (stored, token) = issue(
         id,
         tenant_id,
@@ -1280,6 +1287,121 @@ async fn config_routes_require_a_session() {
         StatusCode::NOT_FOUND,
         "a store with no published config has no effective document"
     );
+}
+
+// --- Store-facing config sync (`GET /sync/stores/{id}/config`, bearer + read_config) ------------
+
+/// Publishes one config version through the admin route, then returns the router, the `read_config`
+/// bearer, the store ULID, and the published version id — the fixture the sync tests share.
+async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, String) {
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
+            &doc,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    let token = issue_key(keys, tenant(), &[Scope::ReadConfig]);
+    (router, token, store_ulid, version)
+}
+
+#[tokio::test]
+async fn config_sync_serves_an_update_then_reports_up_to_date() {
+    let keys = FakeKeys::default();
+    let (router, token, store_ulid, version) = published_config(&keys).await;
+
+    // A store holding nothing gets an update to apply (a full snapshot for a first sync).
+    let fresh = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(fresh.status(), StatusCode::OK);
+    let body = json_body(fresh).await;
+    assert_eq!(
+        body["status"], "update",
+        "a store with nothing gets an update"
+    );
+    assert!(
+        !body["update"].is_null(),
+        "the update carries a snapshot/delta"
+    );
+
+    // A store already holding the current version is told it is up to date.
+    let current = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config?held_version={version}"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(current.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(current).await["status"],
+        "up_to_date",
+        "holding the current version, the store applies nothing"
+    );
+}
+
+#[tokio::test]
+async fn config_sync_is_closed_without_the_read_config_scope() {
+    let keys = FakeKeys::default();
+    let (router, config_token, store_ulid, _version) = published_config(&keys).await;
+    let uri = format!("/sync/stores/{store_ulid}/config");
+
+    // No bearer at all.
+    let anon = router
+        .clone()
+        .oneshot(get(&uri, None))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+
+    // A key scoped to something else is forbidden, not merely empty.
+    let rollups_only = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let wrong_scope = router
+        .clone()
+        .oneshot(get(&uri, Some(&rollups_only)))
+        .await
+        .expect("route");
+    assert_eq!(
+        wrong_scope.status(),
+        StatusCode::FORBIDDEN,
+        "read_rollups does not authorise config pull"
+    );
+
+    // The right scope, but a store with no published config, is a 404 — not a leak of another's tree.
+    let other_store = Ulid::from_u128(0xBEEF).to_string();
+    let unknown = router
+        .oneshot(get(
+            &format!("/sync/stores/{other_store}/config"),
+            Some(&config_token),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }
 
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
