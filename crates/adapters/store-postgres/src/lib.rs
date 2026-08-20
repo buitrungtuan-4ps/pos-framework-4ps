@@ -19,10 +19,12 @@
 
 #![forbid(unsafe_code)]
 
+mod admin;
 mod apikeys;
 mod rollups;
 mod store;
 
+pub use admin::{AdminCredentialRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, PostgresApiKeys};
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};

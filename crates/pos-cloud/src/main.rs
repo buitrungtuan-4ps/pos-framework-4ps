@@ -43,15 +43,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
-    // One pool, three views of it: the event-store application layer, the materialised-rollup read
-    // model the `/v1` dashboard answers from, and the API-key store the `/v1` bearer check consults.
+    // One pool, four views of it: the event-store application layer, the materialised-rollup read
+    // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, and
+    // the super-admin store the `/admin` login and session guard use.
     let cloud = Cloud::new(store.clone());
     let app = CloudApp::new(
         cloud.clone(),
         store.rollups(),
         store.api_keys(),
         SystemClock,
-    );
+        store.admin(),
+    )
+    .with_admin_session_ttl_secs(config.admin_session_ttl_secs);
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the

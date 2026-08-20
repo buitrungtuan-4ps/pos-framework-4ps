@@ -133,7 +133,8 @@ impl EventStoreHarness for StoreHarness {
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
-                 TRUNCATE events, event_outbox, rollups, api_keys RESTART IDENTITY;",
+                 TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions \
+                 RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -173,7 +174,10 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     store.migrate().await.map_err(port_err)?;
     let admin = admin().await?;
     admin
-        .batch_execute("TRUNCATE events, event_outbox, rollups, api_keys RESTART IDENTITY")
+        .batch_execute(
+            "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions \
+             RESTART IDENTITY",
+        )
         .await
         .map_err(db_err)?;
     Ok((store, admin))
@@ -460,4 +464,115 @@ fn rls_isolates_rollup_rows_by_tenant() {
              same store"
         );
     });
+}
+
+// ---------------------------------------------------------------------------
+// The super-admin credential and session store (ADR-0034).
+// ---------------------------------------------------------------------------
+
+mod admin_store {
+    use super::{block_on, prepared};
+
+    /// Seeds the single super-admin row with obviously-fake credentials — never real key material.
+    async fn seed_admin(admin: &tokio_postgres::Client) {
+        let phc: &str = "$argon2id$v=19$m=19456,t=2,p=1$ZmFrZXNhbHQ$ZmFrZWhhc2h2YWx1ZQ";
+        let secret: &[u8] = b"fake-totp-seed-not-real";
+        admin
+            .execute(
+                "INSERT INTO super_admin (id, password_phc, totp_secret, last_used_totp_step) \
+                 VALUES (true, $1, $2, NULL)",
+                &[&phc, &secret],
+            )
+            .await
+            .expect("seed the super-admin row");
+    }
+
+    /// The credential reads back exactly as stored, and the TOTP step advances only forward.
+    #[test]
+    fn the_credential_round_trips_and_the_step_never_moves_backwards() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let credentials = store.admin();
+            assert!(
+                credentials
+                    .fetch_credential()
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "no credential before provisioning"
+            );
+
+            seed_admin(&admin).await;
+            let row = credentials
+                .fetch_credential()
+                .await
+                .expect("fetch")
+                .expect("provisioned");
+            assert_eq!(
+                row.password_phc,
+                "$argon2id$v=19$m=19456,t=2,p=1$ZmFrZXNhbHQ$ZmFrZWhhc2h2YWx1ZQ"
+            );
+            assert_eq!(row.totp_secret, b"fake-totp-seed-not-real");
+            assert_eq!(
+                row.last_used_totp_step, None,
+                "unused until the first login"
+            );
+
+            credentials.advance_totp_step(100).await.expect("advance");
+            // A lower step must not move it backwards — the guard is a no-op here.
+            credentials
+                .advance_totp_step(50)
+                .await
+                .expect("attempt lower");
+            let row = credentials
+                .fetch_credential()
+                .await
+                .expect("fetch")
+                .expect("provisioned");
+            assert_eq!(
+                row.last_used_totp_step,
+                Some(100),
+                "the step advanced to 100 and a lower write did not move it back"
+            );
+        });
+    }
+
+    /// A session is live only up to its expiry, and revoking it removes it.
+    #[test]
+    fn a_session_is_live_until_its_expiry_and_gone_after_revoke() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let sessions = store.admin();
+            let hash = [7_u8; 32];
+            sessions
+                .insert_session(&hash, 2000)
+                .await
+                .expect("insert the session");
+
+            assert!(
+                sessions.session_valid(&hash, 1999).await.expect("query"),
+                "live one millisecond before expiry"
+            );
+            assert!(
+                !sessions.session_valid(&hash, 2000).await.expect("query"),
+                "not live at the expiry instant (the check is strictly greater-than)"
+            );
+            assert!(
+                !sessions
+                    .session_valid(&[9_u8; 32], 1999)
+                    .await
+                    .expect("query"),
+                "an unknown token names no session"
+            );
+
+            sessions
+                .delete_session(&hash)
+                .await
+                .expect("revoke the session");
+            assert!(
+                !sessions.session_valid(&hash, 1999).await.expect("query"),
+                "a revoked session is gone even before its expiry"
+            );
+        });
+    }
 }

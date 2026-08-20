@@ -27,6 +27,12 @@ const fn default_projector_interval_secs() -> u64 {
     30
 }
 
+/// How long a super-admin session is valid, in seconds, when the config does not say — eight hours,
+/// a working day, after which the admin signs in again ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+const fn default_admin_session_ttl_secs() -> u64 {
+    8 * 60 * 60
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -42,6 +48,10 @@ pub struct CloudConfig {
     /// How often the rollup projector sweeps the fleet to keep dashboards current, in seconds.
     #[serde(default = "default_projector_interval_secs")]
     pub projector_interval_secs: u64,
+    /// How long a super-admin session cookie stays valid, in seconds
+    /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+    #[serde(default = "default_admin_session_ttl_secs")]
+    pub admin_session_ttl_secs: u64,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -94,6 +104,11 @@ mod tests {
         assert_eq!(
             config.projector_interval_secs, 30,
             "the projector interval defaults when unset"
+        );
+        assert_eq!(
+            config.admin_session_ttl_secs,
+            8 * 60 * 60,
+            "the admin session TTL defaults to eight hours when unset"
         );
     }
 

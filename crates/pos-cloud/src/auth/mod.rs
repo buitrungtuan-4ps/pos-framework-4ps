@@ -11,6 +11,9 @@
 //! to a single subdomain so an admin session cannot travel between tenants. Both factors are always
 //! evaluated before a verdict, and the client is told only that sign-in failed — the specific
 //! [`AuthError`] is for the server's own log, so a prober cannot learn which factor was wrong.
+//! [`admin`] is the seam that turns this into a login route: it loads the stored credential, runs the
+//! two-factor check, and — on success — mints and persists the server-side session the [`session`]
+//! cookie carries.
 //!
 //! A **machine integrator** presents a scoped per-tenant [`apikey`] instead
 //! ([ADR-0037](../../../docs/adr/0037-api-keys.md)): a bearer token whose secret is stored only as a
@@ -20,6 +23,7 @@
 //! `/v1` handler then gates by scope and scopes to a tenant — refusing every credential problem with
 //! one indistinguishable `401`.
 
+pub mod admin;
 pub mod apikey;
 pub mod bearer;
 pub mod password;

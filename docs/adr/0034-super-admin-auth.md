@@ -69,7 +69,15 @@ subdomain.
   attributes. The three sources of randomness — the Argon2 salt, the TOTP secret, and the session
   token — are generated at the binary edge (a CSPRNG) and passed in, which is what keeps the core
   testable.
-- **Deliberately not here yet:** persisting the credential and the last-used TOTP step (in
-  `store-postgres`), the login route and its rate-limit (defence-in-depth atop the already
-  brute-force-resistant two factors), TOTP enrolment/QR provisioning, and the scoped per-tenant API
-  keys that authorise machine callers rather than the interactive super-admin.
+- **Landed since:** the credential and last-used TOTP step now persist in `store-postgres` (migration
+  `0003`, a single-row `super_admin` table plus a server-side `admin_sessions` table), and the login
+  wiring is built — `POST /admin/login` runs the two-factor check and, on success, mints a 256-bit
+  CSPRNG session token, stores only its `SHA-256`, and sets the host-only `__Host-` cookie;
+  `POST /admin/logout` revokes the session and clears the cookie; `GET /admin/session` is the guard
+  every other `/admin` route stands behind. The session TTL is configuration
+  (`admin_session_ttl_secs`, default eight hours). The scoped per-tenant API keys that authorise
+  machine callers landed earlier ([ADR-0037](0037-api-keys.md)).
+- **Deliberately not here yet:** TOTP enrolment/QR provisioning and the first-boot seeding of the
+  `super_admin` row (the bootstrap `reset_admin` break-glass, P8); the login route's rate-limit
+  (defence-in-depth atop the already brute-force-resistant two factors); and a sweep of expired
+  `admin_sessions` rows (until then the `expires_at` check already makes them unusable).

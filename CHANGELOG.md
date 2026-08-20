@@ -594,6 +594,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `main` alongside the ingest cursor and shut down with it on SIGINT. Without it the wired `/v1` read
   would return empty in production, so this is what makes the dashboard slice live. Unit-tested
   against the fakes (a pass folds the fleet then is idempotent; an empty fleet does nothing).
+- `pos-cloud` (P7): the **super-admin login is wired** (ADR-0034), turning the pure two-factor check
+  into a working `/admin` surface. A new `auth::admin` seam (`AdminStore`) loads the single credential
+  and its last-used TOTP step and backs a server-side session table; `POST /admin/login` runs the
+  password + mandatory-TOTP check and, on success, mints a **256-bit CSPRNG** session token (via the
+  `getrandom` the edge already uses), stores only its `SHA-256`, and sets the host-only `__Host-`
+  session cookie. Every credential problem — wrong password, wrong or replayed code, unprovisioned
+  admin — collapses to one generic `401` (no oracle), a store outage is a retryable `503`, and the
+  matched TOTP step is burned before the session is written so a code cannot mint two sessions.
+  `POST /admin/logout` revokes the session and clears the cookie (idempotent); `GET /admin/session` is
+  the guard the rest of `/admin` will stand behind. Persistence is `store-postgres` migration `0003`
+  (a single-row `super_admin` table and an `admin_sessions` table, neither tenant-scoped — the
+  super-admin is global — so neither carries RLS or an `app_tenant` grant); the session TTL is
+  configuration (`admin_session_ttl_secs`, default eight hours). `CloudApp` now carries the admin
+  store as a fifth collaborator. Adds no crypto crate (`getrandom` was already in the tree). Unit
+  tests cover the no-oracle rule, replay refusal, expiry and logout against the fakes; router tests
+  cover login→cookie→guard, a cookieless `401`, a wrong password, and logout; and a `store-postgres`
+  integration test proves the credential round-trip, the monotonic step advance, and the session
+  lifecycle against a real database.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

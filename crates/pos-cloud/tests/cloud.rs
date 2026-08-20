@@ -16,9 +16,15 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
+use argon2::password_hash::SaltString;
+
+use pos_cloud::auth::SuperAdminCredential;
+use pos_cloud::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
 use pos_cloud::auth::apikey::{
     ApiKeyId, ApiKeyStore, ApiKeyStoreError, Scope, StoredApiKey, issue,
 };
+use pos_cloud::auth::password::hash_password;
+use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::http::CloudApp;
 use pos_cloud::{Cloud, IngestOutcome, http};
@@ -29,6 +35,14 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
+
+/// The instant `clock()` is fixed at, in milliseconds and in seconds — the second form is what the
+/// TOTP code the admin tests submit is computed for.
+const NOW_MS: i64 = 1_700_000_000_000;
+const NOW_UNIX_SECS: u64 = 1_700_000_000;
+/// The obviously-fake super-admin secrets the admin tests use; never real credentials.
+const ADMIN_PASSWORD: &str = "a-strong-admin-passphrase";
+const ADMIN_TOTP_SEED: &[u8] = b"12345678901234567890123456789012";
 
 fn store_id() -> StoreId {
     StoreId::new(Ulid::from_u128(0x0ADA))
@@ -43,7 +57,7 @@ const FAKE_SECRET: &str = "fakesecretfortestsonly";
 
 /// A clock fixed well past the epoch, so an issued key (with no expiry) is live.
 fn clock() -> FakeClock {
-    FakeClock::new(Timestamp::from_milliseconds_since_epoch(1_700_000_000_000).expect("valid"))
+    FakeClock::new(Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"))
 }
 
 /// A run of activation events, re-dated onto `business_date` (`YYYY-MM-DD`).
@@ -127,13 +141,112 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
     token
 }
 
-/// Builds an application state over the fakes.
+/// The super-admin store the `/admin` login and session guard consult, keyed to the one super-admin.
+#[derive(Clone, Default)]
+struct FakeAdmin {
+    credential: Arc<Mutex<Option<SuperAdminCredential>>>,
+    last_used_totp_step: Arc<Mutex<Option<u64>>>,
+    sessions: Arc<Mutex<HashMap<[u8; 32], Timestamp>>>,
+}
+
+impl FakeAdmin {
+    fn provisioned(credential: SuperAdminCredential) -> Self {
+        Self {
+            credential: Arc::new(Mutex::new(Some(credential))),
+            ..Self::default()
+        }
+    }
+}
+
+impl AdminStore for FakeAdmin {
+    async fn load_credential(&self) -> Result<Option<AdminCredential>, AdminStoreError> {
+        Ok(self
+            .credential
+            .lock()
+            .expect("lock")
+            .clone()
+            .map(|credential| AdminCredential {
+                credential,
+                last_used_totp_step: *self.last_used_totp_step.lock().expect("lock"),
+            }))
+    }
+
+    async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
+        let mut last = self.last_used_totp_step.lock().expect("lock");
+        if last.is_none_or(|current| step > current) {
+            *last = Some(step);
+        }
+        Ok(())
+    }
+
+    async fn create_session(
+        &self,
+        token_hash: [u8; 32],
+        expires_at: Timestamp,
+    ) -> Result<(), AdminStoreError> {
+        self.sessions
+            .lock()
+            .expect("lock")
+            .insert(token_hash, expires_at);
+        Ok(())
+    }
+
+    async fn session_is_valid(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock")
+            .get(&token_hash)
+            .is_some_and(|expires_at| *expires_at > now))
+    }
+
+    async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
+        self.sessions.lock().expect("lock").remove(&token_hash);
+        Ok(())
+    }
+}
+
+/// A super-admin provisioned with a known password and TOTP seed, for the login tests.
+fn provisioned_admin() -> FakeAdmin {
+    let salt = SaltString::encode_b64(b"cloud-admin-test-salt").expect("salt");
+    let phc = hash_password(ADMIN_PASSWORD, &salt).expect("hash");
+    FakeAdmin::provisioned(SuperAdminCredential::new(
+        phc,
+        TotpSecret::new(ADMIN_TOTP_SEED.to_vec()),
+    ))
+}
+
+/// The current valid TOTP code for the provisioned admin at `clock()`'s instant.
+fn admin_totp_code() -> String {
+    code_at(
+        &TotpSecret::new(ADMIN_TOTP_SEED.to_vec()),
+        NOW_UNIX_SECS,
+        DIGITS,
+    )
+}
+
+/// Builds an application state over the fakes, with an unprovisioned admin (the `/admin` routes are
+/// reachable but no login can succeed) — enough for the ingest and `/v1` tests.
 fn app(
     cloud: Cloud<FakeStore>,
     rollups: FakeRollups,
     keys: FakeKeys,
-) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock> {
-    CloudApp::new(cloud, rollups, keys, clock())
+) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin> {
+    app_with_admin(cloud, rollups, keys, FakeAdmin::default())
+}
+
+/// Builds an application state over the fakes with a specific admin store, for the `/admin` tests.
+fn app_with_admin(
+    cloud: Cloud<FakeStore>,
+    rollups: FakeRollups,
+    keys: FakeKeys,
+    admin: FakeAdmin,
+) -> CloudApp<FakeStore, FakeRollups, FakeKeys, FakeClock, FakeAdmin> {
+    CloudApp::new(cloud, rollups, keys, clock(), admin)
 }
 
 /// A GET request for `uri`, optionally carrying a `Bearer` token.
@@ -143,6 +256,32 @@ fn get(uri: &str, bearer: Option<&str>) -> Request<Body> {
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
     builder.body(Body::empty()).expect("build the request")
+}
+
+/// A GET request for `uri` carrying `cookie` as the `Cookie` header.
+fn get_with_cookie(uri: &str, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .expect("build the request")
+}
+
+/// A POST request for `uri` with a JSON body.
+fn post_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// The `name=value` pair from a `Set-Cookie` header value (its first `;`-separated segment).
+fn cookie_pair(set_cookie: &str) -> &str {
+    set_cookie.split(';').next().unwrap_or(set_cookie)
 }
 
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
@@ -435,5 +574,158 @@ async fn the_openapi_document_is_served() {
     assert!(
         document["components"]["securitySchemes"]["api_key"].is_object(),
         "the bearer security scheme is declared in the generated document"
+    );
+    assert!(
+        document["paths"]["/admin/login"].is_null(),
+        "the admin surface is not part of the public OpenAPI contract"
+    );
+}
+
+// --- The interactive super-admin surface (`/admin`) ---------------------------------------------
+
+#[tokio::test]
+async fn a_correct_admin_login_sets_a_host_only_cookie_the_guard_then_accepts() {
+    let admin = provisioned_admin();
+    let router = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin,
+    ));
+
+    // Log in with the correct password and current code.
+    let body = serde_json::json!({ "password": ADMIN_PASSWORD, "totp_code": admin_totp_code() });
+    let response = router
+        .clone()
+        .oneshot(post_json("/admin/login", &body))
+        .await
+        .expect("route the login");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .expect("a session cookie is set")
+        .to_str()
+        .expect("ascii");
+    assert!(
+        set_cookie.starts_with("__Host-pos_admin_session="),
+        "the host-only session cookie is issued: {set_cookie}"
+    );
+    assert!(
+        !set_cookie.contains("Domain"),
+        "a Domain attribute would leak the session across subdomains: {set_cookie}"
+    );
+    assert!(set_cookie.contains("Secure") && set_cookie.contains("HttpOnly"));
+
+    // The guard accepts the cookie the login issued.
+    let session = router
+        .oneshot(get_with_cookie("/admin/session", cookie_pair(set_cookie)))
+        .await
+        .expect("route the session check");
+    assert_eq!(
+        session.status(),
+        StatusCode::NO_CONTENT,
+        "the issued session authenticates the guard"
+    );
+}
+
+#[tokio::test]
+async fn the_admin_session_guard_refuses_a_request_without_a_cookie() {
+    let response = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ))
+    .oneshot(get("/admin/session", None))
+    .await
+    .expect("route the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "no session cookie means no admin session"
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_admin_password_is_refused_and_sets_no_cookie() {
+    let body =
+        serde_json::json!({ "password": "not-the-password", "totp_code": admin_totp_code() });
+    let response = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ))
+    .oneshot(post_json("/admin/login", &body))
+    .await
+    .expect("route the login");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        response.headers().get("set-cookie").is_none(),
+        "a refused login issues no session cookie"
+    );
+}
+
+#[tokio::test]
+async fn logout_clears_the_cookie_and_revokes_the_session() {
+    let router = http::router(app_with_admin(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+    ));
+
+    // Log in and capture the session cookie.
+    let body = serde_json::json!({ "password": ADMIN_PASSWORD, "totp_code": admin_totp_code() });
+    let login = router
+        .clone()
+        .oneshot(post_json("/admin/login", &body))
+        .await
+        .expect("route the login");
+    let cookie = cookie_pair(
+        login
+            .headers()
+            .get("set-cookie")
+            .expect("cookie")
+            .to_str()
+            .expect("ascii"),
+    )
+    .to_owned();
+
+    // Log out: the response clears the cookie...
+    let logout = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/logout")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the logout");
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    let cleared = logout
+        .headers()
+        .get("set-cookie")
+        .expect("logout clears the cookie")
+        .to_str()
+        .expect("ascii");
+    assert!(
+        cleared.contains("Max-Age=0"),
+        "the cookie is expired: {cleared}"
+    );
+
+    // ...and the revoked session no longer authenticates the guard.
+    let session = router
+        .oneshot(get_with_cookie("/admin/session", &cookie))
+        .await
+        .expect("route the session check");
+    assert_eq!(
+        session.status(),
+        StatusCode::UNAUTHORIZED,
+        "a revoked session is no longer accepted"
     );
 }

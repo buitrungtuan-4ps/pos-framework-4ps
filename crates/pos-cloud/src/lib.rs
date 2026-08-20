@@ -25,13 +25,16 @@
 //! ([`auth::bearer`]), answers from the materialised rollup ([`dashboard`]) for the key's own
 //! tenant, both the rollup table and the API-key table are persisted in `store-postgres`, and the
 //! [`dashboard::projector`] background task keeps that rollup current across the fleet
-//! (ADR-0036, ADR-0037).
+//! (ADR-0036, ADR-0037). The super-admin surface is wired too: [`auth::admin`] loads the credential
+//! from `store-postgres`, `POST /admin/login` runs the two-factor check and issues a host-only
+//! session cookie backed by a server-side session table, and [`http`] exposes the logout and
+//! session-guard routes the rest of `/admin` will stand behind (ADR-0034).
 //!
 //! Deliberately not here yet, each its own slice (`docs/roadmap.md` P7): the webhook transport's
 //! concrete TLS sender and endpoint persistence (ADR-0032), the config tree's persistence and admin
-//! routes (ADR-0033), the super-admin login route + credential persistence and the API-key
-//! provisioning route (ADR-0034, ADR-0037), and the subject-store schema and the retention runner's
-//! wiring into `main` (ADR-0035).
+//! routes (ADR-0033), the API-key provisioning route that issues a key the one time it is shown
+//! (ADR-0037), the subject-store schema and the retention runner's wiring into `main` (ADR-0035),
+//! and the super-admin's TOTP enrolment/provisioning and first-boot seeding (ADR-0034, P8 bootstrap).
 
 #![forbid(unsafe_code)]
 

@@ -3,21 +3,26 @@
 
 //! Wiring the cloud's persistence seams to their `store-postgres` tables.
 //!
-//! The `RollupStore` ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)) and `ApiKeyStore`
-//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)) traits live here in the cloud, where the handlers
-//! that consume them are; the Postgres tables behind them live in `store-postgres`, the cloud's one
-//! Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module is the thin
-//! seam between the two: it implements each cloud trait for the adapter's query type, turning the
-//! plain row the adapter returns into the cloud's domain shape. All SQL stays in the adapter; all
-//! domain conversion stays here — the adapter never learns a cloud type, and the cloud never writes
-//! SQL.
+//! The `RollupStore` ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)), `ApiKeyStore`
+//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)) and `AdminStore`
+//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) traits live here in the cloud, where the
+//! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
+//! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
+//! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
+//! turning the plain row the adapter returns into the cloud's domain shape. All SQL stays in the
+//! adapter; all domain conversion stays here — the adapter never learns a cloud type, and the cloud
+//! never writes SQL.
 
-use store_postgres::{PostgresApiKeys, PostgresRollups, PostgresStore};
+use store_postgres::{PostgresAdmin, PostgresApiKeys, PostgresRollups, PostgresStore};
 
 use pos_ports::PortError;
 use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::time::Timestamp;
 
+use crate::auth::SuperAdminCredential;
+use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
 use crate::auth::apikey::{ApiKeyId, ApiKeyStore, ApiKeyStoreError, StoredApiKey};
+use crate::auth::totp::TotpSecret;
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
 
@@ -59,6 +64,59 @@ impl RollupStore for PostgresRollups {
 impl StoreCatalog for PostgresStore {
     async fn active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
         self.list_active_stores().await
+    }
+}
+
+impl AdminStore for PostgresAdmin {
+    async fn load_credential(&self) -> Result<Option<AdminCredential>, AdminStoreError> {
+        let row = self
+            .fetch_credential()
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(row.map(|row| AdminCredential {
+            credential: SuperAdminCredential::new(
+                row.password_phc,
+                TotpSecret::new(row.totp_secret),
+            ),
+            // A stored step is always a value this adapter itself wrote, so it fits u64; a stray
+            // negative reads as "never used" rather than failing the load.
+            last_used_totp_step: row
+                .last_used_totp_step
+                .and_then(|step| u64::try_from(step).ok()),
+        }))
+    }
+
+    async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
+        let step = i64::try_from(step).unwrap_or(i64::MAX);
+        self.advance_totp_step(step)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn create_session(
+        &self,
+        token_hash: [u8; 32],
+        expires_at: Timestamp,
+    ) -> Result<(), AdminStoreError> {
+        self.insert_session(&token_hash, expires_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn session_is_valid(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        self.session_valid(&token_hash, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
+        self.delete_session(&token_hash)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
     }
 }
 

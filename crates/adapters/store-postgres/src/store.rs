@@ -20,6 +20,9 @@ const MIGRATION_0001: &str = include_str!("../migrations/0001_cloud_events.sql")
 /// terms.
 const MIGRATION_0002: &str = include_str!("../migrations/0002_cloud_rollups_apikeys.sql");
 
+/// The super-admin credential and session schema ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+const MIGRATION_0003: &str = include_str!("../migrations/0003_cloud_admin.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -82,6 +85,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0002)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0003)
+            .await
             .map_err(unavailable)
     }
 
@@ -99,6 +106,14 @@ impl PostgresStore {
     #[must_use]
     pub fn api_keys(&self) -> crate::apikeys::PostgresApiKeys {
         crate::apikeys::PostgresApiKeys::new(self.pool.clone())
+    }
+
+    /// The super-admin credential and session store over this pool ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AdminStore` seam over it.
+    #[must_use]
+    pub fn admin(&self) -> crate::admin::PostgresAdmin {
+        crate::admin::PostgresAdmin::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
