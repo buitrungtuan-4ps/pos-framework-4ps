@@ -41,10 +41,11 @@ use core::fmt;
 use core::future::Future;
 
 use pos_ports::{
-    BlobStore, ConfigStore, DeliveryVendor, ErpSink, EventStore, Fiscalization, KeyVault,
-    MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver, ShippingDispatch, Signer,
+    BlobStore, CloudSync, ConfigStore, DeliveryVendor, ErpSink, EventStore, Fiscalization,
+    KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver, ShippingDispatch,
+    Signer,
 };
-use pos_proto::{ClockSource, IdGenerator, StoreId};
+use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
 /// The test fixture itself failed.
 ///
@@ -198,6 +199,31 @@ pub trait KeyVaultHarness: Send + Sync {
 
     /// A vault holding nothing.
     fn fresh(&self) -> impl Future<Output = Setup<Self::Vault>> + Send;
+}
+
+/// Supplies a fresh [`CloudSync`] seeded with one recognised activation and one published release.
+///
+/// A transport has no state of its own to reset, so the fixtures are values the harness both seeds
+/// the channel with and hands the suite to assert against — the suite cannot know the right answer
+/// otherwise.
+pub trait CloudSyncHarness: Send + Sync {
+    /// The implementation under test.
+    type Channel: CloudSync;
+
+    /// A channel that recognises [`Self::valid_code`] and publishes [`Self::known_release`].
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Channel>> + Send;
+
+    /// The one activation code the channel accepts.
+    fn valid_code(&self) -> String;
+
+    /// The device the accepted code grants.
+    fn granted_device(&self) -> DeviceId;
+
+    /// A release the channel can fetch.
+    fn known_release(&self) -> ReleaseTag;
+
+    /// The artifact bytes that release returns.
+    fn update_bytes(&self) -> Vec<u8>;
 }
 
 /// Supplies a fresh [`PrinterDriver`], and can break the printer.

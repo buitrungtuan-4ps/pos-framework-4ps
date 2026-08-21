@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! In-memory implementations of all sixteen ports.
+//! In-memory implementations of all seventeen ports.
 //!
 //! # What this crate is for
 //!
@@ -14,7 +14,7 @@
 //! the suites are what make *swappable* a verified fact — but there is a circularity in that claim
 //! if the fakes are exempt: the domain suite runs against the fakes, so a fake that disagrees with
 //! the real store makes every domain test a test of the wrong thing. So these are held to exactly
-//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all sixteen.
+//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all seventeen.
 //!
 //! # Fixed capacities, on purpose
 //!
@@ -47,7 +47,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 pub use determinism::{FakeClock, FakeIdGenerator};
 pub use devices::{FakePaymentTerminal, FakePrinter};
 pub use executor::run_ready;
-pub use infra::{FakeBlobStore, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner};
+pub use infra::{
+    FakeBlobStore, FakeCloudSync, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner,
+};
 pub use store::{FakeStore, FakeTx};
 pub use vendors::{FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping};
 

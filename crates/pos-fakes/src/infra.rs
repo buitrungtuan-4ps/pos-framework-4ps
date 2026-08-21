@@ -7,14 +7,17 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pos_ports::blob_store::{BlobKey, BlobStore};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync};
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
 use pos_ports::metrics_sink::{MetricSample, MetricsSink};
 use pos_ports::signer::{KeyId, PublicKey, Signature, Signer};
 use pos_ports::{PortError, PortName};
-use pos_proto::PROTOCOL_VERSION;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::ids::DeviceId;
 use pos_proto::protocol::{Hello, HelloOutcome, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};
+use pos_proto::text::ReleaseTag;
+use pos_proto::{PROTOCOL_VERSION, Ulid};
 
 use crate::lock;
 
@@ -383,5 +386,75 @@ impl KeyVault for FakeKeyVault {
     async fn delete(&self, name: SecretName) -> Result<(), PortError> {
         lock(&self.secrets).remove(&name);
         Ok(())
+    }
+}
+
+// -----------------------------------------------------------------------------------------------
+// CloudSync
+// -----------------------------------------------------------------------------------------------
+
+/// An in-memory `CloudSync`: one recognised activation code and one published release.
+///
+/// A transport has no state to reset, so this is a unit struct whose fixtures are associated
+/// constants and functions — the harness echoes them to the suite so it knows the right answers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FakeCloudSync;
+
+impl FakeCloudSync {
+    /// The one activation code this channel accepts; anything else is refused.
+    pub const VALID_CODE: &'static str = "AAAA-AAAA-AAAA";
+    /// The one release this channel publishes; anything else is not found.
+    pub const KNOWN_RELEASE: &'static str = "v1.2.3";
+
+    /// A channel with the fixed fixtures.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// The device [`Self::VALID_CODE`] grants.
+    #[must_use]
+    pub fn granted_device() -> DeviceId {
+        DeviceId::new(Ulid::from_u128(0x0DE7))
+    }
+
+    /// The credential bytes [`Self::VALID_CODE`] grants.
+    #[must_use]
+    pub fn credential_bytes() -> Vec<u8> {
+        b"fake-device-credential".to_vec()
+    }
+
+    /// The artifact bytes [`Self::KNOWN_RELEASE`] returns.
+    #[must_use]
+    pub fn artifact_bytes() -> Vec<u8> {
+        b"fake-update-artifact".to_vec()
+    }
+}
+
+impl CloudSync for FakeCloudSync {
+    async fn activate(&self, activation_code: &str) -> Result<ActivationGrant, PortError> {
+        if activation_code == Self::VALID_CODE {
+            Ok(ActivationGrant {
+                device_id: Self::granted_device(),
+                credential: Secret::new(Self::credential_bytes()),
+            })
+        } else {
+            // No oracle: a spent, revoked, or unknown code are all one refusal.
+            Err(PortError::permission_denied(
+                PortName::CloudSync,
+                "activation refused",
+            ))
+        }
+    }
+
+    async fn fetch_update(&self, release: &ReleaseTag) -> Result<Vec<u8>, PortError> {
+        if release.as_str() == Self::KNOWN_RELEASE {
+            Ok(Self::artifact_bytes())
+        } else {
+            Err(PortError::not_found(
+                PortName::CloudSync,
+                "no such release is published",
+            ))
+        }
     }
 }

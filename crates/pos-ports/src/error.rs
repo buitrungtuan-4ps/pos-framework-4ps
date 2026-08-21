@@ -3,7 +3,7 @@
 
 //! The one failure type every port returns.
 //!
-//! One type rather than sixteen, because the framework asks the same three questions
+//! One type rather than seventeen, because the framework asks the same three questions
 //! of every adapter failure — retry or not, park it or not, what to tell the operator
 //! — and per-port enums would each need that classification bolted on separately. See
 //! [ADR-0026](../../../docs/adr/0026-port-shapes.md) §1 for the alternatives that were
@@ -23,7 +23,7 @@ use pos_proto::wire_enum::WireEnum;
 /// An enum rather than a string so metrics, the error mailbox, and the per-adapter
 /// latency charts required by `docs/roadmap.md` P11 can partition by port without
 /// matching text. The list is fixed by
-/// [ADR-0021](../../../docs/adr/0021-corrected-port-list.md); a seventeenth variant
+/// [ADR-0021](../../../docs/adr/0021-corrected-port-list.md); an eighteenth variant
 /// needs an ADR first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -60,6 +60,8 @@ pub enum PortName {
     ErpSink,
     /// [`crate::OrderIn`].
     OrderIn,
+    /// [`crate::CloudSync`].
+    CloudSync,
 }
 
 impl PortName {
@@ -84,6 +86,7 @@ impl PortName {
         Self::ShippingDispatch,
         Self::ErpSink,
         Self::OrderIn,
+        Self::CloudSync,
     ];
 
     /// The port's name in `snake_case`, for metric labels and log fields.
@@ -109,6 +112,7 @@ impl PortName {
             Self::ShippingDispatch => "shipping_dispatch",
             Self::ErpSink => "erp_sink",
             Self::OrderIn => "order_in",
+            Self::CloudSync => "cloud_sync",
         }
     }
 }
@@ -241,7 +245,7 @@ impl PortError {
 
     /// Whether a caller should try again.
     ///
-    /// Delegates to the status rather than living at the call site, because sixteen
+    /// Delegates to the status rather than living at the call site, because seventeen
     /// call sites would eventually disagree about whether `FailedPrecondition` is
     /// worth retrying. It is not.
     #[must_use]
@@ -323,8 +327,8 @@ mod tests {
     }
 
     #[test]
-    fn the_port_list_is_the_sixteen_from_adr_0021() {
-        assert_eq!(PortName::ALL.len(), 16);
+    fn the_port_list_is_the_seventeen_from_adr_0021() {
+        assert_eq!(PortName::ALL.len(), 17);
     }
 
     #[test]

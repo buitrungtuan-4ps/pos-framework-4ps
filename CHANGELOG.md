@@ -973,6 +973,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   configured", never an error. No new dependency, no new port. The edge updater that reads these keys
   and drives `decide_rollout` (verify → self-test → rollback) is P9e-4; fetching the update artifact
   bytes rides the edge→cloud transport still to be decided.
+- `pos-ports` + `pos-contract-tests` + `pos-fakes` (P9, ADR-0053 — a new ADR): a **seventeenth port,
+  `CloudSync`** — the store's request/response channel to the cloud, distinct from the deliberately
+  outbound-only `MessageLink` (so the store still sells offline). It carries the two calls that need an
+  answer back: `activate(code) -> {device_id, credential}` (the first-boot activation exchange,
+  ADR-0050) and `fetch_update(release) -> bytes` (the OTA artifact, ADR-0048, verified against the
+  minisign `Signer` before it is trusted — a transport is not a trust boundary). It names no domain
+  type — the code arrives as a `&str` and the credential comes back as a `Secret` — so `pos-core` stays
+  a sibling; and it is compile-time selected, so it has no `Dyn` mirror. `PortName` gains `CloudSync`
+  and the port count moves to seventeen (`docs/architecture.md` §5 is authoritative; ADR-0021 amended,
+  its immutable body preserved). A `CloudSync` contract suite and `FakeCloudSync` land with it —
+  carried by the `SUITES` table and the every-port / every-suite assertions — so the count is enforced,
+  not just documented. **No new dependency**: the port names only `pos-proto` and its own
+  `Secret`/`PortError`. The real HTTP adapter that speaks to the cloud, and the edge activation client
+  and OTA updater that consume the port, are P9e-2b onward.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

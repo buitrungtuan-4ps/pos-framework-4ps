@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Harness implementations, so `tests/contract.rs` can run all sixteen suites.
+//! Harness implementations, so `tests/contract.rs` can run all seventeen suites.
 //!
 //! Each one is thin, and that is the point: the destructive operations a suite needs — losing power,
 //! severing a link, emptying a paper roll, staging an ambiguous card result — are methods on the
@@ -14,20 +14,24 @@
 //! without checkpointing.
 
 use pos_contract_tests::harness::{
-    BlobStoreHarness, ClockSourceHarness, ConfigStoreHarness, DeliveryVendorHarness,
-    ErpSinkHarness, EventStoreHarness, FiscalizationHarness, HarnessError, IdGeneratorHarness,
-    KeyVaultHarness, MessageLinkHarness, MetricsSinkHarness, OrderInHarness,
+    BlobStoreHarness, ClockSourceHarness, CloudSyncHarness, ConfigStoreHarness,
+    DeliveryVendorHarness, ErpSinkHarness, EventStoreHarness, FiscalizationHarness, HarnessError,
+    IdGeneratorHarness, KeyVaultHarness, MessageLinkHarness, MetricsSinkHarness, OrderInHarness,
     PaymentTerminalHarness, PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
     VendorOrderRef,
 };
-use pos_proto::{MenuItemId, Money, PaymentOutcome, StoreId, Timestamp, Ulid};
+use pos_proto::{
+    DeviceId, MenuItemId, Money, PaymentOutcome, ReleaseTag, StoreId, Timestamp, Ulid,
+};
 
 use crate::determinism::{FakeClock, FakeIdGenerator};
 use crate::devices::{FakePaymentTerminal, FakePrinter};
-use crate::infra::{FakeBlobStore, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner};
+use crate::infra::{
+    FakeBlobStore, FakeCloudSync, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner,
+};
 use crate::store::FakeStore;
 use crate::vendors::{
     FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping, known_menu_item,
@@ -175,6 +179,34 @@ impl KeyVaultHarness for VaultHarness {
 
     async fn fresh(&self) -> Setup<Self::Vault> {
         Ok(FakeKeyVault::new())
+    }
+}
+
+/// Harness for [`FakeCloudSync`].
+#[derive(Debug, Default)]
+pub struct CloudHarness;
+
+impl CloudSyncHarness for CloudHarness {
+    type Channel = FakeCloudSync;
+
+    async fn fresh(&self) -> Setup<Self::Channel> {
+        Ok(FakeCloudSync::new())
+    }
+
+    fn valid_code(&self) -> String {
+        FakeCloudSync::VALID_CODE.to_owned()
+    }
+
+    fn granted_device(&self) -> DeviceId {
+        FakeCloudSync::granted_device()
+    }
+
+    fn known_release(&self) -> ReleaseTag {
+        ReleaseTag::new(FakeCloudSync::KNOWN_RELEASE)
+    }
+
+    fn update_bytes(&self) -> Vec<u8> {
+        FakeCloudSync::artifact_bytes()
     }
 }
 

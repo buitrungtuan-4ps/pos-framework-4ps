@@ -5,7 +5,7 @@
 //!
 //! # This port points the other way
 //!
-//! The other fifteen are *driven* ports: the framework calls out to a database, a broker, a
+//! The other sixteen are *driven* ports: the framework calls out to a database, a broker, a
 //! printer. This one is a *driving* port — the application implements it, and `vendor-grab`,
 //! `POST /v1/orders` and the QR ordering module call in.
 //!

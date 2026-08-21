@@ -91,8 +91,9 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 | `Fiscalization` | Legal invoicing per country | `fiscal-vn` first |
 | `DeliveryVendor` / `ShippingDispatch` / `ErpSink` | Marketplaces, couriers, ERP | per vendor |
 | `OrderIn` | Inbound orders from outside the store | marketplaces, `POST /v1/orders`, QR ordering |
+| `CloudSync` | Store→cloud request/response: activation exchange, OTA artifact fetch | HTTP to the cloud |
 
-The list above is authoritative and counts **sixteen** ports. [ADR-0006](adr/0006-ports-and-adapters.md) named fifteen: it omitted `OrderIn`, which [ADR-0012](adr/0012-qr-ordering-via-cloud.md) depends on. [ADR-0021](adr/0021-corrected-port-list.md) supersedes it.
+The list above is authoritative and counts **seventeen** ports. [ADR-0006](adr/0006-ports-and-adapters.md) named fifteen: it omitted `OrderIn`, which [ADR-0012](adr/0012-qr-ordering-via-cloud.md) depends on, and [ADR-0021](adr/0021-corrected-port-list.md) supersedes it with sixteen. [ADR-0053](adr/0053-cloud-sync-port.md) adds the seventeenth, `CloudSync`, for the store↔cloud calls that need an answer back — distinct from `MessageLink`, which stays outbound-only so the store still sells offline.
 
 **Dependency rule, enforced by a CI test:** `pos-core` and `pos-ports` may depend only on `std`, `serde`, and pure computation crates. Adapters depend on core; core never depends on an adapter. Only the binaries know which adapters are wired in.
 

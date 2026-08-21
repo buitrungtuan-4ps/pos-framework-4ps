@@ -2,6 +2,7 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
 **Supersedes** [ADR-0006](0006-ports-and-adapters.md)
+**Amended by** [ADR-0053](0053-cloud-sync-port.md) — adds a seventeenth port, `CloudSync`; the count below reads sixteen as of this record, and `architecture.md` §5 (the authoritative table) now carries the seventeenth row.
 
 **Context.** [ADR-0006](0006-ports-and-adapters.md) established the rule that matters —
 `pos-core` and `pos-ports` depend only on `std`, `serde` and pure computation crates, every

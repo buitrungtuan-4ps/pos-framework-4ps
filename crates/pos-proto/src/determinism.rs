@@ -14,10 +14,10 @@
 //! `cargo tree -p pos-core`, rather than a lint somebody has to maintain.
 //!
 //! These two traits therefore live in `pos-proto`, which both siblings already depend
-//! on, and `pos-ports` re-exports them so the documented sixteen-port list keeps
+//! on, and `pos-ports` re-exports them so the documented seventeen-port list keeps
 //! exactly one definition of each.
 //!
-//! # Why they are synchronous when the other fourteen are not
+//! # Why they are synchronous when the other fifteen are not
 //!
 //! Because they are not I/O. Reading a clock and minting an identifier are ambient
 //! values, not conversations with another system: neither can block, fail for network
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn both_ports_are_trait_object_compatible() {
-        // Which the fourteen asynchronous ports are not, and is why these two can be
+        // Which the fifteen asynchronous ports are not, and is why these two can be
         // held as `&mut dyn` inside a decision context.
         let instant = Timestamp::from_milliseconds_since_epoch(0).expect("builds");
         let clock: &dyn ClockSource = &FixedClock(instant);

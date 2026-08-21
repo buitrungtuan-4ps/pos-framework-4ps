@@ -52,6 +52,7 @@ use core::fmt;
 use pos_ports::{PortError, PortName};
 
 pub mod blob_store;
+pub mod cloud_sync;
 pub mod config_store;
 pub mod delivery;
 pub mod determinism;
@@ -75,6 +76,8 @@ pub mod signer;
 pub const __PORT_BLOB_STORE: PortName = PortName::BlobStore;
 #[doc(hidden)]
 pub const __PORT_CLOCK_SOURCE: PortName = PortName::ClockSource;
+#[doc(hidden)]
+pub const __PORT_CLOUD_SYNC: PortName = PortName::CloudSync;
 #[doc(hidden)]
 pub const __PORT_CONFIG_STORE: PortName = PortName::ConfigStore;
 #[doc(hidden)]
@@ -365,7 +368,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Sixteen entries, matching `PortName::ALL`.
+/// Seventeen entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -383,6 +386,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::ShippingDispatch, "shipping_dispatch_suite"),
     (PortName::ErpSink, "erp_sink_suite"),
     (PortName::OrderIn, "order_in_suite"),
+    (PortName::CloudSync, "cloud_sync_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.
