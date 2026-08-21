@@ -1,6 +1,6 @@
 # Capacity and reliability
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-18
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-21
 
 Sizing numbers, load limits, and what happens when things break.
 
@@ -110,3 +110,13 @@ At peak, latency does not change — every tier stays far below the point where 
 - **Scenario B** (1,000 busy stores) is feasible on one VPS for CPU and memory, but requires 500 GB–1 TB of disk and a check on the bandwidth allowance. These are the only two linear walls, and both are predictable from the formulas in §2.
 - **QR ordering** is architecturally cheap — it reuses the existing `OrderIn` port — but it changes the system's character by placing the cloud in front of customers. That is a conscious trade-off, not a design flaw.
 - **The first bottleneck under growth is disk `fsync`**, which is why local NVMe is a hard requirement for the cloud host.
+
+## 8. The executable model (`pos-simulator`, P12)
+
+The numbers above began as design estimates. As of P12 they are also **executable and self-checking**: `crates/pos-simulator` encodes the §2 scenarios as data and the sizing formulas as pure integer functions, so a formula that drifts from a table fails a test rather than rotting quietly. `just simulate` prints the envelope and the reconciliation report; the assertions live in the crate's tests.
+
+What the model reproduces from the formulas, checked against the tables: **events/day** exactly (recovering the table's own implied 8 events per bill), **PostgreSQL storage** within 5% (the model gives scenario B 75 GB/month where §2 rounds to 72), **daily bandwidth** inside each published range (QR sessions × ~1 MB of menu imagery — scenario B's ~250 GB/day wall), and the §2 `÷1260` peak-ingest formula shown to be a conservative ceiling every scenario's stated peak sits under. The §4 behavioural stress tests are modelled too: the offline drain reproduces "200 stores → 800k events" and shows the ~9-minute drain is feasible within the ingest ceiling; the webhook backpressure shows a dead endpoint's cursor lag grows while its in-memory footprint stays one batch; the nightly reconciliation is the missing-id set difference; and the OTA ring rollout runs over the real `pos_core::ota::decide_rollout`.
+
+**One standing discrepancy, filed for the pilot.** The model derives scenario A at ~18,000 QR sessions/day (bills × QR-share), where the §2 table states **9,000** — scenarios B and C both agree with the share. It is left as published and pinned by `pos-simulator`'s reconciliation report rather than silently changed, because whether A's QR share is of *bills* or of *guests*, or 9,000 is a transcription of 18,000, is a question the pilot settles.
+
+**What is deliberately not modelled here.** The real sustained soak — 222 events/s against a live PostgreSQL with NVMe `fsync` the deciding factor, run for hours without leaking — needs the target hardware and wall-clock time, so it is an operations/pilot exercise (like the WAL-on-Windows spike and the hardware matrix), not something the deterministic model measures. `pos-simulator` is the harness that soak plugs into; the throughput figure itself is confirmed at the pilot.

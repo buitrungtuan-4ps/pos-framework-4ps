@@ -445,6 +445,21 @@ third adapter, not before** — the rule of three is explicit here.
 **Exit:** every adapter passes its port's contract suite; the unknown-result reconciliation
 flow works end to end; a guest QR order reaches the kitchen display in 0.5–2 s.
 
+**Status: the unblocked surface is done.** `OrderIn` intake (`POST /v1/orders`, ADR-0056), the QR
+security keystone and guardrail decision (ADR-0057), and three integration adapters —
+`shipping-ahamove`, `shipping-grabexpress` (ADR-0058) and `erp-sap` (ADR-0059) — have landed and pass
+their suites, and `templates/adapter-template` was extracted at the third, as the rule of three
+requires. What remains is gated or needs a decision. Gated: the `payment-*` terminal (A1, #2) and the
+`vendor-grab`/ShopeeFood adapter (A3, #5). Needs a decision: *serving* the intake end to end. Reading
+the `OrderIn` contract closed one design question — the cloud **cannot** implement `OrderIn`, because
+the suite requires synchronous, authoritative repricing and menu validation the cloud has no engine
+for; the authoritative implementation is the edge. And the tree is store-initiated only (NATS
+outbound, `CloudSync` and `/sync` both store-pull), so there is no cloud→store channel yet. Serving
+`POST /v1/orders` is therefore an outward-facing API-contract choice — a synchronous cloud→store
+forward (new channel; matches the synchronous `OrderAcceptance` and ADR-0012's online-only guardrails)
+versus an async `202`-plus-poll where the store pulls queued orders — that is left for a human call
+rather than settled unilaterally.
+
 #### P12 · Simulator and capacity validation — *L*
 `pos-simulator`: virtual fleet, order load, network loss, OTA rings, nightly reconciliation.
 Reproduce the published envelope so the numbers in `capacity-and-reliability.md` become
@@ -455,6 +470,16 @@ memory growth.
 
 **Exit:** scenario B reproduced on target hardware; the capacity tables updated with real
 figures; the soak runs nightly without leaking.
+
+**Status: the deterministic core is done; the hardware soak is an operations handoff.**
+`pos-simulator` carries the **executable capacity model** (`capacity-and-reliability.md` §8) — the §2
+envelope reproduced from the sizing formulas and self-checked, with the one standing discrepancy
+(scenario A's QR sessions) pinned rather than papered over — and the **virtual-fleet behavioural
+scenarios**: the OTA ring rollout over the real `pos_core::ota::decide_rollout`, the offline drain, the
+webhook backpressure, and the reconciliation missing-id diff, all integer and clock-free, run by `just
+simulate`. The exit's *"scenario B reproduced on target hardware"* and *"the soak runs nightly"* need
+the VPS and hours of wall clock, so — like the WAL-on-Windows spike (A4) and the hardware matrix (A5) —
+they are a pilot/operations exercise the model *harnesses* rather than measures here.
 
 #### P13 · Pilot readiness — *M*
 Vietnamese operator runbooks · the hardware matrix exercised for real, including sudden

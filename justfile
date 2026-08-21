@@ -47,6 +47,11 @@ build:
 run-edge:
     cargo run -p minimal-edge
 
+# Run the capacity model and the fleet scenarios (P12), printing the envelope and the
+# reconciliation report. Deterministic and offline — no hardware, no clock.
+simulate:
+    cargo run -q -p pos-simulator
+
 test:
     cargo test --workspace --locked
     cargo test --workspace --doc

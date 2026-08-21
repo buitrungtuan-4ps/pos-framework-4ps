@@ -1139,6 +1139,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   cursor falls behind linearly while its in-memory footprint stays one batch, whatever the outage; and
   the nightly reconciliation is the sorted set-difference (`store − cloud`) of missing ids to re-push.
   17 tests in all; still integer-only and deterministic (rates and counts are inputs, no clock).
+- `pos-simulator` (P12): the **runnable entry and reporting** (`report`, `main`, `just simulate`), plus
+  the P12 exit recorded honestly. `report` renders the capacity envelope and the reconciliation report
+  as text (pure, unit-tested); the `pos-simulator` binary prints them and is the one place `print` is
+  allowed. `docs/capacity-and-reliability.md` gains a §8 stating the numbers are now executable and
+  self-checked, and pins the one standing discrepancy (scenario A's 9,000 QR sessions/day vs the
+  model's 18,000) for the pilot rather than silently changing it. `docs/roadmap.md` records P12's
+  status: the deterministic core (capacity model + fleet scenarios) is done, while *"scenario B
+  reproduced on target hardware"* and *"the soak runs nightly"* are a pilot/operations handoff (like
+  A4/A5), not faked. The same status note records P11's: the unblocked surface is done, and serving the
+  intake awaits a cloud→store API-contract decision (the cloud cannot implement `OrderIn`, and the tree
+  is store-initiated only).
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

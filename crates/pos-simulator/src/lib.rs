@@ -37,4 +37,5 @@
 
 pub mod capacity;
 pub mod fleet;
+pub mod report;
 pub mod stress;

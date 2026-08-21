@@ -11,6 +11,12 @@ repository.workspace   = true
 [lib]
 name = "pos_simulator"
 
+# The runnable entry (`just simulate`): it only renders the library's reports to stdout, so all of the
+# model and scenarios stay in the testable library.
+[[bin]]
+name = "pos-simulator"
+path = "src/main.rs"
+
 [dependencies]
 # The capacity model (src/capacity.rs) is pure integer arithmetic and needs no backbone crate. The
 # fleet behavioral scenarios (src/fleet.rs) drive the framework's real OTA decision — pos-core's pure
