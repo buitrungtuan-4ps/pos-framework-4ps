@@ -22,11 +22,16 @@
 //!   ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)).
 //! - [`http`] — the axum router: the health probe, the embedded UI, and the `/ws` WebSocket today;
 //!   the domain routes as they land.
+//! - [`activation`] — the first-boot device activation flow and the boot gate: a generic sub-router
+//!   composing [`CloudSync`](pos_ports::CloudSync) and [`KeyVault`](pos_ports::KeyVault), merged into
+//!   the app once its concrete adapters are selected
+//!   ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 //! - [`server`] — binds the listener and serves with graceful shutdown.
 
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
+pub mod activation;
 pub mod active_config;
 pub mod app;
 pub mod auth;
@@ -45,6 +50,7 @@ pub mod sntp;
 pub mod state;
 pub mod telemetry;
 
+pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
     AppError, BillView, Edge, EdgeSession, LineDraft, LineView, ShiftView, StoreIdentity, TableView,

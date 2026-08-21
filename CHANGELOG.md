@@ -1001,6 +1001,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `/internal/ota/artifact` route is defined by ADR-0054 and served by its P9e-4 counterpart.
 - The ADR index (`docs/adr/README.md`) is caught up: ADRs 0038–0054 were missing from the table and are
   now listed.
+- `pos-edge` (P9, ADR-0050/ADR-0053): the **edge device-activation flow and boot gate**. A generic
+  `activation_router` composes `CloudSync` (exchange the code) and `KeyVault` (store the credential)
+  as a sub-router — the same shape the cloud's activation routes take, since both ports are
+  compile-time-selected with no `Dyn` mirror and cannot ride the concrete `AppState`. `POST
+  /api/activate` parses the code locally (ADR-0050 — locally checkable), refuses a box that already
+  holds a credential as a `409` (never a re-exchange of a now-spent code), exchanges it, stores the
+  credential under `SecretName::DeviceCredential`, and records `device.activation.completed` via a new
+  `Edge::record_activation` (a system event: no employee at first boot, the box's new identity is both
+  the reporting and the activated device). `GET /api/activation` and `boot_standing` report the
+  standing straight from the vault, which is the source of truth for "activated". Proven against the
+  in-memory fakes and a stub cloud (`crates/pos-edge/tests/activation.rs`): a valid code activates and
+  broadcasts the completion, the standing flips, a second attempt is a conflict, a wrong code is a
+  no-oracle `403`, and a malformed one is rejected locally with nothing stored. Composition into the
+  shipped binary waits on the OS-keyring `KeyVault` adapter, deferred as a gated hardware/OS handoff
+  (it needs a live credential store its contract suite cannot get in the pull-request gate).
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

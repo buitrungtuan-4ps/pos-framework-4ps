@@ -36,12 +36,12 @@ use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
-    CashShiftCounted, CashShiftOpened, EventType, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesTableClosed, SalesTableOpened,
+    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, SalesOrderLineAdded,
+    SalesOrderLineFired, SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId, StationId,
-    StoreId, TableId, TaxClassId, TenantId,
+    BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
+    StationId, StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
@@ -488,6 +488,53 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub fn fanout(&self) -> &Fanout {
         &self.fanout
+    }
+
+    /// Records that this box completed device activation and may now trade
+    /// (`device.activation.completed`, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+    ///
+    /// A system event, not a domain decision: there is no signed-in employee at first boot, so the
+    /// envelope carries none, and the box's own new identity is both the reporting and the activated
+    /// device. The caller stores the credential in the [`KeyVault`](pos_ports::KeyVault) *before*
+    /// calling this — the vault is what the boot gate reads, so it, not this event, is the source of
+    /// truth for "activated"; this event is the notification that flows to the cloud.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
+    /// cannot be written.
+    pub async fn record_activation(&self, activated_device_id: DeviceId) -> Result<(), AppError> {
+        let now = self.clock.now();
+        let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
+            .map_err(|_ignored| AppError::Clock)?;
+        let payload = DeviceActivationCompleted {
+            activated_device_id,
+        };
+        let data = RawPayload::encode(&payload).map_err(AppError::Encode)?;
+        let envelope = EventEnvelope {
+            event_id: pos_proto::ids::EventId::new(self.next_ulid()),
+            event_type: EventTypeRef::from_known(DeviceActivationCompleted::EVENT_TYPE),
+            event_time: now,
+            business_date,
+            schema_version: DeviceActivationCompleted::SCHEMA_VERSION,
+            tenant_id: self.identity.tenant_id,
+            brand_id: self.identity.brand_id,
+            store_id: self.identity.store_id,
+            // At first boot the box's new identity is the device that was activated; there is no
+            // separate reporting device and no shift open yet.
+            device_id: activated_device_id,
+            employee_id: None,
+            shift_id: None,
+            data,
+        };
+        let published = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        let message = ServerMessage::Event {
+            event_type: EventTypeRef::from_known(DeviceActivationCompleted::EVENT_TYPE)
+                .as_str()
+                .to_owned(),
+            payload: published,
+        };
+        self.append_and_publish(vec![envelope], vec![message]).await
     }
 
     /// The current projected state of a table.
