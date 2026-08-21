@@ -65,6 +65,7 @@ pub mod images;
 mod openapi;
 pub mod orders;
 mod persistence;
+pub mod qr;
 pub mod reconcile;
 pub mod retention;
 pub mod translations;

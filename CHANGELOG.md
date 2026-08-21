@@ -1047,6 +1047,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `docs/openapi.json` lands with the cloud→store relay (P11a-2) — a buildable follow-on, not an
   external blocker; P10 (`countries/vn`) stays blocked on A2, and the payment (A1) and Grab/ShopeeFood
   (A3) adapters stay blocked-external.
+- `pos-cloud` (P11, ADR-0057 — a new ADR): the **QR ordering** security keystone and guardrail
+  decision. A guest scanning a printed table code has no API key, so the `table_id` travels as an
+  HMAC-signed token — `{tenant}.{store}.{table}.{hex_tag}`, on the same `hmac`/`sha2` line and
+  constant-time-compare idiom the webhook signer uses (ADR-0038), no new dependency —
+  `mint_table_token` (admin side, printed into the QR) and `verify_table_token` (returns the
+  `TableRef` or refuses a forged/tampered/cross-store token). The four guardrails ADR-0012 requires
+  are one pure, total `evaluate(QrFacts) -> QrDecision` in a fixed precedence: a forged token is
+  `UntrustedTable` first, then an offline store (`StoreOffline` — "ask a member of staff"), then
+  out-of-hours, then the per-table rate limit; otherwise `Accept` carrying the staff-confirmation
+  default (on). Both halves are pure and exhaustively unit-tested (`crates/pos-cloud/src/qr.rs`): the
+  token mint/verify (known-shape, tamper, wrong secret, cross-table replay, malformed) and every
+  guardrail branch and its precedence. The endpoint that gathers the facts (store-online, business
+  hours, rate limiter) and relays a verified QR order into the `OrderIn` intake (ADR-0056) lands with
+  the P11a cloud→store relay (P11b-2) — a buildable follow-on, not an external blocker.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
