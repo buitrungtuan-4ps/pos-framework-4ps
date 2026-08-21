@@ -43,5 +43,22 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0022](0022-events-partition-strategy.md) | Events partitioned monthly by business date; tenant isolation by RLS, not by the partition key | Accepted |
 | [0023](0023-tenant-hostname-and-slug.md) | Flat per-tenant subdomains; DNS is the slug-uniqueness ledger; redirect never proxy | Accepted |
 | [0019](0019-openapi-generation.md) | OpenAPI generated from the handlers with `utoipa`; a CI drift check fails on divergence | Accepted |
+| [0038](0038-webhook-tls-sender.md) | The webhook TLS sender reuses the tree's rustls stack, and owns its dial | Accepted |
+| [0039](0039-config-delivery.md) | Config reaches the store by authenticated pull on a store-facing `/sync` surface | Accepted |
+| [0040](0040-reconciliation.md) | Reconciliation is an edge-initiated missing-id diff on the internal surface | Accepted |
+| [0041](0041-device-onboarding.md) | Device onboarding is discover → propose → admin-approves, over a proposal table | Accepted |
+| [0042](0042-image-pipeline.md) | The image pipeline buys `image`, re-encodes to JPEG, and fits a byte budget by ladder | Accepted |
+| [0043](0043-translation-grid.md) | The translation grid: one jsonb per tenant, `en` required as the fallback | Accepted |
+| [0044](0044-fork-and-deploy.md) | Fork-and-deploy: one VPS, Docker Compose, secrets generated on the server | Accepted |
+| [0045](0045-first-boot-admin-enrolment.md) | First-boot super-admin enrolment, and the reset break-glass | Accepted |
+| [0046](0046-backups-and-restore.md) | Cloud backups and the restore drill | Accepted |
+| [0047](0047-minisign-verification.md) | Minisign update verification: `ed25519-dalek` + `blake2`, verify-only | Accepted |
+| [0048](0048-ota-rollout-model.md) | OTA rollout: rings, canary, self-test rollback, and a kill switch, as one pure decision | Accepted |
+| [0049](0049-single-active-lease.md) | The single-active lease: generation-based, offline-durable, with a disjoint invoice range | Accepted |
+| [0050](0050-activation-code-exchange.md) | Activation-code exchange: single-use, locally checkable, credential into the vault | Accepted |
+| [0051](0051-device-credential-provisioning.md) | Device-credential provisioning: the cloud activation exchange | Accepted |
+| [0052](0052-ota-rollout-config.md) | The OTA rollout is published as configuration, validated by shared rules | Accepted |
+| [0053](0053-cloud-sync-port.md) | CloudSync: the store's request/response channel to the cloud (the seventeenth port) | Accepted |
+| [0054](0054-edge-cloud-http-client.md) | The edge→cloud HTTP client reuses the tree's rustls stack, behind a transport seam | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

@@ -987,6 +987,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   not just documented. **No new dependency**: the port names only `pos-proto` and its own
   `Secret`/`PortError`. The real HTTP adapter that speaks to the cloud, and the edge activation client
   and OTA updater that consume the port, are P9e-2b onward.
+- `cloud-sync-http` (P9, ADR-0054 — a new ADR): the **edge→cloud HTTP client**, the concrete
+  `CloudSync` adapter the store composes. `activate(code)` posts `{code}` to the cloud's `POST /activate`
+  (ADR-0050) and reads `{device_id, credential}` back; `fetch_update(release)` posts `{release}` to
+  `POST /internal/ota/artifact` and reads the signed artifact bytes back (verified by the `Signer`
+  downstream, not here — a transport is not a trust boundary). The socket lives behind an
+  `HttpTransport` seam; everything else — request-shaping and the status→`PortError` mapping (`400` →
+  `invalid_argument`, `403` → `permission_denied` with no oracle, `404` → `not_found`, else →
+  `unavailable`) — is pure, so the shared `CloudSync` contract suite runs in the pull-request gate
+  against a stub transport while the real TLS path (`TlsHttpTransport`) belongs to the gated integration
+  lane and the soak. **No new dependency and no new `cargo-deny` entry**: the client reuses the exact
+  rustls/hyper stack the webhook sender pins (ADR-0038) at the versions already in the tree. The cloud's
+  `/internal/ota/artifact` route is defined by ADR-0054 and served by its P9e-4 counterpart.
+- The ADR index (`docs/adr/README.md`) is caught up: ADRs 0038–0054 were missing from the table and are
+  now listed.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
