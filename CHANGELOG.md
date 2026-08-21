@@ -973,6 +973,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   configured", never an error. No new dependency, no new port. The edge updater that reads these keys
   and drives `decide_rollout` (verify → self-test → rollback) is P9e-4; fetching the update artifact
   bytes rides the edge→cloud transport still to be decided.
+- `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
+  (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
+  `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
+  I/O or clock: the fleet canary ramps by bucket while lab and pilot take the update immediately; a
+  raised minimum ring holds the lower rings back; a failed self-test rolls back over the kill switch and
+  a revoked key both; the kill switch freezes an otherwise-eligible fleet; and a revoked signing key is
+  refused fleet-wide even at full ramp.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
