@@ -60,5 +60,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0052](0052-ota-rollout-config.md) | The OTA rollout is published as configuration, validated by shared rules | Accepted |
 | [0053](0053-cloud-sync-port.md) | CloudSync: the store's request/response channel to the cloud (the seventeenth port) | Accepted |
 | [0054](0054-edge-cloud-http-client.md) | The edge→cloud HTTP client reuses the tree's rustls stack, behind a transport seam | Accepted |
+| [0055](0055-edge-ota-updater.md) | The edge OTA updater orchestrates behind an install seam; the OS steps are gated | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

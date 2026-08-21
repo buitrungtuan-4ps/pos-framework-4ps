@@ -1016,6 +1016,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   no-oracle `403`, and a malformed one is rejected locally with nothing stored. Composition into the
   shipped binary waits on the OS-keyring `KeyVault` adapter, deferred as a gated hardware/OS handoff
   (it needs a live credential store its contract suite cannot get in the pull-request gate).
+- `pos-edge` (P9, ADR-0055 — a new ADR): the **edge OTA updater**, the on-box orchestration that
+  carries an eligible update through. `OtaUpdater` composes `CloudSync` (fetch the artifact), the
+  `Signer` port (verify), and a new `UpdateInstaller` seam (the real-machine steps). `run` is a fixed,
+  safety-ordered sequence: a `Superseded`/`Invalid` lease (ADR-0049) reports `ReadOnly` and touches
+  nothing; `decide_rollout` (ADR-0048) resolves roll-back / halt / refuse / skip / install; and on
+  install the artifact is **verified before the disk is touched** — read the claimed key id, refuse a
+  revoked one, select the matching baked-in key, check the signature — then `stage_backup` (the
+  `.pre-update` copy) → `apply` → `self_test`, committing only on a pass and rolling back on a fail.
+  The five `UpdateInstaller` methods are the gated hardware/OS steps (write the binary, reboot, run the
+  smoke test), left to the shipped binary and a real box; the orchestration around them is proven
+  against the in-memory fakes and a recording installer (`crates/pos-edge/tests/ota.rs`, nine cases),
+  which assert both the outcome and that a bad signature or an untrusted key writes nothing, and a
+  failed self-test rolls back rather than commits. Composition into the binary waits on that real
+  installer and the minisign keypair, both gated (`docs/roadmap.md` P9).
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
