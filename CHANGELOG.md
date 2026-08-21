@@ -1096,6 +1096,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `ErpLine` from outside `pos-ports`: `ErpLine::{kind_wire, amount, quantity}` and `Quantity::as_milli`.
   The exact SAP strings are pinned in the gated integration lane; `erp-sap` is the third integration
   adapter's second divergent prior (with the courier) for the `templates/adapter-template` extraction.
+- `shipping-grabexpress` (P11, ADR-0058): the second **`ShippingDispatch`** courier, the other one
+  `architecture.md` §6.1 names, built from the new `templates/adapter-template`. Same transport-seam
+  shape, same pure status mapping, same stub-driven contract suite as `shipping-ahamove` — differing
+  only in Grab Express's own wire (a booking keyed by `merchant_order_id`, a `deliveries` collection,
+  its own status vocabulary `ALLOCATING`/`PICKING_UP`/`IN_DELIVERY`/`COMPLETED`/`CANCELED`, mapped onto
+  `ShipmentStatus` with unknowns kept unrecognised and non-terminal). It passes the shared
+  `ShippingDispatch` suite (all 8 cases) against a stateful stub courier, plus per-status unit tests.
+  No new ADR — it is the second instance under ADR-0058.
+- `templates/adapter-template/` (P11, roadmap P11 "rule of three"): the extracted scaffold for a new
+  network adapter, generalising the pattern now shared by `shipping-ahamove`, `shipping-grabexpress`,
+  `erp-sap`, and `cloud-sync-http` — a transport seam (the only thing that touches a socket) plus a
+  `Tls…Transport` on the tree's pinned rustls/hyper stack, a pure core (request shaping + status→`PortError`
+  mapping), and a stub-driven contract test. It is deliberately **not** a workspace member: the source
+  files carry a `.tmpl` suffix and there is no real `Cargo.toml`, so Cargo, `clippy`, `rustfmt`, and
+  `cargo test` never see it — a contributor copies it out, drops the suffix, fills the placeholders,
+  and adds the crate to `members`. A `README.md` carries the shape, the copy-out checklist, and links
+  to the four worked examples.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

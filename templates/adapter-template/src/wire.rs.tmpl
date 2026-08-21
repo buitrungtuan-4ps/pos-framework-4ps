@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The HTTP transport seam and its production TLS implementation.
+//!
+//! [`{{Provider}}Transport`] is the one thing that touches a socket; [`Tls{{Provider}}Transport`] is
+//! the concrete sender, on the rustls/hyper stack already in the tree (ADR-0038). A provider's API
+//! base URL is operator configuration — one fixed, trusted host — so this dials the ordinary way;
+//! there is no SSRF surface to defend.
+
+use core::future::Future;
+
+/// The HTTP verb a call uses. Drop the variants you do not need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    /// Read a resource.
+    Get,
+    /// Create a resource, or act on one.
+    Post,
+}
+
+impl Method {
+    /// The verb as its HTTP token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+        }
+    }
+}
+
+/// One HTTP request/response over some transport — the seam the socket lives behind. A non-2xx
+/// *response* is not an error here; it comes back in [`HttpResponse::status`] for the caller to map.
+pub trait {{Provider}}Transport: Send + Sync {
+    /// Sends `body` (as `application/json`, when present) to `path` with `method`.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`] if the request could not be completed (resolve/dial/handshake/timeout).
+    fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
+}
+
+/// A response from the provider: the HTTP status and the body bytes.
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    /// The HTTP status code.
+    pub status: u16,
+    /// The response body, verbatim.
+    pub body: Vec<u8>,
+}
+
+/// A transport-level failure — the provider could not be reached — as distinct from a response the
+/// caller must interpret. Always maps to [`unavailable`](pos_ports::PortError::unavailable).
+#[derive(Debug, thiserror::Error)]
+#[error("the {{provider}} transport failed: {0}")]
+pub struct TransportError(String);
+
+impl TransportError {
+    /// A transport failure carrying a human-readable reason.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Tls{{Provider}}Transport
+//
+// COPY THE BODY VERBATIM from a sibling adapter — it is provider-agnostic. See
+// `crates/adapters/shipping-ahamove/src/wire.rs`: the `new` (base-URL validation + rustls
+// ClientConfig with the explicit ring provider and webpki-roots), `connect` (resolve → first TCP that
+// accepts), and `send` (SNI-bound TLS handshake → one HTTP/1.1 request → collect the body), plus the
+// `request` wrapper that bounds the whole thing with `tokio::time::timeout`. Rename the struct only.
+// ---------------------------------------------------------------------------------------------------

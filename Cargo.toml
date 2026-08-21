@@ -17,6 +17,7 @@ members = [
     "crates/adapters/updater-minisign",
     "crates/adapters/cloud-sync-http",
     "crates/adapters/shipping-ahamove",
+    "crates/adapters/shipping-grabexpress",
     "crates/adapters/erp-sap",
     "crates/pos-edge",
     "crates/pos-cloud",

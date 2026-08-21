@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The `{{Port}}` contract suite, against `Http{{Provider}}` over a stub transport.
+//!
+//! `docs/roadmap.md` P11's exit criterion is *"every adapter passes its port's contract suite"*. The
+//! stub reproduces the provider's exact status/body responses, so the suite checks the adapter's whole
+//! branching — request shaping and status→PortError mapping — in the fast gate with no socket.
+
+// The whole file is test scaffolding. `allow-expect-in-tests` in clippy.toml scopes to `#[test]` and
+// `#[cfg(test)]`, which does not reach an integration test's module-level helpers, so the stub and the
+// runtime it drives are allowed to expect and to take the trait's owned body by value here.
+#![allow(
+    clippy::expect_used,
+    clippy::needless_pass_by_value,
+    reason = "test scaffolding: a stub whose own state is corrupt is an unrecoverable test-setup \
+              fault, not a contract failure; and the transport method takes its body by owned \
+              Option<Vec>, which the stub only needs to read"
+)]
+
+use core::future::Future;
+
+use {{adapter_crate}}::{Http{{Provider}}, HttpResponse, Method, {{Provider}}Transport, TransportError};
+// use pos_contract_tests::harness::{ {{Port}}Harness, Setup };
+
+// A stub transport that speaks the provider's exact wire. If the provider is stateful (a courier
+// remembers jobs, an ERP remembers postings), hold `Arc<Mutex<State>>` and let the harness reach into
+// it for any setup the suite needs (e.g. moving a job to a terminal status). If it is stateless
+// (request/response only, like cloud-sync-http), a unit struct is enough.
+struct Stub{{Provider}};
+
+impl {{Provider}}Transport for Stub{{Provider}} {
+    async fn request(
+        &self,
+        _method: Method,
+        _path: &str,
+        _body: Option<Vec<u8>>,
+    ) -> Result<HttpResponse, TransportError> {
+        // Match on (method, path) and return the status/body the real provider would. Parsing the
+        // body proves the adapter sent the fields the provider expects.
+        todo!("respond with the provider's wire for each route the adapter calls")
+    }
+}
+
+// Implement the port's `…Harness` trait: `fresh()` returns `Http{{Provider}}::new(stub)`, and any
+// setup hook the harness declares reaches into the stub's state.
+
+// Drives a future to completion; the stub touches no socket, so a current-thread runtime suffices.
+fn block_on<F: Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build a current-thread tokio runtime")
+        .block_on(future)
+}
+
+// Invoke the shared suite for your port, e.g.:
+//
+// mod suite {
+//     use super::{ {{Provider}}Harness, block_on };
+//     pos_contract_tests::{{port}}_suite!({{Provider}}Harness::new(), block_on);
+// }
