@@ -12,9 +12,11 @@ repository.workspace   = true
 name = "pos_simulator"
 
 [dependencies]
-# P12a (the capacity model) is pure integer arithmetic over the published sizing formulas and needs no
-# backbone crate. P12b adds pos-core (ota::decide_rollout), pos-ports, and pos-fakes for the fleet
-# behavioral scenarios; those dependency lines land with that slice so this one stays minimal.
+# The capacity model (src/capacity.rs) is pure integer arithmetic and needs no backbone crate. The
+# fleet behavioral scenarios (src/fleet.rs) drive the framework's real OTA decision — pos-core's pure
+# `ota::decide_rollout` — over a virtual fleet, so the simulator proves the shipped logic rather than a
+# re-implementation of it. Path, not version: resolved by the workspace.
+pos-core = { path = "../pos-core" }
 
 [lints]
 # The simulator declares its OWN lint table (like the binaries), per the workspace comment: it is a

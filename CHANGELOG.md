@@ -1128,6 +1128,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   behavioral scenarios (OTA rings, offline drain, config fan-out, reconciliation) are the next slice;
   the real sustained soak on the target VPS with live PostgreSQL/NATS is an operations/P13 handoff, not
   faked here.
+- `pos-simulator` (P12): the **virtual-fleet behavioral scenarios** (`fleet`, `stress`). `fleet` folds
+  the framework's *real* OTA decision — `pos_core::ota::decide_rollout` (ADR-0048) — over a whole fleet
+  and returns the aggregate, so the canary ramp, the kill switch reaching every ring, a revoked key
+  refused fleet-wide, and a failed self-test rolling one device back are each asserted across the fleet
+  rather than one device (the scenarios `crates/pos-core/tests/ota_rollout.rs` seeded now have their
+  home). `stress` makes §4's behavioural stress tests executable: the offline drain reproduces the
+  "200 stores → 800k events" figure from the fleet model and shows the ~9-minute drain is feasible
+  within the ingest ceiling (and conservative); the webhook backpressure model shows a dead endpoint's
+  cursor falls behind linearly while its in-memory footprint stays one batch, whatever the outage; and
+  the nightly reconciliation is the sorted set-difference (`store − cloud`) of missing ids to re-push.
+  17 tests in all; still integer-only and deterministic (rates and counts are inputs, no clock).
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

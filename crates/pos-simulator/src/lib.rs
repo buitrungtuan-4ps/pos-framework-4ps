@@ -17,9 +17,12 @@
 //!   them. This is what makes the tables a checked artifact — a formula that stops matching the table
 //!   fails a test, and the one place the published estimates do not reconcile is pinned rather than
 //!   quietly averaged away.
-//! - The **fleet behavioral scenarios** (OTA rings over [`pos_core::ota::decide_rollout`], the
-//!   offline-drain time model, config fan-out, the webhook-cursor backpressure, reconciliation) land in
-//!   the P12b slice.
+//! - [`fleet`] drives the **fleet-scale OTA rollout** over the framework's real decision,
+//!   [`pos_core::ota::decide_rollout`] — the canary ramp, the kill switch, a revoked key, and a failed
+//!   self-test rolling back, each asserted across a whole fleet, not one device.
+//! - [`stress`] makes the §4 behavioural stress tests executable: the offline-drain time model, the
+//!   webhook-cursor backpressure (a dead endpoint falls behind without growing in memory), and the
+//!   nightly reconciliation missing-id diff.
 //! - The **real sustained soak on the target hardware** — 222 events/s against a live PostgreSQL with
 //!   `NVMe` `fsync` the deciding factor, run for hours without leaking — is *not* here and is not faked:
 //!   it needs the VPS and the wall-clock time, so it is an operations/P13 handoff, the same way the
@@ -33,3 +36,5 @@
 #![forbid(unsafe_code)]
 
 pub mod capacity;
+pub mod fleet;
+pub mod stress;
