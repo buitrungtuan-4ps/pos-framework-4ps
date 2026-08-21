@@ -1113,6 +1113,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `cargo test` never see it — a contributor copies it out, drops the suffix, fills the placeholders,
   and adds the crate to `members`. A `README.md` carries the shape, the copy-out checklist, and links
   to the four worked examples.
+- `pos-simulator` (P12): the **executable capacity model** (`crates/pos-simulator/src/capacity.rs`), the
+  first slice of the virtual-fleet simulator. `docs/capacity-and-reliability.md` §2's three scenarios
+  (A/B/C) are encoded as data and its sizing formulas as pure integer functions, so the published
+  numbers become a *checked* artifact rather than an estimate on a page: events/day is reproduced
+  exactly (recovering the table's own implied 8-events-per-bill constant), PostgreSQL storage within 5%
+  (the model gives B 75 GB where the table rounds to 72), daily bandwidth lands inside each published
+  range (from QR sessions × ~1 MB of menu imagery — scenario B's ~250 GB/day wall), and the §2
+  ÷1260 peak-ingest formula is shown to be a conservative ceiling every scenario sits under. A
+  `reconcile()` returns the derived-vs-published divergences instead of hiding them, and pins the one
+  place the estimates do not reconcile — scenario A's 9,000 QR sessions/day against the 18,000 the
+  bills×QR-share model gives (B and C both agree with the share), filed for the pilot to settle. All
+  integer, no floating point on a capacity number; own `[lints]` table like the binaries. The fleet
+  behavioral scenarios (OTA rings, offline drain, config fan-out, reconciliation) are the next slice;
+  the real sustained soak on the target VPS with live PostgreSQL/NATS is an operations/P13 handoff, not
+  faked here.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

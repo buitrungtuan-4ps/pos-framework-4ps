@@ -21,6 +21,7 @@ members = [
     "crates/adapters/erp-sap",
     "crates/pos-edge",
     "crates/pos-cloud",
+    "crates/pos-simulator",
     "examples/minimal-edge",
     "xtask",
 ]
