@@ -40,6 +40,7 @@ pub mod decision;
 pub mod error;
 pub mod inventory;
 pub mod machines;
+pub mod ota;
 pub mod permission;
 pub mod state_machine;
 

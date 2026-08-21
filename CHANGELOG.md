@@ -898,6 +898,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   The production keypairs remain the human-only offline step (P0/P9); whether a valid key is still
   trusted stays a revocation-list question for the config tree, and how an update rolls out is ADR-0048
   (next).
+- `pos-core` (P9, ADR-0048 — a new ADR): the **OTA rollout decision**. `pos_core::ota::decide_rollout`
+  is the pure function that answers "should this device install this update *now*?", once the artifact
+  is validly signed (P9a). It weighs the device's version / ring / canary-bucket / last-self-test
+  against the cloud's published update by a fixed precedence that *is* the safety argument — roll back
+  (a device that failed its self-test on the running version reverts, outranking even the kill switch),
+  already-current, halt (kill switch), refuse (revoked signing key), ring gate, fleet canary gate,
+  install. The rollout shape is **published data** — `min_ring` (Lab < Pilot < Fleet) plus a
+  `fleet_rollout_percent` that a stable per-device canary bucket is measured against — which settles the
+  docs' inconsistent ring count: adding a "25% ring" is setting a number, not shipping a release. The
+  logic is pure and stateless (the device persists only its current version and last self-test), so the
+  simulator (P12) can exhaust it, and the signing key id is the raw `[u8; 8]` minisign uses, keeping
+  `pos-core` off `pos-ports` (the edge maps `KeyId` at the boundary). Proven by twelve tests binding each
+  precedence rule and the canary ramp. The `.pre-update` DB copy and the act of installing or reverting
+  are edge I/O (P9e); revocation-list delivery is the config tree (ADR-0033).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
