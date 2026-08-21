@@ -912,6 +912,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `pos-core` off `pos-ports` (the edge maps `KeyId` at the boundary). Proven by twelve tests binding each
   precedence rule and the canary ramp. The `.pre-update` DB copy and the act of installing or reverting
   are edge I/O (P9e); revocation-list delivery is the config tree (ADR-0033).
+- `pos-core` (P9, ADR-0049 — a new ADR): the **single-active lease** and its invoice-range handoff.
+  `pos_core::lease` decides who is the active machine and hands a replacement a fresh invoice-number
+  range, as pure functions. `lease_standing(held, authoritative)` compares two `LeaseGeneration`s and
+  nothing else — **no clock** — so a lease never expires while the store is offline: equal ⇒ `Active`,
+  behind ⇒ `Superseded` (the old machine goes read-only), ahead ⇒ `Invalid` (a generation the store
+  never issued is refused, not trusted). `issue_replacement` starts the replacement's `InvoiceRange`
+  exactly where the previous one ended, so the two are **disjoint by construction** — even a window
+  where a still-offline old machine keeps issuing invoices cannot mint a legal invoice number the new
+  machine also mints. Pure `pos-core`, no `pos-ports`; the wire `LeaseToken` stays the credential and
+  the generation is the order that decides supersession. The actual invoice-range allocation is a
+  `Fiscalization` call at the cloud (P10/A2), honouring `Superseded` → read-only is the edge (P9e), and
+  legal invoice numbering stays distinct from the per-store gapless receipt counter (ADR-0025). Proven
+  by tests binding the generation verdict, its time-independence, and the disjoint-forward range
+  invariant across a chain of swaps.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
