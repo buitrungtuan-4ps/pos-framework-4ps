@@ -32,6 +32,7 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
+pub mod activation;
 pub mod billing;
 pub mod business_date;
 pub mod campaign;

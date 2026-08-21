@@ -926,6 +926,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   legal invoice numbering stays distinct from the per-store gapless receipt counter (ADR-0025). Proven
   by tests binding the generation verdict, its time-independence, and the disjoint-forward range
   invariant across a chain of swaps.
+- `pos-core` (P9, ADR-0050 — a new ADR): the **activation-code exchange**, the pure half of turning a
+  fresh box into a trading machine. `pos_core::activation::ActivationCode` is a short human-typed code —
+  eleven Crockford base-32 payload symbols (55 bits) plus a checksum symbol, shown as `XXXX-XXXX-XXXX` —
+  that `parse` normalises (case-, hyphen- and whitespace-insensitive, folding the ambiguous `I`/`L`/`O`
+  glyphs) and checksums, so a mistyped code fails at the keyboard rather than after a round-trip; the
+  checksum is a typo guard, not authentication. `redeem` is the single-use rule: it grants only a code
+  the cloud still records as `Issued`, refusing `Redeemed` (a spent sheet) and `Revoked` (a cancelled
+  one), and a grant obliges the caller to flip the record in the credential-minting transaction — the
+  atomicity is the cloud's, the rule the domain's. `device_activation` states that a box holding its
+  `SecretName::DeviceCredential` is activated. Pure `pos-core`, no `pos-ports`; the code's `Debug` is
+  redacted since it is a bearer credential until redeemed. Deliberately elsewhere (P9e): the cloud
+  issue/look-up/consume endpoint and the edge client that presents the code over `MessageLink`, stores
+  the credential via `KeyVault`, and emits `device.activation.completed`.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.
