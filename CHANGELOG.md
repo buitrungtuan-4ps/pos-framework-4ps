@@ -958,6 +958,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   device-credential verification path are P9e; `device.activation.completed` is emitted edge-side, not
   in the exchange transaction. Proven by a router test (single-use + no-oracle) and a `store-postgres`
   round-trip (issue → atomic redeem+mint → replay-refused → revoke).
+- `pos-core` + `pos-cloud` (P9, ADR-0052 — a new ADR): the **OTA rollout is published as
+  configuration**. Rather than a new push channel, the cloud publishes the rollout through the existing
+  config tree (ADR-0033/ADR-0004) as two keys — `fleet_update` (`target_version`, `min_ring`,
+  `rollout_percent`, `halted`, `signing_key_id`, `revoked_key_ids`) fleet-wide, and `device_ota`
+  (`ring`, `canary_bucket`) per device — and each store pulls it like any other setting. The schema and
+  its rules live in `pos-core`: `FleetUpdateConfig`/`DeviceOtaConfig` are typed views whose `validate`
+  methods parse the keys into the `PublishedUpdate`, revoked-key list, and `(Ring, bucket)` that
+  `decide_rollout` (ADR-0048) consumes, so the cloud validates on publish and the edge validates on
+  receipt through the *same* code and cannot disagree. `pos-core::ota` also gains `Ring::from_wire`/
+  `as_wire`, `ReleaseVersion::parse`, and `parse_signing_key_id`. The cloud's `CapabilityValidator` now
+  rejects an incoherent `fleet_update`/`device_ota` on publish — reporting every violation at once (a
+  bad version, ring, ramp percent, or key id) — while an absent key means simply "no rollout
+  configured", never an error. No new dependency, no new port. The edge updater that reads these keys
+  and drives `decide_rollout` (verify → self-test → rollback) is P9e-4; fetching the update artifact
+  bytes rides the edge→cloud transport still to be decided.
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

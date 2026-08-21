@@ -14,6 +14,19 @@
 //! the docs' inconsistent ring count: adding a "25% ring" is setting a number, not shipping a release.
 //! The signing key id is the raw `[u8; 8]` minisign uses, because `pos-core` names no port type; the
 //! edge maps `pos_ports::signer::KeyId` at the boundary.
+//!
+//! # The rollout is published as configuration
+//!
+//! The cloud does not push an update; it publishes the rollout *shape* into the config tree
+//! ([ADR-0033](../../../docs/adr/0033-config-tree.md), [ADR-0052](../../../docs/adr/0052-ota-rollout-config.md))
+//! and each store pulls it. [`FleetUpdateConfig`] and [`DeviceOtaConfig`] are the typed views of the
+//! two config keys — `fleet_update` (the fleet-wide target, ring gate, ramp, kill switch, and revoked
+//! keys) and `device_ota` (this device's ring and canary bucket) — and their `validate` methods are
+//! the *shared* rules the cloud runs before publishing and the edge runs before trusting, so the two
+//! cannot disagree about what a legal rollout looks like. Parsing lives here, beside the decision it
+//! feeds; deserialising the surrounding document is the caller's I/O.
+
+use serde::Deserialize;
 
 /// A semantic release version of the `pos_edge` / `pos_cloud` binary. Ordered `major`, then `minor`,
 /// then `patch`, so `<`/`>` are the version comparison.
@@ -166,6 +179,212 @@ pub fn decide_rollout(
     }
     // 7. Eligible.
     RolloutDecision::Install
+}
+
+impl Ring {
+    /// The `snake_case` wire token for this ring, as it appears in configuration.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Lab => "lab",
+            Self::Pilot => "pilot",
+            Self::Fleet => "fleet",
+        }
+    }
+
+    /// The ring named by a wire token, or `None` if it names no ring.
+    #[must_use]
+    pub fn from_wire(token: &str) -> Option<Self> {
+        match token {
+            "lab" => Some(Self::Lab),
+            "pilot" => Some(Self::Pilot),
+            "fleet" => Some(Self::Fleet),
+            _ => None,
+        }
+    }
+}
+
+impl ReleaseVersion {
+    /// Parses a `MAJOR.MINOR.PATCH` string, or `None` if it is not exactly three `u16` components.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut parts = text.split('.');
+        let major = parts.next()?.parse::<u16>().ok()?;
+        let minor = parts.next()?.parse::<u16>().ok()?;
+        let patch = parts.next()?.parse::<u16>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self::new(major, minor, patch))
+    }
+}
+
+/// Parses a signing key id from exactly sixteen hex digits (the eight-byte minisign key id), or
+/// `None` if the text is not sixteen hex digits.
+#[must_use]
+pub fn parse_signing_key_id(text: &str) -> Option<SigningKeyId> {
+    if text.len() != 16 {
+        return None;
+    }
+    let mut bytes: SigningKeyId = [0; 8];
+    let mut digits = text.chars();
+    for byte in &mut bytes {
+        let high = digits.next()?.to_digit(16)?;
+        let low = digits.next()?.to_digit(16)?;
+        *byte = u8::try_from(high.saturating_mul(16).saturating_add(low)).ok()?;
+    }
+    Some(bytes)
+}
+
+/// The fleet-wide rollout, parsed from a [`FleetUpdateConfig`]: the update to weigh and the keys that
+/// are no longer trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetRollout {
+    /// The published update every device measures itself against.
+    pub update: PublishedUpdate,
+    /// The signing keys revocation has retired; an update signed by one of these is refused.
+    pub revoked_keys: Vec<SigningKeyId>,
+}
+
+/// The `fleet_update` configuration key: the rollout the cloud publishes for the whole fleet.
+///
+/// A typed view of the config value, so the cloud validates it before publishing and the edge parses
+/// it before trusting, both through [`FleetUpdateConfig::validate`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct FleetUpdateConfig {
+    /// The target version, as `MAJOR.MINOR.PATCH`.
+    pub target_version: String,
+    /// The lowest eligible ring, as `lab`, `pilot`, or `fleet`.
+    pub min_ring: String,
+    /// The fraction of the fleet ring currently eligible, `0..=100`.
+    pub rollout_percent: u8,
+    /// Whether the kill switch is engaged. Absent means not halted.
+    #[serde(default)]
+    pub halted: bool,
+    /// The signing key id the artifact is signed by, as sixteen hex digits.
+    pub signing_key_id: String,
+    /// The signing key ids revocation has retired, each sixteen hex digits. Absent means none.
+    #[serde(default)]
+    pub revoked_key_ids: Vec<String>,
+}
+
+impl FleetUpdateConfig {
+    /// Validates and parses the fleet rollout.
+    ///
+    /// # Errors
+    ///
+    /// Every human-readable violation (not just the first), so an operator fixing a rejected config
+    /// sees the whole list: a version, ring, percent, or key id that does not parse.
+    pub fn validate(&self) -> Result<FleetRollout, Vec<String>> {
+        let mut violations = Vec::new();
+        let target = ReleaseVersion::parse(&self.target_version);
+        if target.is_none() {
+            violations.push(format!(
+                "fleet_update.target_version is not MAJOR.MINOR.PATCH: {}",
+                self.target_version
+            ));
+        }
+        let min_ring = Ring::from_wire(&self.min_ring);
+        if min_ring.is_none() {
+            violations.push(format!(
+                "fleet_update.min_ring must be lab, pilot, or fleet: {}",
+                self.min_ring
+            ));
+        }
+        if self.rollout_percent > 100 {
+            violations.push(format!(
+                "fleet_update.rollout_percent must be 0..=100: {}",
+                self.rollout_percent
+            ));
+        }
+        let signing_key_id = parse_signing_key_id(&self.signing_key_id);
+        if signing_key_id.is_none() {
+            violations.push(format!(
+                "fleet_update.signing_key_id must be sixteen hex digits: {}",
+                self.signing_key_id
+            ));
+        }
+        let mut revoked_keys = Vec::with_capacity(self.revoked_key_ids.len());
+        for id in &self.revoked_key_ids {
+            match parse_signing_key_id(id) {
+                Some(key) => revoked_keys.push(key),
+                None => violations.push(format!(
+                    "fleet_update.revoked_key_ids has an id that is not sixteen hex digits: {id}"
+                )),
+            }
+        }
+        // Every field parsed, so these are all `Some`; the guard keeps the assembly panic-free.
+        let (Some(target), Some(min_ring), Some(signing_key_id)) =
+            (target, min_ring, signing_key_id)
+        else {
+            return Err(violations);
+        };
+        if !violations.is_empty() {
+            return Err(violations);
+        }
+        Ok(FleetRollout {
+            update: PublishedUpdate {
+                target,
+                min_ring,
+                fleet_rollout_percent: self.rollout_percent,
+                signing_key_id,
+                halted: self.halted,
+            },
+            revoked_keys,
+        })
+    }
+}
+
+/// A device's rollout placement, parsed from a [`DeviceOtaConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceOtaAssignment {
+    /// The ring the cloud has placed this device in.
+    pub ring: Ring,
+    /// The device's stable `0..=99` canary bucket.
+    pub canary_bucket: u8,
+}
+
+/// The `device_ota` configuration key: this device's ring assignment and canary bucket.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceOtaConfig {
+    /// The ring, as `lab`, `pilot`, or `fleet`.
+    pub ring: String,
+    /// The stable canary bucket, `0..=99`.
+    pub canary_bucket: u8,
+}
+
+impl DeviceOtaConfig {
+    /// Validates and parses the device's rollout placement.
+    ///
+    /// # Errors
+    ///
+    /// Every human-readable violation: a ring that names no ring, or a bucket outside `0..=99`.
+    pub fn validate(&self) -> Result<DeviceOtaAssignment, Vec<String>> {
+        let mut violations = Vec::new();
+        let ring = Ring::from_wire(&self.ring);
+        if ring.is_none() {
+            violations.push(format!(
+                "device_ota.ring must be lab, pilot, or fleet: {}",
+                self.ring
+            ));
+        }
+        if self.canary_bucket > 99 {
+            violations.push(format!(
+                "device_ota.canary_bucket must be 0..=99: {}",
+                self.canary_bucket
+            ));
+        }
+        let Some(ring) = ring else {
+            return Err(violations);
+        };
+        if !violations.is_empty() {
+            return Err(violations);
+        }
+        Ok(DeviceOtaAssignment {
+            ring,
+            canary_bucket: self.canary_bucket,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -354,5 +573,126 @@ mod tests {
                 "{ring:?} is at or above the minimum ring, so it is ring-eligible"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::{
+        DeviceOtaConfig, FleetUpdateConfig, PublishedUpdate, ReleaseVersion, Ring,
+        parse_signing_key_id,
+    };
+
+    #[test]
+    fn rings_round_trip_through_their_wire_tokens() {
+        for ring in [Ring::Lab, Ring::Pilot, Ring::Fleet] {
+            assert_eq!(Ring::from_wire(ring.as_wire()), Some(ring));
+        }
+        assert_eq!(Ring::from_wire("canary"), None);
+        assert_eq!(Ring::from_wire("Lab"), None, "the token is lower-case");
+    }
+
+    #[test]
+    fn version_parsing_needs_exactly_three_numeric_components() {
+        assert_eq!(
+            ReleaseVersion::parse("1.2.3"),
+            Some(ReleaseVersion::new(1, 2, 3))
+        );
+        assert_eq!(
+            ReleaseVersion::parse("10.0.255"),
+            Some(ReleaseVersion::new(10, 0, 255))
+        );
+        assert_eq!(ReleaseVersion::parse("1.2"), None);
+        assert_eq!(ReleaseVersion::parse("1.2.3.4"), None);
+        assert_eq!(ReleaseVersion::parse("1.2.x"), None);
+        assert_eq!(ReleaseVersion::parse(""), None);
+    }
+
+    #[test]
+    fn a_key_id_is_exactly_sixteen_hex_digits() {
+        assert_eq!(parse_signing_key_id("a1a1a1a1a1a1a1a1"), Some([0xA1; 8]));
+        assert_eq!(
+            parse_signing_key_id("00000000000000ff"),
+            Some([0, 0, 0, 0, 0, 0, 0, 0xFF])
+        );
+        assert_eq!(parse_signing_key_id("a1a1a1a1a1a1a1"), None, "too short");
+        assert_eq!(parse_signing_key_id("a1a1a1a1a1a1a1a1a1"), None, "too long");
+        assert_eq!(parse_signing_key_id("a1a1a1a1a1a1a1zz"), None, "not hex");
+    }
+
+    fn valid_fleet() -> FleetUpdateConfig {
+        FleetUpdateConfig {
+            target_version: "1.2.3".to_owned(),
+            min_ring: "pilot".to_owned(),
+            rollout_percent: 40,
+            halted: false,
+            signing_key_id: "a1a1a1a1a1a1a1a1".to_owned(),
+            revoked_key_ids: vec!["b2b2b2b2b2b2b2b2".to_owned()],
+        }
+    }
+
+    #[test]
+    fn a_valid_fleet_update_parses_into_the_published_update_and_revocation_list() {
+        let rollout = valid_fleet().validate().expect("a valid config parses");
+        assert_eq!(
+            rollout.update,
+            PublishedUpdate {
+                target: ReleaseVersion::new(1, 2, 3),
+                min_ring: Ring::Pilot,
+                fleet_rollout_percent: 40,
+                signing_key_id: [0xA1; 8],
+                halted: false,
+            }
+        );
+        assert_eq!(rollout.revoked_keys, vec![[0xB2; 8]]);
+    }
+
+    #[test]
+    fn an_incoherent_fleet_update_reports_every_violation_at_once() {
+        let bad = FleetUpdateConfig {
+            target_version: "not-a-version".to_owned(),
+            min_ring: "canary".to_owned(),
+            rollout_percent: 150,
+            halted: false,
+            signing_key_id: "too-short".to_owned(),
+            revoked_key_ids: vec!["also-bad".to_owned()],
+        };
+        let violations = bad.validate().expect_err("every field is invalid");
+        assert_eq!(violations.len(), 5, "one per bad field: {violations:?}");
+        assert!(violations.iter().any(|v| v.contains("target_version")));
+        assert!(violations.iter().any(|v| v.contains("min_ring")));
+        assert!(violations.iter().any(|v| v.contains("rollout_percent")));
+        assert!(violations.iter().any(|v| v.contains("signing_key_id")));
+        assert!(violations.iter().any(|v| v.contains("revoked_key_ids")));
+    }
+
+    #[test]
+    fn a_fleet_update_at_the_boundaries_is_accepted() {
+        let mut config = valid_fleet();
+        config.rollout_percent = 100;
+        config.revoked_key_ids = Vec::new();
+        let rollout = config.validate().expect("100% and no revocations is valid");
+        assert_eq!(rollout.update.fleet_rollout_percent, 100);
+        assert!(rollout.revoked_keys.is_empty());
+    }
+
+    #[test]
+    fn a_device_ota_assignment_parses_and_bounds_the_bucket() {
+        let assignment = DeviceOtaConfig {
+            ring: "fleet".to_owned(),
+            canary_bucket: 37,
+        }
+        .validate()
+        .expect("a valid assignment parses");
+        assert_eq!(assignment.ring, Ring::Fleet);
+        assert_eq!(assignment.canary_bucket, 37);
+
+        let violations = DeviceOtaConfig {
+            ring: "nope".to_owned(),
+            canary_bucket: 100,
+        }
+        .validate()
+        .expect_err("bad ring and out-of-range bucket");
+        assert_eq!(violations.len(), 2, "{violations:?}");
     }
 }
