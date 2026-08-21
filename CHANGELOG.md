@@ -1061,6 +1061,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   guardrail branch and its precedence. The endpoint that gathers the facts (store-online, business
   hours, rate limiter) and relays a verified QR order into the `OrderIn` intake (ADR-0056) lands with
   the P11a cloud→store relay (P11b-2) — a buildable follow-on, not an external blocker.
+- `shipping-ahamove` (P11, ADR-0058 — a new ADR): the first **`ShippingDispatch`** adapter, one of the
+  two couriers `architecture.md` §6.1 names. It maps the port's three operations — book, cancel, track
+  — onto a REST courier API behind a `CourierTransport` seam, exactly the transport-seam split the
+  webhook sender (ADR-0038) and the edge→cloud client (ADR-0054) use: the socket lives behind the seam
+  (`TlsCourierTransport`, the tree's pinned rustls/hyper stack, one trusted configured host so no SSRF
+  surface), and building the request, mapping the courier's status vocabulary to `ShipmentStatus`, and
+  mapping HTTP status to `PortError` are all pure. The shared `ShippingDispatch` contract suite runs in
+  the fast gate against a **stateful stub courier** with no socket, proving the port semantics that do
+  not change when a field is renamed: idempotent booking (`shipment_id` as the courier's idempotency
+  key — a timed-out retry books no second rider), a cancel of a completed job refused
+  `failed_precondition` rather than a quiet success that promises a refund, an already-cancelled job's
+  cancel succeeding, an unknown job `not_found`, and a finished job still trackable so a missed
+  callback reconciles. An unmapped courier status stays an unrecognised `Open<ShipmentStatus>` (safe:
+  non-terminal), never coerced. The delivery contact (recipient name/phone/address) is VN resident
+  personal data transmitted to the courier — a data processor under PDPD, lawful basis contract
+  performance — for the sole purpose of delivering, never logged, and never carried back on the tracked
+  shipment. The exact Ahamove endpoint strings are pinned in the gated integration lane; `templates/adapter-template`
+  is extracted at the third integration adapter (`erp-sap`), not before (the rule of three, roadmap P11).
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
