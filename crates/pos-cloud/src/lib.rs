@@ -63,6 +63,7 @@ pub mod devices;
 pub mod http;
 pub mod images;
 mod openapi;
+pub mod orders;
 mod persistence;
 pub mod reconcile;
 pub mod retention;

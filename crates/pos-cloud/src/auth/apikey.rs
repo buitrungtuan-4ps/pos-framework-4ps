@@ -52,6 +52,10 @@ pub enum Scope {
     /// Propose discovered devices and read the store's approved ones (`/sync/stores/{id}/devices`)
     /// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
     ManageDevices,
+    /// Place orders through the public intake (`POST /v1/orders`)
+    /// ([ADR-0056](../../../docs/adr/0056-public-order-intake.md)). A write, distinct from every read
+    /// scope above.
+    PlaceOrders,
 }
 
 impl Scope {
@@ -65,6 +69,7 @@ impl Scope {
             Self::ManageWebhooks => "manage_webhooks",
             Self::ReadConfig => "read_config",
             Self::ManageDevices => "manage_devices",
+            Self::PlaceOrders => "place_orders",
         }
     }
 
@@ -81,6 +86,7 @@ impl Scope {
             "manage_webhooks" => Some(Self::ManageWebhooks),
             "read_config" => Some(Self::ReadConfig),
             "manage_devices" => Some(Self::ManageDevices),
+            "place_orders" => Some(Self::PlaceOrders),
             _ => None,
         }
     }

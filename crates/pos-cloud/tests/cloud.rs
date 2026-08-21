@@ -36,6 +36,7 @@ use pos_cloud::devices::{
     DeviceProposalSummary, PersistedDeviceProposal,
 };
 use pos_cloud::http::CloudApp;
+use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
@@ -44,10 +45,12 @@ use pos_cloud::webhook::{
 use pos_cloud::{Cloud, IngestOutcome, http};
 use pos_contract_tests::fixtures;
 use pos_core::activation::{ActivationCode, CodeStatus};
-use pos_fakes::{FakeClock, FakeStore};
+use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
+use pos_fakes::{FakeClock, FakeIntake, FakeStore};
+use pos_ports::PortError;
 use pos_proto::BusinessDate;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{DeviceId, EventId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
@@ -2319,4 +2322,218 @@ async fn the_activation_exchange_is_single_use_and_gives_no_oracle() {
         .await
         .expect("route the malformed code");
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Public order intake (POST /v1/orders) — P11a, ADR-0056 -------------------------------------
+
+/// A store directory that reports a fixed owner for every store, so a test can make the request's
+/// store belong to the caller's tenant, to another tenant, or to no store at all.
+#[derive(Clone)]
+struct FakeDirectory {
+    owner: Option<TenantId>,
+}
+
+impl StoreDirectory for FakeDirectory {
+    async fn tenant_of(&self, _store_id: StoreId) -> Result<Option<TenantId>, PortError> {
+        Ok(self.owner)
+    }
+}
+
+/// The store every order test targets.
+fn order_store() -> StoreId {
+    StoreId::new(Ulid::from_u128(0x5_709E))
+}
+
+/// Builds the intake router over a fresh fake intake and a directory that says `owner` owns the
+/// store, plus the `keys` a test issued a token into.
+fn orders_app(keys: FakeKeys, owner: Option<TenantId>) -> axum::Router {
+    orders_router(FakeIntake::new(), keys, clock(), FakeDirectory { owner })
+}
+
+/// A one-line order body naming `menu_item` on the public-API channel.
+fn order_body(
+    reference: &str,
+    menu_item: MenuItemId,
+    quoted: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut line = serde_json::json!({
+        "menu_item_id": menu_item.to_string(),
+        "quantity_milli": 1000,
+    });
+    if let Some(quoted) = quoted {
+        line["quoted_unit_price"] = quoted;
+    }
+    serde_json::json!({
+        "external_reference": reference,
+        "sales_channel": "SALES_CHANNEL_API",
+        "store_id": order_store().to_string(),
+        "lines": [line],
+        "placed_at_ms": NOW_MS,
+    })
+}
+
+#[tokio::test]
+async fn orders_submit_accepts_and_creates() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let response = orders_app(keys, Some(tenant()))
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-1", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the order");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value["created"].as_bool(), Some(true));
+    assert!(value["order_id"].as_str().is_some(), "an id was assigned");
+}
+
+#[tokio::test]
+async fn orders_submit_is_idempotent() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let body = order_body("api-dup", known, None);
+    // One router, cloned across two calls, so both submits reach the same fake intake state.
+    let router = orders_app(keys, Some(tenant()));
+    let first = router
+        .clone()
+        .oneshot(post_json_bearer("/v1/orders", &body, &token))
+        .await
+        .expect("route the first submit");
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let second = router
+        .oneshot(post_json_bearer("/v1/orders", &body, &token))
+        .await
+        .expect("route the repeat");
+    assert_eq!(
+        second.status(),
+        StatusCode::OK,
+        "a repeat is not created anew"
+    );
+    let bytes = second.into_body().collect().await.expect("body").to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value["created"].as_bool(), Some(false));
+}
+
+#[tokio::test]
+async fn orders_unknown_item_is_bad_request() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let response = orders_app(keys, Some(tenant()))
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-x", unknown_menu_item(), None),
+            &token,
+        ))
+        .await
+        .expect("route the unknown-item order");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn orders_for_another_tenants_store_is_not_found() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    // The store belongs to a different tenant: a generic 404, no oracle.
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let response = orders_app(keys, Some(other))
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-2", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the cross-tenant order");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn orders_for_an_unknown_store_is_not_found() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let response = orders_app(keys, None)
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-3", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the unknown-store order");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn orders_without_the_place_orders_scope_is_forbidden() {
+    let keys = FakeKeys::default();
+    // A valid key, but only a read scope — never authorised to write.
+    let token = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let (known, _price) = known_menu_item();
+    let response = orders_app(keys, Some(tenant()))
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-4", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the under-scoped order");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn orders_without_a_bearer_is_unauthorized() {
+    let keys = FakeKeys::default();
+    let (known, _price) = known_menu_item();
+    let response = orders_app(keys, Some(tenant()))
+        .oneshot(post_json("/v1/orders", &order_body("api-5", known, None)))
+        .await
+        .expect("route the unauthenticated order");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_qr_order_awaits_staff_confirmation_and_a_stale_quote_is_repriced() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, price) = known_menu_item();
+    // A quote that differs from the store's price, and a table id (a QR order).
+    let stale = serde_json::json!({
+        "currency_code": price.currency_code.as_str(),
+        "amount_minor": price.amount_minor.saturating_add(1),
+    });
+    let mut body = order_body("api-qr", known, Some(stale));
+    body["table_id"] = serde_json::json!(Ulid::from_u128(0x7AB1E).to_string());
+    let response = orders_app(keys, Some(tenant()))
+        .oneshot(post_json_bearer("/v1/orders", &body, &token))
+        .await
+        .expect("route the QR order");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(
+        value["awaiting_staff_confirmation"].as_bool(),
+        Some(true),
+        "a QR order waits for staff (ADR-0012)"
+    );
+    assert_eq!(
+        value["repriced"].as_bool(),
+        Some(true),
+        "a stale quote is reported, not honoured"
+    );
 }

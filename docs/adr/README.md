@@ -61,5 +61,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0053](0053-cloud-sync-port.md) | CloudSync: the store's request/response channel to the cloud (the seventeenth port) | Accepted |
 | [0054](0054-edge-cloud-http-client.md) | The edge→cloud HTTP client reuses the tree's rustls stack, behind a transport seam | Accepted |
 | [0055](0055-edge-ota-updater.md) | The edge OTA updater orchestrates behind an install seam; the OS steps are gated | Accepted |
+| [0056](0056-public-order-intake.md) | Public order intake: `POST /v1/orders` over the OrderIn port, tenant-bound via a StoreDirectory seam | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

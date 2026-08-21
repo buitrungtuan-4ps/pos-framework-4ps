@@ -1030,6 +1030,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   which assert both the outcome and that a bad signature or an untrusted key writes nothing, and a
   failed self-test rolls back rather than commits. Composition into the binary waits on that real
   installer and the minisign keypair, both gated (`docs/roadmap.md` P9).
+- `pos-cloud` (P11, ADR-0056 — a new ADR): the **public order-intake surface**, `POST /v1/orders` over
+  the `OrderIn` port — the shared path `docs/roadmap.md` P11 builds first because the marketplaces and
+  QR ordering (ADR-0012) all reuse it. `OrderIn` is a driving port (ADR-0026 §5): the store's edge
+  implements it, and this endpoint is a caller (in the binary, the cloud→store relay; in tests,
+  `FakeIntake`). A new `Scope::PlaceOrders` gates it, a `StoreDirectory` seam binds the request's store
+  to the key's tenant so a key can never place an order into another tenant's store (unknown and
+  not-yours both a generic `404`, no oracle), and the full `OrderIn` contract is surfaced unchanged: a
+  first accept is `201`, an idempotent repeat `200` with `created:false`, an unknown item `400`, a
+  rate-limit `429`, and a stale quote is *reported* (`repriced`) rather than honoured. A dedicated
+  `OrderRequest`/`OrderResponse` DTO owns the wire shape (`pos-proto` carries no `utoipa`), and a
+  guest note rides in as a `GuestNote` that cannot reach the event log. Proven against `FakeIntake` and
+  a fake directory (`crates/pos-cloud/tests/cloud.rs`): accept, idempotent repeat, unknown item,
+  cross-tenant and unknown store, missing scope, no bearer, and a QR order that awaits staff
+  confirmation with a repriced stale quote. Serving it in the binary and registering it in
+  `docs/openapi.json` lands with the cloud→store relay (P11a-2) — a buildable follow-on, not an
+  external blocker; P10 (`countries/vn`) stays blocked on A2, and the payment (A1) and Grab/ShopeeFood
+  (A3) adapters stay blocked-external.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
