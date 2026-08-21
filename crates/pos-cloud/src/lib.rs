@@ -51,6 +51,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activation;
 pub mod auth;
 pub mod clock;
 pub mod cloud;

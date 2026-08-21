@@ -939,6 +939,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   redacted since it is a bearer credential until redeemed. Deliberately elsewhere (P9e): the cloud
   issue/look-up/consume endpoint and the edge client that presents the code over `MessageLink`, stores
   the credential via `KeyVault`, and emits `device.activation.completed`.
+- `pos-cloud` + `store-postgres` (P9, ADR-0051 — a new ADR): the **cloud activation exchange**, the
+  I/O half of ADR-0050. A super-admin issues an activation code bound to a device slot
+  (`POST /admin/activation-codes`, shown once) and can cancel a slot's pending code
+  (`POST /admin/activation-codes/revoke`); a fresh box presents its code on the **unauthenticated**
+  `POST /activate` — the code is the credential — and receives a long-lived `posdev_<id>_<secret>`
+  device credential in exchange. Redeem-and-mint is one transactional adapter method
+  (`consume_and_provision`): `UPDATE … WHERE status = 'issued' RETURNING <slot>` is the single-use
+  guard, and the `device_credentials` row is inserted for that slot in the same transaction, so a code
+  can never be spent without minting exactly one credential for its own slot (composed seam calls
+  cannot share a transaction, ADR-0016). The credential is api-key-shaped: high-entropy, `SHA-256`
+  stored (not Argon2, ADR-0037), shown once; the code is stored only as `SHA-256` of its canonical
+  text. Spent, revoked, unknown, and raced codes all collapse to one generic `403` (no oracle); a
+  malformed code is a plain `400`. New: `pos_core::activation::ActivationCode::from_entropy` (code
+  generation stays at the I/O edge), the `ActivationCodeStore` seam, `store-postgres` migration
+  `0009_cloud_activation.sql` (`activation_codes` + `device_credentials`, no RLS — the api-key
+  PK-lookup pattern), and the `PostgresActivationCodes` adapter. The edge client and the
+  device-credential verification path are P9e; `device.activation.completed` is emitted edge-side, not
+  in the exchange transaction. Proven by a router test (single-use + no-oracle) and a `store-postgres`
+  round-trip (issue → atomic redeem+mint → replay-refused → revoke).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

@@ -38,6 +38,9 @@ const MIGRATION_0007: &str = include_str!("../migrations/0007_cloud_device_propo
 /// The translation-grid table ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
 const MIGRATION_0008: &str = include_str!("../migrations/0008_cloud_translations.sql");
 
+/// The activation-code and device-credential tables ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+const MIGRATION_0009: &str = include_str!("../migrations/0009_cloud_activation.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -124,6 +127,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0008)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0009)
+            .await
             .map_err(unavailable)
     }
 
@@ -141,6 +148,15 @@ impl PostgresStore {
     #[must_use]
     pub fn api_keys(&self) -> crate::apikeys::PostgresApiKeys {
         crate::apikeys::PostgresApiKeys::new(self.pool.clone())
+    }
+
+    /// The activation-code store over this pool ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ActivationCodeStore` seam
+    /// over it.
+    #[must_use]
+    pub fn activation_codes(&self) -> crate::activation::PostgresActivationCodes {
+        crate::activation::PostgresActivationCodes::new(self.pool.clone())
     }
 
     /// The super-admin credential and session store over this pool ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).

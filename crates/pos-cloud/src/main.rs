@@ -152,8 +152,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
-    // The reconciliation diff (ADR-0040) and device-onboarding (ADR-0041) endpoints carry their own
-    // state, so they are merged in rather than threaded through CloudApp.
+    // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
+    // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
+    // rather than threaded through CloudApp.
     let service = http::router(app)
         .merge(http::reconcile_router(store.reconcile()))
         .merge(http::device_router(
@@ -164,6 +165,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .merge(http::translation_router(
             store.translations(),
+            store.admin(),
+            SystemClock,
+        ))
+        .merge(http::activation_router(
+            store.activation_codes(),
             store.admin(),
             SystemClock,
         ));

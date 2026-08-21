@@ -43,6 +43,10 @@ const ALPHABET_SIZE: u32 = 32;
 /// hyphenated groups of four, `XXXX-XXXX-XXXX`.
 const CODE_LENGTH: usize = 12;
 
+/// The number of payload symbols — the code length without its one checksum symbol, and the number
+/// of entropy bytes [`ActivationCode::from_entropy`] consumes.
+pub const PAYLOAD_LEN: usize = CODE_LENGTH - 1;
+
 /// A validated activation code.
 ///
 /// Constructed only through [`ActivationCode::parse`], which normalises human input and verifies the
@@ -107,6 +111,26 @@ impl ActivationCode {
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.canonical.as_str()
+    }
+
+    /// Mints a fresh code from `entropy`, one byte per payload symbol.
+    ///
+    /// Each byte picks a symbol by its remainder modulo the alphabet size; the choice is unbiased
+    /// because 256 is a whole multiple of 32. The checksum symbol is then appended, so the result
+    /// always [`ActivationCode::parse`]s. `pos-core` reads no randomness of its own — the caller
+    /// supplies the entropy (the cloud passes bytes from its CSPRNG), which keeps code generation at
+    /// the I/O edge.
+    #[must_use]
+    pub fn from_entropy(entropy: [u8; PAYLOAD_LEN]) -> Self {
+        let mut values: Vec<u8> = entropy
+            .iter()
+            .map(|&byte| u8::try_from(usize::from(byte) % ALPHABET.len()).unwrap_or(0))
+            .collect();
+        let check = checksum(&values);
+        values.push(check);
+        Self {
+            canonical: canonical_form(&values),
+        }
     }
 }
 
@@ -372,5 +396,23 @@ mod tests {
             device_activation(false),
             ActivationStanding::NeedsActivation
         );
+    }
+
+    #[test]
+    fn from_entropy_always_produces_a_code_that_parses() {
+        // Sweep every byte value in a uniform payload; each must yield a valid, parseable code —
+        // proving the checksum is always consistent and no byte maps outside the alphabet.
+        for seed in 0..=255_u8 {
+            let code = ActivationCode::from_entropy([seed; super::PAYLOAD_LEN]);
+            let reparsed = ActivationCode::parse(code.as_str()).expect("a minted code parses");
+            assert_eq!(reparsed, code, "a minted code round-trips through parse");
+        }
+    }
+
+    #[test]
+    fn distinct_entropy_gives_distinct_codes() {
+        let a = ActivationCode::from_entropy([0; super::PAYLOAD_LEN]);
+        let b = ActivationCode::from_entropy([1; super::PAYLOAD_LEN]);
+        assert_ne!(a, b);
     }
 }

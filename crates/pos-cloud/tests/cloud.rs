@@ -18,6 +18,9 @@ use tower::ServiceExt as _;
 
 use argon2::password_hash::SaltString;
 
+use pos_cloud::activation::{
+    ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
+};
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
 use pos_cloud::auth::apikey::{
@@ -40,10 +43,11 @@ use pos_cloud::webhook::{
 };
 use pos_cloud::{Cloud, IngestOutcome, http};
 use pos_contract_tests::fixtures;
+use pos_core::activation::{ActivationCode, CodeStatus};
 use pos_fakes::{FakeClock, FakeStore};
 use pos_proto::BusinessDate;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{EventId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, EventId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
@@ -2137,4 +2141,182 @@ async fn webhook_register_requires_a_session_and_refuses_ssrf() {
         StatusCode::BAD_REQUEST,
         "a webhook must use https"
     );
+}
+
+// --- Device activation exchange (ADR-0050) ------------------------------------------------------
+
+/// The activation store, keyed by code hash exactly as the real table. The exchange flips a code to
+/// redeemed and counts the credentials it mints, so a test can assert single-use.
+#[derive(Clone, Default)]
+struct FakeActivations {
+    codes: Arc<Mutex<HashMap<[u8; 32], IssuedCode>>>,
+    minted: Arc<Mutex<u32>>,
+}
+
+impl FakeActivations {
+    /// Seeds one issued code for a slot, as the admin issue route would.
+    fn with_issued(
+        code_hash: [u8; 32],
+        tenant: TenantId,
+        store: StoreId,
+        device: DeviceId,
+    ) -> Self {
+        let mut codes = HashMap::new();
+        codes.insert(
+            code_hash,
+            IssuedCode {
+                tenant_id: tenant,
+                store_id: store,
+                device_id: device,
+                status: CodeStatus::Issued,
+            },
+        );
+        Self {
+            codes: Arc::new(Mutex::new(codes)),
+            minted: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// How many credentials have been provisioned.
+    fn minted(&self) -> u32 {
+        *self.minted.lock().expect("lock")
+    }
+}
+
+impl ActivationCodeStore for FakeActivations {
+    async fn issue(
+        &self,
+        code_hash: [u8; 32],
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+    ) -> Result<(), ActivationStoreError> {
+        self.codes.lock().expect("lock").insert(
+            code_hash,
+            IssuedCode {
+                tenant_id,
+                store_id,
+                device_id,
+                status: CodeStatus::Issued,
+            },
+        );
+        Ok(())
+    }
+
+    async fn lookup(
+        &self,
+        code_hash: [u8; 32],
+    ) -> Result<Option<IssuedCode>, ActivationStoreError> {
+        Ok(self.codes.lock().expect("lock").get(&code_hash).cloned())
+    }
+
+    async fn consume_and_provision(
+        &self,
+        code_hash: [u8; 32],
+        _credential: &DeviceCredential,
+    ) -> Result<bool, ActivationStoreError> {
+        let mut codes = self.codes.lock().expect("lock");
+        match codes.get_mut(&code_hash) {
+            Some(code) if code.status == CodeStatus::Issued => {
+                code.status = CodeStatus::Redeemed;
+                *self.minted.lock().expect("lock") += 1;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn revoke_slot(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+    ) -> Result<u64, ActivationStoreError> {
+        let mut count: u64 = 0;
+        for code in self.codes.lock().expect("lock").values_mut() {
+            if code.status == CodeStatus::Issued
+                && code.tenant_id == tenant_id
+                && code.store_id == store_id
+                && code.device_id == device_id
+            {
+                code.status = CodeStatus::Revoked;
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+}
+
+#[tokio::test]
+async fn the_activation_exchange_is_single_use_and_gives_no_oracle() {
+    let code = ActivationCode::from_entropy([13; pos_core::activation::PAYLOAD_LEN]);
+    let device = DeviceId::new(Ulid::from_u128(0xDECAF));
+    let activations = FakeActivations::with_issued(hash_code(&code), tenant(), store_id(), device);
+    let router = http::activation_router(activations.clone(), FakeAdmin::default(), clock());
+
+    // A device presents its valid, unredeemed code and receives a minted credential, shown once.
+    let first = router
+        .clone()
+        .oneshot(post_json(
+            "/activate",
+            &serde_json::json!({ "code": code.as_str() }),
+        ))
+        .await
+        .expect("route the exchange");
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let body = json_body(first).await;
+    assert!(
+        body["credential"]
+            .as_str()
+            .expect("a credential")
+            .starts_with("posdev_"),
+        "the credential is the real value, shown once"
+    );
+    assert_eq!(
+        body["device_id"].as_str().expect("a device id"),
+        device.to_string()
+    );
+    assert_eq!(activations.minted(), 1);
+
+    // The same code again is refused — activation is single-use.
+    let replay = router
+        .clone()
+        .oneshot(post_json(
+            "/activate",
+            &serde_json::json!({ "code": code.as_str() }),
+        ))
+        .await
+        .expect("route the replay");
+    assert_eq!(
+        replay.status(),
+        StatusCode::FORBIDDEN,
+        "a spent code is refused"
+    );
+    assert_eq!(activations.minted(), 1, "no second credential is minted");
+
+    // An unknown but well-formed code is refused identically — no oracle tells them apart.
+    let unknown = ActivationCode::from_entropy([200; pos_core::activation::PAYLOAD_LEN]);
+    let miss = router
+        .clone()
+        .oneshot(post_json(
+            "/activate",
+            &serde_json::json!({ "code": unknown.as_str() }),
+        ))
+        .await
+        .expect("route the unknown code");
+    assert_eq!(
+        miss.status(),
+        StatusCode::FORBIDDEN,
+        "an unknown code is refused exactly as a spent one"
+    );
+
+    // A malformed code is a plain client error, not a refusal — it never named a real code.
+    let malformed = router
+        .oneshot(post_json(
+            "/activate",
+            &serde_json::json!({ "code": "not-a-valid-code" }),
+        ))
+        .await
+        .expect("route the malformed code");
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
 }

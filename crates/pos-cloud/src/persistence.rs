@@ -10,8 +10,9 @@
 //! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)), `WebhookEndpointStore`
 //! ([ADR-0032](../../../docs/adr/0032-webhooks.md)), `ReconcileStore`
 //! ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), `DeviceProposalStore`
-//! ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)) and `TranslationStore`
-//! ([ADR-0043](../../../docs/adr/0043-translation-grid.md)) traits live here in the cloud, where the
+//! ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)), `TranslationStore`
+//! ([ADR-0043](../../../docs/adr/0043-translation-grid.md)) and `ActivationCodeStore`
+//! ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)) traits live here in the cloud, where the
 //! handlers that consume them are; the Postgres tables behind them live in `store-postgres`, the
 //! cloud's one Postgres adapter ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). This module
 //! is the thin seam between the two: it implements each cloud trait for the adapter's query type,
@@ -22,16 +23,19 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects, PostgresTranslations,
-    PostgresWebhooks,
+    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresConfigTrees,
+    PostgresDeviceProposals, PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects,
+    PostgresTranslations, PostgresWebhooks,
 };
 
 use pos_ports::PortError;
-use pos_proto::ids::{EventId, StoreId, SubjectId, TenantId};
+use pos_proto::ids::{DeviceId, EventId, StoreId, SubjectId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
+use pos_core::activation::CodeStatus;
+
+use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
 use crate::auth::apikey::{
@@ -423,6 +427,90 @@ impl ApiKeyStore for PostgresApiKeys {
             }
             None => Ok(None),
         }
+    }
+}
+
+impl ActivationCodeStore for PostgresActivationCodes {
+    async fn issue(
+        &self,
+        code_hash: [u8; 32],
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+    ) -> Result<(), ActivationStoreError> {
+        self.issue(
+            &code_hash,
+            &tenant_id.to_string(),
+            &store_id.to_string(),
+            &device_id.to_string(),
+        )
+        .await
+        .map_err(|error| ActivationStoreError::new(error.to_string()))
+    }
+
+    async fn lookup(
+        &self,
+        code_hash: [u8; 32],
+    ) -> Result<Option<IssuedCode>, ActivationStoreError> {
+        let Some(row) = self
+            .lookup(&code_hash)
+            .await
+            .map_err(|error| ActivationStoreError::new(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
+            row.tenant_id.parse::<Ulid>().map(TenantId::new),
+            row.store_id.parse::<Ulid>().map(StoreId::new),
+            row.device_id.parse::<Ulid>().map(DeviceId::new),
+        ) else {
+            return Err(ActivationStoreError::new(
+                "an activation-code row holds a non-ULID id",
+            ));
+        };
+        let status = match row.status.as_str() {
+            "issued" => CodeStatus::Issued,
+            "redeemed" => CodeStatus::Redeemed,
+            "revoked" => CodeStatus::Revoked,
+            other => {
+                return Err(ActivationStoreError::new(format!(
+                    "an activation-code row holds an unknown status {other}"
+                )));
+            }
+        };
+        Ok(Some(IssuedCode {
+            tenant_id,
+            store_id,
+            device_id,
+            status,
+        }))
+    }
+
+    async fn consume_and_provision(
+        &self,
+        code_hash: [u8; 32],
+        credential: &DeviceCredential,
+    ) -> Result<bool, ActivationStoreError> {
+        let credential_id = credential.id.to_string();
+        let secret_hash = credential.secret_hash();
+        self.consume_and_provision(&code_hash, &credential_id, &secret_hash)
+            .await
+            .map_err(|error| ActivationStoreError::new(error.to_string()))
+    }
+
+    async fn revoke_slot(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+    ) -> Result<u64, ActivationStoreError> {
+        self.revoke_slot(
+            &tenant_id.to_string(),
+            &store_id.to_string(),
+            &device_id.to_string(),
+        )
+        .await
+        .map_err(|error| ActivationStoreError::new(error.to_string()))
     }
 }
 

@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod activation;
 mod admin;
 mod apikeys;
 mod config_trees;
@@ -30,6 +31,7 @@ mod subjects;
 mod translations;
 mod webhooks;
 
+pub use activation::{ActivationCodeRow, PostgresActivationCodes};
 pub use admin::{AdminCredentialRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use config_trees::PostgresConfigTrees;
