@@ -881,6 +881,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   secrets, the `production` Environment with a required reviewer, running the deploy, and enrolling the
   first super-admin. `docs/roadmap.md` records P8 as **substantially done**, with the store-backup half
   of the restore drill (P9) and the human end-to-end fork test as the noted deferrals.
+- `crates/adapters/updater-minisign` (P9, ADR-0047 — a new ADR): the **minisign update-verification
+  adapter**, the concrete `Signer` the P2 port anticipated ("real verification is minisign over a vetted
+  Ed25519 crate; it will pass the same suite"). `MinisignVerifier` verifies a release artifact's
+  signature over `ed25519-dalek` and `blake2` (both pure-Rust, no C), parsing minisign's binary blob —
+  `algorithm(2) ∥ key_id(8) ∥ ed25519_sig(64)` — and both the `Ed` (raw) and `ED` (BLAKE2b-512 prehash)
+  algorithms. It is **verify-only**: there is no `sign` method and it never holds a private key
+  (`docs/architecture.md` §4 keeps signing offline). It honours the port's three status distinctions
+  exactly — a wrong key id is `invalid_argument` ("try the other baked-in key"), a bad signature for the
+  right key is `permission_denied` (terminal, never auto-retried into an install), and malformed bytes
+  are `invalid_argument` — and is **total over hostile input**: every parse is a checked `slice.get`,
+  under the backbone's `panic`/`indexing_slicing`/`unwrap`/`expect` denials, because verification runs at
+  startup on attacker-chosen bytes. It passes the existing `signer` contract suite (the harness signs
+  with throwaway seed-derived keypairs — real signatures, never a production key), plus a legacy-`Ed`
+  round trip. `ed25519-dalek`/`curve25519-dalek`/`blake2` enter the graph and `cargo deny` stays green.
+  The production keypairs remain the human-only offline step (P0/P9); whether a valid key is still
+  trusted stays a revocation-list question for the config tree, and how an update rolls out is ADR-0048
+  (next).
 - `examples/minimal-edge`: the smallest runnable store — `pos_edge` on a fixed dev store id with no
   database, hardware, or config file. `just run-edge` runs it; it grows to compose the edge over
   `pos-fakes` as the P5 domain routes land.

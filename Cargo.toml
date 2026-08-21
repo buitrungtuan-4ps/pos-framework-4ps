@@ -14,6 +14,7 @@ members = [
     "crates/adapters/blob-garage",
     "crates/adapters/link-nats",
     "crates/adapters/printer-escpos",
+    "crates/adapters/updater-minisign",
     "crates/pos-edge",
     "crates/pos-cloud",
     "examples/minimal-edge",

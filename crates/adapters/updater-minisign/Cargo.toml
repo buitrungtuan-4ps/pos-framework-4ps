@@ -1,0 +1,28 @@
+[package]
+name        = "updater-minisign"
+version     = "0.1.0"
+description = "The minisign signature-verification adapter for the Signer port (verify-only)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-ports = { path = "../../pos-ports" }
+# Ed25519 verification (ADR-0047): the audited pure-Rust Dalek implementation. Default features
+# give std and the fast backend; the `rand_core` keygen feature is deliberately absent — this
+# adapter only ever verifies, and never holds or generates a private key.
+ed25519-dalek = "2"
+# BLAKE2b-512, to reproduce minisign's prehash for the `ED` algorithm.
+blake2 = "0.10"
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../pos-contract-tests" }
+# The port is synchronous and the adapter does no async I/O, so the suite runs under pos-fakes'
+# one-poll executor rather than a runtime. A suspension here would be a bug, which `run_ready`
+# turns into a failed test.
+pos-fakes = { path = "../../pos-fakes" }
+
+[lints]
+workspace = true
