@@ -64,5 +64,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0056](0056-public-order-intake.md) | Public order intake: `POST /v1/orders` over the OrderIn port, tenant-bound via a StoreDirectory seam | Accepted |
 | [0057](0057-qr-ordering.md) | QR ordering: an HMAC-signed `table_id` and a pure guardrail decision, over the public intake | Accepted |
 | [0058](0058-shipping-adapters.md) | Shipping adapters: the `ShippingDispatch` port over a REST courier API, behind a transport seam | Accepted |
+| [0059](0059-erp-adapter.md) | ERP adapter: the `ErpSink` port over a REST posting API, behind a transport seam | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

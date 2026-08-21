@@ -101,6 +101,40 @@ impl ErpLine {
             | Self::Consumption { account_code, .. } => account_code,
         }
     }
+
+    /// The line kind as a stable wire token.
+    ///
+    /// An adapter posts revenue and tax to their own accounts, and both carry money, so the kind
+    /// cannot be inferred from which field is populated — it is named here so no adapter guesses.
+    #[must_use]
+    pub const fn kind_wire(&self) -> &'static str {
+        match self {
+            Self::Revenue { .. } => "REVENUE",
+            Self::Tax { .. } => "TAX",
+            Self::Consumption { .. } => "CONSUMPTION",
+        }
+    }
+
+    /// The monetary amount this line posts, for the revenue and tax kinds.
+    ///
+    /// `None` for a consumption line, which posts a quantity rather than money — the ERP values
+    /// consumption, this framework does not, because costing method is an accounting policy.
+    #[must_use]
+    pub const fn amount(&self) -> Option<Money> {
+        match self {
+            Self::Revenue { amount, .. } | Self::Tax { amount, .. } => Some(*amount),
+            Self::Consumption { .. } => None,
+        }
+    }
+
+    /// The quantity this line posts, for the consumption kind. `None` for revenue and tax.
+    #[must_use]
+    pub const fn quantity(&self) -> Option<Quantity> {
+        match self {
+            Self::Consumption { quantity, .. } => Some(*quantity),
+            Self::Revenue { .. } | Self::Tax { .. } => None,
+        }
+    }
 }
 
 /// A day's postings for one store.

@@ -50,6 +50,14 @@ impl Quantity {
         Self { milli }
     }
 
+    /// The quantity in thousandths, the inverse of [`Self::from_milli`].
+    ///
+    /// An adapter posting consumption to an external ledger needs the raw value to put on the wire.
+    #[must_use]
+    pub const fn as_milli(self) -> i64 {
+        self.milli
+    }
+
     /// A whole number of units.
     ///
     /// # Errors

@@ -1079,6 +1079,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   performance — for the sole purpose of delivering, never logged, and never carried back on the tracked
   shipment. The exact Ahamove endpoint strings are pinned in the gated integration lane; `templates/adapter-template`
   is extracted at the third integration adapter (`erp-sap`), not before (the rule of three, roadmap P11).
+- `erp-sap` (P11, ADR-0059 — a new ADR): the **`ErpSink`** adapter, the second integration adapter and
+  the first that is not a courier — proving the transport-seam pattern generalises past one port shape.
+  It maps the port's two operations — post a whole day, read back what posted — onto a REST ERP API
+  behind an `ErpTransport` seam (the same shape the couriers use, ADR-0058), with request shaping and
+  HTTP→`PortError` mapping pure and the socket behind `TlsErpTransport` (one trusted configured host,
+  no SSRF surface). The shared `ErpSink` contract suite runs in the fast gate against a stateful stub
+  ERP with no socket, proving the three obligations: idempotency by revision (`store:business_date:revision`,
+  a retried nightly job harmless), a higher revision superseding a lower one for the same day (an
+  adapter that appended would double-count revenue), and whole-or-nothing validation (an unknown
+  account fails the entire batch `invalid_argument` with nothing posted — half a day in a period is
+  worse than none). Postings are keyed by the **trading** day (`business_date`), the deliberate
+  opposite of `fiscal-vn`'s calendar-date keying. Posting is nightly and off the sales path (ADR-0001),
+  and carries no personal data (aggregates by account and day). Two small additive read-only accessors
+  land on the port types to let an adapter serialise a line without matching the `#[non_exhaustive]`
+  `ErpLine` from outside `pos-ports`: `ErpLine::{kind_wire, amount, quantity}` and `Quantity::as_milli`.
+  The exact SAP strings are pinned in the gated integration lane; `erp-sap` is the third integration
+  adapter's second divergent prior (with the courier) for the `templates/adapter-template` extraction.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no
