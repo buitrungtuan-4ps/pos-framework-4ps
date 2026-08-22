@@ -491,6 +491,21 @@ run the simulator) · the fork-to-UI checklist walked by someone who has not rea
 reconciling, and a contributor who has never seen the codebase ships a printer adapter using
 only what is in the repository.
 
+**Status: the repository-only half is done; the pilot exit is an operations handoff.** The four
+task-shaped guides now live in [`docs/guides/`](guides/) — [start from zero](guides/start-from-zero.md)
+(run `pos_edge` on a laptop, then deploy the cloud to one VPS), [write an adapter](guides/write-an-adapter.md),
+[add a country module](guides/add-a-country-module.md), and [run the simulator](guides/run-the-simulator.md)
+— each finishing in one sitting and each linking the worked examples and enforcement it names. Walking
+the fork-to-UI checklist against the real artifacts surfaced two accuracy bugs that would have stopped a
+first-time reader cold: the `justfile` had duplicate recipes and stale placeholders (with no
+`allow-duplicate-recipes`, `just` refused to parse the whole file, so *every* `just` command was broken),
+and the `README` Quickstart listed a secret the deploy workflow does not use while omitting one it
+requires. Both are fixed, and the deploy runbook now leads with the six-secret sslip.io fastest path so a
+reader with only a VPS reaches a live admin UI without buying a domain. The exit's *"a pilot store trades
+a full day"* and the *hardware matrix exercised for real, including sudden power loss* need physical
+stores, the procured hardware (A5), and a day of wall clock — so, like the WAL-on-Windows soak (A4), they
+are the pilot/operations exercise this documentation sets up rather than performs.
+
 ---
 
 ## Cross-cutting discipline, every phase

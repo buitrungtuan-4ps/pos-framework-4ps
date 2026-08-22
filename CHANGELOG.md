@@ -1150,6 +1150,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   A4/A5), not faked. The same status note records P11's: the unblocked surface is done, and serving the
   intake awaits a cloud→store API-contract decision (the cloud cannot implement `OrderIn`, and the tree
   is store-initiated only).
+- `docs/guides/` (P13): four **task-shaped guides**, each finishing in one sitting and each linking the
+  worked examples and the CI enforcement it names — [start from zero](docs/guides/start-from-zero.md)
+  (run `pos_edge` on a laptop with `just run-edge`, then deploy the cloud tier to one VPS by the
+  six-secret sslip.io path), [write an adapter](docs/guides/write-an-adapter.md) (copy
+  `templates/adapter-template`, map each provider status to a `PortError`, pass the port's contract
+  suite), [add a country module](docs/guides/add-a-country-module.md) (the three ADR-0027 edits that
+  `cargo xtask countries` enforces), and [run the simulator](docs/guides/run-the-simulator.md) (`just
+  simulate` and the tests behind it). A `docs/guides/README.md` indexes them and states the two-tier
+  mental model (store `pos_edge` vs cloud `pos_cloud`). Walking the fork-to-UI checklist against the
+  real artifacts is what these guides do, and it surfaced the two `Fixed` items below.
+- `docs/roadmap.md` records P13's status: the repository-only half (the four guides, and the fork-to-UI
+  walk that produced the fixes below) is done, while *"a pilot store trades a full day"* and the hardware
+  matrix exercised for real need physical stores and procured hardware (A5) — a pilot/operations handoff,
+  like the WAL-on-Windows soak (A4), that this documentation sets up rather than performs.
+
+### Fixed
+- `justfile` (P13): **`just` was completely broken** — a stale "Development loops" block left duplicate
+  `run-edge`/`simulate` recipes and placeholder `run-cloud`/`deploy` bodies, and with no
+  `allow-duplicate-recipes` setting `just` refused to parse the file at all, so *every* `just` command
+  failed. Removed the duplicates, gave `run-cloud` a real body (it runs `pos-cloud` against a
+  `POS_CLOUD_CONFIG` path and names the backends it needs), and replaced the stale `deploy` placeholder
+  with a pointer to the deploy workflow and runbook. Found by walking the P13 fork-to-UI checklist.
+- `README.md` (P13): the Quickstart listed `VPS_SSH_PORT` (a secret the deploy workflow does not use) and
+  omitted `VPS_KNOWN_HOSTS` (one it requires). Rewrote it to run `just run-edge` locally and defer the
+  deploy secrets to the single source of truth in [`docs/deploy-runbook.md`](docs/deploy-runbook.md),
+  which now leads with the six-secret sslip.io fastest path, so a first-time reader cannot copy a wrong
+  secret list. Added `docs/guides/` and `docs/deploy-runbook.md` to the documentation map.
 - `pos-core` tests (P9): **OTA rollout scenarios** over a virtual fleet
   (`crates/pos-core/tests/ota_rollout.rs`), the `docs/roadmap.md` P9 exit proof seeded against the pure
   `decide_rollout` ahead of P12's full `pos-simulator`. Five scenarios pin the safety properties with no

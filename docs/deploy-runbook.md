@@ -7,6 +7,14 @@ server** ([ADR-0044](adr/0044-fork-and-deploy.md)). The target is ~15 minutes: s
 secrets, run one workflow, enrol yourself. The details of each artifact are in
 [`deploy/README.md`](../deploy/README.md); this is the ordered checklist.
 
+> **Fastest test path (no domain).** One Ubuntu VPS with Docker + a public IP is all you need. Set 6
+> GitHub Actions secrets — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS`, `ACME_EMAIL`, and
+> `DOMAIN=<vps-ip-with-dashes>.sslip.io` (e.g. `203-0-113-9.sslip.io`, which resolves to your IP for
+> free so you still get real HTTPS). Leave `CF_DNS_API_TOKEN` unset. Add a `production` Environment
+> with yourself as required reviewer. Then **Actions → deploy → Run workflow**. Everything else below
+> is the with-a-domain and day-two detail. This deploys the **cloud** tier only; the store tier
+> (`pos_edge`) runs in the shop — see [Start from zero](guides/start-from-zero.md).
+
 ## 0. What you need first
 
 - A **VPS** (~1.5 GB RAM is enough for the four backends) reachable over SSH, with Docker and the

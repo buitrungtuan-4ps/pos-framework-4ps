@@ -47,6 +47,13 @@ build:
 run-edge:
     cargo run -p minimal-edge
 
+# Run pos_cloud locally, for a dev loop on the cloud tier. Unlike the edge it needs real
+# backends — start them with `docker compose -f deploy/compose.yml up -d postgres nats garage`
+# — and a config file named by POS_CLOUD_CONFIG (see docs/deploy-runbook.md). To bring the whole
+# cloud up on one machine with Docker Compose instead, run deploy/bootstrap.sh (deploy/README.md).
+run-cloud:
+    POS_CLOUD_CONFIG="${POS_CLOUD_CONFIG:?set POS_CLOUD_CONFIG to a cloud.toml path; see docs/deploy-runbook.md}" cargo run -p pos-cloud
+
 # Run the capacity model and the fleet scenarios (P12), printing the envelope and the
 # reconciliation report. Deterministic and offline — no hardware, no clock.
 simulate:
@@ -104,19 +111,6 @@ migrations-check base="origin/main":
     cargo run -q -p xtask -- migrations --base {{base}}
 
 # ---------------------------------------------------------------------------
-# Development loops. These arrive with the phase that creates their binary
-# (docs/roadmap.md) and fail with a clear message until then.
-# ---------------------------------------------------------------------------
-run-edge:
-    @echo "pos-edge arrives in P5 (docs/roadmap.md)." && exit 1
-
-run-cloud:
-    @echo "pos-cloud arrives in P7 (docs/roadmap.md)." && exit 1
-
-simulate:
-    @echo "pos-simulator arrives in P12 (docs/roadmap.md)." && exit 1
-
-# ---------------------------------------------------------------------------
 # Release. Signing is deliberately manual, from an offline key: there must be no
 # path by which a compromised pipeline can ship software to the whole fleet
 # (engineering-guide.md §6). This recipe therefore runs on a maintainer's machine,
@@ -125,5 +119,8 @@ simulate:
 sign:
     @echo "Signing is a manual step performed from the offline USB key." && exit 1
 
+# Deploying the cloud is the GitHub Actions `deploy` workflow (Actions -> deploy -> Run
+# workflow): CI builds the images and runs deploy/bootstrap.sh on your VPS over SSH, minting
+# every secret on the box (ADR-0044). There is no laptop deploy — see docs/deploy-runbook.md.
 deploy:
-    @echo "deploy/ arrives in P8 (docs/roadmap.md)." && exit 1
+    @echo "Deploy is the GitHub Actions 'deploy' workflow. See docs/deploy-runbook.md."

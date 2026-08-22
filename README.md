@@ -81,22 +81,26 @@ pos-framework/
 
 ## Quickstart
 
-**Deploy the cloud** (no shell access to the server required):
+**Run the store on your laptop** — no database, no hardware, no cloud:
 
-1. Fork this repository (private).
-2. Add GitHub Secrets: `VPS_HOST`, `VPS_SSH_PORT`, `VPS_USER`, `VPS_SSH_KEY`, `DOMAIN`, `ACME_EMAIL`.
-3. Actions → **Deploy** → *Run workflow*.
-4. Open the URL printed in the workflow summary, use the one-time setup token, create the platform super-admin (TOTP required).
-5. Create Tenant → Brand → Store. Click **Export** to get the store installer and its activation code.
+```bash
+just run-edge      # or: cargo run -p minimal-edge      →  open http://127.0.0.1:8787/
+```
 
-**Bring a store online:** run the installer on the store PC, enter the activation code. The store pulls its configuration, publishes `pos.local`, and is ready to sell. Pair tablets and phones by scanning the on-screen QR code.
+**Deploy the cloud** to one VPS, with no command typed on the server: fork, set a handful of GitHub
+Actions secrets, and run the **deploy** workflow. The exact secrets and ordered steps are the single
+source of truth in the [deploy runbook](docs/deploy-runbook.md).
 
-Details: [`docs/engineering-guide.md`](docs/engineering-guide.md) §Fork-and-deploy.
+New here, or picking a task? The four short [**guides**](docs/guides/) each finish in one sitting:
+[start from zero](docs/guides/start-from-zero.md) · [write an adapter](docs/guides/write-an-adapter.md) ·
+[add a country](docs/guides/add-a-country-module.md) · [run the simulator](docs/guides/run-the-simulator.md).
 
 ## Documentation map
 
 | Document | Read it when you need to know |
 |---|---|
+| [docs/guides/](docs/guides/) | Task-shaped how-tos: start from zero, write an adapter, add a country, run the simulator |
+| [docs/deploy-runbook.md](docs/deploy-runbook.md) | Fork → set secrets → live admin UI: the deployment checklist and every secret |
 | [AGENTS.md](AGENTS.md) | The rules. **Read before writing any code.** |
 | [docs/architecture.md](docs/architecture.md) | How the system is built and why |
 | [docs/pos-spec.md](docs/pos-spec.md) | What the product does (business behaviour) |
