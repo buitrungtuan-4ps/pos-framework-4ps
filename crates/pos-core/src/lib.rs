@@ -42,6 +42,7 @@ pub mod error;
 pub mod inventory;
 pub mod lease;
 pub mod machines;
+pub mod menu;
 pub mod ota;
 pub mod permission;
 pub mod state_machine;

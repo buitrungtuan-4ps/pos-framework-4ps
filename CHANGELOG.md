@@ -17,6 +17,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The store menu catalog — the store server's authoritative price book** (ADR-0063), the missing
+  piece a real edge `OrderIn` needs. The dine-in path prices on the device, but an inbound order
+  (marketplace, `POST /v1/orders`, QR) arrives as identifiers and quantities with no device to price
+  from, so the `OrderIn` contract's "the store's price wins" and "an unknown item is refused, never
+  substituted" have nothing to stand on. A new `MenuCatalog`/`MenuEntry` (in `pos-proto`, alongside
+  the other config shapes) is a per-item price book — `unit_price`, `tax_class_id`, `available` — that
+  the cloud publishes under the config tree's `menu` node and the store syncs like any other config.
+  A pure `pos_core::menu::reprice_line` turns `(menu_item_id, quantity, modifiers)` into a priced line
+  (base + modifier prices, extended by quantity, taxed via the existing channel-keyed `TaxRateTable`),
+  or refuses it: an unknown item or modifier (`invalid_argument`), an 86'd item (`failed_precondition`),
+  or a class with no rate on the channel (`failed_precondition`, never a silent zero). The caller's
+  quoted price is compared and flagged `repriced`, never charged. No consumer yet — the edge `OrderIn`
+  that reprices from it is the follow-up PR; this lands the price book and the repricing law, both
+  property-tested.
 - **The cloud→store order relay** (ADR-0061), so `POST /v1/orders` answers in the binary. Inbound
   orders (marketplace, the public API, QR) are held in a durable per-store `order_queue` and the
   store **pulls** them over its own outbound sync channel — no cloud→store push, so "stores dial out
