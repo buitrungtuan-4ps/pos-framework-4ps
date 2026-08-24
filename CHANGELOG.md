@@ -1169,6 +1169,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (`-p`/`-P`). The runbook and Start-from-zero note that `VPS_KNOWN_HOSTS` for a non-default port must be
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
+### Changed
+- **Deploy images are cross-compiled on the runner, no longer built under QEMU emulation.** The
+  arm64 support added above built the non-native architecture by emulating the box's CPU
+  (`tonistiigi/binfmt` + `docker buildx`), which compiles Rust under emulation — an hour or more,
+  and QEMU's occasional miscompiles (illegal-instruction, atomics) made it flaky as well as slow.
+  Both Dockerfiles now pin their builder stage to `$BUILDPLATFORM` (the runner's own CPU) and emit
+  a `$TARGETPLATFORM` binary: `deploy/Dockerfile` cross-compiles `pos_cloud` for the Rust triple
+  chosen from `TARGETARCH`, with the `gcc-aarch64-linux-gnu` toolchain linking `ring`'s C/assembly
+  for the arm64 build; `deploy/caddy.Dockerfile` cross-compiles Caddy with `GOARCH`. Both runtime
+  stages now run **no** commands (CA roots are `COPY`ed from the builder, the app runs as a numeric
+  uid), so no stage of either image is ever emulated — the build is entirely QEMU-free and runs at
+  native speed. The workflow drops the `binfmt` install and lowers its timeout from 120 to 60 min.
+  The box-architecture detection over SSH is unchanged. No image contents change for an amd64 box.
+
 ### Fixed
 - **Deploy now builds images for the VPS's own CPU architecture, not the runner's.** The `deploy`
   workflow always produced amd64 images (`docker build`, `docker pull`), so on an arm64 box — Oracle
