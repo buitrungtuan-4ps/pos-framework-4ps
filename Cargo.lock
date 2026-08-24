@@ -1523,6 +1523,7 @@ dependencies = [
  "pos-fakes",
  "pos-ports",
  "pos-proto",
+ "rust-embed",
  "serde",
  "serde_json",
  "sha2 0.11.0",

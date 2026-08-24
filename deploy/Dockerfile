@@ -7,6 +7,19 @@
 # stage of this image is ever emulated at build time. Build context is the repo root
 # (deploy/compose.yml `build.context: ..`); .dockerignore keeps it to the source cargo needs.
 
+# ---- dashboard (runs natively on the runner) ------------------------------------------
+# Builds the SolidJS back-office dashboard (ADR-0060) to dashboard/dist, which the Rust builder
+# embeds with rust-embed. Pinned to $BUILDPLATFORM so it runs on the runner's own CPU (a pure
+# JS/TS build is architecture-independent — the same dist embeds into an amd64 or arm64 binary).
+FROM --platform=$BUILDPLATFORM node:22-bookworm AS dashboard
+WORKDIR /dashboard
+# Lockfile first for layer caching; `--frozen-lockfile` fails if pnpm-lock.yaml is out of date.
+COPY dashboard/package.json dashboard/pnpm-lock.yaml ./
+RUN npm install --global pnpm@10 && pnpm install --frozen-lockfile
+COPY dashboard/ ./
+# `pnpm build` = tsc --noEmit && the no-hardcoded-strings lint && vite build.
+RUN pnpm build
+
 # ---- builder (runs natively on the runner) --------------------------------------------
 # Pinned to $BUILDPLATFORM so cargo compiles on the runner's own CPU. The full rust image (not
 # -slim) carries gcc + make that `ring` — the pinned rustls provider behind the webhook TLS
@@ -30,6 +43,10 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 WORKDIR /build
 COPY . .
+# The real dashboard build embeds via rust-embed (ADR-0060). dashboard/dist is excluded from the
+# build context (.dockerignore) and built fresh in the node stage above, so copy it in before the
+# compile — otherwise build.rs's placeholder page would be what ships.
+COPY --from=dashboard /dashboard/dist ./dashboard/dist
 # Map Docker's TARGETARCH (amd64/arm64) to the Rust triple, build ONLY pos-cloud and its deps
 # (`--locked` => exactly the versions in Cargo.lock, so a build today and a build at fork time
 # produce the same bits), and stage the binary at a fixed path for the runtime COPY. The

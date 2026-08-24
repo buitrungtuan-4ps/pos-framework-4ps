@@ -52,6 +52,7 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+pub mod assets;
 pub mod auth;
 pub mod clock;
 pub mod cloud;

@@ -17,6 +17,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A back-office dashboard, embedded in `pos_cloud` and served at `/`** (ADR-0060). A new
+  `dashboard/` SolidJS + Tailwind SPA — built like the edge `ui/` (shared design tokens, the ICU
+  i18n runtime with `en` the enforced floor and a `vi` catalogue, a typed client, the
+  no-hardcoded-strings lint) — gives the cloud its first screen. `pos_cloud` embeds it with
+  `rust-embed` and serves it as the router's fallback (`crate::assets`), so the API routes match
+  first and everything else resolves to the SPA; a `build.rs` writes a placeholder on a fresh
+  checkout, exactly as `pos_edge` does. Screens cover the existing `/admin` surface: super-admin
+  login + mandatory TOTP and first-run setup, the **config-tree publish editor** (publish a
+  tenant/brand/store/device level and view the effective config — the operator half of config
+  delivery), API-key provisioning, the printer/KDS approval queue, the translation grid, webhook
+  registration, activation codes, and a daily-rollup report. Auth is the existing super-admin
+  session cookie unchanged; the SPA holds no secret. A `dashboard` CI job type-checks, lints and
+  builds it; `deploy/Dockerfile` gains a Node stage that builds `dashboard/dist` natively (no
+  emulation) and embeds it. (ADR-0060)
+- `GET /admin/stores/{store_id}/rollups/daily` — the daily rollup read under the super-admin
+  session, naming the tenant with `?tenant_id=` (ADR-0060). The `/v1` rollup read stays bearer-authed
+  and tenant-scoped by the key; this admin read reuses the same `RollupStore` for the dashboard,
+  following the same admin-is-global pattern the config read already uses. Read-only.
 - The specification set is now in the repository: `docs/`, ADRs 0001–0012, `AGENTS.md`,
   `CONTRIBUTING.md`, `SECURITY.md`, `MAINTAINERS.md`, `CODEOWNERS`, the GitHub templates,
   and the frozen Vietnamese design archive.

@@ -14,6 +14,10 @@ repository.workspace   = true
 # `cargo test -p pos-cloud --features integration`.
 integration = []
 
+# Like pos-edge's `dev-ui`, this flips the embedded dashboard (ADR-0060) to read `dashboard/dist`
+# from disk instead of the binary, so a dashboard change is a browser refresh, not a Rust rebuild.
+dev-ui = []
+
 # Like pos-edge, most of this is a library so the HTTP surface and the ingest/rollup spine are
 # testable against the in-memory fakes without a database or a socket (tests/cloud.rs); main.rs is
 # the thin entry point that composes store-postgres and binds the server.
@@ -45,6 +49,11 @@ pos-core = { path = "../pos-core" }
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 axum       = "0.8"
 tower-http = { version = "0.6", features = ["trace"] }
+
+# The embedded back-office dashboard (ADR-0060), served as the router's fallback (src/assets.rs).
+# Same crate, version and features pos-edge uses to embed its operator UI: `debug-embed` embeds in
+# every profile so tests exercise the shipped serving path; `dev-ui` reads from disk instead.
+rust-embed = { version = "8", features = ["mime-guess", "debug-embed"] }
 
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }

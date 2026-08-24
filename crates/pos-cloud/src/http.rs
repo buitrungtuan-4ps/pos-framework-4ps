@@ -245,6 +245,10 @@ where
             post(admin_rollups_reset::<S, R, K, C, A, T, W>),
         )
         .route(
+            "/admin/stores/{store_id}/rollups/daily",
+            get(admin_daily_rollups::<S, R, K, C, A, T, W>),
+        )
+        .route(
             "/admin/webhooks",
             post(admin_register_webhook::<S, R, K, C, A, T, W>)
                 .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
@@ -1657,6 +1661,48 @@ where
         )
             .into_response(),
         Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup
+/// read is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not
+/// a tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The
+/// super-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads
+/// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
+/// mutated.
+async fn admin_daily_rollups<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    // The tenant is named explicitly here (the admin is global), unlike the `/v1` read where it is
+    // the API key's. It is a read of the materialised rollup — event counts only, no PII.
+    match dashboard(&app.rollups, tenant_id, store_id).await {
+        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
+        Err(error) => rollup_error_response(&error),
     }
 }
 

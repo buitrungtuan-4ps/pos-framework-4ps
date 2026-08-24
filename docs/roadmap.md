@@ -356,9 +356,14 @@ the request/response shapes are the contract between them. The **`metrics-vm` sp
 (monitoring off below ~50 stores, sparse straight into PostgreSQL above) is not built: the cloud emits
 no metrics yet (`MetricsSink` is not wired into `main`), so a second sink would be infrastructure with
 no producer, and its sampling stride is meant to be sized against P12's measured capacity — it lands
-with metrics integration at scale, not at pilot. The **dashboard screens** are P6-family UI over the
-`/v1` read model. A shared Tenant/Brand config layer that fans out to every store is a later modeling
-step (ADR-0033).
+with metrics integration at scale, not at pilot. The **back-office dashboard** is now built
+(ADR-0060): a SolidJS SPA embedded in `pos_cloud` and served at `/`, covering the `/admin` surface —
+login + TOTP and first-run setup, the config-tree publish editor, API keys, the printer/KDS approval
+queue, the translation grid, webhooks, activation codes, and a daily-rollup report — so the cloud is
+operable from a browser rather than only `curl`. Screens that need endpoints not yet built (a live
+sales chart beyond the daily rollup, bulk config diffs, a tenant/store picker over a listing endpoint)
+are additive follow-ups over the same session. A shared Tenant/Brand config layer that fans out to
+every store is a later modeling step (ADR-0033).
 
 #### P8 · Fork-and-deploy — *L*
 `deploy/compose.yml` (images pinned by digest, log size and file caps, ~1.2–1.5 GB across

@@ -16,7 +16,7 @@ use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
-use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, cursor, dashboard, http};
+use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, assets, cursor, dashboard, http};
 use store_postgres::PostgresStore;
 
 #[tokio::main]
@@ -172,7 +172,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.activation_codes(),
             store.admin(),
             SystemClock,
-        ));
+        ))
+        // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
+        // first, and everything else — `/`, client-routed paths, the built static assets — is served
+        // the single-page app, with an unknown path returning index.html for client-side routing.
+        .fallback(assets::serve);
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

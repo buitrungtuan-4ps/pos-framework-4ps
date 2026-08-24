@@ -6,6 +6,11 @@
 target/
 ui/node_modules/
 ui/dist/
+# The dashboard (ADR-0060) is built fresh in the image's node stage, so the local build outputs
+# never enter the context — the crate's build.rs writes a placeholder and the node stage's dist is
+# COPYed over it before cargo build.
+dashboard/node_modules/
+dashboard/dist/
 deploy/secrets/
 vendor/
 **/*.rs.bk
