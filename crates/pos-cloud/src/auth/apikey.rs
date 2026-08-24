@@ -56,6 +56,10 @@ pub enum Scope {
     /// ([ADR-0056](../../../docs/adr/0056-public-order-intake.md)). A write, distinct from every read
     /// scope above.
     PlaceOrders,
+    /// Pull the store's own queued orders and report their outcome
+    /// (`/sync/stores/{id}/orders`) ([ADR-0061](../../../docs/adr/0061-order-relay.md)). The credential
+    /// a first-party store holds to receive relayed orders, alongside `read_config`.
+    RelayOrders,
 }
 
 impl Scope {
@@ -70,6 +74,7 @@ impl Scope {
             Self::ReadConfig => "read_config",
             Self::ManageDevices => "manage_devices",
             Self::PlaceOrders => "place_orders",
+            Self::RelayOrders => "relay_orders",
         }
     }
 
@@ -87,6 +92,7 @@ impl Scope {
             "read_config" => Some(Self::ReadConfig),
             "manage_devices" => Some(Self::ManageDevices),
             "place_orders" => Some(Self::PlaceOrders),
+            "relay_orders" => Some(Self::RelayOrders),
             _ => None,
         }
     }

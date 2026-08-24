@@ -456,14 +456,18 @@ security keystone and guardrail decision (ADR-0057), and three integration adapt
 their suites, and `templates/adapter-template` was extracted at the third, as the rule of three
 requires. What remains is gated or needs a decision. Gated: the `payment-*` terminal (A1, #2) and the
 `vendor-grab`/ShopeeFood adapter (A3, #5). Needs a decision: *serving* the intake end to end. Reading
-the `OrderIn` contract closed one design question — the cloud **cannot** implement `OrderIn`, because
-the suite requires synchronous, authoritative repricing and menu validation the cloud has no engine
-for; the authoritative implementation is the edge. And the tree is store-initiated only (NATS
-outbound, `CloudSync` and `/sync` both store-pull), so there is no cloud→store channel yet. Serving
-`POST /v1/orders` is therefore an outward-facing API-contract choice — a synchronous cloud→store
-forward (new channel; matches the synchronous `OrderAcceptance` and ADR-0012's online-only guardrails)
-versus an async `202`-plus-poll where the store pulls queued orders — that is left for a human call
-rather than settled unilaterally.
+the `OrderIn` contract closed one design question — the authoritative repricing and menu validation
+the suite requires live at the edge, not the cloud — and the tree is store-initiated only (NATS
+outbound, `CloudSync` and `/sync` both store-pull), so there is no cloud→store push channel and none
+was added. **P11a-2 is now built** (ADR-0061): a durable per-store `order_queue` the store *pulls*,
+with the cloud implementing `OrderIn` over it — `submit` enqueues idempotently and parks up to the
+store's configured deadline (the store long-polls, so an online store is served in well under a
+second), returning the store's real acceptance or a `503` with the order still queued, and `look_up`
+(`GET /v1/orders`) resolves a timed-out caller. Per-store `store.order_relay.{enabled,wait_ms}` is a
+config-tree value, so intake is toggled/tuned per store from the dashboard. "Stores dial out only" is
+preserved. An optional low-latency `live` mode over a store-held outbound channel — which would amend
+`MessageLink`'s one-directional rule — is a conscious follow-up (ADR-0062), behind a
+`store.order_relay.mode` flag, over this same queue as the durable fallback.
 
 #### P12 · Simulator and capacity validation — *L*
 `pos-simulator`: virtual fleet, order load, network loss, OTA rings, nightly reconciliation.

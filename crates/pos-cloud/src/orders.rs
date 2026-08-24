@@ -23,7 +23,7 @@ use core::future::Future;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -43,6 +43,7 @@ use pos_proto::{Open, Quantity, SalesChannel, Timestamp};
 
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope};
+use crate::relay::{LookUpQuery, parse_look_up};
 
 /// Maps a request's store to the tenant that owns it, so the endpoint can refuse a cross-tenant
 /// submission ([ADR-0056](../../../docs/adr/0056-public-order-intake.md)).
@@ -139,7 +140,10 @@ where
     D: StoreDirectory + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/v1/orders", post(submit_order::<X, K, C, D>))
+        .route(
+            "/v1/orders",
+            post(submit_order::<X, K, C, D>).get(look_up_order::<X, K, C, D>),
+        )
         .with_state(OrdersState {
             intake,
             keys,
@@ -274,15 +278,9 @@ fn to_money(money: &MoneyDto) -> Result<Money, &'static str> {
     })
 }
 
-/// Renders an [`OrderAcceptance`]: `201` when this call created the order, `200` for an idempotent
-/// repeat.
-fn order_response(acceptance: &OrderAcceptance) -> Response {
-    let status = if acceptance.created {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-    let body = OrderResponse {
+/// The wire body of an [`OrderAcceptance`].
+fn order_body(acceptance: &OrderAcceptance) -> OrderResponse {
+    OrderResponse {
         order_id: acceptance.order_id.to_string(),
         created: acceptance.created,
         queue_number: acceptance.queue_number,
@@ -292,8 +290,66 @@ fn order_response(acceptance: &OrderAcceptance) -> Response {
         },
         repriced: acceptance.repriced,
         awaiting_staff_confirmation: acceptance.awaiting_staff_confirmation,
+    }
+}
+
+/// Renders an [`OrderAcceptance`] from `submit`: `201` when this call created the order, `200` for an
+/// idempotent repeat.
+fn order_response(acceptance: &OrderAcceptance) -> Response {
+    let status = if acceptance.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
     };
-    (status, Json(body)).into_response()
+    (status, Json(order_body(acceptance))).into_response()
+}
+
+/// `GET /v1/orders?store_id=&sales_channel=&external_reference=` — the resolution path for a caller
+/// whose `submit` timed out ([ADR-0061](../../../docs/adr/0061-order-relay.md)): look up what a
+/// reference produced rather than resubmit. Same tenant binding as `submit`; `404` while the store
+/// has not yet confirmed, or for an unknown reference.
+async fn look_up_order<X, K, C, D>(
+    State(state): State<OrdersState<X, K, C, D>>,
+    headers: HeaderMap,
+    Query(query): Query<LookUpQuery>,
+) -> Response
+where
+    X: OrderIn + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    D: StoreDirectory + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::PlaceOrders) {
+        return forbidden.into_response();
+    }
+    let (store_id, sales_channel, external_reference) = match parse_look_up(&query) {
+        Ok(parts) => parts,
+        Err(reason) => return bad_request(reason),
+    };
+    match state.directory.tenant_of(store_id).await {
+        Ok(Some(owner)) if owner == grant.tenant() => {}
+        Ok(_) => return (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Err(_error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the store directory is unavailable",
+            )
+                .into_response();
+        }
+    }
+    match state
+        .intake
+        .look_up(store_id, sales_channel, &external_reference)
+        .await
+    {
+        Ok(Some(acceptance)) => (StatusCode::OK, Json(order_body(&acceptance))).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such order").into_response(),
+        Err(error) => intake_error(&error),
+    }
 }
 
 /// Maps a submission [`PortError`] to the status the endpoint answers with.
