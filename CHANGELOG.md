@@ -1170,6 +1170,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
+- `deploy/bootstrap.sh`: **`cloud.toml` is now readable by the app container on a non-root deploy
+  user.** `pos_cloud` runs as uid 10001 and its config is a mode-600 file; bootstrap only `chown`ed it
+  when run as root, so a sudo user (the common cloud default — Oracle's `ubuntu`, etc.) left the file
+  owned by the deploy user and the container could not read it, so `pos_cloud` would fail to start.
+  bootstrap now falls back to `sudo -n chown` when not root (no regression where neither root nor
+  passwordless sudo is available — still a warning, not a hard failure). The one-time super-admin
+  setup token is captured at cloud.toml creation and printed from that variable, so it still shows
+  even after the file is chowned away from the deploy user (previously it was re-read from the file
+  afterward, which the chown could make unreadable). Only `pos_cloud` needs this — `postgres` reads
+  `pos.env` via the daemon (`env_file`) and the `nats`/`garage` images read their mounts as root.
 - **Deploy was broken on the sslip.io path (two ways).** (1) The `deploy` workflow always built a
   custom Caddy image via `xcaddy --with caddy-dns/cloudflare`; against a current plugin that build
   failed on Caddy 2.8.4 with `undefined: zapslog.HandlerOptions` (xcaddy resolved `go.uber.org/zap`
