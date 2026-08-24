@@ -30,10 +30,13 @@ RUN pnpm build
 # rust-toolchain.toml exactly.
 FROM --platform=$BUILDPLATFORM rust:1.94.1-bookworm AS builder
 ARG TARGETARCH
-# The GNU cross toolchain for arm64 (linker + arm64 libc/headers, pulled as dependencies). It is
+# The GNU cross toolchain for arm64: the compiler/linker (gcc-aarch64-linux-gnu) AND the arm64
+# target libc dev headers (libc6-dev-arm64-cross). The headers are a *Recommends* of the gcc
+# package, so `--no-install-recommends` drops them unless named explicitly — and without them
+# `ring`'s C (curve25519.c etc.) fails with "fatal error: … No such file or directory". Both are
 # only exercised on an arm64 target; on an amd64 target the native gcc already in the image builds.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu \
+ && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
  && rm -rf /var/lib/apt/lists/*
 # Both targets present, so either box architecture builds from this one image.
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu

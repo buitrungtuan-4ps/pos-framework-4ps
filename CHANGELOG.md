@@ -1215,6 +1215,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   The box-architecture detection over SSH is unchanged. No image contents change for an amd64 box.
 
 ### Fixed
+- **The arm64 cross-compile now has the target libc headers, so `ring` compiles.** The builder
+  installed `gcc-aarch64-linux-gnu` with `--no-install-recommends`, which drops the *Recommended*
+  `libc6-dev-arm64-cross` — the arm64 target C headers. The cross compiler was present but headerless,
+  so an arm64 deploy died in the builder with `ring` failing to compile `curve25519.c` ("fatal
+  error: … No such file or directory / compilation terminated"). `deploy/Dockerfile` now installs
+  `libc6-dev-arm64-cross` alongside the cross gcc. amd64 builds are unaffected.
 - **Deploy now builds images for the VPS's own CPU architecture, not the runner's.** The `deploy`
   workflow always produced amd64 images (`docker build`, `docker pull`), so on an arm64 box — Oracle
   Ampere, AWS Graviton, most free-tier ARM instances — every built/pulled container died with
