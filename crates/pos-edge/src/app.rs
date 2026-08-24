@@ -577,7 +577,9 @@ impl<S: EventStore> Edge<S> {
     /// Opens an order that arrived from **outside** the store — a marketplace order, the public API,
     /// or a QR guest ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Emits `sales.order.opened`
     /// (tableless-capable) and one `sales.order_line.added` per already-priced line, in **one**
-    /// transaction, then folds them into the projection; returns the new order's id.
+    /// transaction, then folds them into the projection; returns the new order's id and the business
+    /// date it was stamped with — the caller keys the daily queue number on that same date so the
+    /// number belongs to the trading day the order actually opened on.
     ///
     /// Unlike the floor commands there is no signed-in employee, so the events carry the box's own
     /// `device_id` and no employee — the same shape [`Self::record_activation`] uses. The lines are
@@ -593,7 +595,7 @@ impl<S: EventStore> Edge<S> {
         channel: Open<SalesChannel>,
         table_id: Option<TableId>,
         lines: &[(PricedLine, bool)],
-    ) -> Result<OrderId, AppError> {
+    ) -> Result<(OrderId, BusinessDate), AppError> {
         let now = self.clock.now();
         let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
@@ -660,7 +662,7 @@ impl<S: EventStore> Edge<S> {
                 projection.add_line(line_id, record);
             }
         }
-        Ok(order_id)
+        Ok((order_id, business_date))
     }
 
     /// The current projected state of a table.

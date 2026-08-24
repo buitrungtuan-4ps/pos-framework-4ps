@@ -19,6 +19,7 @@ use rusqlite::Connection;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_event_store.sql")),
     (2, include_str!("../migrations/0002_receipt_counter.sql")),
+    (3, include_str!("../migrations/0003_queue_counter.sql")),
 ];
 
 /// Applies every migration the database has not yet seen.

@@ -28,6 +28,7 @@ use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
 use crate::app::{AppError, Edge};
+use crate::queue::QueueNumberAuthority;
 
 /// The durable, per-store record of what a caller's reference produced — the idempotency source of
 /// truth ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Keyed by the channel's wire token and
@@ -102,31 +103,37 @@ impl IntakeLedger for InMemoryIntakeLedger {
 }
 
 /// The edge's [`OrderIn`]: reprice from the store's menu, open the order in the local log, dedupe on
-/// the caller's reference. Generic over the store `S` and the ledger `L` — static dispatch, no `dyn`
+/// the caller's reference, and hand a tableless order its daily queue number. Generic over the store
+/// `S`, the ledger `L`, and the queue authority `Q` — static dispatch, no `dyn`
 /// ([ADR-0013](../../../docs/adr/0013-async-strategy.md)).
 #[derive(Debug)]
-pub struct EdgeOrderIn<S, L> {
+pub struct EdgeOrderIn<S, L, Q> {
     edge: Arc<Edge<S>>,
     ledger: L,
+    queue: Q,
     device_id: DeviceId,
 }
 
-impl<S, L> EdgeOrderIn<S, L> {
-    /// Builds the intake over an edge, an idempotency ledger, and the box's own device id (the events
-    /// an inbound order writes carry it, since there is no signed-in employee).
-    pub const fn new(edge: Arc<Edge<S>>, ledger: L, device_id: DeviceId) -> Self {
+impl<S, L, Q> EdgeOrderIn<S, L, Q> {
+    /// Builds the intake over an edge, an idempotency ledger, a queue-number authority, and the box's
+    /// own device id (the events an inbound order writes carry it, since there is no signed-in
+    /// employee). In the field the ledger and the authority are both the one
+    /// [`SqliteStore`](store_sqlite::SqliteStore); the tests and the example pass the in-memory pair.
+    pub const fn new(edge: Arc<Edge<S>>, ledger: L, queue: Q, device_id: DeviceId) -> Self {
         Self {
             edge,
             ledger,
+            queue,
             device_id,
         }
     }
 }
 
-impl<S, L> OrderIn for EdgeOrderIn<S, L>
+impl<S, L, Q> OrderIn for EdgeOrderIn<S, L, Q>
 where
     S: EventStore + Send + Sync,
     L: IntakeLedger,
+    Q: QueueNumberAuthority,
 {
     async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
         if order.lines.is_empty() {
@@ -175,8 +182,9 @@ where
             priced_lines.push((priced, line.note.is_some()));
         }
 
-        // Open the order in one transaction: `sales.order.opened` + a line per priced line.
-        let order_id = self
+        // Open the order in one transaction: `sales.order.opened` + a line per priced line. The
+        // business date it was stamped with keys the queue number below.
+        let (order_id, business_date) = self
             .edge
             .open_inbound_order(
                 self.device_id,
@@ -187,11 +195,24 @@ where
             .await
             .map_err(port_error_from_app)?;
 
+        // A tableless order (takeaway / delivery / public API) is called back by a daily queue
+        // number; a QR order names a table and is served there, so it gets none. The authority is
+        // durable and idempotent by order, so a retry that got past the ledger still yields one
+        // number, not two (ADR-0064).
+        let queue_number = if order.table_id.is_none() {
+            let number = self
+                .queue
+                .allocate_queue_number(order.store_id, business_date, order_id)
+                .await?;
+            Some(u32::try_from(number).unwrap_or(u32::MAX))
+        } else {
+            None
+        };
+
         let acceptance = OrderAcceptance {
             order_id,
             created: true,
-            // Daily-resetting takeaway queue numbers are the next commit (ADR-0064).
-            queue_number: None,
+            queue_number,
             total,
             repriced,
             // A QR order (one that names a table) waits for staff before the kitchen sees it

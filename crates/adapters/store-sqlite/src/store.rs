@@ -14,7 +14,8 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{BillId, ConfigVersionId, EventId, StoreId};
+use pos_proto::ids::{BillId, ConfigVersionId, EventId, OrderId, StoreId};
+use pos_proto::time::BusinessDate;
 
 use crate::migrations;
 use crate::tx::SqliteTx;
@@ -92,6 +93,35 @@ impl SqliteStore {
             Command::AllocateReceipt {
                 store_id,
                 bill_id,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Allocates the next daily queue number for a tableless order, or returns the one it already
+    /// has (ADR-0064, the edge `OrderIn` authority).
+    ///
+    /// Keyed by `(store_id, business_date)`, so a new business date restarts the sequence at 1 —
+    /// the daily reset with no midnight job. Idempotent by `order_id`: allocating twice for one
+    /// order returns the same number and does not advance the counter, so a retry after a crash
+    /// shouts the same number rather than burning a second one. Collision-free while this single
+    /// authority is reachable, because every allocation serialises through the one writer thread.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the allocation fails.
+    pub async fn allocate_daily_queue_number(
+        &self,
+        store_id: StoreId,
+        business_date: BusinessDate,
+        order_id: OrderId,
+    ) -> Result<u64, PortError> {
+        self.ask(PortName::OrderIn, move |reply| {
+            Command::AllocateQueueNumber {
+                store_id,
+                business_date,
+                order_id,
                 reply,
             }
         })

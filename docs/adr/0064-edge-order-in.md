@@ -52,6 +52,17 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
   ([ADR-0057](0057-qr-ordering.md)) — and false for a delivery or public-API order, which a
   marketplace or the caller has already committed to.
 
+- **A tableless order gets a durable, daily-resetting queue number.** An order with no table (a
+  marketplace, public-API, or takeaway order) is called back by `OrderAcceptance::queue_number`,
+  allocated through a `QueueNumberAuthority` injected into `EdgeOrderIn` — the same static-dispatch,
+  in-memory-vs-`SqliteStore` split as the ledger and [`ReceiptAuthority`](../../crates/pos-edge/src/receipt.rs).
+  Unlike the receipt number, the counter is keyed by `(store, business_date)`, so it **resets each
+  trading day** with no midnight job (a date the counter has never seen starts at 1), and it is
+  **durable**: it must not be an in-memory counter, because a box that lost power mid-service would
+  reissue `#1` and shout the same number at two customers. Allocation is idempotent by `order_id`, so
+  a retry that reached the authority yields one number, not two. A QR order names a table and is
+  served there, so it gets none.
+
 **Consequences.**
 
 - The store side of the relay ([ADR-0061](0061-order-relay.md)) can now be closed: the pull-and-ack
@@ -59,10 +70,14 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
   the follow-up PR.
 - Accepting needs no cloud: the catalog is local synced config and the order is written to the local
   event log, so a marketplace or QR order is accepted with the internet down (rule 5).
-- **Deferred to the immediate follow-up commits, not designed away:** the durable SQLite intake
-  ledger (this commit ships the in-memory one behind the trait and the contract suite that proves the
-  behaviour), and the daily-resetting **queue number** for takeaway (`OrderAcceptance::queue_number`
-  is `None` until the `QueueNumberAuthority` lands next). Both are named here so the seam is right.
+- **The durable queue number landed with this design** (`QueueNumberAuthority` + a `store-sqlite`
+  `queue_counter`/`queue_allocations` pair, migration 0003), proven by a store-sqlite test that the
+  sequence survives reopening the database and still restarts on a new business date.
+- **Still deferred to a follow-up commit, not designed away:** the intake **ledger’s** durable
+  SQLite backing. This commit ships the in-memory ledger behind the trait and the shared `OrderIn`
+  contract suite that proves the dedupe behaviour; making that ledger a `store-sqlite` table written
+  **in the order’s own transaction** is the tx-atomic change described above, named here so the seam
+  is right.
 
 **Rejected.**
 
