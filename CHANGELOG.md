@@ -1170,6 +1170,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
+- `store-postgres` integration test (`subjects_store::fetch_due_then_mask_is_idempotent`): the seed
+  bound a `&str` to a `jsonb` column via `$4::jsonb`, which makes Postgres infer the *parameter* as
+  `jsonb` and `tokio-postgres` then rejects the `&str` (`WrongType { Jsonb, "&str" }`) — the seed never
+  ran, failing the merge-to-main integration lane against a live PostgreSQL. Changed it to `$4::text::jsonb`
+  (pin the parameter to `text`, cast to `jsonb` in the database), the exact idiom every production writer
+  already uses — `subjects.rs` (`mask`), `config_trees.rs`, `translations.rs`, `rollups.rs`. Test-only;
+  no shipped code changed. The PR-gate CI does not run the Postgres lane, so this surfaced only on merge.
 - `justfile` (P13): **`just` was completely broken** — a stale "Development loops" block left duplicate
   `run-edge`/`simulate` recipes and placeholder `run-cloud`/`deploy` bodies, and with no
   `allow-duplicate-recipes` setting `just` refused to parse the file at all, so *every* `just` command
