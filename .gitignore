@@ -23,3 +23,5 @@ config.toml
 
 /ui/node_modules/
 /ui/dist/
+/dashboard/node_modules/
+/dashboard/dist/

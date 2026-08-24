@@ -142,6 +142,28 @@ jobs:
         run: pnpm build
 
   # ---------------------------------------------------------------------------
+  # The back-office dashboard (ADR-0060). Like `ui`, the Rust build embeds a
+  # placeholder on a fresh checkout (dashboard/dist is gitignored), so this is
+  # the only job that compiles the SolidJS app: it type-checks, runs the
+  # no-hardcoded-strings lint, and builds it, keeping a dashboard change from
+  # landing broken even though CI does not embed the real bundle.
+  # ---------------------------------------------------------------------------
+  dashboard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: install pnpm
+        run: npm install --global pnpm@10
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: typecheck and build
+        run: pnpm build
+
+  # ---------------------------------------------------------------------------
   # Licences and advisories. The other check that turns architecture into law:
   # unwinding a copyleft crate after it ships inside a binary is a legal problem,
   # not an engineering one.
@@ -206,8 +228,8 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "origin/$BASE"...HEAD)"
-          if ! grep -qE '^(crates/|ui/)' <<<"$changed"; then
-            echo "no change under crates/ or ui/; gate not applicable"
+          if ! grep -qE '^(crates/|ui/|dashboard/)' <<<"$changed"; then
+            echo "no change under crates/, ui/ or dashboard/; gate not applicable"
             exit 0
           fi
           if grep -qx 'CHANGELOG.md' <<<"$changed"; then
@@ -220,5 +242,5 @@ jobs:
             echo "changelog deliberately skipped, with a stated reason"
             exit 0
           fi
-          echo "::error::This pull request changes crates/ or ui/ but does not touch CHANGELOG.md. Add an entry under [Unreleased], or write 'changelog: none <reason>' in the pull-request body."
+          echo "::error::This pull request changes crates/, ui/ or dashboard/ but does not touch CHANGELOG.md. Add an entry under [Unreleased], or write 'changelog: none <reason>' in the pull-request body."
           exit 1

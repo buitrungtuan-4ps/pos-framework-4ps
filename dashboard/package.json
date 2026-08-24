@@ -1,0 +1,31 @@
+{
+  "name": "pos-cloud-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The SolidJS back-office dashboard embedded into pos_cloud (ADR-0060).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && pnpm i18n:lint && vite build",
+    "typecheck": "tsc --noEmit",
+    "i18n:lint": "node scripts/i18n-lint.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.3",
+    "intl-messageformat": "^10.7.18",
+    "solid-js": "^1.9.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.9",
+    "tailwindcss": "^4.0.9",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vite-plugin-solid": "^2.11.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
