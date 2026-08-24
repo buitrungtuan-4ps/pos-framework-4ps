@@ -169,6 +169,23 @@ else
   echo "keep   caddy.env"
 fi
 
+# 5b. Select the Caddyfile matching the DOMAIN. The default committed ./Caddyfile issues over
+#     HTTP-01 (sslip.io and any A-record domain, no Cloudflare, no plugin). For a
+#     Cloudflare-managed DOMAIN with a token, swap in the DNS-01 variant. Read from caddy.env
+#     (always present after the first run) so a re-run selects correctly with no environment.
+CADDY_DOMAIN="$(sed -n 's/^DOMAIN=//p' "$SECRETS/caddy.env")"
+CADDY_CF_TOKEN="$(sed -n 's/^CF_DNS_API_TOKEN=//p' "$SECRETS/caddy.env")"
+case "$CADDY_DOMAIN" in
+  *.sslip.io) USE_CLOUDFLARE=0 ;;
+  *)          [ -n "$CADDY_CF_TOKEN" ] && USE_CLOUDFLARE=1 || USE_CLOUDFLARE=0 ;;
+esac
+if [ "$USE_CLOUDFLARE" = "1" ] && [ -e "$HERE/Caddyfile.cloudflare" ]; then
+  cp "$HERE/Caddyfile.cloudflare" "$HERE/Caddyfile"
+  echo "caddy  Caddyfile = DNS-01 (Cloudflare) for $CADDY_DOMAIN"
+else
+  echo "caddy  Caddyfile = HTTP-01 (default; sslip.io / no Cloudflare) for ${CADDY_DOMAIN:-unset}"
+fi
+
 # 6. Announce the one-time super-admin setup token (ADR-0045). It lives in cloud.toml above;
 #    printed here on first generation so the operator can enrol without reading it off the box.
 SETUP_TOKEN="$(sed -n 's/^admin_setup_token = "\(.*\)"$/\1/p' "$SECRETS/cloud.toml")"

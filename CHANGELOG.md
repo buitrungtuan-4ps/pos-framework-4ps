@@ -1170,6 +1170,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
+- **Deploy was broken on the sslip.io path (two ways).** (1) The `deploy` workflow always built a
+  custom Caddy image via `xcaddy --with caddy-dns/cloudflare`; against a current plugin that build
+  failed on Caddy 2.8.4 with `undefined: zapslog.HandlerOptions` (xcaddy resolved `go.uber.org/zap`
+  past the experimental API 2.8.4 references), so *no* deploy could produce images. (2) Even had it
+  built, `deploy/Caddyfile` hard-coded a Cloudflare DNS-01 `tls{}` block, so an sslip.io deploy (empty
+  `CF_DNS_API_TOKEN`) would fail certificate issuance and never serve `:443` — while the docs promised
+  sslip.io "just works". Fixed both: the Caddy image and Caddyfile are now chosen by `DOMAIN` —
+  `*.sslip.io` uses the **stock official `caddy:2.8.4`** image and an **HTTP-01/TLS-ALPN** `Caddyfile`
+  (no plugin, no Cloudflare, the fragile `xcaddy` build skipped entirely), while a managed domain keeps
+  the custom image (now pinned to Caddy `2.10.0`, which builds the plugin against a self-consistent
+  module graph) and the DNS-01 `deploy/Caddyfile.cloudflare`. `bootstrap.sh` selects the Caddyfile from
+  `DOMAIN` (read back from `caddy.env`, so re-runs are correct); the workflow selects the image and
+  carries it as `CADDY_IMAGE`. Docs updated to state both modes. The custom-image (domain) build runs
+  only in the manual deploy workflow, so confirm it against a real Cloudflare domain when first used.
 - `store-postgres` integration test (`subjects_store::fetch_due_then_mask_is_idempotent`): the seed
   bound a `&str` to a `jsonb` column via `$4::jsonb`, which makes Postgres infer the *parameter* as
   `jsonb` and `tokio-postgres` then rejects the `&str` (`WrongType { Jsonb, "&str" }`) — the seed never

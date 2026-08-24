@@ -47,11 +47,27 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Build the images
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
         run: |
           TAG="${GITHUB_SHA}"
           docker build -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
-          docker build -f deploy/caddy.Dockerfile -t "pos-caddy:${TAG}" deploy
-          docker save "pos-cloud:${TAG}" "pos-caddy:${TAG}" | gzip > /tmp/images.tgz
+          # The custom Caddy image exists ONLY to embed the Cloudflare DNS-01 plugin, used on a
+          # managed-domain DOMAIN. On the sslip.io fallback (HTTP-01, no plugin) ship the stock
+          # official image instead and skip the xcaddy build entirely. Both paths ship their
+          # caddy image inside the same tarball, so the box loads it and Compose never builds.
+          case "$DOMAIN" in
+            *.sslip.io)
+              CADDY_REF="caddy:2.8.4"
+              docker pull "$CADDY_REF"
+              ;;
+            *)
+              CADDY_REF="pos-caddy:${TAG}"
+              docker build -f deploy/caddy.Dockerfile -t "$CADDY_REF" deploy
+              ;;
+          esac
+          docker save "pos-cloud:${TAG}" "$CADDY_REF" | gzip > /tmp/images.tgz
+          echo "CADDY_IMAGE=$CADDY_REF" >> "$GITHUB_ENV"
 
       - name: Open the SSH channel
         env:
@@ -118,11 +134,13 @@ jobs:
           target="${VPS_USER}@${VPS_HOST}"
           tag="${GITHUB_SHA}"
           # Uses the images just loaded (POS_BOOTSTRAP_NO_BUILD=1 so the box never rebuilds from
-          # source). bootstrap.sh keeps any existing secret, so a redeploy does not rotate them.
+          # source). CADDY_IMAGE was chosen per-DOMAIN in "Build the images" (custom pos-caddy for
+          # the Cloudflare path, stock caddy for sslip.io) and carried via $GITHUB_ENV.
+          # bootstrap.sh keeps any existing secret, so a redeploy does not rotate them.
           ssh -p "$port" $ssh_opts "$target" \
             "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh && \
              DOMAIN='${DOMAIN}' ACME_EMAIL='${ACME_EMAIL}' CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
-             POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='pos-caddy:${tag}' POS_BOOTSTRAP_NO_BUILD=1 \
+             POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='${CADDY_IMAGE}' POS_BOOTSTRAP_NO_BUILD=1 \
              ./bootstrap.sh"
 
       - name: Break-glass admin reset
