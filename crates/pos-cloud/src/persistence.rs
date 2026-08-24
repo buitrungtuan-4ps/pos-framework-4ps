@@ -23,9 +23,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresConfigTrees,
-    PostgresDeviceProposals, PostgresReconcile, PostgresRollups, PostgresStore, PostgresSubjects,
-    PostgresTranslations, PostgresWebhooks,
+    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
+    PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTranslations,
+    PostgresWebhooks,
 };
 
 use pos_ports::PortError;
@@ -49,7 +50,12 @@ use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use crate::orders::StoreDirectory;
 use crate::reconcile::{ReconcileError, ReconcileStore};
+use crate::relay::{
+    OrderQueueId, OrderQueueStore, OrderRecord, OrderStatus, PendingOrder, QueuedOrderPayload,
+    StoreOutcome,
+};
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use crate::webhook::sign::SigningSecret;
@@ -621,5 +627,145 @@ impl TranslationStore for PostgresTranslations {
         self.save_grid(&tenant.to_string(), &json)
             .await
             .map_err(|error| TranslationStoreError::new(error.to_string()))
+    }
+}
+
+// --- The order relay's queue and store directory (ADR-0061) ------------------------------------
+
+/// Parses the adapter's `queued_id` text back to the cloud's [`OrderQueueId`].
+fn parse_queued_id(text: &str) -> Result<OrderQueueId, PortError> {
+    text.parse::<Ulid>()
+        .map(OrderQueueId::new)
+        .map_err(|_ignored| {
+            PortError::internal(
+                pos_ports::PortName::OrderIn,
+                "a queued order id is not a ULID",
+            )
+        })
+}
+
+/// Turns the adapter's status/outcome columns into the cloud's [`OrderStatus`].
+fn order_status(row: &OrderQueueRow) -> Result<OrderStatus, PortError> {
+    if row.status == "reported" {
+        let value = row.outcome.as_ref().ok_or_else(|| {
+            PortError::internal(
+                pos_ports::PortName::OrderIn,
+                "a reported order is missing its stored outcome",
+            )
+        })?;
+        let outcome: StoreOutcome = serde_json::from_value(value.clone()).map_err(|error| {
+            PortError::internal(pos_ports::PortName::OrderIn, error.to_string())
+        })?;
+        Ok(OrderStatus::Reported(outcome))
+    } else {
+        Ok(OrderStatus::Pending)
+    }
+}
+
+/// Turns one adapter row into the cloud's [`OrderRecord`].
+fn order_record(row: &OrderQueueRow) -> Result<OrderRecord, PortError> {
+    Ok(OrderRecord {
+        queued_id: parse_queued_id(&row.queued_id)?,
+        status: order_status(row)?,
+    })
+}
+
+impl OrderQueueStore for PostgresOrderQueue {
+    async fn enqueue(
+        &self,
+        tenant: TenantId,
+        queued_id: OrderQueueId,
+        payload: &QueuedOrderPayload,
+    ) -> Result<OrderRecord, PortError> {
+        let json = serde_json::to_value(payload).map_err(|error| {
+            PortError::internal(pos_ports::PortName::OrderIn, error.to_string())
+        })?;
+        let row = self
+            .enqueue(
+                &tenant.to_string(),
+                &payload.store_id,
+                &payload.sales_channel,
+                &payload.external_reference,
+                &queued_id.to_string(),
+                &json,
+            )
+            .await?;
+        order_record(&row)
+    }
+
+    async fn outcome(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+    ) -> Result<Option<OrderRecord>, PortError> {
+        let row = self
+            .outcome(
+                &tenant.to_string(),
+                &store_id.to_string(),
+                sales_channel,
+                external_reference,
+            )
+            .await?;
+        row.as_ref().map(order_record).transpose()
+    }
+
+    async fn pull_pending(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        limit: u32,
+    ) -> Result<Vec<PendingOrder>, PortError> {
+        let rows = self
+            .pull_pending(&tenant.to_string(), &store_id.to_string(), i64::from(limit))
+            .await?;
+        rows.into_iter().map(pending_order).collect()
+    }
+
+    async fn record_outcome(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        queued_id: OrderQueueId,
+        outcome: &StoreOutcome,
+    ) -> Result<bool, PortError> {
+        let json = serde_json::to_value(outcome).map_err(|error| {
+            PortError::internal(pos_ports::PortName::OrderIn, error.to_string())
+        })?;
+        self.record_outcome(
+            &tenant.to_string(),
+            &store_id.to_string(),
+            &queued_id.to_string(),
+            &json,
+        )
+        .await
+    }
+}
+
+/// Turns one pending adapter row into the cloud's [`PendingOrder`].
+fn pending_order(row: PendingOrderRow) -> Result<PendingOrder, PortError> {
+    let queued_id = parse_queued_id(&row.queued_id)?;
+    let payload: QueuedOrderPayload = serde_json::from_value(row.payload)
+        .map_err(|error| PortError::internal(pos_ports::PortName::OrderIn, error.to_string()))?;
+    Ok(PendingOrder { queued_id, payload })
+}
+
+impl StoreDirectory for PostgresStoreDirectory {
+    async fn tenant_of(&self, store_id: StoreId) -> Result<Option<TenantId>, PortError> {
+        let id = store_id.to_string();
+        match self.tenant_of(&id).await? {
+            Some(text) => text
+                .parse::<Ulid>()
+                .map(TenantId::new)
+                .map(Some)
+                .map_err(|_ignored| {
+                    PortError::internal(
+                        pos_ports::PortName::OrderIn,
+                        "a stored tenant id is not a ULID",
+                    )
+                }),
+            None => Ok(None),
+        }
     }
 }

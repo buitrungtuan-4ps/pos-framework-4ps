@@ -68,6 +68,7 @@ pub mod orders;
 mod persistence;
 pub mod qr;
 pub mod reconcile;
+pub mod relay;
 pub mod retention;
 pub mod translations;
 pub mod webhook;

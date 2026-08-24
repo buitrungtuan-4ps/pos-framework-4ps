@@ -17,6 +17,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The cloud→store order relay** (ADR-0061), so `POST /v1/orders` answers in the binary. Inbound
+  orders (marketplace, the public API, QR) are held in a durable per-store `order_queue` and the
+  store **pulls** them over its own outbound sync channel — no cloud→store push, so "stores dial out
+  only" (4G/CGNAT with no port-forward) is unchanged. The cloud implements `OrderIn` over the queue:
+  `submit` enqueues idempotently on `(tenant, store, channel, reference)` and parks up to the store's
+  configured deadline, returning the store's real acceptance (`201`/`200`) if it arrives or `503`
+  on timeout **with the order still queued**; `look_up` (`GET /v1/orders`) resolves a timed-out
+  caller. The store pulls (`GET /sync/stores/{id}/orders`, a bounded long-poll) and reports outcomes
+  (`POST /sync/stores/{id}/orders/{queued_id}/ack`) under a new deny-by-default `relay_orders` scope.
+  Per-store `store.order_relay.{enabled,wait_ms}` is published from the cloud through the config tree,
+  so intake is toggled and tuned per store from the dashboard with no deploy. Validated against the
+  in-memory fakes (queue → pull → ack → look-up, idempotency, scope enforcement); `store-postgres`'s
+  `order_queue` table is proven by its own integration suite.
 - **A back-office dashboard, embedded in `pos_cloud` and served at `/`** (ADR-0060). A new
   `dashboard/` SolidJS + Tailwind SPA — built like the edge `ui/` (shared design tokens, the ICU
   i18n runtime with `en` the enforced floor and a `vi` catalogue, a typed client, the

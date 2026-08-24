@@ -14,9 +14,12 @@ use tracing_subscriber::EnvFilter;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
+use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
-use pos_cloud::{Cloud, CloudConfig, NatsIngestConfig, assets, cursor, dashboard, http};
+use pos_cloud::{
+    Cloud, CloudConfig, NatsIngestConfig, assets, cursor, dashboard, http, orders, relay,
+};
 use store_postgres::PostgresStore;
 
 #[tokio::main]
@@ -171,6 +174,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .merge(http::activation_router(
             store.activation_codes(),
             store.admin(),
+            SystemClock,
+        ))
+        // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
+        // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
+        // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay
+        // resolves the owning tenant and the per-store `order_relay` config from the config tree,
+        // and the handler binds the request's store to the caller's tenant through the same
+        // directory.
+        .merge(orders::orders_router(
+            OrderRelay::new(
+                store.store_directory(),
+                store.config_trees(),
+                store.order_queue(),
+                SystemClock,
+            ),
+            store.api_keys(),
+            SystemClock,
+            store.store_directory(),
+        ))
+        .merge(relay::orders_sync_router(
+            store.order_queue(),
+            store.api_keys(),
             SystemClock,
         ))
         // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match

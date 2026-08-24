@@ -38,6 +38,10 @@ use pos_cloud::devices::{
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
+use pos_cloud::relay::{
+    OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
+    QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
+};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -2536,4 +2540,281 @@ async fn a_qr_order_awaits_staff_confirmation_and_a_stale_quote_is_repriced() {
         Some(true),
         "a stale quote is reported, not honoured"
     );
+}
+
+// --- Order relay (POST /v1/orders over the durable queue) — P11a-2, ADR-0061 -------------------
+
+/// A config-tree store that has published nothing, so the relay falls back to its defaults (intake
+/// enabled, the default park). Enough to exercise the queue and the pull/ack path.
+#[derive(Clone)]
+struct EmptyConfigTrees;
+
+impl ConfigTreeStore for EmptyConfigTrees {
+    async fn load(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
+        Ok(None)
+    }
+
+    async fn save(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+        _state: &ConfigTreeState,
+    ) -> Result<(), ConfigStoreError> {
+        Ok(())
+    }
+}
+
+/// One queued order the fake holds.
+#[derive(Clone)]
+struct QueueEntry {
+    tenant: String,
+    queued_id: OrderQueueId,
+    payload: QueuedOrderPayload,
+    status: OrderStatus,
+}
+
+/// An in-memory [`OrderQueueStore`]. Clones share one store, so the relay's `submit` and the
+/// store-facing pull/ack see the same queue.
+#[derive(Clone, Default)]
+struct FakeOrderQueue {
+    entries: Arc<Mutex<Vec<QueueEntry>>>,
+}
+
+impl FakeOrderQueue {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl OrderQueueStore for FakeOrderQueue {
+    async fn enqueue(
+        &self,
+        tenant: TenantId,
+        queued_id: OrderQueueId,
+        payload: &QueuedOrderPayload,
+    ) -> Result<OrderRecord, PortError> {
+        let mut entries = self.entries.lock().expect("queue lock");
+        let tenant = tenant.to_string();
+        if let Some(found) = entries.iter().find(|entry| {
+            entry.tenant == tenant
+                && entry.payload.store_id == payload.store_id
+                && entry.payload.sales_channel == payload.sales_channel
+                && entry.payload.external_reference == payload.external_reference
+        }) {
+            return Ok(OrderRecord {
+                queued_id: found.queued_id,
+                status: found.status.clone(),
+            });
+        }
+        entries.push(QueueEntry {
+            tenant,
+            queued_id,
+            payload: payload.clone(),
+            status: OrderStatus::Pending,
+        });
+        Ok(OrderRecord {
+            queued_id,
+            status: OrderStatus::Pending,
+        })
+    }
+
+    async fn outcome(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+    ) -> Result<Option<OrderRecord>, PortError> {
+        let entries = self.entries.lock().expect("queue lock");
+        let tenant = tenant.to_string();
+        let store = store_id.to_string();
+        Ok(entries
+            .iter()
+            .find(|entry| {
+                entry.tenant == tenant
+                    && entry.payload.store_id == store
+                    && entry.payload.sales_channel == sales_channel
+                    && entry.payload.external_reference == external_reference
+            })
+            .map(|entry| OrderRecord {
+                queued_id: entry.queued_id,
+                status: entry.status.clone(),
+            }))
+    }
+
+    async fn pull_pending(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        limit: u32,
+    ) -> Result<Vec<PendingOrder>, PortError> {
+        let entries = self.entries.lock().expect("queue lock");
+        let tenant = tenant.to_string();
+        let store = store_id.to_string();
+        let cap = usize::try_from(limit).unwrap_or(usize::MAX);
+        Ok(entries
+            .iter()
+            .filter(|entry| {
+                entry.tenant == tenant
+                    && entry.payload.store_id == store
+                    && matches!(entry.status, OrderStatus::Pending)
+            })
+            .take(cap)
+            .map(|entry| PendingOrder {
+                queued_id: entry.queued_id,
+                payload: entry.payload.clone(),
+            })
+            .collect())
+    }
+
+    async fn record_outcome(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        queued_id: OrderQueueId,
+        outcome: &StoreOutcome,
+    ) -> Result<bool, PortError> {
+        let mut entries = self.entries.lock().expect("queue lock");
+        let tenant = tenant.to_string();
+        let store = store_id.to_string();
+        if let Some(entry) = entries.iter_mut().find(|entry| {
+            entry.tenant == tenant
+                && entry.payload.store_id == store
+                && entry.queued_id == queued_id
+                && matches!(entry.status, OrderStatus::Pending)
+        }) {
+            entry.status = OrderStatus::Reported(outcome.clone());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
+    let keys = FakeKeys::default();
+    let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let relay_token = issue_key(&keys, tenant(), &[Scope::RelayOrders]);
+    let (known, _price) = known_menu_item();
+    let queue = FakeOrderQueue::new();
+    let app = || {
+        orders_router(
+            OrderRelay::new(
+                FakeDirectory {
+                    owner: Some(tenant()),
+                },
+                EmptyConfigTrees,
+                queue.clone(),
+                clock(),
+            ),
+            keys.clone(),
+            clock(),
+            FakeDirectory {
+                owner: Some(tenant()),
+            },
+        )
+        .merge(orders_sync_router_with_cap(
+            queue.clone(),
+            keys.clone(),
+            clock(),
+            std::time::Duration::ZERO,
+        ))
+    };
+
+    // Store silent: submit parks (instantly, under paused time) and reports the order queued.
+    let submitted = app()
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("relay-1", known, None),
+            &place,
+        ))
+        .await
+        .expect("route submit");
+    assert_eq!(submitted.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The store pulls its pending order.
+    let store = order_store().to_string();
+    let pulled = app()
+        .oneshot(get(
+            &format!("/sync/stores/{store}/orders"),
+            Some(&relay_token),
+        ))
+        .await
+        .expect("route pull");
+    assert_eq!(pulled.status(), StatusCode::OK);
+    let body = json_body(pulled).await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    let queued_id = body[0]["queued_id"]
+        .as_str()
+        .expect("a queued id")
+        .to_owned();
+
+    // The store reports the acceptance it decided locally.
+    let order_id = order_store().as_ulid().to_string();
+    let ack_body = serde_json::json!({
+        "outcome": "accepted",
+        "order_id": order_id,
+        "created": true,
+        "total": { "currency_code": "VND", "amount_minor": 150_000 },
+        "repriced": false,
+        "awaiting_staff_confirmation": false,
+    });
+    let acked = app()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store}/orders/{queued_id}/ack"),
+            &ack_body,
+            &relay_token,
+        ))
+        .await
+        .expect("route ack");
+    assert_eq!(acked.status(), StatusCode::NO_CONTENT);
+
+    // The caller resolves the timed-out submit by looking the reference up.
+    let looked = app()
+        .oneshot(get(
+            &format!(
+                "/v1/orders?store_id={store}&sales_channel=SALES_CHANNEL_API&external_reference=relay-1"
+            ),
+            Some(&place),
+        ))
+        .await
+        .expect("route look-up");
+    assert_eq!(looked.status(), StatusCode::OK);
+    let resolved = json_body(looked).await;
+    assert_eq!(resolved["order_id"].as_str(), Some(order_id.as_str()));
+
+    // A second pull sees nothing pending — the order is no longer queued.
+    let again = app()
+        .oneshot(get(
+            &format!("/sync/stores/{store}/orders"),
+            Some(&relay_token),
+        ))
+        .await
+        .expect("route pull again");
+    let again_body = json_body(again).await;
+    assert_eq!(again_body.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn pulling_orders_requires_the_relay_orders_scope() {
+    let keys = FakeKeys::default();
+    // A valid key, but only PlaceOrders — it may submit, not pull the store's queue.
+    let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let app = orders_sync_router_with_cap(
+        FakeOrderQueue::new(),
+        keys.clone(),
+        clock(),
+        std::time::Duration::ZERO,
+    );
+    let store = order_store().to_string();
+    let response = app
+        .oneshot(get(&format!("/sync/stores/{store}/orders"), Some(&place)))
+        .await
+        .expect("route pull");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

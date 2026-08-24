@@ -41,6 +41,9 @@ const MIGRATION_0008: &str = include_str!("../migrations/0008_cloud_translations
 /// The activation-code and device-credential tables ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 const MIGRATION_0009: &str = include_str!("../migrations/0009_cloud_activation.sql");
 
+/// The cloud order-queue table (P7).
+const MIGRATION_0010: &str = include_str!("../migrations/0010_cloud_order_queue.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -131,6 +134,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0009)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0010)
+            .await
             .map_err(unavailable)
     }
 
@@ -190,6 +197,23 @@ impl PostgresStore {
     #[must_use]
     pub fn webhooks(&self) -> crate::webhooks::PostgresWebhooks {
         crate::webhooks::PostgresWebhooks::new(self.pool.clone())
+    }
+
+    /// The order-queue store over this pool (P7).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `OrderQueueStore` seam over
+    /// it.
+    #[must_use]
+    pub fn order_queue(&self) -> crate::order_queue::PostgresOrderQueue {
+        crate::order_queue::PostgresOrderQueue::new(self.pool.clone())
+    }
+
+    /// The store→tenant directory over this pool (P7).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `StoreDirectory` seam over it.
+    #[must_use]
+    pub fn store_directory(&self) -> crate::order_queue::PostgresStoreDirectory {
+        crate::order_queue::PostgresStoreDirectory::new(self.pool.clone())
     }
 
     /// The reconciliation query over this pool ([ADR-0040](../../../docs/adr/0040-reconciliation.md)).

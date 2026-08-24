@@ -66,5 +66,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0058](0058-shipping-adapters.md) | Shipping adapters: the `ShippingDispatch` port over a REST courier API, behind a transport seam | Accepted |
 | [0059](0059-erp-adapter.md) | ERP adapter: the `ErpSink` port over a REST posting API, behind a transport seam | Accepted |
 | [0060](0060-cloud-back-office-dashboard.md) | Cloud back-office: an embedded SolidJS SPA served by `pos_cloud` over the existing admin API | Accepted |
+| [0061](0061-order-relay.md) | Order relay: a durable per-store queue the store pulls; the cloud implements `OrderIn` over it | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
