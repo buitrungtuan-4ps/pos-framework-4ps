@@ -54,8 +54,10 @@ server — CI ships it over SSH and the box mints its own secrets ([ADR-0044](..
    | `DOMAIN` | `<vps-ip-with-dashes>.sslip.io`, e.g. `203-0-113-9.sslip.io` |
    | `ACME_EMAIL` | your email (for the TLS certificate) |
 
-   `sslip.io` resolves that hostname to your IP for free, so you get **real HTTPS with no DNS setup**.
-   (With your own domain instead, set `DOMAIN` to it and add `CF_DNS_API_TOKEN`; see the
+   `sslip.io` resolves that hostname to your IP for free, so you get **real HTTPS with no DNS setup**
+   — Caddy issues the certificate over HTTP-01/TLS-ALPN using the stock official image (no Cloudflare,
+   no plugin), so make sure the VPS's **`:80` and `:443` are reachable from the internet**. (With your
+   own domain instead, set `DOMAIN` to it and add `CF_DNS_API_TOKEN` for DNS-01 via Cloudflare; see the
    [deploy runbook](../deploy-runbook.md).)
    **SSH on a non-default port?** Add a `VPS_PORT` secret (it defaults to 22 when unset), and
    generate the host key with the port: `ssh-keyscan -p <port> <VPS_HOST>`.

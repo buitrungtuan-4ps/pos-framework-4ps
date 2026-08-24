@@ -25,6 +25,13 @@ secrets, run one workflow, enrol yourself. The details of each artifact are in
   drive. Optional for a first bring-up, required before you trust the cell with real data
   ([ADR-0046](adr/0046-backups-and-restore.md)).
 
+> **Two TLS modes, chosen automatically by `DOMAIN`.** A `*.sslip.io` DOMAIN issues over
+> **HTTP-01/TLS-ALPN** with the **stock official Caddy image** — no Cloudflare, no token, and the
+> custom plugin build is skipped entirely. A managed domain issues over **DNS-01 via Cloudflare**,
+> which needs the custom Caddy image (built with the `caddy-dns/cloudflare` plugin) and a
+> `CF_DNS_API_TOKEN`. The deploy workflow and `bootstrap.sh` pick the right image and Caddyfile from
+> `DOMAIN`; you set no flag.
+
 ## 1. Cloudflare (skip if using sslip.io)
 
 The cell's own host follows the same rule as tenant hostnames — **redirect, never proxy, and never

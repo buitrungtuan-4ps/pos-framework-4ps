@@ -1,10 +1,20 @@
-# Caddy fronts pos_cloud (ADR-0044): it terminates real TLS and reverse-proxies plaintext
-# to the app on the internal Docker network. Cloudflare "Flexible" SSL is forbidden — the
-# origin is always real TLS here; if Cloudflare proxies at all it must be Full (strict),
-# the same "redirect, never proxy, never Flexible" rule ADR-0011 fixed for tenant hostnames.
+# Caddy fronts pos_cloud (ADR-0044): it terminates real TLS and reverse-proxies plaintext to
+# the app on the internal Docker network. Cloudflare "Flexible" SSL is forbidden — the origin
+# is always real TLS here; if Cloudflare proxies at all it must be Full (strict), the same
+# "redirect, never proxy, never Flexible" rule ADR-0011 fixed for tenant hostnames.
 #
-# DOMAIN, ACME_EMAIL and CF_DNS_API_TOKEN come from ./secrets/caddy.env, generated on the
-# box by bootstrap.sh (P8b) and never committed.
+# This is the DEFAULT Caddyfile: TLS issued automatically over HTTP-01 / TLS-ALPN, no DNS
+# provider and no Cloudflare token. It is what the sslip.io fallback uses (and works for any
+# domain whose A record points at the box), so :80 and :443 must be reachable from the
+# internet — sslip.io satisfies that by resolving <vps-ip>.sslip.io straight to the box, so
+# the certificate is real. This is why the sslip.io path runs the stock official caddy image
+# and never builds the Cloudflare plugin (deploy/caddy.Dockerfile).
+#
+# For a Cloudflare-managed domain issuing over DNS-01 (grey-clouded, no inbound :80 to ACME),
+# bootstrap.sh swaps in deploy/Caddyfile.cloudflare instead — see ADR-0044.
+#
+# DOMAIN and ACME_EMAIL come from ./secrets/caddy.env, generated on the box by bootstrap.sh
+# (P8b) and never committed.
 
 {
 	email {$ACME_EMAIL}
@@ -13,24 +23,9 @@
 {$DOMAIN} {
 	encode zstd gzip
 
-	# --- Certificate issuance -----------------------------------------------------------
-	# Default: DNS-01 via Cloudflare. Grey-cloud the record (DNS-only); no inbound :80 has
-	# to reach ACME. Requires a Cloudflare-managed DOMAIN and a scoped CF_DNS_API_TOKEN
-	# (Zone:DNS:Edit on the one zone, nothing wider).
-	tls {
-		dns cloudflare {env.CF_DNS_API_TOKEN}
-		resolvers 1.1.1.1
-	}
-	# Fallback for a box with no purchased domain: set DOMAIN=<vps-ip>.sslip.io in
-	# secrets/caddy.env and comment out the whole `tls { … }` block above. Caddy then
-	# issues over HTTP-01 / TLS-ALPN automatically, which needs :80 and :443 reachable from
-	# the internet. sslip.io resolves <vps-ip>.sslip.io straight to the box, so the cert is
-	# real. Leave CF_DNS_API_TOKEN unset in that mode.
-
-	# --- Proxy --------------------------------------------------------------------------
-	# pos_cloud speaks plain HTTP on :8080 inside the network (compose sets its bind).
-	# Active health checks against /health take the upstream out of rotation if the app
-	# stops answering, so Caddy returns 502 rather than proxying into a dead process.
+	# pos_cloud speaks plain HTTP on :8080 inside the network. Active health checks against
+	# /health take the upstream out of rotation if the app stops answering, so Caddy returns
+	# 502 rather than proxying into a dead process.
 	reverse_proxy pos_cloud:8080 {
 		health_uri /health
 		health_interval 10s
