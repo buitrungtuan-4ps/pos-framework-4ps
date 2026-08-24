@@ -1170,6 +1170,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
+- **Deploy now builds images for the VPS's own CPU architecture, not the runner's.** The `deploy`
+  workflow always produced amd64 images (`docker build`, `docker pull`), so on an arm64 box — Oracle
+  Ampere, AWS Graviton, most free-tier ARM instances — every built/pulled container died with
+  `exec /usr/bin/caddy: exec format error` / `Restarting (255)`, and nothing listened on 80/443 (the
+  multi-arch official postgres/nats/garage images came up, masking it). The workflow now detects the
+  box architecture over SSH (`uname -m` → `linux/amd64` | `linux/arm64`) before building, then builds
+  `pos_cloud` and the custom Caddy image with `docker buildx --platform <target> --load` (QEMU via
+  `tonistiigi/binfmt` for the non-native arch) and pulls the stock Caddy image with `--platform`. The
+  job timeout rises to 120 min because a cross-arch Rust build under emulation is slow. Unsupported
+  `uname -m` values fail fast with a clear message.
+- `deploy/reset-admin.sh`: the break-glass **no longer errors when the admin tables do not exist
+  yet.** It ran `DELETE FROM super_admin; DELETE FROM admin_sessions;` unconditionally, so
+  `reset_admin=true` on a first deploy (before the app's first migration created those tables) failed
+  the workflow with `relation "super_admin" does not exist` — contradicting the script's own "idempotent
+  … still succeeds" promise. Each DELETE is now guarded by `to_regclass`, so a reset before the schema
+  exists is a clean no-op. (`reset_admin` is only meant for wiping an *existing* super-admin; a first
+  deploy should leave it off and enrol via the setup token.)
 - `deploy/bootstrap.sh`: **`cloud.toml` is now readable by the app container on a non-root deploy
   user.** `pos_cloud` runs as uid 10001 and its config is a mode-600 file; bootstrap only `chown`ed it
   when run as root, so a sudo user (the common cloud default — Oracle's `ubuntu`, etc.) left the file

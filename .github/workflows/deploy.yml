@@ -1,9 +1,10 @@
 name: deploy
 
-# Manual deploy of one country cell to its VPS (ADR-0044). CI builds the two images, ships
-# them over the existing SSH channel (no registry — GitHub holds no application secret), and
-# runs bootstrap.sh on the box. A rollback is re-running with an older commit's image tag: the
-# app container is stateless, all durable state lives in the postgres/garage/nats volumes.
+# Manual deploy of one country cell to its VPS (ADR-0044). CI builds the two images for the
+# box's own CPU architecture (detected over SSH; amd64 and arm64 — Ampere/Graviton — both work),
+# ships them over the existing SSH channel (no registry — GitHub holds no application secret),
+# and runs bootstrap.sh on the box. A rollback is re-running with an older commit's image tag:
+# the app container is stateless, all durable state lives in the postgres/garage/nats volumes.
 #
 # Required GitHub secrets — the only values that ever cross the repo boundary, and none is an
 # application secret (the box mints those itself, ADR-0044):
@@ -41,33 +42,13 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # A cross-architecture image build under QEMU emulation (an arm64 box built on an amd64
+    # runner, or vice versa) compiles Rust in emulation and is slow — allow well beyond the
+    # native ~10-minute build.
+    timeout-minutes: 120
     environment: production
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Build the images
-        env:
-          DOMAIN: ${{ secrets.DOMAIN }}
-        run: |
-          TAG="${GITHUB_SHA}"
-          docker build -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
-          # The custom Caddy image exists ONLY to embed the Cloudflare DNS-01 plugin, used on a
-          # managed-domain DOMAIN. On the sslip.io fallback (HTTP-01, no plugin) ship the stock
-          # official image instead and skip the xcaddy build entirely. Both paths ship their
-          # caddy image inside the same tarball, so the box loads it and Compose never builds.
-          case "$DOMAIN" in
-            *.sslip.io)
-              CADDY_REF="caddy:2.8.4"
-              docker pull "$CADDY_REF"
-              ;;
-            *)
-              CADDY_REF="pos-caddy:${TAG}"
-              docker build -f deploy/caddy.Dockerfile -t "$CADDY_REF" deploy
-              ;;
-          esac
-          docker save "pos-cloud:${TAG}" "$CADDY_REF" | gzip > /tmp/images.tgz
-          echo "CADDY_IMAGE=$CADDY_REF" >> "$GITHUB_ENV"
 
       - name: Open the SSH channel
         env:
@@ -79,6 +60,59 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      - name: Detect the box architecture
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          port="${VPS_PORT:-22}"
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          # The images must match the VPS CPU or the containers die with "exec format error".
+          # Ask the box directly rather than assuming amd64 — Oracle Ampere, AWS Graviton and
+          # most free-tier ARM instances are arm64. Map uname -m to a docker platform.
+          arch="$(ssh -p "$port" $ssh_opts "${VPS_USER}@${VPS_HOST}" 'uname -m')"
+          case "$arch" in
+            x86_64|amd64)  platform="linux/amd64" ;;
+            aarch64|arm64) platform="linux/arm64" ;;
+            *) echo "unsupported box architecture: '$arch'" >&2; exit 1 ;;
+          esac
+          echo "box architecture: $arch -> $platform"
+          echo "TARGET_PLATFORM=$platform" >> "$GITHUB_ENV"
+
+      - name: Build the images
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
+        run: |
+          TAG="${GITHUB_SHA}"
+          # Build for the box's architecture (TARGET_PLATFORM), not the runner's. A buildx
+          # docker-container builder plus QEMU (registered by tonistiigi/binfmt) cross-builds the
+          # non-native arch; a single target platform means --load puts the image in the local
+          # daemon so `docker save` can ship it. Cross-arch Rust under emulation is slow — see the
+          # job timeout.
+          docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null 2>&1 || true
+          docker buildx create --use --name posdeploy >/dev/null 2>&1 || docker buildx use posdeploy
+          docker buildx build --platform "$TARGET_PLATFORM" --load \
+            -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
+          # The custom Caddy image exists ONLY to embed the Cloudflare DNS-01 plugin, used on a
+          # managed-domain DOMAIN. On the sslip.io fallback (HTTP-01, no plugin) ship the stock
+          # official image (multi-arch) for the box's platform and skip the xcaddy build. Both
+          # paths ship their caddy image inside the same tarball, so the box loads it and Compose
+          # never builds.
+          case "$DOMAIN" in
+            *.sslip.io)
+              CADDY_REF="caddy:2.8.4"
+              docker pull --platform "$TARGET_PLATFORM" "$CADDY_REF"
+              ;;
+            *)
+              CADDY_REF="pos-caddy:${TAG}"
+              docker buildx build --platform "$TARGET_PLATFORM" --load \
+                -f deploy/caddy.Dockerfile -t "$CADDY_REF" deploy
+              ;;
+          esac
+          docker save "pos-cloud:${TAG}" "$CADDY_REF" | gzip > /tmp/images.tgz
+          echo "CADDY_IMAGE=$CADDY_REF" >> "$GITHUB_ENV"
 
       - name: Ship the images and the deploy files
         env:
