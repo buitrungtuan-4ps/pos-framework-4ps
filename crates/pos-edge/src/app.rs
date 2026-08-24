@@ -30,6 +30,7 @@ use pos_core::decision::{
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::RecipeBook;
+use pos_core::menu::PricedLine;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::{PortError, TxContext};
@@ -37,16 +38,18 @@ use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
     CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, SalesOrderLineAdded,
-    SalesOrderLineFired, SalesTableClosed, SalesTableOpened,
+    SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
     StationId, StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::menu::MenuCatalog;
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
+use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::ulid::Ulid;
 use pos_proto::{
     BillState, ClockSource, IdGenerator, Open, OrderLineState, PaymentMethod, PaymentOutcome,
@@ -108,6 +111,11 @@ pub struct EdgeSession {
     /// a special case of this table, not a different model; carrying both dimensions from day one is
     /// what avoids a migration across every line ever written.
     pub tax_rates: TaxRateTable,
+    /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
+    /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
+    /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
+    /// through the config tree (WS-B), which is a safe default — it never guesses a price.
+    pub menu: MenuCatalog,
     /// The channel a walk-in bill's order came in on, which selects the tax rate. `DineIn` for a
     /// full-service store; a marketplace order overrides it per bill (P11).
     pub sales_channel: SalesChannel,
@@ -144,8 +152,24 @@ impl EdgeSession {
                 SalesChannel::DineIn,
                 TaxRate::from_percent(10),
             ),
+            menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
         }
+    }
+
+    /// Installs a menu catalog, for a test or the on-fakes example. The real store's menu arrives
+    /// from the cloud config tree (WS-B); this builder seeds one without a cloud.
+    #[must_use]
+    pub fn with_menu(mut self, menu: MenuCatalog) -> Self {
+        self.menu = menu;
+        self
+    }
+
+    /// Installs a channel-keyed tax table, for a test or the example.
+    #[must_use]
+    pub fn with_tax_rates(mut self, tax_rates: TaxRateTable) -> Self {
+        self.tax_rates = tax_rates;
+        self
     }
 }
 
@@ -490,6 +514,19 @@ impl<S: EventStore> Edge<S> {
         &self.fanout
     }
 
+    /// The store this edge is, so a driving-port caller (the inbound `OrderIn`) can bind an order to
+    /// it and refuse one addressed to another store.
+    #[must_use]
+    pub fn store_id(&self) -> StoreId {
+        self.identity.store_id
+    }
+
+    /// The synced session — the menu catalog and tax table an inbound `OrderIn` reprices from.
+    #[must_use]
+    pub fn session(&self) -> &EdgeSession {
+        &self.session
+    }
+
     /// Records that this box completed device activation and may now trade
     /// (`device.activation.completed`, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
     ///
@@ -535,6 +572,95 @@ impl<S: EventStore> Edge<S> {
             payload: published,
         };
         self.append_and_publish(vec![envelope], vec![message]).await
+    }
+
+    /// Opens an order that arrived from **outside** the store — a marketplace order, the public API,
+    /// or a QR guest ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Emits `sales.order.opened`
+    /// (tableless-capable) and one `sales.order_line.added` per already-priced line, in **one**
+    /// transaction, then folds them into the projection; returns the new order's id.
+    ///
+    /// Unlike the floor commands there is no signed-in employee, so the events carry the box's own
+    /// `device_id` and no employee — the same shape [`Self::record_activation`] uses. The lines are
+    /// already priced by the caller (`pos_core::menu::reprice_line`); this records what it decided.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the business date cannot be derived, an event cannot be encoded, or the store
+    /// cannot be written.
+    pub async fn open_inbound_order(
+        &self,
+        device_id: DeviceId,
+        channel: Open<SalesChannel>,
+        table_id: Option<TableId>,
+        lines: &[(PricedLine, bool)],
+    ) -> Result<OrderId, AppError> {
+        let now = self.clock.now();
+        let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
+            .map_err(|_ignored| AppError::Clock)?;
+        let order_id = self.next_order_id();
+
+        let mut envelopes = Vec::with_capacity(lines.len() + 1);
+        let mut messages = Vec::with_capacity(lines.len() + 1);
+
+        let opened = SalesOrderOpened {
+            order_id,
+            channel,
+            table_id,
+            guest_count: None,
+        };
+        let (envelope, message) = self.system_prepare(device_id, now, business_date, &opened)?;
+        envelopes.push(envelope);
+        messages.push(message);
+
+        let mut line_records: Vec<(OrderLineId, LineRecord)> = Vec::with_capacity(lines.len());
+        for (priced, note_present) in lines {
+            let order_line_id = OrderLineId::new(self.next_ulid());
+            let added = SalesOrderLineAdded {
+                order_id,
+                order_line_id,
+                menu_item_id: priced.menu_item_id,
+                display_name: priced.display_name.clone(),
+                quantity: priced.quantity,
+                unit_price: priced.unit_price,
+                line_total: priced.line_total,
+                tax_class_id: priced.tax_class_id,
+                tax_rate: priced.tax_rate,
+                seat: None,
+                course_id: None,
+                note_present: *note_present,
+            };
+            let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
+            envelopes.push(envelope);
+            messages.push(message);
+            line_records.push((
+                order_line_id,
+                LineRecord {
+                    order_id,
+                    state: OrderLineState::Added,
+                    menu_item_id: priced.menu_item_id,
+                    quantity: priced.quantity,
+                    course_id: None,
+                    line_total: priced.line_total,
+                    tax_class_id: priced.tax_class_id,
+                },
+            ));
+        }
+
+        self.append_and_publish(envelopes, messages).await?;
+
+        {
+            let mut projection = self.lock_projection();
+            // A QR order names a table, so the floor shows it occupied and staff can open the bill;
+            // a delivery or public-API order has none.
+            if let Some(table_id) = table_id {
+                projection.set_table(table_id, TableState::Occupied);
+                projection.open_order(table_id, order_id);
+            }
+            for (line_id, record) in line_records {
+                projection.add_line(line_id, record);
+            }
+        }
+        Ok(order_id)
     }
 
     /// The current projected state of a table.
@@ -1234,6 +1360,43 @@ impl<S: EventStore> Edge<S> {
         let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
         let event_type = EventTypeRef::from_known(P::EVENT_TYPE).as_str().to_owned();
         let envelope = self.envelope(ctx, payload)?;
+        Ok((
+            envelope,
+            ServerMessage::Event {
+                event_type,
+                payload: published,
+            },
+        ))
+    }
+
+    /// Prepares a **system** event — one with no signed-in employee — building its envelope with the
+    /// box's own `device_id` and `employee_id: None`, and its fan-out message. Inbound-order intake
+    /// ([`Self::open_inbound_order`]) and activation use this instead of [`Self::prepare`], which
+    /// needs a [`DecisionCtx`] actor there is none of.
+    fn system_prepare<P: EventPayload + serde::Serialize>(
+        &self,
+        device_id: DeviceId,
+        now: Timestamp,
+        business_date: BusinessDate,
+        payload: &P,
+    ) -> Result<(EventEnvelope<RawPayload>, ServerMessage), AppError> {
+        let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+        let event_type = EventTypeRef::from_known(P::EVENT_TYPE).as_str().to_owned();
+        let data = RawPayload::encode(payload).map_err(AppError::Encode)?;
+        let envelope = EventEnvelope {
+            event_id: pos_proto::ids::EventId::new(self.next_ulid()),
+            event_type: EventTypeRef::from_known(P::EVENT_TYPE),
+            event_time: now,
+            business_date,
+            schema_version: P::SCHEMA_VERSION,
+            tenant_id: self.identity.tenant_id,
+            brand_id: self.identity.brand_id,
+            store_id: self.identity.store_id,
+            device_id,
+            employee_id: None,
+            shift_id: self.current_shift_id(),
+            data,
+        };
         Ok((
             envelope,
             ServerMessage::Event {

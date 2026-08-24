@@ -17,6 +17,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The edge implements `OrderIn`** (ADR-0064) — the store side of order intake. `EdgeOrderIn` reprices
+  each inbound line from the store's synced menu catalog (ADR-0063), opens a **tableless** order in the
+  local event log (`sales.order.opened` + `sales.order_line.added` in one transaction), and dedupes on
+  the caller's `(sales_channel, external_reference)` through a per-store intake ledger — so a
+  marketplace's retry or the relay's at-least-once delivery converge on one order in the kitchen. The
+  acceptance total is the store's own menu total (tax-inclusive); an unknown item is refused
+  (`invalid_argument`), never substituted; a QR order (one that names a table) awaits staff
+  confirmation while a delivery/public-API order does not; and it accepts **offline**, since the menu
+  is local config and the order is a local log write. Proven against the shared `OrderIn` contract
+  suite — the same suite `FakeIntake` passes — so "the edge is a real `OrderIn`" is verified, not
+  asserted. The durable SQLite intake ledger and the daily-resetting takeaway queue number are the
+  immediate follow-up commits (the trait seam and the in-memory implementation ship here).
 - **The store menu catalog — the store server's authoritative price book** (ADR-0063), the missing
   piece a real edge `OrderIn` needs. The dine-in path prices on the device, but an inbound order
   (marketplace, `POST /v1/orders`, QR) arrives as identifiers and quantities with no device to price

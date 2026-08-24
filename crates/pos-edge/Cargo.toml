@@ -86,6 +86,9 @@ futures-util = "0.3"
 # The application layer runs against the in-memory fakes in tests, exactly as it will against
 # store-sqlite in the field.
 pos-fakes = { path = "../pos-fakes" }
+# The shared port contract suites: `EdgeOrderIn` is proven against the `OrderIn` suite (ADR-0064),
+# the same suite `FakeIntake` passes — so "the edge is a real OrderIn" is verified, not asserted.
+pos-contract-tests = { path = "../pos-contract-tests" }
 
 # A shipped binary, not a library, so it declares its own lint table rather than
 # inheriting the strict library baseline (Cargo rejects a manifest that both
