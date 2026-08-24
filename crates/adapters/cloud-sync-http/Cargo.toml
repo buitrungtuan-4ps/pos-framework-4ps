@@ -1,0 +1,42 @@
+[package]
+name        = "cloud-sync-http"
+version     = "0.1.0"
+description = "The edge's CloudSync adapter: activation exchange and OTA artifact fetch over HTTPS to the cloud."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+# The backbone this adapter implements: the CloudSync port, its PortError, and the Secret the grant
+# carries back. Paths, not versions.
+pos-ports = { path = "../../pos-ports" }
+pos-proto = { path = "../../pos-proto" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+# ADR-0054: the edge->cloud HTTP client reuses the exact rustls/hyper stack the cloud's webhook sender
+# pins (ADR-0038). Every crate here is already in the tree at these versions via pos-cloud and
+# async-nats, so this adds direct-dependency lines, not a new subtree, and no new cargo-deny entry.
+# `ring` is pinned so feature unification cannot pull aws-lc-rs; roots are the bundled webpki-roots
+# Mozilla set, hermetic for a fork-and-deploy edge.
+hyper           = { version = "1", features = ["client", "http1"] }
+hyper-util      = { version = "0.1", features = ["tokio"] }
+http-body-util  = "0.1"
+bytes           = "1"
+tokio           = { version = "1", features = ["net", "time", "rt"] }
+tokio-rustls    = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots    = "1"
+url             = "2"
+
+[dev-dependencies]
+# The shared CloudSync contract suite. It runs against a stub transport (tests/contract.rs) that
+# reproduces the cloud's exact status/body responses, so the request-shaping and status->PortError
+# mapping are checked on every pull request with no socket (ADR-0054).
+pos-contract-tests = { path = "../../pos-contract-tests" }
+
+[lints]
+workspace = true

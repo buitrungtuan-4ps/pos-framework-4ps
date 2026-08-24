@@ -1,0 +1,2044 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The cloud HTTP surface.
+//!
+//! Five kinds of route:
+//!
+//!  * `/health` — liveness.
+//!  * `/internal/*` — the ingest re-push target and the reconciliation diff the fleet uses
+//!    (`docs/roadmap.md` P7): `/internal/ingest` (the primary production path is the NATS cursor
+//!    feed) and `/internal/reconcile` ([ADR-0040](../../../docs/adr/0040-reconciliation.md), an edge
+//!    asking which ids the cloud is missing). Not part of the external contract, and not
+//!    authenticated — reachable only on the cloud's own private network. Built by [`reconcile_router`]
+//!    (its own state) and merged into the main router.
+//!  * `/v1/*` — the **public** API external integrators build against. Every data route requires a
+//!    scoped per-tenant API key ([`crate::auth::bearer`]) and answers only for the key's own tenant.
+//!    Every `/v1` handler carries a [`utoipa::path`] annotation and every response type derives
+//!    `utoipa::ToSchema`, so `/v1/openapi.json` is generated from the code and can never drift from
+//!    it ([ADR-0019](../../../docs/adr/0019-openapi-generation.md)).
+//!  * `/sync/*` — the **store-facing** surface a first-party store operates its own state on:
+//!    pulling configuration ([ADR-0039](../../../docs/adr/0039-config-delivery.md), `read_config`
+//!    scope) and proposing/reading its devices ([ADR-0041](../../../docs/adr/0041-device-onboarding.md),
+//!    `manage_devices` scope, via [`device_router`]). Bearer-authed, tenant-isolated, and — being
+//!    store operation rather than an integrator API — absent from the public OpenAPI, like `/admin`
+//!    and `/internal`.
+//!  * `/admin/*` — the **interactive** super-admin surface ([`crate::auth::admin`],
+//!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
+//!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
+//!    behind that guard — provisioning of scoped per-tenant API keys ([ADR-0037](../../../docs/adr/0037-api-keys.md)):
+//!    issue (returning the token once), list, and revoke; authoring the four-level configuration
+//!    tree ([ADR-0033](../../../docs/adr/0033-config-tree.md)): publish a level of a store's tree
+//!    (validated, versioned) and read its effective document; and registering webhook endpoints
+//!    ([ADR-0032](../../../docs/adr/0032-webhooks.md)): register a destination (SSRF-vetted, returning
+//!    the signing secret once), list, and delete; resolving device-onboarding proposals
+//!    ([ADR-0041](../../../docs/adr/0041-device-onboarding.md), via [`device_router`]): list the
+//!    pending queue and approve or reject; and authoring the translation grid
+//!    ([ADR-0043](../../../docs/adr/0043-translation-grid.md), via [`translation_router`]): read and
+//!    replace a tenant's localized strings, `en`-validated. Not part of the public contract, so —
+//!    like `/internal` — it is absent from the OpenAPI document.
+//!
+//! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
+//! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], the [`WebhookEndpointStore`], and the
+//! [`ClockSource`] — bundled in [`CloudApp`]. Tests drive it against `pos-fakes` and the binary serves
+//! it over `store-postgres` with the identical handler code (ADR-0026).
+
+use core::fmt;
+use core::fmt::Write as _;
+use std::collections::BTreeSet;
+
+use argon2::password_hash::SaltString;
+use axum::extract::{Path, Query, State};
+use axum::http::header::SET_COOKIE;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+
+use pos_ports::PortError;
+use pos_ports::config_store::ConfigUpdate;
+use pos_ports::event_store::EventStore;
+use pos_proto::ErrorStatus;
+use pos_proto::determinism::ClockSource;
+use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId, TenantId};
+use pos_proto::ulid::Ulid;
+
+use pos_core::activation::{ActivationCode, Redemption, redeem};
+
+use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
+use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
+use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
+use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::enrol::{
+    MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
+};
+use crate::auth::password::hash_password;
+use crate::auth::session::{clear_cookie, set_cookie};
+use crate::cloud::{Cloud, DailyRollup};
+use crate::config_tree::{
+    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
+};
+use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
+use crate::devices::{
+    DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
+    PersistedDeviceProposal,
+};
+use crate::openapi::ApiDoc;
+use crate::reconcile::ReconcileStore;
+use crate::translations::{TranslationGrid, TranslationStore};
+use crate::webhook::{
+    PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
+};
+use utoipa::OpenApi as _;
+
+/// The super-admin session TTL a [`CloudApp`] uses when the binary does not override it. Eight hours,
+/// matching [`crate::config`]'s default; `main.rs` threads the configured value in via
+/// [`CloudApp::with_admin_session_ttl_secs`].
+const DEFAULT_ADMIN_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
+
+/// Everything a request handler needs, bundled so the router carries one state type: the event
+/// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
+/// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
+/// store the `/admin` config routes author, the webhook-endpoint store the `/admin` webhook routes
+/// register into, and the clock the checks verify time against.
+///
+/// Cloneable and cheap to clone — each collaborator is itself a shared handle (a pool, an `Arc`), so
+/// a clone talks to the same backing store.
+pub struct CloudApp<S, R, K, C, A, T, W> {
+    cloud: Cloud<S>,
+    rollups: R,
+    keys: K,
+    clock: C,
+    admin: A,
+    config_trees: T,
+    webhooks: W,
+    admin_session_ttl_secs: u64,
+    admin_setup_token: Option<String>,
+}
+
+impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The collaborators are opaque handles — a pool, a key store, a clock — and some hold
+        // secrets, so the fields are deliberately elided rather than rendered.
+        formatter.debug_struct("CloudApp").finish_non_exhaustive()
+    }
+}
+
+impl<S, R, K, C, A, T, W> Clone for CloudApp<S, R, K, C, A, T, W>
+where
+    S: Clone,
+    R: Clone,
+    K: Clone,
+    C: Clone,
+    A: Clone,
+    T: Clone,
+    W: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            cloud: self.cloud.clone(),
+            rollups: self.rollups.clone(),
+            keys: self.keys.clone(),
+            clock: self.clock.clone(),
+            admin: self.admin.clone(),
+            config_trees: self.config_trees.clone(),
+            webhooks: self.webhooks.clone(),
+            admin_session_ttl_secs: self.admin_session_ttl_secs,
+            admin_setup_token: self.admin_setup_token.clone(),
+        }
+    }
+}
+
+impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
+    /// Bundles the collaborators into one shareable application state, with the default super-admin
+    /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it).
+    pub const fn new(
+        cloud: Cloud<S>,
+        rollups: R,
+        keys: K,
+        clock: C,
+        admin: A,
+        config_trees: T,
+        webhooks: W,
+    ) -> Self {
+        Self {
+            cloud,
+            rollups,
+            keys,
+            clock,
+            admin,
+            config_trees,
+            webhooks,
+            admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
+            admin_setup_token: None,
+        }
+    }
+
+    /// Sets how long an issued super-admin session stays valid, in seconds — the binary threads the
+    /// configured value in ([`crate::config::CloudConfig::admin_session_ttl_secs`]).
+    #[must_use]
+    pub const fn with_admin_session_ttl_secs(mut self, secs: u64) -> Self {
+        self.admin_session_ttl_secs = secs;
+        self
+    }
+
+    /// Sets the one-time super-admin setup token that gates first-boot enrolment
+    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)) — the binary threads in the
+    /// configured value ([`crate::config::CloudConfig::admin_setup_token`]). `None` leaves
+    /// `/admin/setup` disabled (a `404`), the posture once an admin is enrolled and the token removed.
+    #[must_use]
+    pub fn with_admin_setup_token(mut self, token: Option<String>) -> Self {
+        self.admin_setup_token = token;
+        self
+    }
+}
+
+/// Builds the cloud router over `app`.
+pub fn router<S, R, K, C, A, T, W>(app: CloudApp<S, R, K, C, A, T, W>) -> Router
+where
+    S: EventStore + Clone + Send + Sync + 'static,
+    S::Tx: Send,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/health", get(health))
+        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
+        .route(
+            "/v1/stores/{store_id}/rollups/daily",
+            get(daily_rollups::<S, R, K, C, A, T, W>),
+        )
+        .route("/v1/openapi.json", get(openapi))
+        .route(
+            "/sync/stores/{store_id}/config",
+            get(edge_config_sync::<S, R, K, C, A, T, W>),
+        )
+        .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
+        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
+        .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
+        .route("/admin/setup", post(admin_setup::<S, R, K, C, A, T, W>))
+        .route(
+            "/admin/api-keys",
+            post(admin_create_api_key::<S, R, K, C, A, T, W>)
+                .get(admin_list_api_keys::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/api-keys/{id}",
+            delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config",
+            get(admin_config_effective::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config/{level}",
+            axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/rollups/reset",
+            post(admin_rollups_reset::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/webhooks",
+            post(admin_register_webhook::<S, R, K, C, A, T, W>)
+                .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/webhooks/{id}",
+            delete(admin_delete_webhook::<S, R, K, C, A, T, W>),
+        )
+        .with_state(app)
+}
+
+/// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
+///
+/// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
+/// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
+/// the ids to re-push through `/internal/ingest`. It needs only the [`ReconcileStore`], so it carries
+/// its own state and is merged into the main router in `main`, rather than threading an extra
+/// collaborator through every `CloudApp` handler. Internal, private-network, and absent from the
+/// public OpenAPI, exactly like `/internal/ingest`.
+pub fn reconcile_router<Rec>(store: Rec) -> Router
+where
+    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/internal/reconcile", post(reconcile::<Rec>))
+        .with_state(store)
+}
+
+/// Liveness: answers as soon as the process is serving.
+async fn health() -> &'static str {
+    "ok"
+}
+
+/// An edge's reconciliation manifest: the ids it holds for one store, for the cloud to diff.
+#[derive(Debug, Clone, Deserialize)]
+struct ReconcileRequest {
+    /// The tenant the store belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose log is being reconciled (a 26-character ULID).
+    store_id: String,
+    /// The event ids the edge holds for this store over the window it is reconciling.
+    event_ids: Vec<String>,
+}
+
+/// The ids the cloud is missing from the manifest — what the edge should re-push.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReconcileResponse {
+    /// The subset of the manifest the cloud's event log does not contain (ULID strings).
+    missing: Vec<String>,
+}
+
+/// Answers which of the edge's candidate ids the cloud is missing for a store
+/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)). Internal (the reconciliation partner of
+/// `/internal/ingest`), so it carries no authentication and is absent from the public OpenAPI.
+async fn reconcile<Rec>(State(store): State<Rec>, Json(request): Json<ReconcileRequest>) -> Response
+where
+    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+{
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let mut candidates = Vec::with_capacity(request.event_ids.len());
+    for raw in &request.event_ids {
+        match raw.parse::<EventId>() {
+            Ok(id) => candidates.push(id),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "an event id is not a ULID").into_response();
+            }
+        }
+    }
+    match store
+        .absent_event_ids(tenant_id, store_id, &candidates)
+        .await
+    {
+        Ok(missing) => (
+            StatusCode::OK,
+            Json(ReconcileResponse {
+                missing: missing.iter().map(ToString::to_string).collect(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a reconciliation diff failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+// --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) ------------------------
+
+/// The collaborators the device-onboarding routes need, stated independently of [`CloudApp`]: the
+/// proposal store, plus the admin, API-key, and clock stores the two auth paths use.
+#[derive(Clone)]
+struct DeviceState<D, A, K, C> {
+    devices: D,
+    admin: A,
+    keys: K,
+    clock: C,
+}
+
+/// Builds the device-onboarding sub-router, stated independently of [`CloudApp`]
+/// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+///
+/// A store proposes a discovered printer/KDS and reads back its approved devices on the store-facing
+/// `/sync` surface (API key, `manage_devices` scope); a super-admin lists the pending queue and
+/// approves or rejects on `/admin` (session guard). It needs the proposal store plus the existing
+/// admin/api-key/clock collaborators, so — like [`reconcile_router`] — it carries its own state and is
+/// merged into the main router rather than adding an eighth `CloudApp` generic.
+pub fn device_router<D, A, K, C>(devices: D, admin: A, keys: K, clock: C) -> Router
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/sync/stores/{store_id}/devices",
+            post(propose_device::<D, A, K, C>).get(list_store_devices::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals",
+            get(list_pending_devices::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/approve",
+            post(approve_device::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/reject",
+            post(reject_device::<D, A, K, C>),
+        )
+        .with_state(DeviceState {
+            devices,
+            admin,
+            keys,
+            clock,
+        })
+}
+
+/// A store's proposal of a discovered device.
+#[derive(Debug, Clone, Deserialize)]
+struct ProposeDeviceRequest {
+    /// `printer` or `kds`.
+    kind: String,
+    /// A human-readable name for the device.
+    name: String,
+    /// The device's network address, as discovered (e.g. `192.168.1.50:9100`).
+    address: String,
+}
+
+/// The id and status of a freshly-proposed device (always `pending`).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProposeDeviceResponse {
+    /// The proposal's id (a ULID).
+    id: String,
+    /// The status — `pending` until an operator resolves it.
+    status: String,
+}
+
+/// The tenant a device listing or resolution is scoped to (the super-admin is global).
+#[derive(Debug, Clone, Deserialize)]
+struct DeviceTenantQuery {
+    /// The tenant whose proposals to act on (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
+/// approve; the id is minted here and returned once.
+async fn propose_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<ProposeDeviceRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    let Some(kind) = DeviceKind::from_wire(&request.kind) else {
+        return (StatusCode::BAD_REQUEST, "kind must be one of printer, kds").into_response();
+    };
+    if request.name.trim().is_empty() || request.address.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name and address are required").into_response();
+    }
+    let Some(id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceProposalId::new)
+    else {
+        tracing::error!("could not read OS entropy to mint a device-proposal id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the device service is unavailable",
+        )
+            .into_response();
+    };
+    let proposal = PersistedDeviceProposal {
+        id,
+        tenant_id: grant.tenant(),
+        store_id,
+        kind,
+        name: request.name,
+        address: request.address,
+    };
+    match state.devices.propose(&proposal).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(ProposeDeviceResponse {
+                id: id.to_string(),
+                status: DeviceProposalStatus::Pending.as_wire().to_owned(),
+            }),
+        )
+            .into_response(),
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A store lists its **approved** devices (`manage_devices` scope) — what the edge acts on, never a
+/// raw discovery.
+async fn list_store_devices<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    match state
+        .devices
+        .list(
+            grant.tenant(),
+            Some(store_id),
+            DeviceProposalStatus::Approved,
+        )
+        .await
+    {
+        Ok(devices) => {
+            (StatusCode::OK, Json::<Vec<DeviceProposalSummary>>(devices)).into_response()
+        }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's pending device proposals — the approval queue.
+async fn list_pending_devices<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Pending)
+        .await
+    {
+        Ok(devices) => {
+            (StatusCode::OK, Json::<Vec<DeviceProposalSummary>>(devices)).into_response()
+        }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// A super-admin approves a pending proposal.
+async fn approve_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    resolve_device(&state, &headers, &id, &query, true).await
+}
+
+/// A super-admin rejects a pending proposal.
+async fn reject_device<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<DeviceTenantQuery>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    resolve_device(&state, &headers, &id, &query, false).await
+}
+
+/// Resolves a proposal to approved or rejected (super-admin only). `204` whether or not a pending row
+/// was found — resolving is idempotent, tenant-scoped, and telling the caller which case it was is a
+/// needless enumeration signal.
+async fn resolve_device<D, A, K, C>(
+    state: &DeviceState<D, A, K, C>,
+    headers: &HeaderMap,
+    id: &str,
+    query: &DeviceTenantQuery,
+    approved: bool,
+) -> Response
+where
+    D: DeviceProposalStore,
+    A: AdminStore,
+    C: ClockSource,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        id.parse::<Ulid>().map(DeviceProposalId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the proposal id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.devices.resolve(tenant_id, id, approved).await {
+        Ok(_found) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// Maps a device-proposal store failure to a retryable `503`, logging the detail rather than leaking it.
+fn device_error_response(error: &crate::devices::DeviceProposalError) -> Response {
+    tracing::error!(%error, "a device-proposal store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the device service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
+
+/// The collaborators the activation routes need, stated independently of [`CloudApp`]: the activation
+/// store, plus the admin and clock stores the issue/revoke routes' session guard uses.
+#[derive(Clone)]
+struct ActivationState<X, A, C> {
+    activations: X,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the activation sub-router ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+///
+/// A super-admin issues a code bound to a device slot and can cancel a slot's pending code, both
+/// behind the `/admin` session guard. A device presents its code on `/activate` and receives its
+/// credential — that route is **not** authenticated, because the code itself is the bearer credential
+/// (single-use, 55-bit); the exchange is where a box first earns a credential. Like [`device_router`],
+/// it carries its own state and is merged into the main router rather than adding a `CloudApp` generic.
+pub fn activation_router<X, A, C>(activations: X, admin: A, clock: C) -> Router
+where
+    X: ActivationCodeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/activation-codes",
+            post(admin_issue_activation_code::<X, A, C>),
+        )
+        .route(
+            "/admin/activation-codes/revoke",
+            post(admin_revoke_activation_codes::<X, A, C>),
+        )
+        .route("/activate", post(exchange_activation_code::<X, A, C>))
+        .with_state(ActivationState {
+            activations,
+            admin,
+            clock,
+        })
+}
+
+/// A super-admin issues an activation code for a device slot.
+#[expect(
+    clippy::struct_field_names,
+    reason = "tenant_id/store_id/device_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
+)]
+#[derive(Debug, Clone, Deserialize)]
+struct IssueActivationRequest {
+    /// The tenant the device belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store the device belongs to (a ULID).
+    store_id: String,
+    /// The device slot to activate (a ULID).
+    device_id: String,
+}
+
+/// The freshly-issued code, shown once for the operator to put on the setup sheet.
+#[derive(Debug, Clone, serde::Serialize)]
+struct IssueActivationResponse {
+    /// The `XXXX-XXXX-XXXX` code — the only time it is visible; only its hash is stored.
+    activation_code: String,
+}
+
+/// A super-admin cancels the pending activation for a device slot (a leaked setup sheet).
+#[expect(
+    clippy::struct_field_names,
+    reason = "tenant_id/store_id/device_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
+)]
+#[derive(Debug, Clone, Deserialize)]
+struct RevokeActivationRequest {
+    /// The tenant the device belongs to (a ULID).
+    tenant_id: String,
+    /// The store the device belongs to (a ULID).
+    store_id: String,
+    /// The device slot whose issued codes to cancel (a ULID).
+    device_id: String,
+}
+
+/// How many still-issued codes were cancelled.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RevokeActivationResponse {
+    /// The number of codes moved from `issued` to `revoked`.
+    revoked: u64,
+}
+
+/// A device presents its activation code. Unauthenticated: the code is the credential.
+#[derive(Debug, Clone, Deserialize)]
+struct ExchangeRequest {
+    /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
+    code: String,
+}
+
+/// The device's minted credential and the device id it was activated as — shown once.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExchangeResponse {
+    /// The device id the credential authenticates as.
+    device_id: String,
+    /// The `posdev_<id>_<secret>` bearer token the device stores in its `KeyVault`.
+    credential: String,
+}
+
+/// A super-admin issues an activation code bound to a device slot.
+async fn admin_issue_activation_code<X, A, C>(
+    State(state): State<ActivationState<X, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<IssueActivationRequest>,
+) -> Response
+where
+    X: ActivationCodeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request.device_id.parse::<Ulid>().map(DeviceId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, and device_id must be ULIDs",
+        )
+            .into_response();
+    };
+    let Some(code) = mint_activation_code() else {
+        tracing::error!("could not read OS entropy to mint an activation code");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the activation service is unavailable",
+        )
+            .into_response();
+    };
+    match state
+        .activations
+        .issue(hash_code(&code), tenant_id, store_id, device_id)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(IssueActivationResponse {
+                activation_code: code.as_str().to_owned(),
+            }),
+        )
+            .into_response(),
+        Err(error) => activation_error_response(&error),
+    }
+}
+
+/// A super-admin cancels a device slot's still-issued codes.
+async fn admin_revoke_activation_codes<X, A, C>(
+    State(state): State<ActivationState<X, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<RevokeActivationRequest>,
+) -> Response
+where
+    X: ActivationCodeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request.device_id.parse::<Ulid>().map(DeviceId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, and device_id must be ULIDs",
+        )
+            .into_response();
+    };
+    match state
+        .activations
+        .revoke_slot(tenant_id, store_id, device_id)
+        .await
+    {
+        Ok(revoked) => (StatusCode::OK, Json(RevokeActivationResponse { revoked })).into_response(),
+        Err(error) => activation_error_response(&error),
+    }
+}
+
+/// A device exchanges its activation code for a credential (unauthenticated — the code is the
+/// credential). Single-use and deny-by-default, per [`pos_core::activation::redeem`].
+async fn exchange_activation_code<X, A, C>(
+    State(state): State<ActivationState<X, A, C>>,
+    Json(request): Json<ExchangeRequest>,
+) -> Response
+where
+    X: ActivationCodeStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let Ok(code) = ActivationCode::parse(&request.code) else {
+        // A malformed code never named a real one, so this is a plain client error, not an oracle.
+        return (StatusCode::BAD_REQUEST, "the activation code is malformed").into_response();
+    };
+    let code_hash = hash_code(&code);
+    let issued = match state.activations.lookup(code_hash).await {
+        Ok(Some(issued)) => issued,
+        // An unknown code collapses to the same refusal a spent one gets — no oracle.
+        Ok(None) => return activation_refused(),
+        Err(error) => return activation_error_response(&error),
+    };
+    match redeem(issued.status) {
+        Redemption::Reject(reason) => {
+            // The reason is for the server's log; the device sees one generic refusal.
+            tracing::info!(?reason, "activation refused");
+            activation_refused()
+        }
+        Redemption::Grant => {
+            let now_ms = state.clock.now().as_milliseconds_since_epoch();
+            let (Some(id), Some(secret)) = (mint_ulid(now_ms), random_hex_32()) else {
+                tracing::error!("could not read OS entropy to mint a device credential");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "the activation service is unavailable",
+                )
+                    .into_response();
+            };
+            let (credential, token) = mint_device_credential(id, &secret);
+            match state
+                .activations
+                .consume_and_provision(code_hash, &credential)
+                .await
+            {
+                Ok(true) => (
+                    StatusCode::CREATED,
+                    Json(ExchangeResponse {
+                        device_id: issued.device_id.to_string(),
+                        credential: token,
+                    }),
+                )
+                    .into_response(),
+                // The code was spent or revoked between the lookup and the consume — same refusal.
+                Ok(false) => activation_refused(),
+                Err(error) => activation_error_response(&error),
+            }
+        }
+    }
+}
+
+/// The one generic activation refusal. A spent, revoked, unknown, or raced code all collapse to this,
+/// so a prober cannot tell them apart ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+fn activation_refused() -> Response {
+    (StatusCode::FORBIDDEN, "activation refused").into_response()
+}
+
+/// Maps an activation-store failure to a retryable `503`, logging the detail rather than leaking it.
+fn activation_error_response(error: &crate::activation::ActivationStoreError) -> Response {
+    tracing::error!(%error, "an activation store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the activation service is unavailable",
+    )
+        .into_response()
+}
+
+/// Mints a fresh activation code from OS entropy, or `None` if the entropy source is unavailable — in
+/// which case the caller fails closed rather than issue a guessable code.
+fn mint_activation_code() -> Option<ActivationCode> {
+    let mut entropy = [0_u8; pos_core::activation::PAYLOAD_LEN];
+    getrandom::fill(&mut entropy).ok()?;
+    Some(ActivationCode::from_entropy(entropy))
+}
+
+// --- Translation grid (`/admin/translations`) ---------------------------------------------------
+
+/// The collaborators the translation-grid routes need, stated independently of [`CloudApp`].
+#[derive(Clone)]
+struct TranslationState<Tr, A, C> {
+    translations: Tr,
+    admin: A,
+    clock: C,
+}
+
+/// The tenant a translation request is scoped to (the super-admin is global).
+#[derive(Debug, Clone, Deserialize)]
+struct TranslationTenantQuery {
+    /// The tenant whose grid to read or write (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// The keys a rejected grid failed the fallback rule on — every key must carry a non-empty `en`.
+#[derive(Debug, Clone, serde::Serialize)]
+struct GridViolations {
+    /// The keys missing a non-empty `en` value ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+    missing_fallback: Vec<String>,
+}
+
+/// Builds the translation-grid sub-router, stated independently of [`CloudApp`]
+/// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+///
+/// A super-admin reads and replaces a tenant's whole grid behind the session guard; a `PUT` is
+/// validated so every key carries a non-empty `en` fallback before anything is stored. Like the other
+/// merged sub-routers, it carries its own state rather than adding a `CloudApp` generic.
+pub fn translation_router<Tr, A, C>(translations: Tr, admin: A, clock: C) -> Router
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/translations",
+            get(get_translations::<Tr, A, C>).put(put_translations::<Tr, A, C>),
+        )
+        .with_state(TranslationState {
+            translations,
+            admin,
+            clock,
+        })
+}
+
+/// Returns a tenant's translation grid (super-admin only), or an empty grid if it has authored none.
+async fn get_translations<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.translations.load(tenant_id).await {
+        // A tenant with no grid yet is an empty grid to edit, not a 404.
+        Ok(grid) => (StatusCode::OK, Json(grid.unwrap_or_default())).into_response(),
+        Err(error) => translation_error_response(&error),
+    }
+}
+
+/// Replaces a tenant's translation grid (super-admin only). A grid whose every key does not carry a
+/// non-empty `en` is a `422` naming the offending keys, and nothing is stored.
+async fn put_translations<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+    Json(grid): Json<TranslationGrid>,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let missing = grid.keys_missing_fallback();
+    if !missing.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(GridViolations {
+                missing_fallback: missing,
+            }),
+        )
+            .into_response();
+    }
+    match state.translations.save(tenant_id, &grid).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => translation_error_response(&error),
+    }
+}
+
+/// Maps a translation-store failure to a retryable `503`, logging the detail rather than leaking it.
+fn translation_error_response(error: &crate::translations::TranslationStoreError) -> Response {
+    tracing::error!(%error, "a translation store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the translation service is unavailable",
+    )
+        .into_response()
+}
+
+/// The generated OpenAPI document for the public `/v1` surface.
+async fn openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+/// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
+/// so it is deliberately absent from the public OpenAPI document and carries no authentication.
+async fn ingest<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(events): Json<Vec<EventEnvelope<RawPayload>>>,
+) -> Response
+where
+    S: EventStore + Clone + Send + Sync + 'static,
+    S::Tx: Send,
+    // R, K, C, A are unused here, but the shared `CloudApp` state must be `Clone + Send + Sync` for
+    // the `State` extractor, and that decomposes to every field being so.
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    match app.cloud.ingest(&events).await {
+        Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// A store's per-trading-day activity rollups, oldest day first — answered from the materialised
+/// rollup, never a log scan.
+///
+/// Requires a valid API key with the `read_rollups` scope, and answers **only** for that key's
+/// tenant: the tenant comes from the verified grant, never the request, so a caller can read a
+/// store's rollups only if the store is within its own tenant. A `store_id` outside the tenant is
+/// not an error — it simply has no rollup and reads back as an empty list.
+#[utoipa::path(
+    get,
+    path = "/v1/stores/{store_id}/rollups/daily",
+    params(("store_id" = String, Path, description = "The store's 26-character ULID")),
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Daily activity rollups, oldest day first", body = Vec<DailyRollup>),
+        (status = 400, description = "The store id is not a ULID"),
+        (status = 401, description = "The API key is missing, malformed, or invalid"),
+        (status = 403, description = "The API key lacks the read_rollups scope"),
+        (status = 503, description = "The rollup store is unreachable"),
+    ),
+    tag = "rollups",
+)]
+pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    // S and A are unused here but are part of the shared `CloudApp` state, which the `State`
+    // extractor needs whole as `Clone + Send + Sync`.
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
+    // read rollups at all? Only then does the request touch a resource.
+    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadRollups) {
+        return forbidden.into_response();
+    }
+    let store_id = match store_id.parse::<Ulid>() {
+        Ok(ulid) => StoreId::new(ulid),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+        }
+    };
+    // The tenant is the grant's, not the request's — this is the isolation boundary.
+    match dashboard(&app.rollups, grant.tenant(), store_id).await {
+        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
+        Err(error) => rollup_error_response(&error),
+    }
+}
+
+// --- The store-facing configuration surface (`/sync`) -------------------------------------------
+
+/// The version a store reports it currently holds, if any.
+#[derive(Debug, Clone, Deserialize)]
+struct ConfigSyncQuery {
+    /// The config version the store holds (a ULID), or absent if it holds none yet.
+    #[serde(default)]
+    held_version: Option<String>,
+}
+
+/// What a store should do to reach the current configuration — the wire form of a
+/// [`SyncOutcome`](crate::config_tree::SyncOutcome).
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ConfigSyncResponse {
+    /// The store already holds the current version; it applies nothing.
+    UpToDate,
+    /// The store should apply this snapshot or delta.
+    Update {
+        /// The snapshot or collapsed delta to apply ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+        update: ConfigUpdate,
+    },
+}
+
+/// Serves a store its own configuration update: nothing (up to date), a delta, or a full snapshot
+/// past *K* versions behind ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
+///
+/// Requires a valid API key with the `read_config` scope, and answers **only** for that key's tenant:
+/// the tenant comes from the verified grant, never the path, so a store can pull a `store_id` only
+/// within its own tenant. A store outside the tenant, or one with nothing published, reads `404`.
+async fn edge_config_sync<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigSyncQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    let held = match query.held_version {
+        None => None,
+        Some(ref raw) => match raw.parse::<Ulid>().map(ConfigVersionId::new) {
+            Ok(version) => Some(version),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "held_version is not a ULID").into_response();
+            }
+        },
+    };
+    // The tenant is the grant's, not the path's — a store reaches only its own tenant's trees.
+    match app.config_trees.load(grant.tenant(), store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            let response = match tree.update_for(held) {
+                SyncOutcome::UpToDate => ConfigSyncResponse::UpToDate,
+                SyncOutcome::Deliver(update) => ConfigSyncResponse::Update { update },
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+// --- The interactive super-admin surface (`/admin`) ---------------------------------------------
+
+/// Signs a super-admin in: a two-factor login that, on success, sets a host-only session cookie.
+///
+/// The session token is minted here — a 256-bit CSPRNG value, at the binary edge — and passed to
+/// [`login`], which stores only its hash ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)); the
+/// browser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a
+/// store outage is a `503`. Not in the OpenAPI document — this is the admin surface, not the public
+/// `/v1` API.
+async fn admin_login<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(request): Json<LoginRequest>,
+) -> Response
+where
+    // Only A and C are used, but the whole shared state must be `Clone + Send + Sync` for `State`.
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let Some(token) = mint_session_token() else {
+        // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
+        // closed with a retryable status rather than issue a guessable session.
+        tracing::error!("could not read OS entropy to mint a session token");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the sign-in service is unavailable",
+        )
+            .into_response();
+    };
+    match login(
+        &app.admin,
+        &app.clock,
+        &request,
+        &token,
+        app.admin_session_ttl_secs,
+    )
+    .await
+    {
+        Ok(()) => set_cookie_response(
+            StatusCode::NO_CONTENT,
+            &set_cookie(&token, app.admin_session_ttl_secs),
+        ),
+        Err(denied) => denied.into_response(),
+    }
+}
+
+/// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+///
+/// Token-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch
+/// (compared in constant time), `422` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
+/// `409` once an administrator is already enrolled, and on success `201` with the one-time TOTP
+/// enrolment. The password is hashed with Argon2id under a fresh CSPRNG salt and never stored in the
+/// clear; the TOTP secret is generated here and returned exactly once.
+async fn admin_setup<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(request): Json<SetupRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let Some(expected) = app.admin_setup_token.as_deref() else {
+        // No token configured: setup is off. Reveal nothing more than "no such route".
+        return (StatusCode::NOT_FOUND, "setup is not enabled").into_response();
+    };
+    if !constant_time_eq(&request.setup_token, expected) {
+        return (StatusCode::UNAUTHORIZED, "setup failed").into_response();
+    }
+    if request.password.len() < MIN_PASSWORD_LEN {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the password is too short",
+        )
+            .into_response();
+    }
+    let Some((secret, phc)) = mint_credential(&request.password) else {
+        tracing::error!("could not mint a super-admin credential (entropy or hashing failed)");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the setup service is unavailable",
+        )
+            .into_response();
+    };
+    match app.admin.provision_credential(phc, secret.to_vec()).await {
+        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+        Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the setup service is unavailable",
+        )
+            .into_response(),
+    }
+}
+
+/// Signs a super-admin out: revokes the session server-side and clears the client cookie.
+///
+/// Idempotent — a request with no session, or one the store cannot reach, still clears the client
+/// cookie, so the browser is always logged out even if the server-side row lingers to its TTL.
+async fn admin_logout<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(error) = logout(&app.admin, &headers).await {
+        // The server-side revoke failed, but clearing the client cookie still logs the browser out;
+        // the lingering row expires at its TTL. Log and carry on rather than leave the user unable to
+        // sign out.
+        tracing::warn!(%error, "revoking an admin session failed; clearing the client cookie anyway");
+    }
+    set_cookie_response(StatusCode::NO_CONTENT, &clear_cookie())
+}
+
+/// Confirms the caller holds a live super-admin session — the guard every other `/admin` route will
+/// stand behind, exposed here as a `204`/`401` "am I signed in?" check for the admin UI.
+async fn admin_session<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    match authenticate_session(&app.admin, &app.clock, &headers).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(denied) => denied.into_response(),
+    }
+}
+
+/// A super-admin request to provision a new API key for a tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateApiKeyRequest {
+    /// The tenant the key will act for (a 26-character ULID).
+    tenant_id: String,
+    /// The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these.
+    scopes: Vec<String>,
+    /// An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires.
+    #[serde(default)]
+    expires_at_ms: Option<i64>,
+}
+
+/// The one-time response to a provisioning request: the id, and the token shown exactly once.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CreateApiKeyResponse {
+    /// The key's public id (the ULID half of the token).
+    id: String,
+    /// The full `pos_<id>_<secret>` token. **Shown once** — only its hash is stored, so it cannot be
+    /// recovered later.
+    token: String,
+}
+
+/// The tenant a listing is scoped to.
+#[derive(Debug, Clone, Deserialize)]
+struct ListApiKeysQuery {
+    /// The tenant whose keys to list (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// Provisions a new scoped per-tenant API key and returns the one-time token (super-admin only).
+///
+/// Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and
+/// persists it (storing only the secret's hash). The token in the `201` body is the only time the
+/// secret is visible.
+async fn admin_create_api_key<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApiKeyRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    // Strict: an unknown scope name is a `400`, not a silent drop — the admin is granting explicitly,
+    // so a typo must not quietly issue a key that authorises nothing.
+    let scopes = match parse_scopes(&request.scopes) {
+        Ok(scopes) => scopes,
+        Err(unknown) => {
+            return (StatusCode::BAD_REQUEST, format!("unknown scope: {unknown}")).into_response();
+        }
+    };
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(secret)) = (mint_api_key_id(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint an API key");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the provisioning service is unavailable",
+        )
+            .into_response();
+    };
+    let expires_at = match request.expires_at_ms {
+        Some(ms) => match pos_proto::time::Timestamp::from_milliseconds_since_epoch(ms) {
+            Ok(timestamp) => Some(timestamp),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "expires_at_ms is out of range").into_response();
+            }
+        },
+        None => None,
+    };
+    let (stored, token) = issue(id, tenant_id, scopes, &secret, expires_at);
+    if let Err(error) = app.keys.insert(&stored).await {
+        tracing::error!(%error, "persisting a new API key failed");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the provisioning service is unavailable",
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(CreateApiKeyResponse {
+            id: id.to_string(),
+            token,
+        }),
+    )
+        .into_response()
+}
+
+/// Lists a tenant's API keys as metadata only — never a secret (super-admin only).
+async fn admin_list_api_keys<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Query(query): Query<ListApiKeysQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match app.keys.list_for_tenant(tenant_id).await {
+        Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing API keys failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the provisioning service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking
+/// is idempotent, and telling the caller which it was is a needless enumeration signal.
+async fn admin_revoke_api_key<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyAdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(id) = id.parse::<Ulid>().map(ApiKeyId::new) else {
+        return (StatusCode::BAD_REQUEST, "the key id is not a ULID").into_response();
+    };
+    match app.keys.revoke(id).await {
+        Ok(_found) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "revoking an API key failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the provisioning service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The tenant a config request is scoped to. The super-admin is global, so it names the tenant on
+/// the query string, exactly as API-key provisioning does.
+#[derive(Debug, Clone, Deserialize)]
+struct ConfigTenantQuery {
+    /// The tenant whose store's config tree to author or read (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// The version id a successful publish produced.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PublishedConfig {
+    /// The new config version id (a ULID).
+    config_version_id: String,
+}
+
+/// The violations a rejected publish reported — the composed document failed validation, so nothing
+/// changed and the last good version stays current.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigViolations {
+    /// One human-readable message per violation.
+    violations: Vec<String>,
+}
+
+/// Authors one level of a store's config tree and publishes the composed version (super-admin only).
+///
+/// Loads the store's tree for the query's tenant, replaces the named `level`'s document with the
+/// request body, and publishes — composing, validating, and (only if valid) appending a new version,
+/// which is then persisted. A rejected version is a `422` carrying the violations; nothing is stored
+/// and the last good version stays current ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+async fn admin_config_publish<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path((store_id, level)): Path<(String, String)>,
+    Query(query): Query<ConfigTenantQuery>,
+    Json(document): Json<serde_json::Value>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(level) = parse_config_level(&level) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "level must be one of tenant, brand, store, device",
+        )
+            .into_response();
+    };
+
+    // Rehydrate the store's tree (or start a fresh one), authoring against the §10-aware validator.
+    let mut tree = match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => ConfigTree::from_state(store_id, CapabilityValidator, state),
+        Ok(None) => ConfigTree::new(store_id, CapabilityValidator),
+        Err(error) => return config_store_error_response(&error),
+    };
+    let Some(version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(level, document, version_id) {
+        Ok(id) => {
+            if let Err(error) = app
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// The current effective (composed, validated) config document for a store (super-admin only), or
+/// `404` if nothing has been published to it yet.
+async fn admin_config_effective<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            match tree.current_effective() {
+                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    "the store has no published configuration",
+                )
+                    .into_response(),
+            }
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// Resets a store's materialised rollup so the projector rebuilds it from the event log
+/// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
+/// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
+/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+/// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
+async fn admin_rollups_reset<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match app
+        .rollups
+        .save(tenant_id, store_id, &StoredRollups::default())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => rollup_error_response(&error),
+    }
+}
+
+// --- Webhook endpoint administration (`/admin/webhooks`) ----------------------------------------
+
+/// A super-admin request to register a webhook endpoint for a tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct RegisterWebhookRequest {
+    /// The tenant the endpoint belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose event log the endpoint follows (a 26-character ULID).
+    store_id: String,
+    /// The destination URL. Must be `https`, must carry no credentials, and must resolve only to
+    /// public-unicast addresses — vetted here before the endpoint is stored ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+    url: String,
+}
+
+/// The one-time response to a registration: the id, the normalized URL, and the signing secret shown
+/// **exactly once** — the tenant needs it to verify the HMAC signature on every delivery, and the
+/// cloud keeps only its own copy thereafter.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RegisterWebhookResponse {
+    /// The endpoint's public id (a ULID).
+    id: String,
+    /// The normalized destination URL that was stored.
+    url: String,
+    /// The HMAC signing secret. Shown once; it is the tenant's copy of what the cloud signs with.
+    signing_secret: String,
+}
+
+/// The tenant a webhook listing or deletion is scoped to. The super-admin is global, so it names the
+/// tenant on the query string, exactly as API-key provisioning and config authoring do.
+#[derive(Debug, Clone, Deserialize)]
+struct WebhookTenantQuery {
+    /// The tenant whose endpoints to list or delete within (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// Registers a webhook endpoint and returns the one-time signing secret (super-admin only).
+///
+/// Behind the session guard. The destination is SSRF-vetted before anything is stored: `https` only,
+/// no credentials, and every resolved address must be public unicast — so a webhook URL can never
+/// become a probe into the cloud's own network ([ADR-0032](../../../docs/adr/0032-webhooks.md)). The
+/// id and signing secret are minted at the edge; the secret in the `201` body is the only time it is
+/// visible, because the cloud stores it to *sign* with rather than to verify a hash of.
+async fn admin_register_webhook<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterWebhookRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Vet the destination before it is ever stored. `vet` resolves the host with a real
+    // getaddrinfo-backed resolver, which blocks, so it runs on the blocking pool. The vetted
+    // addresses are not kept — the delivery slice re-vets before each connect (ADR-0032) — but a
+    // structurally unsafe or inward-pointing URL is refused up front rather than at first delivery.
+    let raw_url = request.url.clone();
+    let vetted = match tokio::task::spawn_blocking(move || {
+        vet(&raw_url, crate::webhook::ssrf::resolve_host)
+    })
+    .await
+    {
+        Ok(Ok(vetted)) => vetted,
+        Ok(Err(rejection)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("the webhook URL was rejected: {rejection}"),
+            )
+                .into_response();
+        }
+        Err(join_error) => {
+            tracing::error!(%join_error, "the SSRF vetting task failed to join");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response();
+        }
+    };
+
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(secret)) = (mint_webhook_id(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint a webhook endpoint");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the webhook service is unavailable",
+        )
+            .into_response();
+    };
+    let endpoint = PersistedWebhook {
+        id,
+        tenant_id,
+        store_id,
+        url: vetted.url.clone(),
+        secret: SigningSecret::new(secret.clone()),
+        cursor: None,
+        disabled: false,
+    };
+    if let Err(error) = app.webhooks.insert(&endpoint).await {
+        tracing::error!(%error, "persisting a new webhook endpoint failed");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the webhook service is unavailable",
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(RegisterWebhookResponse {
+            id: id.to_string(),
+            url: vetted.url,
+            signing_secret: secret,
+        }),
+    )
+        .into_response()
+}
+
+/// Lists a tenant's webhook endpoints as metadata only — never a secret (super-admin only).
+async fn admin_list_webhooks<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Query(query): Query<WebhookTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match app.webhooks.list_for_tenant(tenant_id).await {
+        Ok(summaries) => (StatusCode::OK, Json::<Vec<WebhookSummary>>(summaries)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing webhook endpoints failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Deletes a webhook endpoint by id within a tenant (super-admin only). `204` whether or not a live
+/// endpoint was found — deletion is idempotent, the tenant scope stops one tenant removing another's
+/// endpoint, and reporting which case it was is a needless enumeration signal.
+async fn admin_delete_webhook<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<WebhookTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        id.parse::<Ulid>().map(WebhookEndpointId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the endpoint id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.webhooks.delete(tenant_id, id).await {
+        Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "deleting a webhook endpoint failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Mints a webhook endpoint id from `now_ms`, or `None` if the OS entropy source is unavailable.
+fn mint_webhook_id(now_ms: i64) -> Option<WebhookEndpointId> {
+    mint_ulid(now_ms).map(WebhookEndpointId::new)
+}
+
+/// Maps a config-tree store failure to a retryable `503`, logging the detail rather than leaking it.
+fn config_store_error_response(error: &crate::config_tree::ConfigStoreError) -> Response {
+    tracing::error!(%error, "a config-tree store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the configuration service is unavailable",
+    )
+        .into_response()
+}
+
+/// Parses a config-tree level from its path segment, or `None` for an unknown one.
+fn parse_config_level(level: &str) -> Option<ConfigLevel> {
+    match level {
+        "tenant" => Some(ConfigLevel::Tenant),
+        "brand" => Some(ConfigLevel::Brand),
+        "store" => Some(ConfigLevel::Store),
+        "device" => Some(ConfigLevel::Device),
+        _ => None,
+    }
+}
+
+/// Parses wire scope names strictly, returning the first unknown name rather than dropping it — the
+/// deny-by-default read tolerance is wrong for a write, where a typo would silently grant nothing.
+fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
+    let mut scopes = BTreeSet::new();
+    for name in names {
+        let scope = Scope::from_wire(name).ok_or_else(|| name.clone())?;
+        scopes.insert(scope);
+    }
+    Ok(scopes)
+}
+
+/// Mints an API-key id from `now_ms`, or `None` if the OS entropy source is unavailable.
+fn mint_api_key_id(now_ms: i64) -> Option<ApiKeyId> {
+    mint_ulid(now_ms).map(ApiKeyId::new)
+}
+
+/// Mints a config version id from `now_ms`, or `None` if the OS entropy source is unavailable.
+fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
+    mint_ulid(now_ms).map(ConfigVersionId::new)
+}
+
+/// A fresh ULID: `now_ms` as the timestamp and 80 CSPRNG bits as the randomness, or `None` if the OS
+/// entropy source is unavailable (the caller then fails closed rather than mint a guessable id).
+fn mint_ulid(now_ms: i64) -> Option<Ulid> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
+    // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
+    Some(Ulid::from_parts(ms, u128::from_le_bytes(bytes)))
+}
+
+/// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid
+/// header value, so a failure to parse it is impossible; the `unwrap_or_else` keeps a fabricated
+/// bad value from taking the process down rather than papering over a real one.
+fn set_cookie_response(status: StatusCode, cookie: &str) -> Response {
+    let mut response = status.into_response();
+    let value =
+        HeaderValue::from_str(cookie).unwrap_or_else(|_| HeaderValue::from_static("invalid"));
+    response.headers_mut().insert(SET_COOKIE, value);
+    response
+}
+
+/// Mints a session token: 256 CSPRNG bits as lowercase hex, or `None` if the OS entropy source is
+/// unavailable — in which case the caller must fail closed rather than issue a guessable token.
+fn mint_session_token() -> Option<String> {
+    random_hex_32()
+}
+
+/// 32 CSPRNG bytes (256 bits) as a 64-character lowercase hex string, or `None` if the OS entropy
+/// source is unavailable. Used for both the session token and an API-key secret — both need a long,
+/// unguessable, ASCII-safe value.
+fn random_hex_32() -> Option<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).ok()?;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // Writing to a String is infallible; the result is ignored deliberately.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// Mints a fresh super-admin credential from OS entropy: a [`TOTP_SECRET_BYTES`]-byte TOTP secret and
+/// the Argon2id PHC hash of `password` under a fresh 16-byte CSPRNG salt. `None` if the OS entropy
+/// source is unavailable or hashing fails — the caller then fails closed rather than provision a
+/// credential built on weak randomness.
+fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> {
+    let mut secret = [0_u8; TOTP_SECRET_BYTES];
+    getrandom::fill(&mut secret).ok()?;
+    let mut salt_bytes = [0_u8; 16];
+    getrandom::fill(&mut salt_bytes).ok()?;
+    let salt = SaltString::encode_b64(&salt_bytes).ok()?;
+    let phc = hash_password(password, &salt).ok()?;
+    Some((secret, phc))
+}
+
+/// Maps a [`PortError`] to an HTTP response, translating the AIP-193 status to a status code so a
+/// caller retries the retryable ones (`503`, `429`) and not the terminal ones.
+fn error_response(error: &PortError) -> Response {
+    let status = match error.status() {
+        ErrorStatus::InvalidArgument => StatusCode::BAD_REQUEST,
+        ErrorStatus::FailedPrecondition => StatusCode::CONFLICT,
+        ErrorStatus::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+        ErrorStatus::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, error.to_string()).into_response()
+}
+
+/// Maps a rollup-read failure to a `503`, logging the detail rather than returning it — a dashboard
+/// read only fails when the store itself is unreachable, which is transient and the caller's cue to
+/// retry, and the internal reason is not the client's business.
+fn rollup_error_response(error: &RollupError) -> Response {
+    tracing::error!(%error, "a dashboard rollup read failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the dashboard is temporarily unavailable",
+    )
+        .into_response()
+}

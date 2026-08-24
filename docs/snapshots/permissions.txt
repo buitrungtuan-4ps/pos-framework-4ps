@@ -1,0 +1,165 @@
+# Generated from crates/pos-core/src/permission.rs — do not edit.
+# One line per fact. A bare id is a contract; tabbed lines are mutable metadata.
+admin.config.edit
+admin.config.edit	default_role=MANAGER
+admin.config.edit	default_role=OWNER
+admin.config.edit	group=STORE_ADMINISTRATION
+admin.config.edit	pin_required=false
+admin.config.edit	risk=MEDIUM
+admin.device.manage
+admin.device.manage	default_role=MANAGER
+admin.device.manage	default_role=OWNER
+admin.device.manage	group=STORE_ADMINISTRATION
+admin.device.manage	pin_required=false
+admin.device.manage	risk=HIGH
+billing.bill.void
+billing.bill.void	default_role=MANAGER
+billing.bill.void	default_role=OWNER
+billing.bill.void	group=BILLING
+billing.bill.void	pin_required=true
+billing.bill.void	risk=HIGH
+billing.comp.apply
+billing.comp.apply	default_role=MANAGER
+billing.comp.apply	default_role=OWNER
+billing.comp.apply	default_role=SUPERVISOR
+billing.comp.apply	group=BILLING
+billing.comp.apply	pin_required=true
+billing.comp.apply	risk=HIGH
+billing.discount.apply
+billing.discount.apply	default_role=CASHIER
+billing.discount.apply	default_role=MANAGER
+billing.discount.apply	default_role=OWNER
+billing.discount.apply	default_role=SERVER
+billing.discount.apply	default_role=SUPERVISOR
+billing.discount.apply	group=BILLING
+billing.discount.apply	pin_required=false
+billing.discount.apply	risk=MEDIUM
+billing.discount.override_ceiling
+billing.discount.override_ceiling	default_role=MANAGER
+billing.discount.override_ceiling	default_role=OWNER
+billing.discount.override_ceiling	group=BILLING
+billing.discount.override_ceiling	pin_required=true
+billing.discount.override_ceiling	risk=HIGH
+billing.price.override
+billing.price.override	default_role=MANAGER
+billing.price.override	default_role=OWNER
+billing.price.override	group=BILLING
+billing.price.override	pin_required=true
+billing.price.override	risk=HIGH
+billing.receipt.reprint
+billing.receipt.reprint	default_role=CASHIER
+billing.receipt.reprint	default_role=MANAGER
+billing.receipt.reprint	default_role=OWNER
+billing.receipt.reprint	default_role=SUPERVISOR
+billing.receipt.reprint	group=BILLING
+billing.receipt.reprint	pin_required=false
+billing.receipt.reprint	risk=MEDIUM
+billing.refund.issue
+billing.refund.issue	default_role=MANAGER
+billing.refund.issue	default_role=OWNER
+billing.refund.issue	group=BILLING
+billing.refund.issue	pin_required=true
+billing.refund.issue	risk=HIGH
+cash.drawer.open_no_sale
+cash.drawer.open_no_sale	default_role=MANAGER
+cash.drawer.open_no_sale	default_role=OWNER
+cash.drawer.open_no_sale	default_role=SUPERVISOR
+cash.drawer.open_no_sale	group=CASH_AND_SHIFTS
+cash.drawer.open_no_sale	pin_required=true
+cash.drawer.open_no_sale	risk=HIGH
+cash.movement.record
+cash.movement.record	default_role=CASHIER
+cash.movement.record	default_role=MANAGER
+cash.movement.record	default_role=OWNER
+cash.movement.record	default_role=SUPERVISOR
+cash.movement.record	group=CASH_AND_SHIFTS
+cash.movement.record	pin_required=false
+cash.movement.record	risk=MEDIUM
+cash.shift.close
+cash.shift.close	default_role=CASHIER
+cash.shift.close	default_role=MANAGER
+cash.shift.close	default_role=OWNER
+cash.shift.close	default_role=SUPERVISOR
+cash.shift.close	group=CASH_AND_SHIFTS
+cash.shift.close	pin_required=false
+cash.shift.close	risk=MEDIUM
+cash.shift.open
+cash.shift.open	default_role=CASHIER
+cash.shift.open	default_role=MANAGER
+cash.shift.open	default_role=OWNER
+cash.shift.open	default_role=SUPERVISOR
+cash.shift.open	group=CASH_AND_SHIFTS
+cash.shift.open	pin_required=false
+cash.shift.open	risk=LOW
+cloud.staff.manage
+cloud.staff.manage	default_role=OWNER
+cloud.staff.manage	group=CLOUD_ADMINISTRATION
+cloud.staff.manage	pin_required=false
+cloud.staff.manage	risk=HIGH
+cloud.tenant.manage
+cloud.tenant.manage	default_role=OWNER
+cloud.tenant.manage	group=CLOUD_ADMINISTRATION
+cloud.tenant.manage	pin_required=false
+cloud.tenant.manage	risk=HIGH
+inventory.receipt.record
+inventory.receipt.record	default_role=MANAGER
+inventory.receipt.record	default_role=OWNER
+inventory.receipt.record	default_role=SUPERVISOR
+inventory.receipt.record	group=MENU_AND_INVENTORY
+inventory.receipt.record	pin_required=false
+inventory.receipt.record	risk=LOW
+inventory.stocktake.perform
+inventory.stocktake.perform	default_role=MANAGER
+inventory.stocktake.perform	default_role=OWNER
+inventory.stocktake.perform	default_role=SUPERVISOR
+inventory.stocktake.perform	group=MENU_AND_INVENTORY
+inventory.stocktake.perform	pin_required=false
+inventory.stocktake.perform	risk=MEDIUM
+inventory.waste.record
+inventory.waste.record	default_role=COOK
+inventory.waste.record	default_role=MANAGER
+inventory.waste.record	default_role=OWNER
+inventory.waste.record	default_role=SUPERVISOR
+inventory.waste.record	group=MENU_AND_INVENTORY
+inventory.waste.record	pin_required=false
+inventory.waste.record	risk=LOW
+menu.item.edit
+menu.item.edit	default_role=MANAGER
+menu.item.edit	default_role=OWNER
+menu.item.edit	group=MENU_AND_INVENTORY
+menu.item.edit	pin_required=false
+menu.item.edit	risk=MEDIUM
+sales.item.mark_unavailable
+sales.item.mark_unavailable	default_role=CASHIER
+sales.item.mark_unavailable	default_role=COOK
+sales.item.mark_unavailable	default_role=MANAGER
+sales.item.mark_unavailable	default_role=OWNER
+sales.item.mark_unavailable	default_role=SERVER
+sales.item.mark_unavailable	default_role=SUPERVISOR
+sales.item.mark_unavailable	group=SALES
+sales.item.mark_unavailable	pin_required=false
+sales.item.mark_unavailable	risk=LOW
+sales.item.open
+sales.item.open	default_role=CASHIER
+sales.item.open	default_role=MANAGER
+sales.item.open	default_role=OWNER
+sales.item.open	default_role=SERVER
+sales.item.open	default_role=SUPERVISOR
+sales.item.open	group=SALES
+sales.item.open	pin_required=false
+sales.item.open	risk=MEDIUM
+sales.line.void_fired
+sales.line.void_fired	default_role=MANAGER
+sales.line.void_fired	default_role=OWNER
+sales.line.void_fired	default_role=SUPERVISOR
+sales.line.void_fired	group=SALES
+sales.line.void_fired	pin_required=true
+sales.line.void_fired	risk=HIGH
+sales.order.transfer
+sales.order.transfer	default_role=MANAGER
+sales.order.transfer	default_role=OWNER
+sales.order.transfer	default_role=SERVER
+sales.order.transfer	default_role=SUPERVISOR
+sales.order.transfer	group=SALES
+sales.order.transfer	pin_required=false
+sales.order.transfer	risk=LOW

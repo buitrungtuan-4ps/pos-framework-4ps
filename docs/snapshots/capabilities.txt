@@ -1,0 +1,22 @@
+# Generated from crates/pos-core/src/capability.rs — do not edit.
+# One line per fact. A bare key is a contract; a tabbed default is mutable metadata.
+barcode_enabled
+barcode_enabled	default=false
+courses_enabled
+courses_enabled	default=true
+kds_enabled
+kds_enabled	default=true
+pay_first_enabled
+pay_first_enabled	default=false
+qr_ordering_enabled
+qr_ordering_enabled	default=false
+queue_number_enabled
+queue_number_enabled	default=false
+seats_enabled
+seats_enabled	default=false
+tables_enabled
+tables_enabled	default=true
+tabs_enabled
+tabs_enabled	default=false
+tips_enabled
+tips_enabled	default=true

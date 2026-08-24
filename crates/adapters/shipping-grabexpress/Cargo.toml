@@ -1,0 +1,43 @@
+[package]
+name        = "shipping-grabexpress"
+version     = "0.1.0"
+description = "The Grab Express ShippingDispatch adapter: book, cancel, and track a courier job over HTTPS."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+# The backbone this adapter implements: the ShippingDispatch port, its value types, and PortError.
+# Paths, not versions.
+pos-ports = { path = "../../pos-ports" }
+pos-proto = { path = "../../pos-proto" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+# The production TLS transport reuses the exact rustls/hyper stack the webhook sender (ADR-0038), the
+# edge->cloud client (ADR-0054), and the sibling courier adapter (ADR-0058) pin. Every crate here is
+# already in the tree at these versions, so this adds direct-dependency lines, not a new subtree, and
+# no new cargo-deny entry. `ring` is pinned so feature unification cannot pull aws-lc-rs; roots are the
+# bundled webpki-roots Mozilla set. A courier's API base URL is operator configuration — one fixed,
+# trusted host — so this dials the ordinary way with no SSRF surface.
+hyper           = { version = "1", features = ["client", "http1"] }
+hyper-util      = { version = "0.1", features = ["tokio"] }
+http-body-util  = "0.1"
+bytes           = "1"
+tokio           = { version = "1", features = ["net", "time", "rt"] }
+tokio-rustls    = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots    = "1"
+url             = "2"
+
+[dev-dependencies]
+# The shared ShippingDispatch contract suite, run against a stateful stub courier (tests/contract.rs)
+# that reproduces Grab Express's exact status/body responses, so the whole branching is checked on
+# every pull request with no socket (ADR-0058).
+pos-contract-tests = { path = "../../pos-contract-tests" }
+
+[lints]
+workspace = true

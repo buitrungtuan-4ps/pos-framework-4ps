@@ -1,0 +1,34 @@
+# The dependency allow-list for pos-core, pos-ports and pos-proto.
+#
+# `cargo xtask deps-rule` enforces it in two layers: the declared dependencies in
+# each manifest, and the resolved normal-dependency closure (feature unification
+# can add an edge a manifest never declared). Dev-dependencies are excluded and
+# governed by `dev-allow` below.
+#
+# This file is the real gate on "pure computation". The check enforces membership,
+# not purity — nothing stops an allowed crate from doing I/O behind a feature — so
+# it carries a CODEOWNERS entry and adding a name here needs an architecture
+# reviewer and an ADR.
+
+[allow]
+serde       = { reason = "wire serialization; no I/O", adr = "0006" }
+serde_core  = { reason = "transitive from serde", adr = "0006" }
+jiff        = { reason = "zoned datetime arithmetic; MUST be default-features = false", adr = "0014" }
+"jiff-tzdb" = { reason = "pure timezone data compiled into the binary", adr = "0014" }
+"jiff-core" = { reason = "pure calendar arithmetic; transitive from jiff", adr = "0014" }
+"portable-atomic" = { reason = "transitive from jiff, and only on targets without pointer-width atomics", adr = "0014" }
+"portable-atomic-util" = { reason = "as portable-atomic", adr = "0014" }
+thiserror   = { reason = "error enum derive; no runtime", adr = "0006" }
+"serde_json" = { reason = "JSON is the wire format; pure computation, and RawValue is what makes lossless payload forwarding possible", adr = "0006" }
+itoa        = { reason = "integer formatting; transitive from serde_json", adr = "0006" }
+zmij        = { reason = "number formatting; transitive from serde_json, which replaced ryu with it", adr = "0006" }
+memchr      = { reason = "substring search; transitive from serde_json", adr = "0006" }
+
+# Features that make an otherwise-allowed crate unacceptable. A match here fails
+# the build even though the crate name is allowed.
+[forbidden-features]
+jiff = ["tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform", "default"]
+
+[dev-allow]
+proptest = { reason = "property tests for the four data-correctness laws" }
+insta    = { reason = "snapshot tests for the permission matrix and event schema" }

@@ -1,0 +1,20 @@
+# Keys that every crates/**/clippy.toml must restate.
+#
+# A per-crate clippy.toml REPLACES the root file rather than merging with it, so a
+# crate that adds one for a single exemption silently loses the float ban, the
+# SystemTime::now ban, and the test allowances. `cargo xtask lint-config` compares
+# each per-crate file against this list and fails on anything missing.
+required-keys = [
+    "msrv",
+    "disallowed-types",
+    "disallowed-methods",
+    "disallowed-macros",
+    "allow-unwrap-in-tests",
+    "allow-expect-in-tests",
+    "allow-panic-in-tests",
+    "allow-print-in-tests",
+    # Not a safety rule like the bans above, but it has the same failure mode: a crate
+    # that drops it starts reporting `doc_markdown` on every proper noun the root file
+    # already excused, and the fix people reach for is `#[allow]` on the module.
+    "doc-valid-idents",
+]

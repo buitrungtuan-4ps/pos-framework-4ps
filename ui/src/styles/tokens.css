@@ -1,0 +1,111 @@
+/*
+ * The design tokens — the single source the whole interface is built from (P6, docs/roadmap.md).
+ *
+ * Structural tokens (spacing, type, radius, border, motion, touch) live in Tailwind's `@theme`, so a
+ * utility like `p-2` or `text-lg` resolves to a token, never a magic number. Colour tokens are held
+ * apart as CSS variables in `:root` and re-pointed for dark, so a theme is a swap of values and the
+ * structure never moves. `@theme` colours forward to those variables, which is what lets one utility
+ * (`bg-surface`) be correct in both themes.
+ */
+
+@theme {
+  /* Type scale: 12 / 14 / 16 / 20 / 28 / 40. Money gets the two largest so it reads across a counter. */
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.875rem; /* 14 */
+  --text-base: 1rem; /* 16 */
+  --text-lg: 1.25rem; /* 20 */
+  --text-xl: 1.75rem; /* 28 */
+  --text-2xl: 2.5rem; /* 40 */
+
+  /* One radius, one border. */
+  --radius-token: 0.5rem; /* 8px */
+
+  /* Motion: 100–150ms, one easing. Honoured only when the viewer allows motion (see base). */
+  --ease-token: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Touch targets: 48px minimum, 60px for money and primary actions. */
+  --spacing-touch: 3rem; /* 48 */
+  --spacing-money: 3.75rem; /* 60 */
+
+  /* Colour utilities forward to the runtime variables below, so `bg-surface` flips with the theme. */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
+  --color-ok: var(--ok);
+
+  /* Table-state colours, kept semantic so a state is never conveyed by hue alone (a label rides with it). */
+  --color-free: var(--free);
+  --color-occupied: var(--occupied);
+  --color-awaiting: var(--awaiting);
+  --color-cleaning: var(--cleaning);
+}
+
+/* Light — the default palette. Every colour token is defined here so none has its only value in a
+   media query. */
+:root {
+  --canvas: oklch(0.98 0.005 250);
+  --surface: oklch(1 0 0);
+  --surface-raised: oklch(0.995 0.003 250);
+  --ink: oklch(0.22 0.02 260);
+  --ink-muted: oklch(0.48 0.02 260);
+  --line: oklch(0.9 0.01 260);
+  --accent: oklch(0.55 0.16 25); /* the brand red, muted for long shifts */
+  --accent-ink: oklch(0.99 0 0);
+  --danger: oklch(0.55 0.19 25);
+  --danger-ink: oklch(0.99 0 0);
+  --ok: oklch(0.6 0.13 155);
+
+  --free: oklch(0.7 0.03 260);
+  --occupied: oklch(0.6 0.14 240);
+  --awaiting: oklch(0.72 0.15 75);
+  --cleaning: oklch(0.68 0.13 300);
+}
+
+/* Dark — the same roles, re-pointed. Guarded so an explicit light choice wins over the system. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: oklch(0.17 0.01 260);
+    --surface: oklch(0.21 0.012 260);
+    --surface-raised: oklch(0.25 0.014 260);
+    --ink: oklch(0.95 0.008 260);
+    --ink-muted: oklch(0.72 0.02 260);
+    --line: oklch(0.32 0.014 260);
+    --accent: oklch(0.62 0.15 25);
+    --accent-ink: oklch(0.15 0.01 260);
+    --danger: oklch(0.64 0.18 25);
+    --danger-ink: oklch(0.15 0.01 260);
+    --ok: oklch(0.68 0.13 155);
+
+    --free: oklch(0.55 0.03 260);
+    --occupied: oklch(0.62 0.14 240);
+    --awaiting: oklch(0.72 0.15 75);
+    --cleaning: oklch(0.66 0.13 300);
+  }
+}
+
+/* Explicit dark (the KDS defaults here, and a manual toggle sets it) wins in both directions. */
+:root[data-theme="dark"] {
+  --canvas: oklch(0.17 0.01 260);
+  --surface: oklch(0.21 0.012 260);
+  --surface-raised: oklch(0.25 0.014 260);
+  --ink: oklch(0.95 0.008 260);
+  --ink-muted: oklch(0.72 0.02 260);
+  --line: oklch(0.32 0.014 260);
+  --accent: oklch(0.62 0.15 25);
+  --accent-ink: oklch(0.15 0.01 260);
+  --danger: oklch(0.64 0.18 25);
+  --danger-ink: oklch(0.15 0.01 260);
+  --ok: oklch(0.68 0.13 155);
+
+  --free: oklch(0.55 0.03 260);
+  --occupied: oklch(0.62 0.14 240);
+  --awaiting: oklch(0.72 0.15 75);
+  --cleaning: oklch(0.66 0.13 300);
+}

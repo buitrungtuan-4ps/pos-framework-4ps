@@ -1,0 +1,22 @@
+[package]
+name        = "pos-ports"
+version     = "0.1.0"
+description = "The seventeen boundaries the framework owns. Traits only, no implementations."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-proto  = { path = "../pos-proto" }
+serde.workspace      = true
+# Configuration documents cross this boundary uninterpreted, so the port needs a JSON
+# value type but no JSON schema. `raw_value` is the whole reason it is here.
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

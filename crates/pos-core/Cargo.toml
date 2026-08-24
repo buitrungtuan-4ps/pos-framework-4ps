@@ -1,0 +1,31 @@
+[package]
+name        = "pos-core"
+version     = "0.1.0"
+description = "The domain. Pure business rules, state machines, and money arithmetic."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-proto = { path = "../pos-proto" }
+serde.workspace = true
+# ADR-0014. pos-core is where the bundled timezone database lives: it derives
+# `business_date` from an instant, the store's timezone, and the cutoff hour, and
+# resolves daypart/shift civil times across DST. `tzdb-bundle-always` compiles the
+# tzdb into the binary as pure data — Windows ships none and the edge is a static
+# binary on an unadministered machine. `default-features = false` is inherited from
+# the workspace entry and stays off (tz-system / tzdb-zoneinfo read $TZ and
+# /usr/share/zoneinfo, which this crate's allow-list forbids).
+jiff = { workspace = true, features = ["tzdb-bundle-always"] }
+
+# NOTE: pos-ports is deliberately absent and must stay absent (ADR-0013).
+# `cargo xtask deps-rule` fails the build if it appears here or anywhere in this
+# crate's resolved normal-dependency closure.
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

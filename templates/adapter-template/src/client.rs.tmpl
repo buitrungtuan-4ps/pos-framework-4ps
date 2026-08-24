@@ -1,0 +1,78 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The [`{{Port}}`] adapter over a [`{{Provider}}Transport`].
+//!
+//! Everything here is pure but for the one `await` on the transport: build the request body, map the
+//! provider's vocabulary to the port's value types, and map the provider's HTTP status to the right
+//! [`PortError`]. The status mapping is the load-bearing part — the port's contract turns on it.
+//!
+//! If the request carries personal data (a delivery address, an invoice buyer), say so here and in an
+//! ADR, transmit it for the sole purpose the port needs, never log it, and never carry it back on the
+//! returned value. See ADR-0058 for the courier's PDPD posture as a worked example.
+
+use pos_ports::{{port_module}}::{{Port}};
+use pos_ports::{PortError, PortName};
+
+use crate::wire::{HttpResponse, Method, {{Provider}}Transport};
+
+/// The port this adapter serves, for every [`PortError`] it raises.
+const PORT: PortName = PortName::{{Port}};
+
+/// The {{Provider}} [`{{Port}}`] adapter over a [`{{Provider}}Transport`].
+#[derive(Debug, Clone)]
+pub struct Http{{Provider}}<T> {
+    transport: T,
+}
+
+impl<T> Http{{Provider}}<T> {
+    /// Wraps a transport as a {{Provider}} channel.
+    #[must_use]
+    pub const fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+// Request bodies you serialize (serde::Serialize) and response bodies you deserialize
+// (serde::Deserialize) go here. Keep personal-data fields out of anything logged.
+
+impl<T: {{Provider}}Transport> {{Port}} for Http{{Provider}}<T> {
+    // Implement each port method: build a body, `self.transport.request(...).await`, map the transport
+    // error to `PortError::unavailable(PORT, ...)`, then hand the response to a free `parse_*` below.
+    //
+    // Example (adapt to your port's method signatures):
+    //
+    // async fn do_something(&self, input: &Input) -> Result<Output, PortError> {
+    //     let body = serde_json::to_vec(&RequestBody::from(input))
+    //         .map_err(|e| PortError::internal(PORT, format!("encoding failed: {e}")))?;
+    //     let response = self.transport.request(Method::Post, "/v1/things", Some(body)).await
+    //         .map_err(|e| PortError::unavailable(PORT, e.to_string()))?;
+    //     parse_something(&response)
+    // }
+}
+
+/// Maps a provider response to the port's value, or the right refusal.
+///
+/// `2xx` is success; each other status maps to the `PortError` the port's contract documents for that
+/// case. A `2xx` body that does not parse is the provider breaking its own contract
+/// ([`internal`](PortError::internal)). Never coerce an unknown provider status to a known one —
+/// preserve it as an unrecognised value so it stays non-terminal / unresolved, the safe direction.
+#[expect(dead_code, reason = "template skeleton: filled in per port")]
+fn parse_something(response: &HttpResponse) -> Result<(), PortError> {
+    match response.status {
+        200..=299 => Ok(()),
+        400 => Err(PortError::invalid_argument(PORT, "…")),
+        404 => Err(PortError::not_found(PORT, "…")),
+        409 => Err(PortError::failed_precondition(PORT, "…")),
+        other => Err(PortError::unavailable(
+            PORT,
+            format!("the {{provider}} returned HTTP {other}"),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Unit-test each `parse_*` against a hand-built `HttpResponse` for every status you map. The
+    // status→PortError mapping is where the port's contract lives, so test each branch.
+}

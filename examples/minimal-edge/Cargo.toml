@@ -1,0 +1,30 @@
+[package]
+name        = "minimal-edge"
+version     = "0.0.0"
+description = "The smallest runnable store: pos_edge with no database, no hardware, no network."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+
+[[bin]]
+name = "minimal-edge"
+path = "src/main.rs"
+
+[dependencies]
+# Selects the reference country (ADR-0027), so the example logs a real country
+# at start-up — the one edit a fork makes to serve its own market.
+pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz"] }
+pos-proto = { path = "../../crates/pos-proto" }
+# The example composes the edge over the in-memory fakes — no database, no hardware.
+pos-fakes = { path = "../../crates/pos-fakes" }
+tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing   = "0.1"
+
+# A runnable example, not a shipped library, so it declares its own relaxed lint
+# table (Cargo rejects inheriting [workspace.lints] and adding to it).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

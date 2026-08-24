@@ -1,0 +1,23 @@
+[package]
+name        = "printer-escpos"
+version     = "0.1.0"
+description = "The ESC/POS thermal-printer adapter for the PrinterDriver port."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-proto = { path = "../../pos-proto" }
+pos-ports = { path = "../../pos-ports" }
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../pos-contract-tests" }
+# The adapter's port futures are always ready — it does no async I/O in this build (byte encoding
+# plus a synchronous transport) — so the suites run under pos-fakes' one-poll executor rather than a
+# runtime. A future that suspends here would be a bug, which `run_ready` turns into a panic.
+pos-fakes = { path = "../../pos-fakes" }
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+# Ownership drives review routing. Boundaries below require maintainer approval.
+
+/crates/pos-core/        @maintainers-domain
+/crates/pos-ports/       @maintainers-architecture
+/crates/pos-proto/       @maintainers-architecture
+/deploy/                 @maintainers-cloud
+/.github/                @maintainers-architecture
+/docs/adr/               @maintainers-architecture
+/docs/naming-and-api.md  @maintainers-architecture
+/docs/pos-spec.md        @maintainers-domain
+/CHANGELOG.md            @maintainers-architecture
+/SECURITY.md             @maintainers-security
+/docs/roadmap.md         @maintainers-architecture
+/docs/architecture.md    @maintainers-architecture
+/docs/engineering-guide.md @maintainers-architecture
+/docs/ui-ux.md           @maintainers-domain
+/docs/glossary.md        @maintainers-domain
+/docs/capacity-and-reliability.md @maintainers-cloud
+/LICENSE                 @maintainers-architecture
+/MAINTAINERS.md          @maintainers-architecture
+/vietnamese-design-archive/ @maintainers-architecture

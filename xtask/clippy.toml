@@ -1,0 +1,38 @@
+# This file REPLACES the workspace-root clippy.toml rather than merging with it, so
+# every key the root sets is restated below. `cargo xtask lint-config` fails the
+# build if one is missing — that check exists because silently losing the float ban
+# is exactly the kind of mistake this arrangement invites.
+#
+# The one deliberate difference: xtask is a command-line tool whose output *is* its
+# product, so the print bans are lifted here. Nothing in xtask ships to a store or
+# to the cloud, so no log of its output ever travels anywhere.
+msrv = "1.94.0"
+
+disallowed-types = ["f32", "f64"]
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "take time from the ClockSource port, so tests can drive a shift across midnight" },
+    { path = "std::time::Instant::now",    reason = "take time from the ClockSource port" },
+    { path = "std::thread::sleep",         reason = "blocking in an async task; use a timer or spawn_blocking" },
+]
+
+# std::process::exit and the print macros are absent from the lists above on
+# purpose: a CLI reports through stdout and signals through its exit code.
+disallowed-macros = []
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+allow-print-in-tests  = true
+allow-dbg-in-tests    = false
+
+doc-valid-idents = [
+    "SQLite", "PostgreSQL", "JetStream", "NATS", "ULID", "ESC/POS", "ICU",
+    "TOTP", "WebP", "SolidJS", "mDNS", "SNTP", "Argon2", "JSONB", "SemVer",
+    "OpenAPI", "PostgreSQL", "MessageFormat",
+    # Product and vendor names that appear in port documentation as prose.
+    "MinIO", "ShopeeFood", "GrabFood", "DPAPI", "ShiftJIS",
+    "..",
+]
+
+too-many-arguments-threshold = 8

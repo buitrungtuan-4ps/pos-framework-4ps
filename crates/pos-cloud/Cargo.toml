@@ -1,0 +1,131 @@
+[package]
+name        = "pos-cloud"
+version     = "0.0.0"
+description = "The cloud binary: idempotent event ingest into PostgreSQL, feeding rollups."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[features]
+# The end-to-end cursor test needs a live NATS server with JetStream, so it is gated off the PR
+# `test` job. The merge-to-`main` integration job and a developer with NATS_URL set enable it:
+# `cargo test -p pos-cloud --features integration`.
+integration = []
+
+# Like pos-edge, most of this is a library so the HTTP surface and the ingest/rollup spine are
+# testable against the in-memory fakes without a database or a socket (tests/cloud.rs); main.rs is
+# the thin entry point that composes store-postgres and binds the server.
+[lib]
+name = "pos_cloud"
+
+[[bin]]
+name = "pos-cloud"
+path = "src/main.rs"
+
+[dependencies]
+# The backbone and the cloud store this binary composes. Paths, not versions.
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+# The real cloud composes the PostgreSQL event store (ADR-0016); main.rs opens it. Tests compose
+# pos-fakes instead — the same ingest and rollup code runs against both (ADR-0026).
+store-postgres = { path = "../adapters/store-postgres" }
+# The production ingest feed: a durable NATS cursor over the event log (ADR-0031). The consume loop
+# (src/cursor.rs) drives Cloud::ingest; the ack policy is tested without a broker, and the loop is
+# proven against real JetStream by link-nats's own integration test.
+link-nats = { path = "../adapters/link-nats" }
+# The config tree validates a version against pos-core's §10 inter-flag capability rules before
+# publishing (ADR-0033), reusing the domain's own rule set so the cloud and edge cannot disagree.
+# pos-core is pure (the dependency-rule test keeps it I/O-free), so composing it here is sound.
+pos-core = { path = "../pos-core" }
+
+# The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
+# test proves they never reach pos-core.
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum       = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+toml       = "1"
+
+# Webhooks (P7, ADR-0032). `url` parses and validates tenant-supplied destination URLs for the SSRF
+# guard — URL parsing is exactly the "genuinely hard and general" thing not to hand-roll (ADR-0007),
+# and it is already in the tree. `hmac`+`sha2` sign each delivery, on the same RustCrypto line
+# blob-garage already uses (hmac 0.13 / sha2 0.11), so no new crypto version enters the graph.
+url  = "2"
+hmac = "0.13"
+sha2 = "0.11"
+
+# The webhook TLS sender (ADR-0038). Every crate here is already in the tree at these versions — the
+# HTTP/1.1 client (`hyper` + `hyper-util` + `http-body-util` + `bytes`) via `axum`, and the TLS stack
+# (`tokio-rustls` + `webpki-roots`, the `ring` provider) via `async-nats` (ADR-0031) — so the sender
+# adds direct-dependency lines, not a new subtree, and no new `cargo-deny` entry. `tokio-rustls`
+# carries `default-features = false` with only `ring`/`tls12`/`logging` so the `aws-lc-rs` provider
+# cannot enter through feature unification.
+hyper           = { version = "1", features = ["client", "http1"] }
+hyper-util      = { version = "0.1", features = ["tokio"] }
+http-body-util  = "0.1"
+bytes           = "1"
+tokio-rustls    = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots    = "1"
+
+# Super-admin auth (P7, ADR-0034). `argon2` (same version/idiom the edge uses for PIN hashes) hashes
+# and verifies the password. RFC 6238 TOTP runs over HMAC-SHA256 using the `sha2`+`hmac` already
+# added above for webhooks, so it adds no crypto crate (ADR-0034 explains the SHA256 choice).
+argon2 = "0.5"
+# The super-admin session token is 32 CSPRNG bytes minted at the binary edge and hashed before
+# storage (ADR-0034). `getrandom` is the same OS-entropy crate the edge already uses (pairing codes,
+# id-generator seeding), at the same 0.3 version, so no new randomness crate enters the graph.
+getrandom = "0.3"
+# ADR-0019: the public /v1 OpenAPI is generated from the handlers and types, never hand-written.
+# `utoipa::ToSchema` rides beside the serde derives on the response types, and `utoipa::path` beside
+# the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.
+utoipa = "5"
+
+# The menu-image pipeline (P7, ADR-0042). Decoding, resizing and re-encoding a tenant-uploaded image
+# to the ≤30 KB thumbnail / ≤150 KB detail budgets is the "genuinely hard and general" work ADR-0007
+# says to buy, not hand-roll. Minimal codecs only — `png`+`jpeg` decode, `jpeg` encode — so the
+# dependency tree stays as small as the pipeline needs.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[dev-dependencies]
+# Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The ingest and rollup code runs against the in-memory fakes in tests, exactly as it will against
+# store-postgres in the cloud; the fixtures build the event batches.
+pos-fakes = { path = "../pos-fakes" }
+pos-contract-tests = { path = "../pos-contract-tests" }
+
+# A shipped binary, not a library, so it declares its own lint table (Cargo rejects a manifest that
+# both inherits [workspace.lints] and adds to it). Money, no-PII-to-stdout and no-float rules stay
+# on; unwrap/expect/panic are left at their defaults so the startup path may use them where a
+# failure is fatal anyway.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"

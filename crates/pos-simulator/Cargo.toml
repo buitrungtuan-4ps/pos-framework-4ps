@@ -1,0 +1,49 @@
+[package]
+name        = "pos-simulator"
+version     = "0.0.0"
+description = "The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios (P12)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "pos_simulator"
+
+# The runnable entry (`just simulate`): it only renders the library's reports to stdout, so all of the
+# model and scenarios stay in the testable library.
+[[bin]]
+name = "pos-simulator"
+path = "src/main.rs"
+
+[dependencies]
+# The capacity model (src/capacity.rs) is pure integer arithmetic and needs no backbone crate. The
+# fleet behavioral scenarios (src/fleet.rs) drive the framework's real OTA decision — pos-core's pure
+# `ota::decide_rollout` — over a virtual fleet, so the simulator proves the shipped logic rather than a
+# re-implementation of it. Path, not version: resolved by the workspace.
+pos-core = { path = "../pos-core" }
+
+[lints]
+# The simulator declares its OWN lint table (like the binaries), per the workspace comment: it is a
+# harness, not a shipped library, so it is exempt from the strict library baseline. The money, no-PII,
+# and no-float rules stay on — capacity arithmetic must be integer, never float — and `allow_attributes`
+# is denied so any suppression is an `#[expect(... reason = ...)]`. unwrap/expect/panic are left at
+# their defaults, which a scenario harness may use where a failure is a test-setup fault anyway.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"

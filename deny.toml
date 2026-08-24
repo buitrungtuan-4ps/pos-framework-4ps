@@ -1,0 +1,131 @@
+# Licence and advisory policy. One of the two checks that turn architecture into
+# law: nobody can accidentally introduce copyleft into a shipped binary.
+#
+# ADR-0009 keeps this repository proprietary, and deliberately keeps the dependency
+# tree free of copyleft anyway, so that publishing the source later is a licence
+# decision rather than a dependency-untangling project.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+all-features = true
+# "Copyleft is blocked inside binaries" — dev-dependencies are not linked into a
+# shipped artifact, so dropping them from the graph is what makes the rule mean
+# what it says.
+exclude-dev = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Every entry needs an expiry date in a comment. An ignore with no end date is a
+# vulnerability with a note attached.
+ignore = []
+
+[licenses]
+# NOTE: the v2 schema has no per-licence "warn" level — a licence is either in
+# `allow` or it fails the build. So `engineering-guide.md`'s "warn on MPL-2.0" is
+# implemented by leaving MPL-2.0 out of `allow` and enumerating each MPL crate
+# under `exceptions`. That is stricter than a warning, and deliberately so: it
+# forces one reviewed entry per crate, where a warning in CI output is a warning
+# nobody reads. The only MPL crate the design anticipates is the serial-port
+# crate, which ADR-0007 already schedules for replacement.
+version = 2
+confidence-threshold = 0.93
+# Our own crates carry `LicenseRef-Proprietary`, which is not an SPDX identifier by
+# design (ADR-0009). They are `publish = false`, so skip them: this policy is about
+# what third-party code we link, not about our own licence.
+private = { ignore = true }
+# Keep the allow-list broader than today's tree. Warning on an allowed licence that
+# nothing currently uses would make the list churn with every dependency change,
+# and the list is a policy statement rather than an inventory.
+unused-allowed-license = "allow"
+
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "Unicode-3.0",
+]
+# AGPL-3.0, GPL-*, and SSPL-1.0 are absent from `allow`, so they are a hard
+# failure. Do not add them.
+#
+# `webpki-roots` is Mozilla's root-CA trust bundle — *data*, not code — pulled (not feature-gated)
+# by async-nats's `tokio-websockets` transport (P7, ADR-0031). It is licensed `CDLA-Permissive-2.0`,
+# a permissive data-sharing licence with no copyleft or share-alike, so it imposes nothing on our
+# own source; it is kept as a scoped exception rather than added to `allow` so the permission is
+# reviewed per-crate rather than opening CDLA workspace-wide. Flagged in ADR-0031. If the cloud is
+# later configured to trust only the OS certificate store, this dependency drops and the exception
+# with it.
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+# Intra-workspace `path` dependencies have no version requirement and do not need
+# one: they are resolved by the workspace, not by the registry.
+allow-wildcard-paths = true
+deny = [
+    { crate = "openssl-sys", reason = "use rustls; there is no system OpenSSL to maintain on a thousand unattended store machines" },
+    { crate = "chrono", reason = "ADR-0014 chose jiff; chrono's Local pulls iana-time-zone, which reads the filesystem" },
+]
+# Every skip needs a reason and a review date, and the nightly job reports the
+# size of this list so it ratchets down instead of growing quietly. Zero skips is
+# achievable now and will not stay achievable once tokio, sqlx and the windows-*
+# family arrive — that is the moment to start curating, not to give up.
+#
+# The moment arrived with P5's axum + rust-embed stack. Both entries below are
+# transient: the ecosystem is mid-migration across a major version, and each skip
+# disappears when the laggards catch up. Re-check on the review date.
+skip = [
+    # syn straddles its 2 -> 3 bump: serde_derive and thiserror-impl are on syn 3,
+    # while rust-embed-impl and tracing-attributes are still on syn 2. All four are
+    # build-time proc-macros — none is linked into a shipped binary — so this is a
+    # compile-time duplicate only. review: 2026-11-19
+    { crate = "syn@2", reason = "build-time proc-macro; ecosystem mid-migration from syn 2 to syn 3" },
+    # rand_core straddles 0.6 -> 0.9: password-hash (via argon2) pulls 0.6 for the salt generation
+    # the edge never uses — it only verifies PINs — while tungstenite's WebSocket frame masking pulls
+    # 0.9. Skipping the 0.6 line leaves 0.9 unique. review: 2026-11-19
+    { crate = "rand_core@0.6", reason = "argon2/password-hash's salt-generation line, unused at the edge" },
+    # fallible-iterator straddles 0.2 -> 0.3 inside the tokio-postgres stack (P7): postgres-types is
+    # on 0.2, postgres-protocol on 0.3. Skipping the 0.2 line leaves 0.3 unique. Both are cloud-only
+    # (store-postgres), never at the edge. review: 2026-11-19
+    { crate = "fallible-iterator@0.2", reason = "tokio-postgres stack mid-migration from fallible-iterator 0.2 to 0.3" },
+    # hashbrown straddles 0.14 -> 0.17 across the two binaries: rusqlite's hashlink (edge, store-sqlite)
+    # pins 0.14, while indexmap (cloud, pulled by utoipa for OpenAPI generation, P7) is on 0.17. The two
+    # binaries never link both, so this is a workspace-graph duplicate only; skipping the 0.14 line
+    # leaves 0.17 unique. review: 2026-11-19
+    { crate = "hashbrown@0.14", reason = "rusqlite/hashlink (edge) still on 0.14; utoipa/indexmap (cloud) on 0.17" },
+]
+skip-tree = [
+    # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed
+    # hashes embedded files with sha2 0.11 (pulling digest 0.11, block-buffer 0.12,
+    # crypto-common 0.2, cpufeatures 0.3), while axum's WebSocket handshake uses the
+    # stable line (sha1 0.10 -> digest 0.10, ...). Skipping the 0.11 subtree leaves
+    # the 0.10 line unique. review: 2026-11-19
+    { crate = "sha2@0.11", reason = "new RustCrypto line pulled by rust-embed; stable line still used by axum" },
+    # async-nats (P7 link-nats) is one large dependency that drags in its own rustls, rand, and
+    # error-handling stack at versions that straddle what axum and the RustCrypto crates already use
+    # (getrandom, rand, rand_chacha, rustls-webpki, rustls-native-certs, openssl-probe, thiserror,
+    # thiserror-impl). Skipping the async-nats subtree collapses all of those into one reviewed entry
+    # rather than a dozen; the cloud is where these land, and the JetStream client is worth the tree
+    # (ADR-0031). review: 2026-11-19
+    { crate = "async-nats", reason = "the JetStream client's rustls/rand/thiserror stack straddles versions the rest of the tree uses" },
+    # The rand 0.10 line (rand_core 0.10, getrandom 0.4, chacha20) arrives with the tokio-postgres
+    # stack (P7): postgres-protocol uses it for the SCRAM authentication nonce. The edge's tungstenite
+    # is still on rand 0.9. They are in different binaries — pos_cloud vs pos_edge — so no single
+    # artifact carries both; skipping the 0.10 subtree leaves the 0.9 line unique. review: 2026-11-19
+    { crate = "rand@0.10", reason = "tokio-postgres's SCRAM nonce line; the edge's WebSocket stack is still on rand 0.9" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

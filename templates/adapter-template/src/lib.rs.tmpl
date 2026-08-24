@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The {{Provider}} [`{{Port}}`](pos_ports::{{port_module}}::{{Port}}) adapter, over HTTPS.
+//!
+//! {{One paragraph: which external system this is, and which port operations it maps.}}
+//!
+//! # A transport seam, and a pure core
+//!
+//! The socket lives behind [`{{Provider}}Transport`]; building the request and mapping the provider's
+//! HTTP status to the right [`PortError`](pos_ports::PortError) are pure. That is what lets the shared
+//! `{{Port}}` contract suite run in the fast pull-request gate against a stub, while the real TLS path
+//! ([`Tls{{Provider}}Transport`]) is exercised in the gated integration lane and the soak — the split
+//! ADR-0038 drew for the webhook sender and ADR-0058 for the couriers.
+//!
+//! # The exact provider wire is pinned in the gated lane
+//!
+//! The concrete endpoint paths, authentication, and vocabulary here are this adapter's own mapping;
+//! the exact provider strings are confirmed against the live system in the gated integration lane.
+//! What the fast gate proves is the port *semantics*, which do not change when a field is renamed.
+
+#![forbid(unsafe_code)]
+
+mod client;
+mod wire;
+
+pub use client::Http{{Provider}};
+pub use wire::{{{Provider}}Transport, HttpResponse, Method, Tls{{Provider}}Transport, TransportError};

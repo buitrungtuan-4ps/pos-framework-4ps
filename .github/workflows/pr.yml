@@ -1,0 +1,224 @@
+name: pr
+
+# The gate every pull request passes. Target: under ten minutes, enforced by
+# `timeout-minutes` on each job rather than left as an aspiration — a target
+# nothing measures is a wish.
+#
+# Jobs run in parallel, and each is ordered internally so the cheapest failure
+# surfaces first. A contributor with a naming mistake should not wait for a full
+# clippy pass to hear about it.
+
+on:
+  pull_request:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.head_ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Repository rules. No heavy compilation, so this is the fastest signal.
+  # ---------------------------------------------------------------------------
+  rules:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The changed-file gates need the base branch.
+          fetch-depth: 0
+      - uses: ./.github/actions/rust-setup
+
+      - name: dependency rule
+        run: cargo run -q -p xtask -- deps-rule
+      - name: per-crate clippy.toml restates the baseline
+        run: cargo run -q -p xtask -- lint-config
+      - name: every action pinned to a commit SHA
+        run: cargo run -q -p xtask -- actions-pinned
+      - name: internal documentation links resolve
+        run: cargo run -q -p xtask -- links
+      - name: every country module is named, wired in, and selectable
+        run: cargo run -q -p xtask -- countries
+      - name: nothing removed from a committed snapshot
+        run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
+      - name: migrations are additive-only
+        run: cargo run -q -p xtask -- migrations --base origin/${{ github.base_ref }}
+
+      # The dependency rule is the check that turns the architecture into law, so
+      # prove it still fires rather than trusting that it would. Runs against a
+      # throwaway copy of the tree.
+      - name: the dependency rule rejects tokio in the domain
+        run: bash xtask/tests/deps_rule_e2e.sh
+
+  # ---------------------------------------------------------------------------
+  # Formatting and lints, including the backbone pass that cannot be escaped.
+  # ---------------------------------------------------------------------------
+  lints:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+
+      - run: cargo fmt --all -- --check
+
+      - name: clippy (workspace)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Not redundant with the pass above. A source-level `#![allow]` overrides a
+      # `deny` inherited from [workspace.lints], so that table is not a floor.
+      # `--forbid` cannot be overridden — `allow` against `forbid` is E0453 — and
+      # this pass is the only thing making the backbone's no-panic and no-float
+      # rules unescapable rather than conventional.
+      - name: clippy (backbone, unescapable)
+        run: |
+          for crate in pos-core pos-ports pos-proto; do
+            cargo clippy -p "$crate" --all-targets -- \
+              -F clippy::unwrap_used -F clippy::expect_used -F clippy::panic \
+              -F clippy::todo -F clippy::unimplemented \
+              -F clippy::print_stdout -F clippy::print_stderr \
+              -F clippy::float_arithmetic -F unsafe_code -D warnings
+          done
+
+  # ---------------------------------------------------------------------------
+  # Tests. The domain suite touches no database, network or hardware, so it needs
+  # no services here — that is the point of the sans-I/O core.
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - run: cargo test --workspace --locked
+      - name: doc examples compile
+        run: cargo test --workspace --doc
+
+  # ---------------------------------------------------------------------------
+  # Both target platforms, because the store binary runs on Windows.
+  # ---------------------------------------------------------------------------
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - run: cargo build --workspace --locked
+
+  # ---------------------------------------------------------------------------
+  # The operator UI (P6). The Rust build embeds a placeholder on a fresh checkout
+  # (ui/dist is gitignored), so this is the only job that actually compiles the
+  # SolidJS app: it type-checks and builds it, which is what keeps a UI change
+  # from landing broken even though CI does not embed the real bundle.
+  # ---------------------------------------------------------------------------
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Node ships on the runner; pnpm is installed pinned to the major the
+      # lockfile was written with, and no remote action is added to the pinned-SHA
+      # surface. `--frozen-lockfile` fails if ui/pnpm-lock.yaml is out of date.
+      - name: install pnpm
+        run: npm install --global pnpm@10
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: typecheck and build
+        run: pnpm build
+
+  # ---------------------------------------------------------------------------
+  # Licences and advisories. The other check that turns architecture into law:
+  # unwinding a copyleft crate after it ships inside a binary is a legal problem,
+  # not an engineering one.
+  # ---------------------------------------------------------------------------
+  deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: install cargo-deny
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[cargo-deny\]/,/^\[just\]/p' tools/tool-versions.toml \
+                     | sed -n 's/^version *= *"\(.*\)"/\1/p')"
+          cargo install cargo-deny --locked --version "$version"
+      - run: cargo deny --all-features check advisories licenses bans sources
+
+  # ---------------------------------------------------------------------------
+  # Secrets. A secret committed once is leaked forever, so this cannot be added
+  # retroactively.
+  # ---------------------------------------------------------------------------
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: install gitleaks
+        # Downloaded and verified against a sha256 recorded in this repository,
+        # rather than run through the official action: that action requires a paid
+        # licence key for organisations, and this way needs no third party at all.
+        run: |
+          set -euo pipefail
+          section="$(sed -n '/^\[gitleaks\]/,/^\[cargo-deny\]/p' tools/tool-versions.toml)"
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' <<<"$section")"
+          expected="$(sed -n 's/^sha256_linux *= *"\(.*\)"/\1/p' <<<"$section")"
+          url="$(sed -n 's/^url_linux *= *"\(.*\)"/\1/p' <<<"$section" | sed "s/{v}/$version/g")"
+          curl -fsSL "$url" -o /tmp/gitleaks.tar.gz
+          echo "$expected  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+      - name: scan the pull-request range
+        run: gitleaks git --redact --verbose --log-opts="origin/${{ github.base_ref }}..HEAD"
+
+  # ---------------------------------------------------------------------------
+  # Documentation gates. Deliberately escapable with an explicit sentence: the
+  # goal is a conscious decision, not a bureaucratic block.
+  # ---------------------------------------------------------------------------
+  docs-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: a code change touches CHANGELOG.md, or says why not
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "origin/$BASE"...HEAD)"
+          if ! grep -qE '^(crates/|ui/)' <<<"$changed"; then
+            echo "no change under crates/ or ui/; gate not applicable"
+            exit 0
+          fi
+          if grep -qx 'CHANGELOG.md' <<<"$changed"; then
+            echo "changelog updated"
+            exit 0
+          fi
+          # The escape needs the sentence AND a reason after it, so a bare
+          # "changelog: none" does not pass.
+          if grep -qiE '^[[:space:]]*changelog:[[:space:]]*none[[:space:]]+\S+' <<<"$PR_BODY"; then
+            echo "changelog deliberately skipped, with a stated reason"
+            exit 0
+          fi
+          echo "::error::This pull request changes crates/ or ui/ but does not touch CHANGELOG.md. Add an entry under [Unreleased], or write 'changelog: none <reason>' in the pull-request body."
+          exit 1

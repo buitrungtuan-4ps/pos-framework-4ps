@@ -1,0 +1,36 @@
+[package]
+name        = "store-postgres"
+version     = "0.1.0"
+description = "The cloud EventStore over PostgreSQL (tokio-postgres + deadpool, monthly partitions, RLS)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[features]
+# The tests that need a live PostgreSQL are gated behind this feature, so the pull-request `test`
+# job (which has no database) does not compile or run them. The merge-to-`main` integration job and
+# a developer with a local database enable it: `cargo test -p store-postgres --features integration
+# -- --test-threads=1`, with DATABASE_URL set to a libpq key=value string.
+integration = []
+
+[dependencies]
+pos-proto = { path = "../../pos-proto" }
+pos-ports = { path = "../../pos-ports" }
+serde_json.workspace = true
+# ADR-0016: tokio-postgres behind a deadpool pool, hand-written SQL, no build-time database. No TLS
+# feature — the cloud reaches its database over the loopback / private network of its own box; a
+# public path would terminate TLS at the proxy (P8), not here. Envelopes cross as text bound to a
+# `json` column (see the migration), so no serde_json ToSql/FromSql mapping is pulled in.
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../pos-contract-tests" }
+# The contract suite supplies its own block_on; the integration tests need a multi-thread runtime
+# because deadpool spawns each connection's driver task.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

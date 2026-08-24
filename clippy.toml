@@ -1,0 +1,43 @@
+# CAUTION: a crates/**/clippy.toml REPLACES this file wholesale — the two are
+# not merged. Any crate that adds its own must restate every key it still wants,
+# and `cargo xtask lint-config` fails the build if it does not.
+msrv = "1.94.0"
+
+# Money is an integer in the currency's minor unit (naming-and-api.md §3.2).
+# This is a global ban, not a backbone-only one: a payment or vendor adapter
+# computing a total in f64 is precisely where money bugs live. A crate with a
+# genuine need for floats — pos-simulator's statistics, say — adds its own
+# clippy.toml, which is a visible and reviewable act.
+disallowed-types = ["f32", "f64"]
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "take time from the ClockSource port, so tests can drive a shift across midnight" },
+    { path = "std::time::Instant::now",    reason = "take time from the ClockSource port" },
+    { path = "std::process::exit",         reason = "return an error to main instead" },
+    { path = "std::thread::sleep",         reason = "blocking in an async task; use a timer or spawn_blocking" },
+]
+
+disallowed-macros = [
+    { path = "std::print",   reason = "use tracing; logs travel to the cloud" },
+    { path = "std::println", reason = "use tracing; logs travel to the cloud" },
+    { path = "std::eprint",  reason = "use tracing" },
+    { path = "std::eprintln", reason = "use tracing" },
+]
+
+# Tests may unwrap, expect, panic and print. Verified to scope to #[cfg(test)].
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+allow-print-in-tests  = true
+allow-dbg-in-tests    = false
+
+too-many-arguments-threshold = 8
+
+doc-valid-idents = [
+    "SQLite", "PostgreSQL", "JetStream", "NATS", "ULID", "ESC/POS", "ICU",
+    "TOTP", "WebP", "SolidJS", "mDNS", "SNTP", "Argon2", "JSONB", "SemVer",
+    "OpenAPI", "PostgreSQL", "MessageFormat",
+    # Product and vendor names that appear in port documentation as prose.
+    "MinIO", "ShopeeFood", "GrabFood", "DPAPI", "ShiftJIS",
+    "..",
+]

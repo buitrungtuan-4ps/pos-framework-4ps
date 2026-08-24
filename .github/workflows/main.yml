@@ -1,0 +1,129 @@
+name: main
+
+# What runs once a change has landed. Everything here is too slow or too stateful
+# for the ten-minute pull-request gate, and none of it is a substitute for it.
+#
+# The `integration` job runs the code that needs a real backing service against
+# one — `store-postgres` against PostgreSQL, `blob-garage` against S3 (MinIO),
+# `link-nats` and the `pos_cloud` ingest cursor against NATS JetStream (all P7). The
+# service image is pinned by digest, not tag: a tag is mutable, and a silently
+# changed database version is a long afternoon. These tests are behind each
+# adapter's `integration` Cargo feature, so the ten-minute pull-request gate
+# neither compiles nor runs them.
+
+on:
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Against real PostgreSQL, S3 (MinIO) and NATS JetStream. The domain never needs
+  # any of them; the adapters do, and a contract test that runs only against a fake
+  # proves nothing about the real thing.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      # Pinned by digest (postgres:16 as of this commit), not tag — see the file header.
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: poscloud
+        ports:
+          - 5432:5432
+        # Do not start the test step until the database answers, or the first
+        # connection races the container's boot and fails intermittently.
+        options: >-
+          --health-cmd "pg_isready -U pos -d poscloud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # libpq key=value form. `pos` is the image's superuser, so it owns `events` and
+      # bypasses the row-level policy — which is what the trusted ingest adapter does;
+      # the RLS cases drop to the `app_tenant` role to prove the policy still bites.
+      DATABASE_URL: "host=localhost port=5432 user=pos password=pos dbname=poscloud"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: store-postgres against a real PostgreSQL
+        # Single-threaded: every case shares the one database and truncates between
+        # cases (see the crate's tests/integration.rs).
+        run: cargo test -p store-postgres --features integration --locked -- --test-threads=1
+      - name: start MinIO
+        # Pinned by digest (minio/minio as of this commit), not tag — see the file header. Run as a
+        # step rather than a `services:` entry because the server needs the `server /data` command,
+        # which a service block cannot pass.
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "MinIO did not become ready" >&2
+          docker logs minio || true
+          exit 1
+      - name: blob-garage against a real S3
+        env:
+          S3_ENDPOINT: http://localhost:9000
+          S3_REGION: us-east-1
+          S3_ACCESS_KEY: minioadmin
+          S3_SECRET_KEY: minioadmin
+        run: cargo test -p blob-garage --features integration --locked
+      - name: start NATS with JetStream
+        # Pinned by digest (nats:2.10 as of this commit), not tag — see the file header. A step
+        # rather than a service because JetStream needs the `-js` flag, which a service block cannot
+        # pass; `-m 8222` exposes the monitoring endpoint the readiness check polls.
+        run: |
+          docker run -d --name nats -p 4222:4222 -p 8222:8222 \
+            nats@sha256:5498ba57b9471840be3d15b033a4eec554d1c02fa6c2cc0ca2d888637f6c6e2f \
+            -js -m 8222
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:8222/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "NATS did not become ready" >&2
+          docker logs nats || true
+          exit 1
+      - name: link-nats against a real NATS
+        env:
+          NATS_URL: "127.0.0.1:4222"
+        run: cargo test -p link-nats --features integration --locked
+      - name: pos_cloud ingest cursor against a real NATS
+        # The end-to-end proof that the durable cursor drives Cloud::ingest idempotently against real
+        # JetStream (over the fake store, so this step needs only NATS). See tests/cursor.rs.
+        env:
+          NATS_URL: "127.0.0.1:4222"
+        run: cargo test -p pos-cloud --features integration --locked --test cursor
+
+  # ---------------------------------------------------------------------------
+  # Contract tests: every implementation of every port runs the same suite. This
+  # is what makes "swappable" a verified fact rather than a claim, and it is one of
+  # the three nets that catch a syntactically-correct, semantically-wrong change.
+  # ---------------------------------------------------------------------------
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/rust-setup
+      - name: port contract suites
+        run: |
+          echo "Contract suites arrive with pos-contract-tests in P2. See docs/roadmap.md."

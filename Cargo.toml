@@ -1,0 +1,182 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pos-proto",
+    "crates/pos-core",
+    "crates/pos-ports",
+    "crates/pos-country",
+    "countries/zz",
+    "crates/pos-contract-tests",
+    "crates/pos-fakes",
+    "crates/adapters/store-sqlite",
+    "crates/adapters/store-postgres",
+    "crates/adapters/metrics-vm",
+    "crates/adapters/blob-garage",
+    "crates/adapters/link-nats",
+    "crates/adapters/printer-escpos",
+    "crates/adapters/updater-minisign",
+    "crates/adapters/cloud-sync-http",
+    "crates/adapters/shipping-ahamove",
+    "crates/adapters/shipping-grabexpress",
+    "crates/adapters/erp-sap",
+    "crates/pos-edge",
+    "crates/pos-cloud",
+    "crates/pos-simulator",
+    "examples/minimal-edge",
+    "xtask",
+]
+
+# The graph is deliberate (ADR-0013):
+#
+#             pos-proto        wire types, value types, determinism traits
+#            /         \
+#     pos-core        pos-ports
+#
+# pos-core does NOT depend on pos-ports. They are siblings. Cargo unifies
+# features across the whole graph, so a single pos-ports crate with its I/O
+# traits behind a feature would still make those traits nameable from pos-core
+# the moment any binary enabled the feature. Keeping them siblings makes
+# "the domain cannot perform I/O" a property of the graph — `cargo tree -p
+# pos-core` — instead of a lint someone has to remember.
+#
+# pos-fakes and pos-contract-tests sit below both siblings and are deliberately
+# NOT subject to the allow-list (ADR-0013). Neither pulls in a runtime, though:
+# each suite is emitted by a macro and the adapter invoking it supplies its own
+# `block_on`, so the choice of executor stays with the binary that has one.
+#
+#             pos-core        pos-ports
+#                    \        /    \
+#                  pos-fakes    pos-contract-tests
+#                          \        /
+#                        adapters, binaries
+#
+# pos-fakes is a dev-dependency of pos-core and runs every suite against itself,
+# which is what makes "the fakes behave like the real thing" a checked claim.
+
+# Adapter, binary, and UI crates are created in the phase that needs them
+# (docs/roadmap.md). The intended full layout is in README.md; empty crates
+# nobody compiles are the speculative scaffolding docs/design-principles.md
+# rules out.
+
+[workspace.package]
+edition      = "2024"
+rust-version = "1.94"
+license      = "LicenseRef-Proprietary"
+publish      = false
+repository   = "https://github.com/buitrungtuan-4ps/pos-framework-4ps"
+
+[workspace.dependencies]
+# The pos-core / pos-ports / pos-proto allow-list. `cargo xtask deps-rule` is the
+# enforcer; adding a name here without adding it to tools/backbone-allowlist.toml
+# does nothing.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+thiserror = { version = "2", default-features = false }
+# JSON is the wire format, and pos-proto is the wire crate. Pure computation: no
+# I/O, no runtime, no procedural macro of its own. `RawValue` is the specific
+# reason it is a real dependency rather than a dev one — it is what lets a node
+# forward an event payload it does not understand without corrupting it.
+serde_json = { version = "1", default-features = false, features = ["std", "raw_value"] }
+# ADR-0014. `default-features = false` is MANDATORY: the defaults include
+# tz-system and tzdb-zoneinfo, which read $TZ and /usr/share/zoneinfo — filesystem
+# and environment access inside the crate whose allow-list forbids exactly that.
+# pos-proto needs no timezone data at all (it carries instants and civil dates);
+# the bundled tzdb is added by pos-core, which derives business dates.
+jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+
+# ---------------------------------------------------------------------------
+# Lints — read this before changing it.
+#
+# Cargo permits exactly one [workspace.lints] table, and it REJECTS a manifest
+# that both inherits it and adds to it. So the tiers in engineering-guide.md §9
+# cannot be expressed here. The shape that does work, in three layers:
+#
+#   1. This table is the strict library baseline. pos-core, pos-ports, pos-proto
+#      AND every adapter inherit it wholesale with `[lints] workspace = true`.
+#   2. Backbone crates tighten it further in source (`#![forbid(unsafe_code)]`),
+#      and adapters relax exactly one lint in source
+#      (`#![expect(unsafe_code, reason = "FFI to the terminal SDK")]`).
+#      `unsafe_code` is therefore `deny` and not `forbid` here — `forbid` cannot
+#      be lifted even by `expect`, and adapters legitimately need FFI.
+#   3. Binaries and the simulator declare their OWN [lints] table, which
+#      replaces this one entirely, so `unwrap` is available where the docs allow
+#      it.
+#
+# A source-level `#![allow(...)]` BEATS a `deny` set here — this table is not a
+# floor. That hole is closed in CI, which re-runs clippy over the three backbone
+# crates with `--forbid` for the non-negotiables; `allow` against `forbid` is a
+# hard error (E0453), so the escape does not compile. `allow_attributes` and
+# `allow_attributes_without_reason` below catch the careless version of the same
+# move at desk time, before CI has to.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_code                   = "deny"   # backbone escalates to forbid in source
+missing_docs                  = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+# Load-bearing, not hygiene: the state-machine table in pos-core lists one row
+# per state x trigger cell. This lint is what stops a clever `|`-collapsed arm
+# from shadowing a row, which is what keeps the table a true 1:1 twin of
+# pos-spec.md rather than a lossy summary of it.
+unreachable_patterns           = "deny"
+
+[workspace.lints.clippy]
+all      = { level = "deny",  priority = -1 }
+pedantic = { level = "warn",  priority = -1 }
+
+# No panic path in a library.
+unwrap_used     = "deny"
+expect_used     = "deny"
+panic           = "deny"
+todo            = "deny"
+unimplemented   = "deny"
+unreachable     = "deny"
+indexing_slicing = "deny"
+exit            = "deny"
+
+# Money is an integer in the currency's minor unit. `float_arithmetic` bans the
+# operations; `disallowed_types` in clippy.toml bans the types themselves, which
+# is what catches a float arriving in a struct field or a function signature.
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+# Logs travel to the cloud, so they go through `tracing` and never stdout.
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+# Also load-bearing: role templates are exhaustive `match` over Permission, so
+# adding a permission fails to compile until every template decides about it. A
+# single `_ =>` arm would silently defeat that, which is the whole mechanism
+# pos-spec.md §9 asks for ("adding a permission must not be manual work").
+wildcard_enum_match_arm = "deny"
+
+# clippy.toml carries the lists these three read.
+disallowed_types   = "deny"
+disallowed_methods = "deny"
+disallowed_macros  = "deny"
+
+# Every escape hatch must name a reason, and must be `expect` (which fails when
+# it becomes unnecessary) rather than `allow` (which rots silently).
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+# A library that can fail or panic says so in its documentation.
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+
+# Deliberately NOT enabled workspace-wide: clippy::arithmetic_side_effects.
+# With `-D warnings` it would reject every `i + 1`, and the resulting spray of
+# `#[expect]` attributes would teach people to silence it by reflex. Overflow
+# safety for money is bought with the type instead: `Money` exposes only checked
+# arithmetic, and the `money` module turns the lint on for itself.
+
+[profile.release]
+lto             = "thin"
+codegen-units   = 1
+panic           = "abort"
+strip           = "symbols"
+# Money is i64 in a currency's minor unit. A silent wrap is a wrong total on a
+# receipt; a panic is a crash we find in testing. Keep it loud in release too.
+overflow-checks = true

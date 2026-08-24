@@ -1,0 +1,43 @@
+# systemd unit for the store binary (P5).
+#
+# The edge runs unattended on a store mini-PC. This unit restarts it on crash and on boot, and sends
+# SIGTERM on stop — which pos_edge drains gracefully (server.rs), finishing any in-flight request
+# before exiting, so "kill mid-sale loses only the uncommitted transaction" holds under a normal
+# stop as well as a crash.
+#
+# Install (as root):
+#   cp pos-edge /usr/local/bin/pos-edge
+#   install -d -o pos -g pos /var/lib/pos-edge
+#   cp pos-edge.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now pos-edge
+
+[Unit]
+Description=Pizza 4P's POS edge (store server)
+Documentation=https://github.com/buitrungtuan-4ps/pos-framework-4ps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Runs as its own unprivileged user; the store database and config live under StateDirectory.
+User=pos
+Group=pos
+StateDirectory=pos-edge
+WorkingDirectory=/var/lib/pos-edge
+Environment=POS_EDGE_CONFIG=/var/lib/pos-edge/config.toml
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/pos-edge
+# SIGTERM triggers graceful shutdown; give in-flight requests time to drain before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=2
+
+# Hardening: the edge needs no privilege beyond its own state directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

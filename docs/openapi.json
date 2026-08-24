@@ -1,0 +1,117 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pizza 4P's POS Cloud API",
+    "description": "The public read API for the Pizza 4P's cloud. Generated from the handlers; see ADR-0019.",
+    "license": {
+      "name": "LicenseRef-Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/stores/{store_id}/rollups/daily": {
+      "get": {
+        "tags": [
+          "rollups"
+        ],
+        "summary": "A store's per-trading-day activity rollups, oldest day first — answered from the materialised\nrollup, never a log scan.",
+        "description": "Requires a valid API key with the `read_rollups` scope, and answers **only** for that key's\ntenant: the tenant comes from the verified grant, never the request, so a caller can read a\nstore's rollups only if the store is within its own tenant. A `store_id` outside the tenant is\nnot an error — it simply has no rollup and reads back as an empty list.",
+        "operationId": "daily_rollups",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily activity rollups, oldest day first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailyRollup"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The store id is not a ULID"
+          },
+          "401": {
+            "description": "The API key is missing, malformed, or invalid"
+          },
+          "403": {
+            "description": "The API key lacks the read_rollups scope"
+          },
+          "503": {
+            "description": "The rollup store is unreachable"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DailyRollup": {
+        "type": "object",
+        "description": "A day's activity for one store, derived from the event log.\n\nThe cloud's dashboards answer from rollups rather than by scanning the raw log\n(`docs/roadmap.md` P7). This first rollup counts events per store trading day and per event\ntype — enough for an activity dashboard, and it uses only envelope fields (`business_date`,\n`event_type`), so it needs no per-event-type decoding. Money- and order-shaped rollups, and the\nmaterialised tables that make the <10 ms dashboard query real, land with the dashboard slice.",
+        "required": [
+          "business_date",
+          "total_events",
+          "by_type"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD` ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md))."
+          },
+          "by_type": {
+            "type": "object",
+            "description": "Per-event-type counts, ordered by type so the output is deterministic.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every event recorded on that day.",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A scoped per-tenant API key, presented as `Authorization: Bearer pos_<id>_<secret>`."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "rollups",
+      "description": "Per-store, per-trading-day activity rollups."
+    }
+  ]
+}
