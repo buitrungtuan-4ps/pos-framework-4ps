@@ -1,7 +1,8 @@
 name: deploy
 
 # Manual deploy of one country cell to its VPS (ADR-0044). CI builds the two images for the
-# box's own CPU architecture (detected over SSH; amd64 and arm64 — Ampere/Graviton — both work),
+# box's own CPU architecture (detected over SSH; amd64 and arm64 — Ampere/Graviton — both work)
+# by cross-compiling on the runner rather than emulating the box (see "Build the images"),
 # ships them over the existing SSH channel (no registry — GitHub holds no application secret),
 # and runs bootstrap.sh on the box. A rollback is re-running with an older commit's image tag:
 # the app container is stateless, all durable state lives in the postgres/garage/nats volumes.
@@ -42,10 +43,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-24.04
-    # A cross-architecture image build under QEMU emulation (an arm64 box built on an amd64
-    # runner, or vice versa) compiles Rust in emulation and is slow — allow well beyond the
-    # native ~10-minute build.
-    timeout-minutes: 120
+    # The images are cross-compiled on the runner's own CPU (no QEMU), so even an arm64 box built
+    # on an amd64 runner compiles at native speed. Allow headroom over the ~10-15 minute build for
+    # a cold toolchain and the image ship, not for emulation.
+    timeout-minutes: 60
     environment: production
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -86,12 +87,13 @@ jobs:
           DOMAIN: ${{ secrets.DOMAIN }}
         run: |
           TAG="${GITHUB_SHA}"
-          # Build for the box's architecture (TARGET_PLATFORM), not the runner's. A buildx
-          # docker-container builder plus QEMU (registered by tonistiigi/binfmt) cross-builds the
-          # non-native arch; a single target platform means --load puts the image in the local
-          # daemon so `docker save` can ship it. Cross-arch Rust under emulation is slow — see the
-          # job timeout.
-          docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null 2>&1 || true
+          # Build for the box's architecture (TARGET_PLATFORM), not the runner's — but WITHOUT
+          # QEMU. Both Dockerfiles pin their builder stage to $BUILDPLATFORM (the runner's amd64)
+          # and emit a $TARGET_PLATFORM binary (Rust via the aarch64 GNU toolchain, caddy via
+          # GOARCH), and their runtime stages run no commands, so nothing is ever emulated and an
+          # arm64 image builds at native speed. buildx (docker-container driver) is still what lets
+          # a single --platform build --load a foreign-arch image into the daemon so `docker save`
+          # can ship it.
           docker buildx create --use --name posdeploy >/dev/null 2>&1 || docker buildx use posdeploy
           docker buildx build --platform "$TARGET_PLATFORM" --load \
             -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
