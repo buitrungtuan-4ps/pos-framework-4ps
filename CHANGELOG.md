@@ -1170,6 +1170,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
+- `deploy/reset-admin.sh`: the break-glass **no longer errors when the admin tables do not exist
+  yet.** It ran `DELETE FROM super_admin; DELETE FROM admin_sessions;` unconditionally, so
+  `reset_admin=true` on a first deploy (before the app's first migration created those tables) failed
+  the workflow with `relation "super_admin" does not exist` — contradicting the script's own "idempotent
+  … still succeeds" promise. Each DELETE is now guarded by `to_regclass`, so a reset before the schema
+  exists is a clean no-op. (`reset_admin` is only meant for wiping an *existing* super-admin; a first
+  deploy should leave it off and enrol via the setup token.)
 - `deploy/bootstrap.sh`: **`cloud.toml` is now readable by the app container on a non-root deploy
   user.** `pos_cloud` runs as uid 10001 and its config is a mode-600 file; bootstrap only `chown`ed it
   when run as root, so a sudo user (the common cloud default — Oracle's `ubuntu`, etc.) left the file
