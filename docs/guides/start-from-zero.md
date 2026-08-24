@@ -57,6 +57,8 @@ server — CI ships it over SSH and the box mints its own secrets ([ADR-0044](..
    `sslip.io` resolves that hostname to your IP for free, so you get **real HTTPS with no DNS setup**.
    (With your own domain instead, set `DOMAIN` to it and add `CF_DNS_API_TOKEN`; see the
    [deploy runbook](../deploy-runbook.md).)
+   **SSH on a non-default port?** Add a `VPS_PORT` secret (it defaults to 22 when unset), and
+   generate the host key with the port: `ssh-keyscan -p <port> <VPS_HOST>`.
 3. **Settings → Environments → New environment → `production`**, and add yourself as a **required
    reviewer**. Every deploy pauses for one approval — that reviewer is also the second person the
    admin break-glass needs.

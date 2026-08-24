@@ -1164,6 +1164,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   walk that produced the fixes below) is done, while *"a pilot store trades a full day"* and the hardware
   matrix exercised for real need physical stores and procured hardware (A5) — a pilot/operations handoff,
   like the WAL-on-Windows soak (A4), that this documentation sets up rather than performs.
+- `deploy` workflow: an **optional `VPS_PORT` secret** for a VPS whose SSH is not on 22. It defaults to
+  22 when unset or empty (so existing forks are unaffected), and is threaded into every `ssh`/`scp` step
+  (`-p`/`-P`). The runbook and Start-from-zero note that `VPS_KNOWN_HOSTS` for a non-default port must be
+  generated with `ssh-keyscan -p <port>`, whose entries are keyed `[host]:port` — the form SSH looks up.
 
 ### Fixed
 - `justfile` (P13): **`just` was completely broken** — a stale "Development loops" block left duplicate

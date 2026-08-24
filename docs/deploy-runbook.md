@@ -49,10 +49,11 @@ application secret (the box mints those itself, [ADR-0044](adr/0044-fork-and-dep
 | `VPS_HOST` | host or IP to SSH to |
 | `VPS_USER` | SSH user (a sudo-less deploy user, or root) |
 | `VPS_SSH_KEY` | that user's private key (PEM) |
-| `VPS_KNOWN_HOSTS` | the box's SSH host key(s) — `ssh-keyscan <host>` — so the deploy is not trust-on-first-use |
+| `VPS_KNOWN_HOSTS` | the box's SSH host key(s) — `ssh-keyscan <host>` (add `-p <port>` for a non-default port) — so the deploy is not trust-on-first-use |
 | `DOMAIN` | your host (or `<vps-ip>.sslip.io`) |
 | `ACME_EMAIL` | contact address for the certificate |
 | `CF_DNS_API_TOKEN` | the scoped Cloudflare token (leave empty for sslip.io) |
+| `VPS_PORT` | SSH port, if not 22 (optional; defaults to 22 when unset or empty) |
 | `RCLONE_REMOTE` | off-box backup target, e.g. `myremote:pos-backups` (optional at first) |
 
 Then configure a GitHub **Environment named `production`** with a **required reviewer**. Every deploy

@@ -11,6 +11,9 @@ name: deploy
 #   VPS_USER          SSH user (e.g. a sudo-less deploy user, or root)
 #   VPS_SSH_KEY       that user's private key (PEM)
 #   VPS_KNOWN_HOSTS   the box's SSH host key(s), so the connection is not trust-on-first-use
+#                     (for a non-default port, generate with `ssh-keyscan -p <port>` — the
+#                     entries are then keyed as `[host]:port`, which is what SSH looks up)
+#   VPS_PORT          SSH port (optional; defaults to 22 when unset or empty)
 #   DOMAIN            the cell's hostname (or <vps-ip>.sslip.io with no purchased domain)
 #   ACME_EMAIL        contact address for the TLS certificate
 #   CF_DNS_API_TOKEN  Cloudflare Zone:DNS:Edit token (leave empty for an *.sslip.io DOMAIN)
@@ -65,13 +68,15 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          port="${VPS_PORT:-22}"
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           # Ship the deploy tree, but never the local secrets/ — the box holds its own.
           tar -C deploy --exclude=secrets -czf /tmp/deploy.tgz .
-          scp $ssh_opts /tmp/deploy.tgz /tmp/images.tgz "${target}:/tmp/"
-          ssh $ssh_opts "$target" '
+          scp -P "$port" $ssh_opts /tmp/deploy.tgz /tmp/images.tgz "${target}:/tmp/"
+          ssh -p "$port" $ssh_opts "$target" '
             set -e
             mkdir -p ~/pos-cloud/deploy
             tar -C ~/pos-cloud/deploy -xzf /tmp/deploy.tgz
@@ -82,12 +87,14 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          port="${VPS_PORT:-22}"
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           # Snapshot the existing database before the new image comes up, so a bad release rolls
           # back to a known-good copy (ADR-0046). The first deploy has no database yet — skip.
-          ssh $ssh_opts "$target" '
+          ssh -p "$port" $ssh_opts "$target" '
             cd ~/pos-cloud/deploy
             chmod +x backup.sh
             if [ -n "$(docker compose ps -q postgres 2>/dev/null)" ]; then
@@ -104,13 +111,15 @@ jobs:
           DOMAIN: ${{ secrets.DOMAIN }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          port="${VPS_PORT:-22}"
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           tag="${GITHUB_SHA}"
           # Uses the images just loaded (POS_BOOTSTRAP_NO_BUILD=1 so the box never rebuilds from
           # source). bootstrap.sh keeps any existing secret, so a redeploy does not rotate them.
-          ssh $ssh_opts "$target" \
+          ssh -p "$port" $ssh_opts "$target" \
             "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh && \
              DOMAIN='${DOMAIN}' ACME_EMAIL='${ACME_EMAIL}' CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
              POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='pos-caddy:${tag}' POS_BOOTSTRAP_NO_BUILD=1 \
@@ -121,8 +130,10 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          port="${VPS_PORT:-22}"
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           echo "reset_admin=true: clearing the super-admin and all sessions on the box"
-          ssh $ssh_opts "$target" 'cd ~/pos-cloud/deploy && ./reset-admin.sh'
+          ssh -p "$port" $ssh_opts "$target" 'cd ~/pos-cloud/deploy && ./reset-admin.sh'
