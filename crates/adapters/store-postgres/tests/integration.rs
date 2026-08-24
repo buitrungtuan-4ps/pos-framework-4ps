@@ -856,8 +856,13 @@ mod subjects_store {
             let fields: &str = r#"{"name":"name-placeholder","phone":"phone-placeholder"}"#;
             admin
                 .execute(
+                    // `$4::text::jsonb`, not `$4::jsonb`: the inner `::text` pins the bound parameter's
+                    // inferred type to `text` (which `&str` serialises to) before the database casts it
+                    // to `jsonb`. `$4::jsonb` alone makes Postgres infer the parameter itself as `jsonb`,
+                    // which tokio-postgres rejects for a `&str` (WrongType). Same pattern the production
+                    // writers use — subjects.rs, config_trees.rs, translations.rs, rollups.rs.
                     "INSERT INTO subjects (subject_id, tenant_id, collected_at, fields) \
-                     VALUES ($1, $2, $3, $4::jsonb)",
+                     VALUES ($1, $2, $3, $4::text::jsonb)",
                     &[&id, &tenant, &collected, &fields],
                 )
                 .await
