@@ -32,6 +32,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The cloud now has a catalog authoring seam — the source of truth a menu compiles from**
+  (ADR-0066, Phase 2a). `pos-cloud` gains a `CatalogStore` trait and its records for the item master,
+  menus (with a `parent_menu_id` inheritance edge), and menu placements (an item in a menu, with its
+  per-channel prices and a published-availability floor). It is deliberately distinct from the config
+  tree (which carries only compiled output) and the registry (identity/naming), mirroring how
+  ADR-0065 separated those — tenant-scoped create/list/update, entities archived not deleted, an
+  in-memory fake proving the contract. A menu id is a cloud-authoring concept that never crosses the
+  wire, so `MenuId` is defined beside the seam like `BrandId`. No Postgres or admin routes yet (later
+  slices); this is the model the compiler reads to produce a `MenuBook`. Prices are a T2 asset —
+  authored and compiled in the cloud, never logged.
 - **The compiled menu now carries a per-channel presentation plan, separate from its prices**
   (ADR-0066, Phase 2a). `pos-proto` gains `DisplayPlan` (display categories → sub-categories →
   item buttons, each with an optional POS grid position) and its channel-keyed `LayoutBook` — the
