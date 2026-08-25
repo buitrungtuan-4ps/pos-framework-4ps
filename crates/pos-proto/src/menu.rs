@@ -25,9 +25,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::enums::SalesChannel;
 use crate::ids::{MenuItemId, TaxClassId};
 use crate::money::Money;
 use crate::text::DisplayName;
+use crate::wire_enum::Open;
 
 /// One sellable item in the store's catalog: what it is called, what it costs, and how it is taxed.
 ///
@@ -149,9 +151,116 @@ impl MenuCatalog {
     }
 }
 
+/// One channel's price book within a [`MenuBook`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ChannelCatalog {
+    /// The channel this catalog prices. `Open`, so a book published by a newer cloud that has learned
+    /// a channel this build has not still deserialises — the same rule [`crate::locale::TaxRateRow`]
+    /// follows for the rate table.
+    pub sales_channel: Open<SalesChannel>,
+    /// The price book in force on that channel.
+    pub catalog: MenuCatalog,
+}
+
+/// The store's price book, resolved per sales channel.
+///
+/// [ADR-0063](../../../docs/adr/0063-store-menu-catalog.md) gave the store one flat [`MenuCatalog`];
+/// [ADR-0066](../../../docs/adr/0066-cloud-catalog.md) makes the compiled `menu` node a `MenuBook`, so
+/// the same item can be one price dine-in and another on delivery **without reshaping** the tested
+/// [`MenuEntry`] / reprice contract. The cloud resolves the channel at compile time and emits one
+/// catalog per channel; the edge selects the catalog for an inbound order's channel with
+/// [`MenuBook::catalog_for`] and reprices from it exactly as before.
+///
+/// A list of rows plus a `fallback`, for the same round-trips-in-a-diff reason [`MenuCatalog`] and
+/// [`crate::locale::TaxRateTable`] are lists. A single-channel store is the degenerate case: one row,
+/// or just the fallback.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MenuBook {
+    channels: Vec<ChannelCatalog>,
+    /// The catalog used for a channel that has no row of its own. Empty by default — a store with no
+    /// fallback simply sells nothing on an unconfigured channel, the same safe default an empty
+    /// [`MenuCatalog`] already is. `#[serde(default)]` so a book that omits it still loads.
+    #[serde(default)]
+    fallback: MenuCatalog,
+}
+
+impl MenuBook {
+    /// An empty book — no channel priced and no fallback, so it sells nothing anywhere until the
+    /// cloud publishes one. The safe default, like [`MenuCatalog::new`].
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            channels: Vec::new(),
+            fallback: MenuCatalog::new(),
+        }
+    }
+
+    /// A book from its channel rows, with an empty fallback.
+    #[must_use]
+    pub const fn from_channels(channels: Vec<ChannelCatalog>) -> Self {
+        Self {
+            channels,
+            fallback: MenuCatalog::new(),
+        }
+    }
+
+    /// Adds (or, in code, appends) a channel's catalog.
+    #[must_use]
+    pub fn with(mut self, sales_channel: SalesChannel, catalog: MenuCatalog) -> Self {
+        self.channels.push(ChannelCatalog {
+            sales_channel: Open::from_known(sales_channel),
+            catalog,
+        });
+        self
+    }
+
+    /// Sets the fallback catalog used for channels without a row of their own.
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: MenuCatalog) -> Self {
+        self.fallback = fallback;
+        self
+    }
+
+    /// Every channel row.
+    #[must_use]
+    pub fn channels(&self) -> &[ChannelCatalog] {
+        &self.channels
+    }
+
+    /// The fallback catalog.
+    #[must_use]
+    pub const fn fallback(&self) -> &MenuCatalog {
+        &self.fallback
+    }
+
+    /// The catalog to price a channel from: the channel's own row if the book carries one, otherwise
+    /// the fallback. Total — it always returns a catalog (empty if nothing is configured), so the
+    /// caller reprices uniformly and an unpriced channel refuses every line as `UnknownItem` rather
+    /// than needing a separate "no catalog" branch. An unrecognised channel row never answers for a
+    /// known channel, the same guard [`crate::locale::TaxRateTable::rate_for`] applies.
+    #[must_use]
+    pub fn catalog_for(&self, sales_channel: SalesChannel) -> &MenuCatalog {
+        self.channels
+            .iter()
+            .find(|row| {
+                row.sales_channel.known() == sales_channel && !row.sales_channel.is_unrecognised()
+            })
+            .map_or(&self.fallback, |row| &row.catalog)
+    }
+
+    /// Whether the book prices nothing at all — no channel row and an empty fallback.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.channels.is_empty() && self.fallback.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MenuCatalog, MenuEntry};
+    use super::{MenuBook, MenuCatalog, MenuEntry};
+    use crate::enums::SalesChannel;
     use crate::ids::{MenuItemId, TaxClassId};
     use crate::money::{CurrencyCode, Money};
     use crate::text::DisplayName;
@@ -262,6 +371,85 @@ mod tests {
             back,
             MenuCatalog::new().with(margherita()),
             "an unknown field must not make a menu catalog unusable, nor change what it means"
+        );
+    }
+
+    fn priced(price: i64) -> MenuEntry {
+        MenuEntry::new(
+            item(500),
+            DisplayName::new("Margherita"),
+            vnd(price),
+            food_class(),
+        )
+    }
+
+    #[test]
+    fn a_menu_book_prices_a_channel_specifically_and_falls_back_otherwise() {
+        // Dine-in has its own price; delivery has none, so it takes the fallback. This is the whole
+        // point of the book: one item, different money per channel, with the tested reprice contract
+        // untouched.
+        let book = MenuBook::new()
+            .with(
+                SalesChannel::DineIn,
+                MenuCatalog::new().with(priced(150_000)),
+            )
+            .with_fallback(MenuCatalog::new().with(priced(170_000)));
+
+        assert_eq!(
+            book.catalog_for(SalesChannel::DineIn)
+                .get(item(500))
+                .expect("dine-in")
+                .unit_price,
+            vnd(150_000),
+            "the channel's own catalog wins"
+        );
+        assert_eq!(
+            book.catalog_for(SalesChannel::Delivery)
+                .get(item(500))
+                .expect("fallback")
+                .unit_price,
+            vnd(170_000),
+            "a channel with no row of its own takes the fallback"
+        );
+        assert!(!book.is_empty());
+    }
+
+    #[test]
+    fn an_empty_menu_book_prices_nothing_anywhere() {
+        let book = MenuBook::new();
+        assert!(book.is_empty());
+        assert!(
+            book.catalog_for(SalesChannel::DineIn).is_empty(),
+            "with no rows and no fallback, every channel gets an empty catalog and refuses every line"
+        );
+    }
+
+    #[test]
+    fn a_menu_book_round_trips_through_json() {
+        let book = MenuBook::new()
+            .with(
+                SalesChannel::DineIn,
+                MenuCatalog::new().with(priced(150_000)),
+            )
+            .with(
+                SalesChannel::Delivery,
+                MenuCatalog::new().with(priced(180_000)),
+            )
+            .with_fallback(MenuCatalog::new().with(priced(160_000)));
+
+        let json = serde_json::to_string(&book).expect("serialise");
+        let back: MenuBook = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, book);
+    }
+
+    #[test]
+    fn a_menu_book_without_a_fallback_field_loads() {
+        // The fallback is `#[serde(default)]`, so a book that publishes only its channels still
+        // applies — the same forward-compatibility the catalog and locale pack follow.
+        let book: MenuBook = serde_json::from_str(r#"{"channels":[]}"#).expect("deserialise");
+        assert!(
+            book.is_empty(),
+            "no channels and a defaulted empty fallback"
         );
     }
 }
