@@ -14,8 +14,7 @@ use std::sync::Arc;
 
 use pos_contract_tests::harness::{OrderInHarness, Setup};
 use pos_edge::{
-    Edge, EdgeOrderIn, EdgeSession, InMemoryIntakeLedger, InMemoryQueueNumbers, InMemoryReceipts,
-    StoreIdentity,
+    Edge, EdgeOrderIn, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -60,7 +59,7 @@ fn seeded_session() -> EdgeSession {
 struct EdgeIntakeHarness;
 
 impl OrderInHarness for EdgeIntakeHarness {
-    type Intake = EdgeOrderIn<FakeStore, InMemoryIntakeLedger, InMemoryQueueNumbers>;
+    type Intake = EdgeOrderIn<FakeStore, InMemoryQueueNumbers>;
 
     async fn fresh(&self) -> Setup<Self::Intake> {
         let edge = Edge::new(
@@ -72,7 +71,6 @@ impl OrderInHarness for EdgeIntakeHarness {
         .expect("seed the id generator");
         Ok(EdgeOrderIn::new(
             Arc::new(edge),
-            InMemoryIntakeLedger::new(),
             InMemoryQueueNumbers::new(),
             DeviceId::new(Ulid::from_u128(20)),
         ))

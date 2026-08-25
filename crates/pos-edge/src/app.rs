@@ -33,6 +33,7 @@ use pos_core::inventory::RecipeBook;
 use pos_core::menu::PricedLine;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
+use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
@@ -480,6 +481,23 @@ pub struct Edge<S> {
     receipts: Arc<dyn ReceiptAuthority>,
 }
 
+/// What [`Edge::open_inbound_order`] needs to write the idempotency ledger row in the order's own
+/// transaction ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)): the caller's key and the two
+/// acceptance facts the order itself does not carry. `order_id`, `business_date` and
+/// `awaiting_staff_confirmation` are the order's own and are filled in by `open_inbound_order`; the
+/// `queue_number` is reconstructed on a repeat, never stored.
+#[derive(Debug, Clone, Copy)]
+pub struct IntakeIntent<'a> {
+    /// The channel's wire token — the first half of the idempotency key.
+    pub sales_channel: &'a str,
+    /// The caller's own reference — the second half of the idempotency key.
+    pub external_reference: &'a str,
+    /// The accepted total (tax-inclusive), the store's own menu total.
+    pub total: Money,
+    /// Whether any line's caller-quoted price differed from the store's.
+    pub repriced: bool,
+}
+
 impl<S: EventStore> Edge<S> {
     /// Composes an edge over `store` for a given identity and session, allocating receipt numbers
     /// from `receipts`.
@@ -595,7 +613,11 @@ impl<S: EventStore> Edge<S> {
         channel: Open<SalesChannel>,
         table_id: Option<TableId>,
         lines: &[(PricedLine, bool)],
-    ) -> Result<(OrderId, BusinessDate), AppError> {
+        intake: Option<IntakeIntent<'_>>,
+    ) -> Result<(OrderId, BusinessDate), AppError>
+    where
+        S: IntakeLedger,
+    {
         let now = self.clock.now();
         let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
@@ -648,7 +670,35 @@ impl<S: EventStore> Edge<S> {
             ));
         }
 
-        self.append_and_publish(envelopes, messages).await?;
+        // The events AND the idempotency ledger row commit in ONE transaction, so a crash between
+        // opening the order and recording it is impossible — either both land or neither
+        // (ADR-0064). A plain insert on an existing key fails the commit with `already_exists` and
+        // rolls the events back with it, which is how a concurrent second order on the same key is
+        // refused rather than duplicated.
+        let mut tx = self.store.begin().await?;
+        self.store.append(&mut tx, &envelopes).await?;
+        if let Some(intent) = intake {
+            let record = IntakeRecord {
+                order_id,
+                business_date,
+                total: intent.total,
+                repriced: intent.repriced,
+                awaiting_staff_confirmation: table_id.is_some(),
+            };
+            self.store
+                .record(
+                    &mut tx,
+                    self.identity.store_id,
+                    intent.sales_channel,
+                    intent.external_reference,
+                    &record,
+                )
+                .await?;
+        }
+        tx.commit().await?;
+        for message in &messages {
+            self.fanout.publish(message);
+        }
 
         {
             let mut projection = self.lock_projection();
@@ -663,6 +713,27 @@ impl<S: EventStore> Edge<S> {
             }
         }
         Ok((order_id, business_date))
+    }
+
+    /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
+    /// this store, or `None` ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). The intake path
+    /// reads this to return the same order on a retry rather than opening a second one.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the ledger cannot be read.
+    pub async fn look_up_intake(
+        &self,
+        sales_channel: &str,
+        external_reference: &str,
+    ) -> Result<Option<IntakeRecord>, AppError>
+    where
+        S: IntakeLedger,
+    {
+        self.store
+            .look_up(self.identity.store_id, sales_channel, external_reference)
+            .await
+            .map_err(AppError::Port)
     }
 
     /// The current projected state of a table.

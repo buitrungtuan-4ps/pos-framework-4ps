@@ -16,7 +16,7 @@ use pos_ports::config_store::ConfigUpdate;
 use pos_ports::{PortError, PortName, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 
-use crate::writer::Command;
+use crate::writer::{Command, IntakeWrite};
 
 /// A store transaction: a buffer of pending writes and the handle that flushes them.
 ///
@@ -27,12 +27,16 @@ pub struct SqliteTx {
     pub(crate) commands: mpsc::Sender<Command>,
     pub(crate) events: Vec<EventEnvelope<RawPayload>>,
     pub(crate) config: Option<ConfigUpdate>,
+    /// The inbound-order idempotency row to write with the order (ADR-0064), if any. Buffered by
+    /// `IntakeLedger::record` and flushed in the same SQLite transaction as `events`.
+    pub(crate) intake: Option<IntakeWrite>,
 }
 
 impl TxContext for SqliteTx {
     async fn commit(self) -> Result<(), PortError> {
-        // Nothing to do if the transaction touched nothing — a begin with no append and no apply.
-        if self.events.is_empty() && self.config.is_none() {
+        // Nothing to do if the transaction touched nothing — a begin with no append, apply, or
+        // intake record.
+        if self.events.is_empty() && self.config.is_none() && self.intake.is_none() {
             return Ok(());
         }
         let (reply, outcome) = oneshot::channel();
@@ -40,6 +44,7 @@ impl TxContext for SqliteTx {
             .send(Command::Commit {
                 events: self.events,
                 config: self.config,
+                intake: self.intake,
                 reply,
             })
             .await

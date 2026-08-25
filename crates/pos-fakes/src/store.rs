@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{ConfigVersionId, EventId, StoreId};
@@ -59,6 +60,10 @@ struct StoreState {
     current: BTreeMap<StoreId, ConfigSnapshot>,
     /// The last version that applied, which diverges from `current` only after a refusal.
     last_known_good: BTreeMap<StoreId, ConfigSnapshot>,
+    /// The inbound-order idempotency ledger, keyed by `(store, sales_channel, external_reference)`
+    /// (ADR-0064). Written in the order's own transaction, so a committed record always has its
+    /// order.
+    intake: BTreeMap<(StoreId, String, String), IntakeRecord>,
 }
 
 /// An in-memory `EventStore` and `ConfigStore`.
@@ -95,11 +100,31 @@ pub struct FakeTx {
     state: Arc<Mutex<StoreState>>,
     events: Vec<EventEnvelope<RawPayload>>,
     config: Option<ConfigUpdate>,
+    /// The inbound-order idempotency row to write with the order (ADR-0064), if any:
+    /// `(store, sales_channel, external_reference, record)`.
+    intake: Option<(StoreId, String, String, IntakeRecord)>,
 }
 
 impl TxContext for FakeTx {
     async fn commit(self) -> Result<(), PortError> {
         let mut state = lock(&self.state);
+
+        // Check the intake key BEFORE mutating anything, so a conflict leaves the whole transaction
+        // with no effect — the same atomicity the real store gets from rolling back on the plain
+        // insert's constraint violation (ADR-0064). A committed intake row therefore always has its
+        // order, and a second order on the same key never lands.
+        if let Some((store_id, sales_channel, external_reference, _)) = &self.intake
+            && state.intake.contains_key(&(
+                *store_id,
+                sales_channel.clone(),
+                external_reference.clone(),
+            ))
+        {
+            return Err(PortError::already_exists(
+                PortName::OrderIn,
+                "an order already exists for this reference",
+            ));
+        }
 
         for envelope in self.events {
             let store_id = envelope.store_id;
@@ -146,6 +171,12 @@ impl TxContext for FakeTx {
             state.last_known_good.insert(snapshot.store_id, snapshot);
         }
 
+        if let Some((store_id, sales_channel, external_reference, record)) = self.intake {
+            state
+                .intake
+                .insert((store_id, sales_channel, external_reference), record);
+        }
+
         Ok(())
     }
 
@@ -165,6 +196,7 @@ impl Transactional for FakeStore {
             state: Arc::clone(&self.state),
             events: Vec::new(),
             config: None,
+            intake: None,
         })
     }
 }
@@ -314,5 +346,41 @@ impl ConfigStore for FakeStore {
         };
         tx.config = Some(update.clone());
         Ok(reached)
+    }
+}
+
+impl IntakeLedger for FakeStore {
+    async fn record(
+        &self,
+        tx: &mut FakeTx,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+        record: &IntakeRecord,
+    ) -> Result<(), PortError> {
+        tx.intake = Some((
+            store_id,
+            sales_channel.to_owned(),
+            external_reference.to_owned(),
+            record.clone(),
+        ));
+        Ok(())
+    }
+
+    async fn look_up(
+        &self,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+    ) -> Result<Option<IntakeRecord>, PortError> {
+        let state = lock(&self.state);
+        Ok(state
+            .intake
+            .get(&(
+                store_id,
+                sales_channel.to_owned(),
+                external_reference.to_owned(),
+            ))
+            .cloned())
     }
 }

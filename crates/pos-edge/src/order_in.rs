@@ -7,132 +7,95 @@
 //! from its own menu, opens the order in its local log, and accepts **offline**. This is that
 //! implementor. It is a thin driving-port adapter over [`Edge`]: `submit` reprices each line against
 //! the session's [`MenuCatalog`](pos_proto::menu::MenuCatalog) (ADR-0063), opens the order through
-//! [`Edge::open_inbound_order`], and records the acceptance in an idempotency ledger keyed by the
-//! caller's `(sales_channel, external_reference)` — so a marketplace's retry, or the relay's
-//! at-least-once delivery, converge on one order in the kitchen.
+//! [`Edge::open_inbound_order`], and — in that order's **own transaction** — records the acceptance
+//! in the durable [`IntakeLedger`] keyed by the caller's `(sales_channel, external_reference)`. So a
+//! marketplace's retry, the relay's at-least-once redelivery, or a crash mid-open all converge on
+//! one order in the kitchen.
 //!
 //! The relay client ([ADR-0061](../../../docs/adr/0061-order-relay.md)) is the production caller; a
 //! guest QR order and a `POST /v1/orders` reach the same path.
 
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_ports::event_store::EventStore;
+use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderAcceptance, OrderIn};
 use pos_ports::{PortError, PortName};
+use pos_proto::error::ErrorStatus;
 use pos_proto::ids::DeviceId;
 use pos_proto::money::Money;
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
-use crate::app::{AppError, Edge};
+use crate::app::{AppError, Edge, IntakeIntent};
 use crate::queue::QueueNumberAuthority;
 
-/// The durable, per-store record of what a caller's reference produced — the idempotency source of
-/// truth ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Keyed by the channel's wire token and
-/// the caller's reference, exactly as the cloud relay keys its queue. Backed by `store-sqlite` in the
-/// binary (the follow-up commit) and an in-memory map in tests and the example — the same split as
-/// [`ReceiptAuthority`](crate::receipt::ReceiptAuthority).
-pub trait IntakeLedger: Send + Sync {
-    /// The acceptance a reference already produced, or `None` if this is the first time.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError`] if the ledger could not be read.
-    fn lookup(
-        &self,
-        sales_channel: &str,
-        external_reference: &str,
-    ) -> impl Future<Output = Result<Option<OrderAcceptance>, PortError>> + Send;
-
-    /// Records the acceptance for a reference. Insert-if-absent: a racing second writer keeps the
-    /// first record rather than overwriting it.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError`] if the ledger could not be written.
-    fn record(
-        &self,
-        sales_channel: &str,
-        external_reference: &str,
-        acceptance: OrderAcceptance,
-    ) -> impl Future<Output = Result<(), PortError>> + Send;
-}
-
-/// An in-memory [`IntakeLedger`] — the tests-and-example implementation. Not durable across a
-/// restart; the SQLite implementation (written in the order's own transaction) is the production one.
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryIntakeLedger {
-    inner: Arc<Mutex<BTreeMap<(String, String), OrderAcceptance>>>,
-}
-
-impl InMemoryIntakeLedger {
-    /// An empty ledger.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl IntakeLedger for InMemoryIntakeLedger {
-    async fn lookup(
-        &self,
-        sales_channel: &str,
-        external_reference: &str,
-    ) -> Result<Option<OrderAcceptance>, PortError> {
-        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        Ok(guard
-            .get(&(sales_channel.to_owned(), external_reference.to_owned()))
-            .cloned())
-    }
-
-    async fn record(
-        &self,
-        sales_channel: &str,
-        external_reference: &str,
-        acceptance: OrderAcceptance,
-    ) -> Result<(), PortError> {
-        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        guard
-            .entry((sales_channel.to_owned(), external_reference.to_owned()))
-            .or_insert(acceptance);
-        Ok(())
-    }
-}
-
 /// The edge's [`OrderIn`]: reprice from the store's menu, open the order in the local log, dedupe on
-/// the caller's reference, and hand a tableless order its daily queue number. Generic over the store
-/// `S`, the ledger `L`, and the queue authority `Q` — static dispatch, no `dyn`
+/// the caller's reference through the store's durable ledger, and hand a tableless order its daily
+/// queue number. Generic over the store `S` (which supplies both the event log and the idempotency
+/// ledger, so the two share one transaction) and the queue authority `Q` — static dispatch, no `dyn`
 /// ([ADR-0013](../../../docs/adr/0013-async-strategy.md)).
 #[derive(Debug)]
-pub struct EdgeOrderIn<S, L, Q> {
+pub struct EdgeOrderIn<S, Q> {
     edge: Arc<Edge<S>>,
-    ledger: L,
     queue: Q,
     device_id: DeviceId,
 }
 
-impl<S, L, Q> EdgeOrderIn<S, L, Q> {
-    /// Builds the intake over an edge, an idempotency ledger, a queue-number authority, and the box's
-    /// own device id (the events an inbound order writes carry it, since there is no signed-in
-    /// employee). In the field the ledger and the authority are both the one
-    /// [`SqliteStore`](store_sqlite::SqliteStore); the tests and the example pass the in-memory pair.
-    pub const fn new(edge: Arc<Edge<S>>, ledger: L, queue: Q, device_id: DeviceId) -> Self {
+impl<S, Q> EdgeOrderIn<S, Q> {
+    /// Builds the intake over an edge, a queue-number authority, and the box's own device id (the
+    /// events an inbound order writes carry it, since there is no signed-in employee). In the field
+    /// the store and the authority are both the one [`SqliteStore`](store_sqlite::SqliteStore) — so
+    /// the ledger row lands in the order's transaction and the queue number survives a restart; the
+    /// tests and the example pass the fake store and the in-memory queue authority.
+    pub const fn new(edge: Arc<Edge<S>>, queue: Q, device_id: DeviceId) -> Self {
         Self {
             edge,
-            ledger,
             queue,
             device_id,
         }
     }
 }
 
-impl<S, L, Q> OrderIn for EdgeOrderIn<S, L, Q>
+impl<S, Q> EdgeOrderIn<S, Q>
 where
-    S: EventStore + Send + Sync,
-    L: IntakeLedger,
+    S: EventStore + IntakeLedger + Send + Sync,
+    Q: QueueNumberAuthority,
+{
+    /// Rebuilds the acceptance a repeat is owed from its stored record. The queue number is
+    /// reconstructed here rather than stored: the authority is idempotent by order, so a tableless
+    /// order gets the same number back (and a crash that opened the order but never numbered it gets
+    /// one now), while a QR order gets none.
+    async fn acceptance_from_record(
+        &self,
+        store_id: StoreId,
+        record: &IntakeRecord,
+        created: bool,
+    ) -> Result<OrderAcceptance, PortError> {
+        let queue_number = if record.awaiting_staff_confirmation {
+            None
+        } else {
+            let number = self
+                .queue
+                .allocate_queue_number(store_id, record.business_date, record.order_id)
+                .await?;
+            Some(u32::try_from(number).unwrap_or(u32::MAX))
+        };
+        Ok(OrderAcceptance {
+            order_id: record.order_id,
+            created,
+            queue_number,
+            total: record.total,
+            repriced: record.repriced,
+            awaiting_staff_confirmation: record.awaiting_staff_confirmation,
+        })
+    }
+}
+
+impl<S, Q> OrderIn for EdgeOrderIn<S, Q>
+where
+    S: EventStore + IntakeLedger + Send + Sync,
     Q: QueueNumberAuthority,
 {
     async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
@@ -154,11 +117,15 @@ where
 
         // A repeat — the caller's retry, or the relay's at-least-once delivery — returns the recorded
         // acceptance and reports it did not create a second order.
-        if let Some(existing) = self.ledger.lookup(channel_token, reference).await? {
-            return Ok(OrderAcceptance {
-                created: false,
-                ..existing
-            });
+        if let Some(record) = self
+            .edge
+            .look_up_intake(channel_token, reference)
+            .await
+            .map_err(port_error_from_app)?
+        {
+            return self
+                .acceptance_from_record(order.store_id, &record, false)
+                .await;
         }
 
         let session = self.edge.session();
@@ -182,23 +149,50 @@ where
             priced_lines.push((priced, line.note.is_some()));
         }
 
-        // Open the order in one transaction: `sales.order.opened` + a line per priced line. The
-        // business date it was stamped with keys the queue number below.
-        let (order_id, business_date) = self
+        // Open the order and record the idempotency row in ONE transaction: `sales.order.opened` +
+        // a line per priced line + the ledger row (ADR-0064). A concurrent second order on the same
+        // key loses the race at commit (`already_exists`) — resolve it by returning the winner.
+        let intent = IntakeIntent {
+            sales_channel: channel_token,
+            external_reference: reference,
+            total,
+            repriced,
+        };
+        let (order_id, business_date) = match self
             .edge
             .open_inbound_order(
                 self.device_id,
                 order.sales_channel.clone(),
                 order.table_id,
                 &priced_lines,
+                Some(intent),
             )
             .await
-            .map_err(port_error_from_app)?;
+        {
+            Ok(opened) => opened,
+            Err(AppError::Port(error)) if error.status() == ErrorStatus::AlreadyExists => {
+                // Another delivery of the same reference won the race and its record is now durable.
+                let record = self
+                    .edge
+                    .look_up_intake(channel_token, reference)
+                    .await
+                    .map_err(port_error_from_app)?
+                    .ok_or_else(|| {
+                        PortError::internal(
+                            PortName::OrderIn,
+                            "an order exists for this reference but its record is missing",
+                        )
+                    })?;
+                return self
+                    .acceptance_from_record(order.store_id, &record, false)
+                    .await;
+            }
+            Err(other) => return Err(port_error_from_app(other)),
+        };
 
         // A tableless order (takeaway / delivery / public API) is called back by a daily queue
         // number; a QR order names a table and is served there, so it gets none. The authority is
-        // durable and idempotent by order, so a retry that got past the ledger still yields one
-        // number, not two (ADR-0064).
+        // durable and idempotent by order (ADR-0064).
         let queue_number = if order.table_id.is_none() {
             let number = self
                 .queue
@@ -209,7 +203,7 @@ where
             None
         };
 
-        let acceptance = OrderAcceptance {
+        Ok(OrderAcceptance {
             order_id,
             created: true,
             queue_number,
@@ -218,11 +212,7 @@ where
             // A QR order (one that names a table) waits for staff before the kitchen sees it
             // (ADR-0057); a delivery or public-API order is already committed by its channel.
             awaiting_staff_confirmation: order.table_id.is_some(),
-        };
-        self.ledger
-            .record(channel_token, reference, acceptance.clone())
-            .await?;
-        Ok(acceptance)
+        })
     }
 
     async fn look_up(
@@ -234,9 +224,18 @@ where
         if store_id != self.edge.store_id() {
             return Ok(None);
         }
-        self.ledger
-            .lookup(sales_channel.as_wire(), external_reference.as_str())
+        match self
+            .edge
+            .look_up_intake(sales_channel.as_wire(), external_reference.as_str())
             .await
+            .map_err(port_error_from_app)?
+        {
+            Some(record) => Ok(Some(
+                self.acceptance_from_record(store_id, &record, false)
+                    .await?,
+            )),
+            None => Ok(None),
+        }
     }
 }
 

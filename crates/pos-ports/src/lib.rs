@@ -46,6 +46,7 @@ pub mod erp;
 pub mod error;
 pub mod event_store;
 pub mod fiscalization;
+pub mod intake_ledger;
 pub mod key_vault;
 pub mod message_link;
 pub mod metrics_sink;
@@ -71,6 +72,7 @@ pub use fiscalization::{
     Fiscalization, InvoiceBuyer, InvoiceLine, InvoiceNumber, InvoiceRange, InvoiceRequest,
     IssuedInvoice, ReconciliationReport,
 };
+pub use intake_ledger::{IntakeLedger, IntakeRecord};
 pub use key_vault::{KeyVault, Secret, SecretName};
 pub use message_link::{LinkCapacity, MessageLink, PublishOutcome};
 pub use metrics_sink::{

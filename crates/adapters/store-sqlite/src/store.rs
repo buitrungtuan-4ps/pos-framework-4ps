@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, ConfigVersionId, EventId, OrderId, StoreId};
@@ -19,7 +20,7 @@ use pos_proto::time::BusinessDate;
 
 use crate::migrations;
 use crate::tx::SqliteTx;
-use crate::writer::{self, Command};
+use crate::writer::{self, Command, IntakeWrite};
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
 /// stalled writer cannot grow the queue without bound.
@@ -176,6 +177,7 @@ impl Transactional for SqliteStore {
             commands: self.inner.commands.clone(),
             events: Vec::new(),
             config: None,
+            intake: None,
         })
     }
 }
@@ -313,5 +315,55 @@ impl ConfigStore for SqliteStore {
         };
         tx.config = Some(update.clone());
         Ok(reached)
+    }
+}
+
+impl IntakeLedger for SqliteStore {
+    async fn record(
+        &self,
+        tx: &mut SqliteTx,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+        record: &IntakeRecord,
+    ) -> Result<(), PortError> {
+        // Serialise here so the writer thread stays free of `pos_ports` types; the row is flushed
+        // in the order's own transaction at commit (ADR-0064).
+        let record_json = serde_json::to_string(record).map_err(|error| {
+            PortError::internal(PortName::OrderIn, "could not encode the intake record")
+                .with_source(error)
+        })?;
+        tx.intake = Some(IntakeWrite {
+            store_id,
+            sales_channel: sales_channel.to_owned(),
+            external_reference: external_reference.to_owned(),
+            record_json,
+        });
+        Ok(())
+    }
+
+    async fn look_up(
+        &self,
+        store_id: StoreId,
+        sales_channel: &str,
+        external_reference: &str,
+    ) -> Result<Option<IntakeRecord>, PortError> {
+        let (sales_channel, external_reference) =
+            (sales_channel.to_owned(), external_reference.to_owned());
+        let stored = self
+            .ask(PortName::OrderIn, move |reply| Command::LookUpIntake {
+                store_id,
+                sales_channel,
+                external_reference,
+                reply,
+            })
+            .await?;
+        match stored {
+            Some(json) => Ok(Some(serde_json::from_str(&json).map_err(|error| {
+                PortError::internal(PortName::OrderIn, "could not decode a stored intake record")
+                    .with_source(error)
+            })?)),
+            None => Ok(None),
+        }
     }
 }
