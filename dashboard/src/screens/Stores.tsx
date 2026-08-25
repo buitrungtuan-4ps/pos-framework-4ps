@@ -3,6 +3,7 @@
 // brand, and archive/restore — all by name, no ULID typed. Tenant-scoped to the picker's context.
 
 import { createSignal, For, Show } from "solid-js";
+import { A } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
 import type { Brand, Store } from "../api/types";
@@ -137,9 +138,17 @@ export function Stores() {
           <Card
             title={t("stores.list")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
-              </Button>
+              <div class="flex gap-2">
+                <A
+                  href="/stores/new"
+                  class="inline-flex min-h-touch items-center justify-center rounded-token bg-accent px-4 text-base font-medium text-accent-ink"
+                >
+                  {t("wizard.open")}
+                </A>
+                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+                  {t("action.load")}
+                </Button>
+              </div>
             }
           >
             <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
