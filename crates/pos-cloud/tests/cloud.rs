@@ -1028,8 +1028,8 @@ async fn first_boot_setup_enrols_the_admin_then_refuses_a_second() {
         "the enrolment carries a provisioning uri: {uri}"
     );
     assert!(
-        uri.contains("algorithm=SHA256"),
-        "the uri fixes SHA-256: {uri}"
+        uri.contains("algorithm=SHA1"),
+        "the uri fixes HMAC-SHA1 — the algorithm every authenticator app computes (ADR-0034): {uri}"
     );
     assert!(
         enrolment["secret_base32"]
