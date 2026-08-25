@@ -38,6 +38,9 @@ use pos_cloud::devices::{
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
+use pos_cloud::registry::{
+    BrandRecord, DeviceRecord, RegistryStore, RegistryStoreError, StoreRecord, TenantRecord,
+};
 use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
@@ -556,6 +559,19 @@ fn post_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Reques
 fn put_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request<Body> {
     Request::builder()
         .method("PUT")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A PATCH request for `uri` with a JSON body and a `Cookie` header.
+fn patch_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
         .uri(uri)
         .header("content-type", "application/json")
         .header("cookie", cookie)
@@ -2817,4 +2833,269 @@ async fn pulling_orders_requires_the_relay_orders_scope() {
         .await
         .expect("route pull");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// --- The org registry (ADR-0065) ---------------------------------------------------------------
+
+/// The registry as four flat lists, mirroring how the real tables read and scope by tenant.
+#[derive(Clone, Default)]
+struct FakeRegistry {
+    tenants: Arc<Mutex<Vec<TenantRecord>>>,
+    brands: Arc<Mutex<Vec<BrandRecord>>>,
+    stores: Arc<Mutex<Vec<StoreRecord>>>,
+    devices: Arc<Mutex<Vec<DeviceRecord>>>,
+}
+
+impl RegistryStore for FakeRegistry {
+    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<(), RegistryStoreError> {
+        self.tenants.lock().expect("lock").push(tenant.clone());
+        Ok(())
+    }
+
+    async fn list_tenants(&self) -> Result<Vec<TenantRecord>, RegistryStoreError> {
+        Ok(self.tenants.lock().expect("lock").clone())
+    }
+
+    async fn update_tenant(&self, tenant: &TenantRecord) -> Result<bool, RegistryStoreError> {
+        let mut rows = self.tenants.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.tenant_id == tenant.tenant_id {
+                row.name.clone_from(&tenant.name);
+                row.status = tenant.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_brand(&self, brand: &BrandRecord) -> Result<(), RegistryStoreError> {
+        self.brands.lock().expect("lock").push(brand.clone());
+        Ok(())
+    }
+
+    async fn list_brands(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<BrandRecord>, RegistryStoreError> {
+        Ok(self
+            .brands
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|brand| brand.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_brand(&self, brand: &BrandRecord) -> Result<bool, RegistryStoreError> {
+        let mut rows = self.brands.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.brand_id == brand.brand_id && row.tenant_id == brand.tenant_id {
+                row.name.clone_from(&brand.name);
+                row.status = brand.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_store(&self, store: &StoreRecord) -> Result<(), RegistryStoreError> {
+        self.stores.lock().expect("lock").push(store.clone());
+        Ok(())
+    }
+
+    async fn list_stores(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<StoreRecord>, RegistryStoreError> {
+        Ok(self
+            .stores
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|store| store.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_store(&self, store: &StoreRecord) -> Result<bool, RegistryStoreError> {
+        let mut rows = self.stores.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.store_id == store.store_id && row.tenant_id == store.tenant_id {
+                row.name.clone_from(&store.name);
+                row.brand_id = store.brand_id;
+                row.status = store.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_device(&self, device: &DeviceRecord) -> Result<(), RegistryStoreError> {
+        self.devices.lock().expect("lock").push(device.clone());
+        Ok(())
+    }
+
+    async fn list_devices(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<DeviceRecord>, RegistryStoreError> {
+        Ok(self
+            .devices
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|device| device.tenant_id == tenant_id && device.store_id == store_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_device(&self, device: &DeviceRecord) -> Result<bool, RegistryStoreError> {
+        let mut rows = self.devices.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.device_id == device.device_id && row.tenant_id == device.tenant_id {
+                row.name.clone_from(&device.name);
+                row.kind.clone_from(&device.kind);
+                row.status = device.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// The main router (for `/admin/login`) and the registry sub-router, sharing one admin store —
+/// production's `merge`, in a test.
+fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::registry_router(registry, admin, clock()))
+}
+
+#[tokio::test]
+async fn registry_creates_and_lists_named_tenant_and_store_without_typing_a_ulid() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+
+    // Create a tenant by name; the id is minted server-side and returned once.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Pizza 4P's");
+    assert_eq!(created["status"], "active");
+    let tenant_id = created["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    // It shows in the listing the picker reads.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/tenants", &cookie))
+        .await
+        .expect("route list tenants");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let tenants = json_body(listed).await;
+    assert_eq!(tenants.as_array().expect("array").len(), 1);
+    assert_eq!(tenants[0]["tenant_id"], tenant_id);
+
+    // Create a store under it — again, no ULID typed by the operator.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/stores",
+            &serde_json::json!({ "tenant_id": tenant_id, "name": "Bến Thành" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create store");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let store = json_body(created).await;
+    assert_eq!(store["name"], "Bến Thành");
+    assert_eq!(store["brand_id"], serde_json::Value::Null);
+    let store_id = store["store_id"].as_str().expect("a store id").to_owned();
+
+    // And it lists for its tenant.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores?tenant_id={tenant_id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list stores");
+    let stores = json_body(listed).await;
+    assert_eq!(stores.as_array().expect("array").len(), 1);
+    assert_eq!(stores[0]["store_id"], store_id);
+}
+
+#[tokio::test]
+async fn registry_renames_a_tenant_and_404s_an_unknown_one() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Placeholder" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    // Rename it.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    assert_eq!(json_body(renamed).await["name"], "Pizza 4P's");
+
+    // Renaming an unknown tenant is a 404, not a silent success.
+    let missing = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/tenants/{}", Ulid::from_u128(9_999)),
+            &serde_json::json!({ "name": "Nope", "status": "active" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename missing");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn registry_is_behind_the_session_guard() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    // No session cookie → the guard denies before any listing is revealed.
+    let denied = router
+        .oneshot(get("/admin/tenants", None))
+        .await
+        .expect("route unauthenticated");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }

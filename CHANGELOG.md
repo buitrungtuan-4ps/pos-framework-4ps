@@ -32,6 +32,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The cloud now has an org registry — named Tenant/Brand/Store/Device** (ADR-0065, WS-C #102). The
+  cloud has always addressed a store by two opaque ULIDs; nothing recorded that a tenant, brand, or
+  store *exists*, what it is *called*, or which brand and tenant a store *belongs to*. A new
+  `store-postgres` migration (`0011`) adds `tenants`, `brands`, `stores`, and `devices` tables —
+  each a named, status-bearing row with its parentage, RLS-isolated by tenant exactly as
+  `config_trees` is — and a `RegistryStore` seam with `/admin/tenants|brands|stores` (and
+  `/admin/stores/{id}/devices`) CRUD behind the super-admin session. Identity and naming live here;
+  configuration keeps living in the config tree (ADR-0033), and a store shares its `store_id` between
+  the two. `devices` is the canonical device identity that `device_proposals`/`device_credentials`
+  key to, not a fourth copy. This is the backbone that lets the back-office dashboard (ADR-0060)
+  replace free-text ULID entry with named pickers and a create-store flow — so a normal operator
+  never sees or types a ULID, and `tenant_id is not a ULID` stops being reachable. **Upgrade note:**
+  migration `0011` runs on boot and **backfills** the registry from existing `config_trees` rows —
+  every already-configured `(tenant_id, store_id)` becomes a tenant and a store under a placeholder
+  name (`Store <short-ulid>`), idempotently, touching nothing in `config_trees`; renaming them is a
+  non-blocking follow-up. No config, protocol, or permission identifier changes.
 - **The intake idempotency ledger is now durable and written in the order's own transaction**
   (ADR-0064). `IntakeLedger` is promoted to a `pos-ports` port (a `Transactional` one, like
   `ConfigStore`): `record` buffers the `(sales_channel, external_reference) → record` row into the

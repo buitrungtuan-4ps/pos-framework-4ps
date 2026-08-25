@@ -44,6 +44,9 @@ const MIGRATION_0009: &str = include_str!("../migrations/0009_cloud_activation.s
 /// The cloud order-queue table (P7).
 const MIGRATION_0010: &str = include_str!("../migrations/0010_cloud_order_queue.sql");
 
+/// The cloud org registry — named Tenant/Brand/Store/Device ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+const MIGRATION_0011: &str = include_str!("../migrations/0011_cloud_registry.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -137,6 +140,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0010)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0011)
             .await
             .map_err(unavailable)
     }
@@ -240,6 +247,14 @@ impl PostgresStore {
     #[must_use]
     pub fn translations(&self) -> crate::translations::PostgresTranslations {
         crate::translations::PostgresTranslations::new(self.pool.clone())
+    }
+
+    /// The org-registry store over this pool ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `RegistryStore` seam over it.
+    #[must_use]
+    pub fn registry(&self) -> crate::registry::PostgresRegistry {
+        crate::registry::PostgresRegistry::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

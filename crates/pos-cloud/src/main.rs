@@ -176,6 +176,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // The org registry (ADR-0065): named Tenant/Brand/Store/Device under the super-admin session,
+        // the source of the dashboard's named pickers. Its tables are backfilled from `config_trees`
+        // by migration 0011, so an existing cell's fleet appears here on the first boot after upgrade.
+        .merge(http::registry_router(
+            store.registry(),
+            store.admin(),
+            SystemClock,
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay
