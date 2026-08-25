@@ -102,6 +102,11 @@ skip = [
     # binaries never link both, so this is a workspace-graph duplicate only; skipping the 0.14 line
     # leaves 0.17 unique. review: 2026-11-19
     { crate = "hashbrown@0.14", reason = "rusqlite/hashlink (edge) still on 0.14; utoipa/indexmap (cloud) on 0.17" },
+    # sha1 straddles 0.10 -> 0.11: axum's WebSocket handshake pulls 0.10 (on the `digest` 0.10 line),
+    # while pos-cloud's super-admin TOTP (ADR-0034, amended to HMAC-SHA1 for authenticator-app
+    # compatibility) needs 0.11 on the `digest` 0.11 line `hmac` 0.13 uses. The two never link in one
+    # binary path meaningfully; skipping the 0.10 line leaves 0.11 unique. review: 2026-11-19
+    { crate = "sha1@0.10", reason = "axum WebSocket handshake on sha1 0.10 (digest 0.10); cloud TOTP on sha1 0.11 (digest 0.11)" },
 ]
 skip-tree = [
     # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed

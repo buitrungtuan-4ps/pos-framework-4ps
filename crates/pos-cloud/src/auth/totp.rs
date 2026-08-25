@@ -4,12 +4,14 @@
 //! Time-based one-time passwords (RFC 6238), the mandatory second factor for the super-admin
 //! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
 //!
-//! TOTP over HMAC-**SHA256**, the 30-second time step, dynamically truncated to a 6-digit code. RFC
-//! 6238 permits SHA1/SHA256/SHA512, and this picks SHA256 — modern authenticators honour it via the
-//! `otpauth://` URI's `algorithm=SHA256` field — so the cloud reuses the `sha2` already in its tree
-//! rather than adding a second SHA1 crate version ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
-//! The provisioning QR must therefore set `algorithm=SHA256`. Two things beyond the RFC make it safe
-//! as a real second factor:
+//! TOTP over HMAC-**SHA1**, the 30-second time step, dynamically truncated to a 6-digit code. RFC
+//! 6238 permits SHA1/SHA256/SHA512, and this picks SHA1 — the algorithm every authenticator app
+//! computes by **default**, and the only one Google Authenticator and Microsoft Authenticator
+//! actually honour (they ignore the `otpauth://` URI's `algorithm` field), so a code a real operator
+//! types in verifies. ADR-0034 originally chose SHA256 to avoid a second `sha1` crate version; that
+//! made enrolment unusable in practice, so it was amended — the duplicate `sha1` line is the accepted
+//! cost, carried by a documented `deny.toml` skip. Two things beyond the RFC make it safe as a real
+//! second factor:
 //!
 //!  * **A skew window.** [`verify`] accepts the code for the step before and after now (`±1`), so a
 //!    clock a few seconds off still authenticates, but a code more than ~30s stale does not.
@@ -24,9 +26,9 @@ use core::fmt;
 
 use hmac::digest::KeyInit as _;
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha1::Sha1;
 
-type HmacSha256 = Hmac<Sha256>;
+type HmacSha1 = Hmac<Sha1>;
 
 /// The time step, in seconds — the RFC 6238 default and what authenticator apps assume.
 pub const STEP_SECONDS: u64 = 30;
@@ -119,7 +121,7 @@ pub fn verify(
 
 /// The code for a specific step counter (RFC 6238 / RFC 4226 dynamic truncation).
 fn code_for_step(secret: &TotpSecret, step: u64, digits: u32) -> String {
-    let digest = match HmacSha256::new_from_slice(&secret.0) {
+    let digest = match HmacSha1::new_from_slice(&secret.0) {
         Ok(mut mac) => {
             mac.update(&step.to_be_bytes());
             mac.finalize().into_bytes()
@@ -157,19 +159,19 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::{DIGITS, STEP_SECONDS, TotpError, TotpSecret, code_at, verify};
 
-    /// The RFC 6238 Appendix B SHA256 seed: ASCII "12345678901234567890123456789012" (32 bytes).
+    /// The RFC 6238 Appendix B SHA1 seed: ASCII "12345678901234567890" (20 bytes).
     fn rfc_secret() -> TotpSecret {
-        TotpSecret::new(b"12345678901234567890123456789012".to_vec())
+        TotpSecret::new(b"12345678901234567890".to_vec())
     }
 
     #[test]
     fn it_matches_the_rfc_6238_test_vectors() {
-        // The published SHA256 rows (8-digit), independently recomputed.
-        assert_eq!(code_at(&rfc_secret(), 59, 8), "46119246");
-        assert_eq!(code_at(&rfc_secret(), 1_111_111_109, 8), "68084774");
-        assert_eq!(code_at(&rfc_secret(), 1_234_567_890, 8), "91819424");
-        // And the 6-digit truncation the product uses.
-        assert_eq!(code_at(&rfc_secret(), 59, DIGITS), "119246");
+        // The published SHA1 rows (8-digit) — RFC 6238 Appendix B.
+        assert_eq!(code_at(&rfc_secret(), 59, 8), "94287082");
+        assert_eq!(code_at(&rfc_secret(), 1_111_111_109, 8), "07081804");
+        assert_eq!(code_at(&rfc_secret(), 1_234_567_890, 8), "89005924");
+        // And the 6-digit truncation the product uses (the last six digits of the T=59 row).
+        assert_eq!(code_at(&rfc_secret(), 59, DIGITS), "287082");
     }
 
     #[test]

@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
 pub const MIN_PASSWORD_LEN: usize = 12;
 
-/// The length of a freshly-minted TOTP shared secret, in bytes — 256 bits, matching the SHA-256 the
-/// verifier uses ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+/// The length of a freshly-minted TOTP shared secret, in bytes — 256 bits, well above RFC 4226's
+/// 160-bit floor and independent of the HMAC hash the verifier uses
+/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
 pub const TOTP_SECRET_BYTES: usize = 32;
 
 /// The issuer label the `otpauth://` URI carries — deliberately free of characters that would need
@@ -61,7 +62,7 @@ impl fmt::Debug for SetupRequest {
 /// operator through the HTTP response body, never a log.
 #[derive(Clone, Serialize)]
 pub struct Enrolment {
-    /// The `otpauth://totp/…` provisioning URI (SHA-256, 6 digits, 30-second period).
+    /// The `otpauth://totp/…` provisioning URI (SHA1, 6 digits, 30-second period).
     pub otpauth_uri: String,
     /// The base32-encoded shared secret, for an authenticator that takes a typed key.
     pub secret_base32: String,
@@ -87,12 +88,14 @@ pub fn build_enrolment(secret: &[u8]) -> Enrolment {
 }
 
 /// The `otpauth://totp` provisioning URI for `secret`, fixing the parameters the verifier expects
-/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): HMAC-SHA256, 6 digits, a 30-second step.
+/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): HMAC-SHA1, 6 digits, a 30-second step.
+/// `algorithm=SHA1` is stated explicitly even though it is the default, so a URI-honouring app agrees
+/// with the ones (Google/Microsoft Authenticator) that assume it regardless.
 #[must_use]
 pub fn otpauth_uri(secret: &[u8]) -> String {
     let encoded = base32_encode(secret);
     format!(
-        "otpauth://totp/{ISSUER}:{ACCOUNT}?secret={encoded}&issuer={ISSUER}&algorithm=SHA256&digits=6&period=30"
+        "otpauth://totp/{ISSUER}:{ACCOUNT}?secret={encoded}&issuer={ISSUER}&algorithm=SHA1&digits=6&period=30"
     )
 }
 
@@ -177,7 +180,7 @@ mod tests {
         let uri = otpauth_uri(b"fooba"); // -> MZXW6YTB
         assert_eq!(
             uri,
-            "otpauth://totp/Pizza4Ps:super-admin?secret=MZXW6YTB&issuer=Pizza4Ps&algorithm=SHA256&digits=6&period=30"
+            "otpauth://totp/Pizza4Ps:super-admin?secret=MZXW6YTB&issuer=Pizza4Ps&algorithm=SHA1&digits=6&period=30"
         );
     }
 
