@@ -28,6 +28,7 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod determinism;
+pub mod display;
 pub mod enums;
 pub mod envelope;
 pub mod error;
@@ -46,6 +47,10 @@ pub mod ulid;
 pub mod wire_enum;
 
 pub use determinism::{ClockSource, IdGenerator};
+pub use display::{
+    ChannelLayout, DisplayButton, DisplayCategory, DisplayPlan, DisplaySubcategory, GridPosition,
+    LayoutBook,
+};
 pub use enums::{
     BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
     SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
@@ -54,10 +59,10 @@ pub use envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPa
 pub use error::{ErrorBody, ErrorDetail, ErrorResponse, ErrorStatus};
 pub use events::{EventType, TypedPayload};
 pub use ids::{
-    BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, EventId,
-    IngredientId, MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId,
-    ShipmentId, StationId, StockLedgerEntryId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
-    VoucherId,
+    BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    DisplaySubcategoryId, EmployeeId, EventId, IngredientId, MenuItemId, OrderId, OrderLineId,
+    PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId,
+    StoreId, SubjectId, TableId, TaxClassId, TenantId, VoucherId,
 };
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,
