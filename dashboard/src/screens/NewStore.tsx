@@ -9,7 +9,7 @@ import { useNavigate } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import type { Brand, CreateApiKeyResponse, Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
-import { tenantId } from "../state/session";
+import { tenantId, tenantName } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
@@ -94,6 +94,65 @@ export function NewStore() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // The store server's bootstrap file (crates/pos-edge EdgeConfig): it names WHICH store this box is
+  // and nothing else — the schema is `deny_unknown_fields`, so a credential or a cloud URL here would
+  // be rejected at load. The box gets its credential by activation, not this file (see the runbook).
+  // Store/tenant names and the cloud origin ride along as comments, so the file documents itself
+  // without adding parsed keys. Assembled client-side because the store_id is only known here.
+  const [copied, setCopied] = createSignal(false);
+
+  const configToml = () => {
+    const store = created();
+    if (!store) {
+      return "";
+    }
+    return [
+      "# pos_edge bootstrap configuration",
+      `# Store:  ${store.name}  (${store.store_id})`,
+      `# Tenant: ${tenantName() || tenantId()}  (${tenantId()})`,
+      `# Cloud:  ${window.location.origin}`,
+      "#",
+      "# This file tells the store server WHICH store it is. It carries no credential — the box",
+      "# gets its credential by activation (see the provisioning runbook), never from this file.",
+      "# Save it as config.toml beside the pos_edge binary, or point POS_EDGE_CONFIG at its path.",
+      "",
+      `store_id = "${store.store_id}"`,
+      "",
+      "# Optional — the LAN IP to advertise in the pairing QR; pin it with a DHCP reservation:",
+      '# advertised_ip = "192.168.1.50"',
+      "",
+      "# Optional — override the listen address (default 0.0.0.0:8787):",
+      '# bind = "0.0.0.0:8787"',
+      "",
+      "# Optional — where the SQLite event store lives (default store.sqlite):",
+      '# store_path = "store.sqlite"',
+      "",
+    ].join("\n");
+  };
+
+  const copyConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(configToml());
+      setCopied(true);
+    } catch {
+      // Clipboard access can be blocked; the operator can still select the text or download the file.
+      setCopied(false);
+    }
+  };
+
+  // A real file download, not a data: link the operator has to rename — this dashboard is served by
+  // pos_cloud (same origin), so the browser saves `config.toml` directly.
+  const downloadConfig = () => {
+    const url = URL.createObjectURL(new Blob([configToml()], { type: "application/toml" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "config.toml";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -237,6 +296,27 @@ export function NewStore() {
                   </Show>
                 </tbody>
               </table>
+
+              {/* The store server's config.toml — the operator's one file to carry to the box. */}
+              <div class="flex flex-col gap-2">
+                <span class="text-sm font-medium text-ink">{t("wizard.configTitle")}</span>
+                <p class="text-sm text-ink-muted">{t("wizard.configHint")}</p>
+                <pre class="overflow-x-auto rounded-token border border-line bg-surface-raised p-3 font-mono text-xs text-ink">
+                  {configToml()}
+                </pre>
+                <div class="flex gap-2">
+                  <Button variant="secondary" onClick={() => void copyConfig()}>
+                    {t("action.copy")}
+                  </Button>
+                  <Button variant="secondary" onClick={downloadConfig}>
+                    {t("wizard.downloadConfig")}
+                  </Button>
+                </div>
+                <Show when={copied()}>
+                  <Banner tone="ok" message={t("wizard.configCopied")} />
+                </Show>
+              </div>
+
               <Banner tone="ok" message={t("wizard.doneHint")} />
               <div>
                 <Button onClick={() => navigate("/stores", { replace: true })}>

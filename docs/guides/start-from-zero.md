@@ -90,6 +90,8 @@ development, it wants PostgreSQL/NATS/Garage (start them with
 
 ## Where to next
 
+- **Bring a real store online** (from the dashboard: create it, generate its `config.toml`, activate its
+  devices) → [Bring a store online](bring-a-store-online.md).
 - **Connect a real payment terminal, courier, or marketplace** → [Write an adapter](write-an-adapter.md).
 - **Support a new country** (tax invoices, locale, local vendors) → [Add a country module](add-a-country-module.md).
 - **Check the capacity numbers / run fleet scenarios** → [Run the simulator](run-the-simulator.md).

@@ -2,12 +2,13 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-21
 
-Four short, task-shaped guides. Each is meant to be finished in one sitting.
+Five short, task-shaped guides. Each is meant to be finished in one sitting.
 
 | I want to… | Guide |
 |---|---|
 | Clone the repo and see a sale happen | [Start from zero](start-from-zero.md) |
 | Deploy the cloud to a real server | [Start from zero → Part 2](start-from-zero.md#part-2--deploy-the-cloud-to-a-vps-15-minutes), then the [deploy runbook](../deploy-runbook.md) |
+| Bring a real store online from the dashboard | [Bring a store online](bring-a-store-online.md) |
 | Write an adapter for a new vendor/device | [Write an adapter](write-an-adapter.md) |
 | Add a new country (tax, locale, vendors) | [Add a country module](add-a-country-module.md) |
 | Prove the capacity numbers, run fleet scenarios | [Run the simulator](run-the-simulator.md) |
