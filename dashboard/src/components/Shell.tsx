@@ -13,6 +13,7 @@ import { ContextPicker } from "./ContextPicker";
 
 const NAV: readonly { href: string; key: Parameters<typeof t>[0] }[] = [
   { href: "/", key: "nav.reports" },
+  { href: "/stores", key: "nav.stores" },
   { href: "/config", key: "nav.config" },
   { href: "/api-keys", key: "nav.apiKeys" },
   { href: "/devices", key: "nav.devices" },
