@@ -3381,3 +3381,137 @@ async fn catalog_is_behind_the_session_guard() {
         .expect("route unauthenticated");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// The main router (for login + the effective-config read), the catalog CRUD router, and the publish
+/// router — all sharing one admin, one catalog, and one config-tree store, as production merges them.
+fn catalog_publish_app(
+    admin: FakeAdmin,
+    catalog: FakeCatalog,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::catalog_router(
+            catalog.clone(),
+            admin.clone(),
+            clock(),
+        ))
+        .merge(http::catalog_publish_router(
+            catalog,
+            config_trees,
+            admin,
+            clock(),
+        ))
+}
+
+#[tokio::test]
+async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+
+    // Author an item, a menu, and a dine-in placement.
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    let item_id = json_body(item).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/menus/{menu_id}/placements/{item_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "prices": [{ "sales_channel": "SALES_CHANNEL_DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
+                "available": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route place item");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    // Publish the menu to the store.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's effective config now carries the compiled MenuBook on its `menu` node.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+    let dine_in = &doc["menu"]["channels"][0];
+    assert_eq!(dine_in["sales_channel"], "SALES_CHANNEL_DINE_IN");
+    let entry = &dine_in["catalog"]["items"][0];
+    assert_eq!(entry["menu_item_id"], item_id);
+    assert_eq!(entry["unit_price"]["amount_minor"], 150_000);
+    assert_eq!(entry["display_name"], "Margherita");
+}
+
+#[tokio::test]
+async fn publishing_an_unknown_menu_is_refused() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    // No menu authored → the compiler refuses with a named error, surfaced as 422 (not a store 5xx).
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": ulid_text(1), "store_id": ulid_text(2), "menu_id": ulid_text(10) }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish unknown menu");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

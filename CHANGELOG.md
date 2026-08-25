@@ -32,14 +32,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A menu now publishes to a store — compiled and written onto its config tree** (ADR-0066, Phase 2a).
+  A `catalog_publish_router` adds `POST /admin/catalog/publish` behind the super-admin session guard:
+  given `(tenant_id, store_id, menu_id)` it loads that tenant's items, menus and placements, runs the
+  pure `compile_menu` to a `MenuBook`, and writes the book onto the store's **Store-layer** `menu`
+  config node (index 2 in the Tenant→Brand→Store→Device order), re-publishing that whole layer through
+  the versioned config tree — so the price book reaches the store exactly like every other config
+  change, no new transport. A compiler refusal (unknown or cyclic menu) surfaces as **422**, an
+  operator error to fix, distinct from a store 5xx; a store with no tree yet gets one started. Proven
+  end to end against the fakes: authoring an item + a dine-in placement, publishing, then reading the
+  store's effective config back and finding the compiled `MenuBook` on its `menu` node. Wired into
+  `pos_cloud`. Prices stay a T2 asset — compiled and shipped in config, never logged. This closes the
+  Phase 2a authoring→compile→publish path; the menu editor UI is the next slice.
 - **The catalog is now editable over `/admin`** (ADR-0066, Phase 2a). A `catalog_router` exposes the
   authoring model behind the super-admin session guard: `/admin/catalog/items` and
   `/admin/catalog/menus` (list scoped to `?tenant_id=`, create with the id minted server-side,
   `PATCH` to rename / set status / reparent), and `/admin/catalog/menus/{menu_id}/placements` (list,
   `PUT` to upsert an item's per-channel prices and availability by its `(menu_id, menu_item_id)` pair,
   `DELETE` to remove it). Tenant named the admin-is-global way; every write is `FakeCatalog`-tested for
-  create/list/upsert/remove and the session guard. Wired into `pos_cloud`. The menu editor UI and the
-  publish path (compile → config tree) are the next slices.
+  create/list/upsert/remove and the session guard. Wired into `pos_cloud`. The publish path (compile →
+  config tree) lands in this release; the menu editor UI is the next slice.
 - **The catalog authoring model now persists in PostgreSQL** (ADR-0066, Phase 2a). Migration `0012`
   adds `catalog_items`, `catalog_menus` (with an inheritance edge) and `catalog_placements` (an item
   in a menu, its per-channel prices as a `jsonb` document keyed by `(menu_id, menu_item_id)`), all

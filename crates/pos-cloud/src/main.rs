@@ -191,6 +191,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
+        // config node, so it rides the config tree to the store like every other config change.
+        .merge(http::catalog_publish_router(
+            store.catalog(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay

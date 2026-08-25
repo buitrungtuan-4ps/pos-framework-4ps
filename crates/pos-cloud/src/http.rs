@@ -81,6 +81,7 @@ use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
 };
+use crate::catalog_compiler::compile_menu;
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
@@ -1657,6 +1658,179 @@ where
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no such placement").into_response(),
         Err(error) => catalog_error_response(&error),
+    }
+}
+
+// --- Catalog publish (`/admin/catalog/publish`, ADR-0066) ---------------------------------------
+
+/// The collaborators the publish route needs: the catalog to compile from, the config-tree store to
+/// publish into, plus the admin and clock the session guard and version-id minting use.
+#[derive(Clone)]
+struct CatalogPublishState<Cat, Cfg, A, C> {
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the catalog publish sub-router ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+///
+/// The step that turns authored catalog into what a store actually pulls: compile a menu into a
+/// per-channel [`pos_proto::MenuBook`] and write it onto the `menu` node of the store's **Store**
+/// config layer, so it rides the config tree to the store like every other configuration change
+/// ([ADR-0033](../../../docs/adr/0033-config-tree.md)) — no new channel. It is a separate sub-router
+/// because it needs the config-tree store the CRUD routes do not.
+pub fn catalog_publish_router<Cat, Cfg, A, C>(
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+) -> Router
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/catalog/publish",
+            post(admin_publish_menu::<Cat, Cfg, A, C>),
+        )
+        .with_state(CatalogPublishState {
+            catalog,
+            config_trees,
+            admin,
+            clock,
+        })
+}
+
+/// A super-admin selects the (tenant, store, menu) to compile and publish.
+#[expect(
+    clippy::struct_field_names,
+    reason = "tenant_id/store_id/menu_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
+)]
+#[derive(Debug, Clone, Deserialize)]
+struct PublishMenuRequest {
+    /// The tenant that owns the catalog and the store (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose `menu` config node receives the compiled book (a ULID).
+    store_id: String,
+    /// The menu to compile — its inheritance chain and placements (a ULID).
+    menu_id: String,
+}
+
+/// A super-admin publishes a menu to a store: compile → write the `MenuBook` to the store's `menu`
+/// config node → version it through the config tree.
+async fn admin_publish_menu<Cat, Cfg, A, C>(
+    State(state): State<CatalogPublishState<Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishMenuRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id), Ok(menu_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request.menu_id.parse::<Ulid>().map(MenuId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id or menu_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Load the tenant's authoring model. Placements are gathered across every menu; the compiler
+    // filters to the requested menu's inheritance chain, so extra rows are harmless.
+    let items = match state.catalog.list_items(tenant_id).await {
+        Ok(items) => items,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let menus = match state.catalog.list_menus(tenant_id).await {
+        Ok(menus) => menus,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let mut placements = Vec::new();
+    for menu in &menus {
+        match state.catalog.list_placements(tenant_id, menu.menu_id).await {
+            Ok(rows) => placements.extend(rows),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
+
+    // Compile. A refusal here is a configuration error the operator must fix, not a store failure.
+    let book = match compile_menu(&items, &menus, &placements, menu_id) {
+        Ok(book) => book,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Ok(book_value) = serde_json::to_value(&book) else {
+        tracing::error!("could not serialise a compiled menu book");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the catalog service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Load the store's tree (or start one), set the `menu` key on its Store layer, re-publish that
+    // layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order (`ConfigLevel::ORDER`);
+    // writing the whole layer back preserves any other Store-level keys already there.
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |s| s.layers[2].clone(),
+    );
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("menu".to_owned(), book_value);
+    } else {
+        store_layer = serde_json::json!({ "menu": book_value });
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
     }
 }
 
