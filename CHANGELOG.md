@@ -17,6 +17,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The edge implements `OrderIn`** (ADR-0064) — the store side of order intake. `EdgeOrderIn` reprices
+  each inbound line from the store's synced menu catalog (ADR-0063), opens a **tableless** order in the
+  local event log (`sales.order.opened` + `sales.order_line.added` in one transaction), and dedupes on
+  the caller's `(sales_channel, external_reference)` through a per-store intake ledger — so a
+  marketplace's retry or the relay's at-least-once delivery converge on one order in the kitchen. The
+  acceptance total is the store's own menu total (tax-inclusive); an unknown item is refused
+  (`invalid_argument`), never substituted; a QR order (one that names a table) awaits staff
+  confirmation while a delivery/public-API order does not; and it accepts **offline**, since the menu
+  is local config and the order is a local log write. Proven against the shared `OrderIn` contract
+  suite — the same suite `FakeIntake` passes — so "the edge is a real `OrderIn`" is verified, not
+  asserted.
+- **A tableless order now gets a durable, daily-resetting queue number** (ADR-0064) — the number the
+  counter shouts a takeaway customer back by. A `QueueNumberAuthority` (the same in-memory-vs-`SqliteStore`
+  split as `ReceiptAuthority`) is injected into `EdgeOrderIn`; the `store-sqlite` implementation
+  (migration 0003, a `queue_counter` keyed by `(store, business_date)` plus an order-keyed
+  `queue_allocations` idempotency table) **resets each trading day with no midnight job** and is
+  **durable** — a store-sqlite test proves the sequence survives reopening the database, so a box that
+  lost power mid-service does not reissue `#1` at a second customer. Allocation is idempotent by order,
+  and a QR order (one that names a table) still gets none. The intake **ledger’s** durable SQLite
+  backing (in the order’s own transaction) remains the one flagged follow-up; the in-memory ledger
+  behind the trait + contract suite ships here.
+- **The store menu catalog — the store server's authoritative price book** (ADR-0063), the missing
+  piece a real edge `OrderIn` needs. The dine-in path prices on the device, but an inbound order
+  (marketplace, `POST /v1/orders`, QR) arrives as identifiers and quantities with no device to price
+  from, so the `OrderIn` contract's "the store's price wins" and "an unknown item is refused, never
+  substituted" have nothing to stand on. A new `MenuCatalog`/`MenuEntry` (in `pos-proto`, alongside
+  the other config shapes) is a per-item price book — `unit_price`, `tax_class_id`, `available` — that
+  the cloud publishes under the config tree's `menu` node and the store syncs like any other config.
+  A pure `pos_core::menu::reprice_line` turns `(menu_item_id, quantity, modifiers)` into a priced line
+  (base + modifier prices, extended by quantity, taxed via the existing channel-keyed `TaxRateTable`),
+  or refuses it: an unknown item or modifier (`invalid_argument`), an 86'd item (`failed_precondition`),
+  or a class with no rate on the channel (`failed_precondition`, never a silent zero). The caller's
+  quoted price is compared and flagged `repriced`, never charged. No consumer yet — the edge `OrderIn`
+  that reprices from it is the follow-up PR; this lands the price book and the repricing law, both
+  property-tested.
 - **The cloud→store order relay** (ADR-0061), so `POST /v1/orders` answers in the binary. Inbound
   orders (marketplace, the public API, QR) are held in a durable per-store `order_queue` and the
   store **pulls** them over its own outbound sync channel — no cloud→store push, so "stores dial out

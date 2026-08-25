@@ -18,7 +18,8 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigUpdate};
 use pos_ports::event_store::{OutboxPosition, OutboxRecord};
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{BillId, EventId, StoreId};
+use pos_proto::ids::{BillId, EventId, OrderId, StoreId};
+use pos_proto::time::BusinessDate;
 
 /// How many undelivered events the store holds before pushing back — mirrors the fake, so
 /// back-pressure behaves identically in tests and in the field.
@@ -77,6 +78,13 @@ pub(crate) enum Command {
     AllocateReceipt {
         store_id: StoreId,
         bill_id: BillId,
+        reply: oneshot::Sender<Result<u64, PortError>>,
+    },
+    /// Allocate (or return the already-allocated) daily queue number for a tableless order.
+    AllocateQueueNumber {
+        store_id: StoreId,
+        business_date: BusinessDate,
+        order_id: OrderId,
         reply: oneshot::Sender<Result<u64, PortError>>,
     },
 }
@@ -140,6 +148,19 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(allocate_receipt(&mut conn, store_id, bill_id));
+            }
+            Command::AllocateQueueNumber {
+                store_id,
+                business_date,
+                order_id,
+                reply,
+            } => {
+                let _ = reply.send(allocate_queue_number(
+                    &mut conn,
+                    store_id,
+                    business_date,
+                    order_id,
+                ));
             }
         }
     }
@@ -388,6 +409,76 @@ fn allocate_receipt(
         tx.execute(
             "INSERT INTO receipt_allocations (store_id, bill_id, receipt_number) VALUES (?1, ?2, ?3)",
             params![store, bill, allocated],
+        )
+        .map_err(|error| db_error(port, error))?;
+        allocated
+    };
+
+    tx.commit().map_err(|error| db_error(port, error))?;
+    Ok(u64::try_from(number).unwrap_or(0))
+}
+
+/// Allocates the next daily queue number for a tableless order, or returns the one it already has
+/// (ADR-0064, the edge `OrderIn` authority).
+///
+/// The counter is keyed by `(store, business_date)`, so a business date the counter has never seen
+/// starts at 1 — the daily reset, with no midnight job. One `IMMEDIATE` transaction does the whole
+/// read-modify-write, and every allocation funnels through this one writer thread, so two channels
+/// delivering at once are handed distinct numbers. Idempotency is the `queue_allocations` row: an
+/// order that already has a number gets it back without advancing the counter, so a retry after a
+/// crash shouts the same number rather than burning a second one.
+fn allocate_queue_number(
+    conn: &mut Connection,
+    store_id: StoreId,
+    business_date: BusinessDate,
+    order_id: OrderId,
+) -> Result<u64, PortError> {
+    let port = PortName::OrderIn;
+    let store = store_id.to_string();
+    let date = business_date.to_string();
+    let order = order_id.to_string();
+
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error(port, error))?;
+
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT queue_number FROM queue_allocations WHERE store_id = ?1 AND order_id = ?2",
+            params![store, order],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+
+    let number = if let Some(number) = existing {
+        number
+    } else {
+        // Ensure a counter row for this (store, date) starting at 1, read the number it will hand
+        // out, advance it, and record the allocation — all inside this transaction, so a rollback
+        // consumes nothing and a new business date begins its own sequence at 1.
+        tx.execute(
+            "INSERT INTO queue_counter (store_id, business_date, next_number) VALUES (?1, ?2, 1)
+             ON CONFLICT (store_id, business_date) DO NOTHING",
+            params![store, date],
+        )
+        .map_err(|error| db_error(port, error))?;
+        let allocated: i64 = tx
+            .query_row(
+                "SELECT next_number FROM queue_counter WHERE store_id = ?1 AND business_date = ?2",
+                params![store, date],
+                |row| row.get(0),
+            )
+            .map_err(|error| db_error(port, error))?;
+        tx.execute(
+            "UPDATE queue_counter SET next_number = next_number + 1
+             WHERE store_id = ?1 AND business_date = ?2",
+            params![store, date],
+        )
+        .map_err(|error| db_error(port, error))?;
+        tx.execute(
+            "INSERT INTO queue_allocations (store_id, order_id, queue_number) VALUES (?1, ?2, ?3)",
+            params![store, order, allocated],
         )
         .map_err(|error| db_error(port, error))?;
         allocated

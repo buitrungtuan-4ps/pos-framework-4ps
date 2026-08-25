@@ -34,6 +34,7 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod locale;
+pub mod menu;
 pub mod money;
 pub mod pii;
 pub mod protocol;
@@ -61,6 +62,7 @@ pub use ids::{
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,
 };
+pub use menu::{MenuCatalog, MenuEntry};
 pub use money::{CurrencyCode, Money, MoneyError, Ratio, Rounding, div_round};
 pub use pii::NoPii;
 pub use protocol::{Hello, HelloOutcome, LeaseToken, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};

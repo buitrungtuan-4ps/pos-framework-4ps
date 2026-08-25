@@ -1589,6 +1589,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "http-body-util",
+ "pos-contract-tests",
  "pos-core",
  "pos-country",
  "pos-country-zz",
