@@ -23,14 +23,15 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
-    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, DeviceRow, OrderQueueRow,
+    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
-use pos_proto::ids::{DeviceId, EventId, StoreId, SubjectId, TenantId};
+use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, SubjectId, TaxClassId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
@@ -43,6 +44,9 @@ use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
 use crate::auth::totp::TotpSecret;
+use crate::catalog::{
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
+};
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
@@ -969,5 +973,179 @@ impl RegistryStore for PostgresRegistry {
         )
         .await
         .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+}
+
+// --- catalog (Phase 2a, ADR-0066): the store-postgres rows converted to the CatalogStore domain ---
+
+fn parse_catalog_item_id(text: &str) -> Result<MenuItemId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(MenuItemId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!("a catalog item id is not a ULID: {text}"))
+        })
+}
+
+fn parse_catalog_menu_id(text: &str) -> Result<MenuId, CatalogStoreError> {
+    text.parse::<Ulid>().map(MenuId::new).map_err(|_ignored| {
+        CatalogStoreError::new(format!("a catalog menu id is not a ULID: {text}"))
+    })
+}
+
+fn parse_catalog_tax_class(text: &str) -> Result<TaxClassId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(TaxClassId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!("a catalog tax class id is not a ULID: {text}"))
+        })
+}
+
+fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreError> {
+    Ok(CatalogItem {
+        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
+    let parent_menu_id = match row.parent_menu_id {
+        Some(text) => Some(parse_catalog_menu_id(&text)?),
+        None => None,
+    };
+    Ok(Menu {
+        menu_id: parse_catalog_menu_id(&row.menu_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        parent_menu_id,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, CatalogStoreError> {
+    let prices: Vec<ChannelPrice> = serde_json::from_str(&row.prices_json).map_err(|error| {
+        CatalogStoreError::new(format!(
+            "a placement's stored prices are not valid JSON: {error}"
+        ))
+    })?;
+    Ok(MenuPlacement {
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        menu_id: parse_catalog_menu_id(&row.menu_id)?,
+        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+        prices,
+        available: row.available,
+    })
+}
+
+impl CatalogStore for PostgresCatalog {
+    async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
+        self.insert_item(
+            &item.menu_item_id.to_string(),
+            &item.tenant_id.to_string(),
+            &item.name,
+            &item.tax_class_id.to_string(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_items(&self, tenant_id: TenantId) -> Result<Vec<CatalogItem>, CatalogStoreError> {
+        let rows = self
+            .fetch_items(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_item_record).collect()
+    }
+
+    async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+        self.set_item(
+            &item.tenant_id.to_string(),
+            &item.menu_item_id.to_string(),
+            &item.name,
+            &item.tax_class_id.to_string(),
+            item.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
+        let parent = menu.parent_menu_id.map(|id| id.to_string());
+        self.insert_menu(
+            &menu.menu_id.to_string(),
+            &menu.tenant_id.to_string(),
+            &menu.name,
+            parent.as_deref(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_menus(&self, tenant_id: TenantId) -> Result<Vec<Menu>, CatalogStoreError> {
+        let rows = self
+            .fetch_menus(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_menu_record).collect()
+    }
+
+    async fn update_menu(&self, menu: &Menu) -> Result<bool, CatalogStoreError> {
+        let parent = menu.parent_menu_id.map(|id| id.to_string());
+        self.set_menu(
+            &menu.tenant_id.to_string(),
+            &menu.menu_id.to_string(),
+            &menu.name,
+            parent.as_deref(),
+            menu.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+        let prices_json = serde_json::to_string(&placement.prices).map_err(|error| {
+            CatalogStoreError::new(format!("could not serialise placement prices: {error}"))
+        })?;
+        self.upsert_placement(
+            &placement.tenant_id.to_string(),
+            &placement.menu_id.to_string(),
+            &placement.menu_item_id.to_string(),
+            &prices_json,
+            placement.available,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_placements(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+        let rows = self
+            .fetch_placements(&tenant_id.to_string(), &menu_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.iter().map(catalog_placement_record).collect()
+    }
+
+    async fn remove_placement(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        self.delete_placement(
+            &tenant_id.to_string(),
+            &menu_id.to_string(),
+            &menu_item_id.to_string(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 }

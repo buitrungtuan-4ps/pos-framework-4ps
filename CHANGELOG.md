@@ -32,6 +32,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The catalog authoring model now persists in PostgreSQL** (ADR-0066, Phase 2a). Migration `0012`
+  adds `catalog_items`, `catalog_menus` (with an inheritance edge) and `catalog_placements` (an item
+  in a menu, its per-channel prices as a `jsonb` document keyed by `(menu_id, menu_item_id)`), all
+  RLS-isolated by tenant like the registry tables. A `store-postgres` `PostgresCatalog` adapter and
+  the `pos-cloud` `impl CatalogStore for PostgresCatalog` back the seam end to end: items and menus
+  create/list/update, placements upsert/list/remove, prices round-tripping through the `text::jsonb`
+  cast the config tree already uses. Forward-only and additive (greenfield — no backfill); prices are
+  a T2 pricing model, stored only here and in the compiled config, never a log.
 - **The menu compiler turns authoring into the flat per-channel snapshot the edge reprices from**
   (ADR-0066, Phase 2a). A pure `compile_menu(items, menus, placements, root)` in `pos-cloud` folds a
   menu's inheritance chain **most-specific-wins** (a child's placement overrides an ancestor's,
