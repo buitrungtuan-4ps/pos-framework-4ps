@@ -38,8 +38,10 @@ subdomain.
   > authenticator apps operators actually run, because those apps ignore `algorithm=SHA256`. Switched
   > to HMAC-SHA1; the duplicate `sha1` line (0.11 on the `digest` 0.11 line, alongside axum's 0.10) is
   > the accepted cost, carried by a documented `bans.skip` in `deny.toml`. HMAC-SHA1 is sound for TOTP
-  > (the security is the shared secret's entropy and the single-use/skew rules, not the hash). Existing
-  > enrolments must re-enrol via the `reset_admin` break-glass path (ADR-0045); there is at most one.
+  > (the security is the shared secret's entropy and the single-use/skew rules, not the hash). The
+  > stored secret is unchanged, so an operator on Google/Microsoft Authenticator (whose entry was
+  > already SHA1) can just sign in once the fix deploys; only an operator whose app honoured SHA256
+  > must re-enrol via the `reset_admin` break-glass path (ADR-0045). There is at most one super-admin.
 
 - **Both factors evaluated, one generic failure to the client.** `authenticate` computes the password
   and TOTP checks before returning any verdict, and the HTTP layer returns a single generic failure
