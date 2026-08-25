@@ -32,6 +32,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The dashboard now picks the tenant/store by name, not by typing a ULID** (ADR-0065, WS-C #102).
+  The top bar's two free-text `Tenant ID` / `Store ID` boxes — the ones that leaked
+  `tenant_id is not a ULID` and made the screen unusable for a non-technical operator — are replaced
+  by a **context picker** that reads the new registry (`GET /admin/tenants`, `/admin/stores`) and
+  lets the operator choose a tenant, then one of its stores, by name; the ULID sits underneath, muted,
+  for reference only. Every screen still reads the same id in context, so nothing downstream changes —
+  it is just chosen from a list now instead of typed. Bilingual EN/VI, behind the no-hardcoded-strings
+  lint. The create-store wizard and the full CRUD screens are the next slices.
 - **The cloud now has an org registry — named Tenant/Brand/Store/Device** (ADR-0065, WS-C #102). The
   cloud has always addressed a store by two opaque ULIDs; nothing recorded that a tenant, brand, or
   store *exists*, what it is *called*, or which brand and tenant a store *belongs to*. A new
