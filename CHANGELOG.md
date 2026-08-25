@@ -32,6 +32,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A Stores & brands management screen names the stores the registry backfilled** (ADR-0065, WS-C #102).
+  The backfill (migration `0011`) surfaced every existing store under a placeholder name like
+  `Store 01J9…`; there was no way to fix that or to add a store from the dashboard. A new **Stores**
+  screen (behind the super-admin session, scoped to the picker's tenant) lists the tenant's stores,
+  **renames** them, **creates** new stores and brands, **assigns** a store to a brand, and
+  **archives / restores** — all by name, over the registry's `/admin/stores` and `/admin/brands`
+  routes. Bilingual EN/VI, behind the no-hardcoded-strings lint. The guided create-store **wizard** and
+  device naming are the next slices.
 - **The dashboard now picks the tenant/store by name, not by typing a ULID** (ADR-0065, WS-C #102).
   The top bar's two free-text `Tenant ID` / `Store ID` boxes — the ones that leaked
   `tenant_id is not a ULID` and made the screen unusable for a non-technical operator — are replaced

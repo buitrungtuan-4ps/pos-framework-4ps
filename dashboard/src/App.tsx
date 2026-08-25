@@ -17,6 +17,7 @@ import { Devices } from "./screens/Devices";
 import { Login } from "./screens/Login";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
+import { Stores } from "./screens/Stores";
 import { Translations } from "./screens/Translations";
 import { Webhooks } from "./screens/Webhooks";
 
@@ -49,6 +50,7 @@ export function App() {
         <Route path="/setup" component={Setup} />
         <Route path="/" component={Guarded}>
           <Route path="/" component={Reports} />
+          <Route path="/stores" component={Stores} />
           <Route path="/config" component={Config} />
           <Route path="/api-keys" component={ApiKeys} />
           <Route path="/devices" component={Devices} />

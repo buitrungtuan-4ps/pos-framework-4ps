@@ -13,6 +13,7 @@ import type {
   DailyRollup,
   Device,
   DeviceProposalSummary,
+  EntityStatus,
   Enrolment,
   Json,
   PublishedConfig,
@@ -197,6 +198,17 @@ export const api = {
       tenant_id: tenantId,
       name,
       ...(brandId === undefined ? {} : { brand_id: brandId }),
+    }),
+  updateStore: (
+    storeId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus; brandId: string | null },
+  ) =>
+    requestJson<Store>("PATCH", `/admin/stores/${encodeURIComponent(storeId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      status: fields.status,
+      brand_id: fields.brandId,
     }),
   listDevices: (tenantId: string, storeId: string) =>
     requestJson<Device[]>(
