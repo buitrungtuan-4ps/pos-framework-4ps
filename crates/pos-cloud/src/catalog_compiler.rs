@@ -169,6 +169,8 @@ mod tests {
             tenant_id: tenant(),
             name: name.to_owned(),
             tax_class_id: TaxClassId::new(Ulid::from_u128(7)),
+            item_category_id: None,
+            item_subcategory_id: None,
             status: EntityStatus::Active,
         }
     }

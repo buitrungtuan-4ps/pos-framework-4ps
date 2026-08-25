@@ -32,6 +32,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Items now carry an operational category and sub-category** (ADR-0066 entities 2 and 3, Phase 2a).
+  The catalog gains an item taxonomy — `ItemCategory` and `ItemSubcategory` (tenant-scoped,
+  archived-not-deleted, a sub-category nested under a category) — behind `/admin/catalog/item-categories`
+  and `/admin/catalog/item-subcategories` (list/create/`PATCH`), plus two additive nullable columns on
+  `catalog_items` linking an item to its category and sub-category. Backed by migration `0014` and the
+  `PostgresCatalog` adapter. The menu editor's item form gains category + (category-filtered)
+  sub-category pickers, an editable Categories and Sub-categories card, and a Category column on the
+  items table. This is the taxonomy a product-mix report will total by — **distinct** from the
+  presentation taxonomy a screen groups by (that is the display taxonomy, entities 11/12). It is
+  authoring metadata today; the reporting that consumes it is a later phase. `FakeCatalog`-tested
+  (category + sub-category + item linkage round-trips) and typechecked in the dashboard. Forward-only
+  and additive; greenfield, no backfill.
 - **Tax classes are now named entities, and an item picks one from a list** (ADR-0066 entity 10, Phase 2a).
   A `TaxClass` (id + name, tenant-scoped, archived-not-deleted) joins the catalog store behind
   `/admin/catalog/tax-classes` (list/create, `PATCH` to rename or set status), backed by migration

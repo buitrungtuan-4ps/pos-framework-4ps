@@ -79,8 +79,8 @@ use crate::auth::enrol::{
 use crate::auth::password::hash_password;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
-    TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemCategoryId,
+    ItemSubcategory, ItemSubcategoryId, Menu, MenuId, MenuPlacement, TaxClass,
 };
 use crate::catalog_compiler::compile_menu;
 use crate::cloud::{Cloud, DailyRollup};
@@ -1259,6 +1259,24 @@ where
             axum::routing::patch(admin_update_tax_class::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/item-categories",
+            get(admin_list_item_categories::<Cat, A, C>)
+                .post(admin_create_item_category::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/item-categories/{item_category_id}",
+            axum::routing::patch(admin_update_item_category::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/item-subcategories",
+            get(admin_list_item_subcategories::<Cat, A, C>)
+                .post(admin_create_item_subcategory::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/item-subcategories/{item_subcategory_id}",
+            axum::routing::patch(admin_update_item_subcategory::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/menus",
             get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
         )
@@ -1287,6 +1305,10 @@ struct CreateItemRequest {
     tenant_id: String,
     name: String,
     tax_class_id: String,
+    #[serde(default)]
+    item_category_id: Option<String>,
+    #[serde(default)]
+    item_subcategory_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1294,6 +1316,10 @@ struct UpdateItemRequest {
     tenant_id: String,
     name: String,
     tax_class_id: String,
+    #[serde(default)]
+    item_category_id: Option<String>,
+    #[serde(default)]
+    item_subcategory_id: Option<String>,
     status: String,
 }
 
@@ -1306,6 +1332,34 @@ struct CreateTaxClassRequest {
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateTaxClassRequest {
     tenant_id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateItemCategoryRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateItemCategoryRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateItemSubcategoryRequest {
+    tenant_id: String,
+    item_category_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateItemSubcategoryRequest {
+    tenant_id: String,
+    item_category_id: String,
     name: String,
     status: String,
 }
@@ -1363,6 +1417,30 @@ fn parse_optional_menu(value: Option<&str>) -> Result<Option<MenuId>, ()> {
     }
 }
 
+/// Parses an optional item-category id; an absent field or an empty string is "unclassified" (`None`),
+/// a present-but-malformed value is `Err` (a `400`).
+fn parse_optional_category(value: Option<&str>) -> Result<Option<ItemCategoryId>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(ItemCategoryId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
+/// Parses an optional item-sub-category id, with the same empty-is-`None` rule as
+/// [`parse_optional_category`].
+fn parse_optional_subcategory(value: Option<&str>) -> Result<Option<ItemSubcategoryId>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(ItemSubcategoryId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
 /// A super-admin lists a tenant's items.
 async fn admin_list_items<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -1410,6 +1488,16 @@ where
         )
             .into_response();
     };
+    let (Ok(item_category_id), Ok(item_subcategory_id)) = (
+        parse_optional_category(request.item_category_id.as_deref()),
+        parse_optional_subcategory(request.item_subcategory_id.as_deref()),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "item_category_id or item_subcategory_id is not a ULID",
+        )
+            .into_response();
+    };
     let Some(menu_item_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuItemId::new)
     else {
@@ -1420,6 +1508,8 @@ where
         tenant_id,
         name: request.name,
         tax_class_id,
+        item_category_id,
+        item_subcategory_id,
         status: EntityStatus::Active,
     };
     match state.catalog.create_item(&record).await {
@@ -1457,11 +1547,23 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
     };
+    let (Ok(item_category_id), Ok(item_subcategory_id)) = (
+        parse_optional_category(request.item_category_id.as_deref()),
+        parse_optional_subcategory(request.item_subcategory_id.as_deref()),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "item_category_id or item_subcategory_id is not a ULID",
+        )
+            .into_response();
+    };
     let record = CatalogItem {
         menu_item_id,
         tenant_id,
         name: request.name,
         tax_class_id,
+        item_category_id,
+        item_subcategory_id,
         status,
     };
     match state.catalog.update_item(&record).await {
@@ -1565,6 +1667,220 @@ where
     match state.catalog.update_tax_class(&record).await {
         Ok(true) => (StatusCode::OK, Json(record)).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no such tax class").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's item categories.
+async fn admin_list_item_categories<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_item_categories(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<ItemCategory>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates an item category; the id is minted here and returned once.
+async fn admin_create_item_category<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateItemCategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(item_category_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ItemCategoryId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = ItemCategory {
+        item_category_id,
+        tenant_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_item_category(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames an item category and/or sets its status.
+async fn admin_update_item_category<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(item_category_id): Path<String>,
+    Json(request): Json<UpdateItemCategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(item_category_id), Ok(tenant_id)) = (
+        item_category_id.parse::<Ulid>().map(ItemCategoryId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the category id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = ItemCategory {
+        item_category_id,
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.catalog.update_item_category(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such item category").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's item sub-categories.
+async fn admin_list_item_subcategories<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_item_subcategories(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<ItemSubcategory>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates an item sub-category under a parent category; the id is minted here.
+async fn admin_create_item_subcategory<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateItemSubcategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(item_category_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request
+            .item_category_id
+            .parse::<Ulid>()
+            .map(ItemCategoryId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or item_category_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(item_subcategory_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ItemSubcategoryId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = ItemSubcategory {
+        item_subcategory_id,
+        tenant_id,
+        item_category_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_item_subcategory(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames an item sub-category, (re)parents it, and/or sets its status.
+async fn admin_update_item_subcategory<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(item_subcategory_id): Path<String>,
+    Json(request): Json<UpdateItemSubcategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(item_subcategory_id), Ok(tenant_id), Ok(item_category_id)) = (
+        item_subcategory_id
+            .parse::<Ulid>()
+            .map(ItemSubcategoryId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request
+            .item_category_id
+            .parse::<Ulid>()
+            .map(ItemCategoryId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the sub-category id, tenant_id or item_category_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = ItemSubcategory {
+        item_subcategory_id,
+        tenant_id,
+        item_category_id,
+        name: request.name,
+        status,
+    };
+    match state.catalog.update_item_subcategory(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such item sub-category").into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }

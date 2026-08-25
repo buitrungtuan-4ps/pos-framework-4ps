@@ -17,6 +17,8 @@ import type {
   DeviceProposalSummary,
   EntityStatus,
   Enrolment,
+  ItemCategory,
+  ItemSubcategory,
   Json,
   Menu,
   MenuPlacement,
@@ -245,23 +247,81 @@ export const api = {
       `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
+  listItemCategories: (tenantId: string) =>
+    requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
+  createItemCategory: (tenantId: string, name: string) =>
+    requestJson<ItemCategory>("POST", "/admin/catalog/item-categories", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateItemCategory: (
+    itemCategoryId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<ItemCategory>(
+      "PATCH",
+      `/admin/catalog/item-categories/${encodeURIComponent(itemCategoryId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  listItemSubcategories: (tenantId: string) =>
+    requestJson<ItemSubcategory[]>(
+      "GET",
+      `/admin/catalog/item-subcategories?${tenantQuery(tenantId)}`,
+    ),
+  createItemSubcategory: (tenantId: string, itemCategoryId: string, name: string) =>
+    requestJson<ItemSubcategory>("POST", "/admin/catalog/item-subcategories", {
+      tenant_id: tenantId,
+      item_category_id: itemCategoryId,
+      name,
+    }),
+  updateItemSubcategory: (
+    itemSubcategoryId: string,
+    tenantId: string,
+    fields: { itemCategoryId: string; name: string; status: EntityStatus },
+  ) =>
+    requestJson<ItemSubcategory>(
+      "PATCH",
+      `/admin/catalog/item-subcategories/${encodeURIComponent(itemSubcategoryId)}`,
+      {
+        tenant_id: tenantId,
+        item_category_id: fields.itemCategoryId,
+        name: fields.name,
+        status: fields.status,
+      },
+    ),
   listItems: (tenantId: string) =>
     requestJson<CatalogItem[]>("GET", `/admin/catalog/items?${tenantQuery(tenantId)}`),
-  createItem: (tenantId: string, name: string, taxClassId: string) =>
+  createItem: (
+    tenantId: string,
+    name: string,
+    taxClassId: string,
+    taxonomy: { itemCategoryId: string | null; itemSubcategoryId: string | null },
+  ) =>
     requestJson<CatalogItem>("POST", "/admin/catalog/items", {
       tenant_id: tenantId,
       name,
       tax_class_id: taxClassId,
+      item_category_id: taxonomy.itemCategoryId,
+      item_subcategory_id: taxonomy.itemSubcategoryId,
     }),
   updateItem: (
     menuItemId: string,
     tenantId: string,
-    fields: { name: string; taxClassId: string; status: EntityStatus },
+    fields: {
+      name: string;
+      taxClassId: string;
+      itemCategoryId: string | null;
+      itemSubcategoryId: string | null;
+      status: EntityStatus;
+    },
   ) =>
     requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
       tenant_id: tenantId,
       name: fields.name,
       tax_class_id: fields.taxClassId,
+      item_category_id: fields.itemCategoryId,
+      item_subcategory_id: fields.itemSubcategoryId,
       status: fields.status,
     }),
   listMenus: (tenantId: string) =>

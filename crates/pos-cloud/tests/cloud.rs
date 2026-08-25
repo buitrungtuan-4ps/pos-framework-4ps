@@ -30,7 +30,8 @@ use pos_cloud::auth::apikey::{
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, Menu, MenuId, MenuPlacement, TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, ItemCategory, ItemSubcategory, Menu, MenuId,
+    MenuPlacement, TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -3109,6 +3110,8 @@ async fn registry_is_behind_the_session_guard() {
 struct FakeCatalog {
     items: Arc<Mutex<Vec<CatalogItem>>>,
     tax_classes: Arc<Mutex<Vec<TaxClass>>>,
+    categories: Arc<Mutex<Vec<ItemCategory>>>,
+    subcategories: Arc<Mutex<Vec<ItemSubcategory>>>,
     menus: Arc<Mutex<Vec<Menu>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
 }
@@ -3136,6 +3139,8 @@ impl CatalogStore for FakeCatalog {
             if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
                 row.name.clone_from(&item.name);
                 row.tax_class_id = item.tax_class_id;
+                row.item_category_id = item.item_category_id;
+                row.item_subcategory_id = item.item_subcategory_id;
                 row.status = item.status;
                 return Ok(true);
             }
@@ -3171,6 +3176,85 @@ impl CatalogStore for FakeCatalog {
             if row.tax_class_id == tax_class.tax_class_id && row.tenant_id == tax_class.tenant_id {
                 row.name.clone_from(&tax_class.name);
                 row.status = tax_class.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_item_category(&self, category: &ItemCategory) -> Result<(), CatalogStoreError> {
+        self.categories.lock().expect("lock").push(category.clone());
+        Ok(())
+    }
+
+    async fn list_item_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+        Ok(self
+            .categories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.categories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.item_category_id == category.item_category_id
+                && row.tenant_id == category.tenant_id
+            {
+                row.name.clone_from(&category.name);
+                row.status = category.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.subcategories
+            .lock()
+            .expect("lock")
+            .push(subcategory.clone());
+        Ok(())
+    }
+
+    async fn list_item_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+        Ok(self
+            .subcategories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.subcategories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.item_subcategory_id == subcategory.item_subcategory_id
+                && row.tenant_id == subcategory.tenant_id
+            {
+                row.name.clone_from(&subcategory.name);
+                row.item_category_id = subcategory.item_category_id;
+                row.status = subcategory.status;
                 return Ok(true);
             }
         }
@@ -3395,6 +3479,97 @@ async fn catalog_creates_lists_and_renames_a_tax_class() {
         .await
         .expect("route rename unknown tax class");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn catalog_item_taxonomy_categories_subcategories_and_item_linkage() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // A category, by name.
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/item-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Pizza" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create category");
+    assert_eq!(category.status(), StatusCode::CREATED);
+    let category_id = json_body(category).await["item_category_id"]
+        .as_str()
+        .expect("a category id")
+        .to_owned();
+
+    // A sub-category under it.
+    let subcategory = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/item-subcategories",
+            &serde_json::json!({ "tenant_id": tenant, "item_category_id": category_id, "name": "Thin crust" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create subcategory");
+    assert_eq!(subcategory.status(), StatusCode::CREATED);
+    let subcategory = json_body(subcategory).await;
+    assert_eq!(subcategory["item_category_id"], category_id);
+    let subcategory_id = subcategory["item_subcategory_id"]
+        .as_str()
+        .expect("a sub-category id")
+        .to_owned();
+
+    // An item that references both — the linkage round-trips through create and list.
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+                "item_category_id": category_id,
+                "item_subcategory_id": subcategory_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(item.status(), StatusCode::CREATED);
+    let item = json_body(item).await;
+    assert_eq!(item["item_category_id"], category_id);
+    assert_eq!(item["item_subcategory_id"], subcategory_id);
+
+    let categories = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/item-categories?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list categories");
+    assert_eq!(
+        json_body(categories).await.as_array().expect("array").len(),
+        1
+    );
+
+    let subcategories = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/item-subcategories?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list subcategories");
+    assert_eq!(
+        json_body(subcategories)
+            .await
+            .as_array()
+            .expect("array")
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

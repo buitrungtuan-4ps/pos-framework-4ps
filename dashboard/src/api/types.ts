@@ -153,12 +153,31 @@ export interface TaxClass {
   readonly status: EntityStatus;
 }
 
+/** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
+export interface ItemCategory {
+  readonly item_category_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** An item sub-category, nested under a category (ADR-0066 entity 3). */
+export interface ItemSubcategory {
+  readonly item_subcategory_id: string;
+  readonly tenant_id: string;
+  readonly item_category_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
 /** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
 export interface CatalogItem {
   readonly menu_item_id: string;
   readonly tenant_id: string;
   readonly name: string;
   readonly tax_class_id: string;
+  readonly item_category_id: string | null;
+  readonly item_subcategory_id: string | null;
   readonly status: EntityStatus;
 }
 

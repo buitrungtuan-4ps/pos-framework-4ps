@@ -59,6 +59,87 @@ impl fmt::Display for MenuId {
     }
 }
 
+/// An item category's identifier — a ULID minted at creation. The operational taxonomy is a
+/// cloud-authoring concept (reporting/tax-default/kitchen grouping); like [`MenuId`], its id is
+/// defined beside the seam rather than in [`pos_proto::ids`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ItemCategoryId(Ulid);
+
+impl ItemCategoryId {
+    /// Wraps a ULID as an item-category id.
+    #[must_use]
+    pub const fn new(ulid: Ulid) -> Self {
+        Self(ulid)
+    }
+
+    /// The underlying ULID.
+    #[must_use]
+    pub const fn as_ulid(self) -> Ulid {
+        self.0
+    }
+}
+
+impl fmt::Display for ItemCategoryId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// An item sub-category's identifier — a ULID minted at creation, nested under an [`ItemCategoryId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ItemSubcategoryId(Ulid);
+
+impl ItemSubcategoryId {
+    /// Wraps a ULID as an item-sub-category id.
+    #[must_use]
+    pub const fn new(ulid: Ulid) -> Self {
+        Self(ulid)
+    }
+
+    /// The underlying ULID.
+    #[must_use]
+    pub const fn as_ulid(self) -> Ulid {
+        self.0
+    }
+}
+
+impl fmt::Display for ItemSubcategoryId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// An item category — the operational taxonomy for reporting, tax defaults and kitchen grouping
+/// (ADR-0066 entity 2). This is **not** the presentation taxonomy a screen groups by (that is a
+/// [display category](DisplayCategory-like) delivered in the layout, entity 11); a product-mix report
+/// groups by *this*.
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemCategory {
+    /// The category id.
+    pub item_category_id: ItemCategoryId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The human name (`Pizza`, `Beverage`, `Dessert`).
+    pub name: String,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
+/// An item sub-category — a refinement of an [`ItemCategory`] (ADR-0066 entity 3).
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemSubcategory {
+    /// The sub-category id.
+    pub item_subcategory_id: ItemSubcategoryId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The parent category this refines.
+    pub item_category_id: ItemCategoryId,
+    /// The human name (`Thin crust`, `Soft drink`).
+    pub name: String,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
 /// A tax class — a named bucket an item belongs to, whose rate the store's channel-keyed
 /// [`pos_proto::locale::TaxRateTable`] resolves at reprice time (ADR-0066 entity 10; D6).
 ///
@@ -95,6 +176,10 @@ pub struct CatalogItem {
     pub name: String,
     /// The tax class, which the store's channel-keyed rate table turns into a rate at reprice time.
     pub tax_class_id: TaxClassId,
+    /// The operational category this item reports under, or `None` if unclassified (entity 2).
+    pub item_category_id: Option<ItemCategoryId>,
+    /// The operational sub-category, refining the category, or `None` (entity 3).
+    pub item_subcategory_id: Option<ItemSubcategoryId>,
     /// Active or archived.
     pub status: EntityStatus,
 }
@@ -194,6 +279,43 @@ pub trait CatalogStore {
         tax_class: &TaxClass,
     ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
 
+    /// Inserts an item category.
+    fn create_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's item categories.
+    fn list_item_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<ItemCategory>, CatalogStoreError>> + Send;
+
+    /// Renames an item category and/or sets its status. Returns whether a row changed.
+    fn update_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
+    /// Inserts an item sub-category under a parent category.
+    fn create_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's item sub-categories.
+    fn list_item_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<ItemSubcategory>, CatalogStoreError>> + Send;
+
+    /// Renames an item sub-category, (re)parents it, and/or sets its status. Returns whether a row
+    /// changed.
+    fn update_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
     /// Inserts a menu.
     fn create_menu(
         &self,
@@ -259,8 +381,8 @@ mod tests {
     use pos_proto::wire_enum::Open;
 
     use super::{
-        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
-        TaxClass,
+        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemSubcategory,
+        Menu, MenuId, MenuPlacement, TaxClass,
     };
     use crate::registry::EntityStatus;
 
@@ -270,6 +392,8 @@ mod tests {
     struct FakeCatalog {
         items: Mutex<Vec<CatalogItem>>,
         tax_classes: Mutex<Vec<TaxClass>>,
+        categories: Mutex<Vec<ItemCategory>>,
+        subcategories: Mutex<Vec<ItemSubcategory>>,
         menus: Mutex<Vec<Menu>>,
         placements: Mutex<Vec<MenuPlacement>>,
     }
@@ -303,6 +427,8 @@ mod tests {
             };
             row.name.clone_from(&item.name);
             row.tax_class_id = item.tax_class_id;
+            row.item_category_id = item.item_category_id;
+            row.item_subcategory_id = item.item_subcategory_id;
             row.status = item.status;
             Ok(true)
         }
@@ -338,6 +464,86 @@ mod tests {
             };
             row.name.clone_from(&tax_class.name);
             row.status = tax_class.status;
+            Ok(true)
+        }
+
+        async fn create_item_category(
+            &self,
+            category: &ItemCategory,
+        ) -> Result<(), CatalogStoreError> {
+            self.categories.lock().expect("lock").push(category.clone());
+            Ok(())
+        }
+
+        async fn list_item_categories(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+            Ok(self
+                .categories
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_item_category(
+            &self,
+            category: &ItemCategory,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.categories.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.item_category_id == category.item_category_id
+                    && row.tenant_id == category.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&category.name);
+            row.status = category.status;
+            Ok(true)
+        }
+
+        async fn create_item_subcategory(
+            &self,
+            subcategory: &ItemSubcategory,
+        ) -> Result<(), CatalogStoreError> {
+            self.subcategories
+                .lock()
+                .expect("lock")
+                .push(subcategory.clone());
+            Ok(())
+        }
+
+        async fn list_item_subcategories(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+            Ok(self
+                .subcategories
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_item_subcategory(
+            &self,
+            subcategory: &ItemSubcategory,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.subcategories.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.item_subcategory_id == subcategory.item_subcategory_id
+                    && row.tenant_id == subcategory.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&subcategory.name);
+            row.item_category_id = subcategory.item_category_id;
+            row.status = subcategory.status;
             Ok(true)
         }
 
@@ -443,6 +649,8 @@ mod tests {
             tenant_id: tenant(tenant_n),
             name: name.to_owned(),
             tax_class_id: tax_class(1),
+            item_category_id: None,
+            item_subcategory_id: None,
             status: EntityStatus::Active,
         }
     }

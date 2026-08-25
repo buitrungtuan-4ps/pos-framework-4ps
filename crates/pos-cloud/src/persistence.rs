@@ -23,11 +23,12 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, CatalogTaxClassRow, DeviceRow,
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
-    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
-    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, CatalogTaxClassRow,
+    CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
+    PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
+    TenantRow,
 };
 
 use pos_ports::PortError;
@@ -45,8 +46,8 @@ use crate::auth::apikey::{
 };
 use crate::auth::totp::TotpSecret;
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
-    TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemCategoryId,
+    ItemSubcategory, ItemSubcategoryId, Menu, MenuId, MenuPlacement, TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1001,13 +1002,67 @@ fn parse_catalog_tax_class(text: &str) -> Result<TaxClassId, CatalogStoreError> 
         })
 }
 
+fn parse_catalog_category_id(text: &str) -> Result<ItemCategoryId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(ItemCategoryId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!("a catalog item category id is not a ULID: {text}"))
+        })
+}
+
+fn parse_catalog_subcategory_id(text: &str) -> Result<ItemSubcategoryId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(ItemSubcategoryId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!(
+                "a catalog item sub-category id is not a ULID: {text}"
+            ))
+        })
+}
+
 fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreError> {
+    let item_category_id = match row.item_category_id {
+        Some(text) => Some(parse_catalog_category_id(&text)?),
+        None => None,
+    };
+    let item_subcategory_id = match row.item_subcategory_id {
+        Some(text) => Some(parse_catalog_subcategory_id(&text)?),
+        None => None,
+    };
     Ok(CatalogItem {
         menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
         tenant_id: parse_registry_tenant(&row.tenant_id)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?,
         name: row.name,
         tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
+        item_category_id,
+        item_subcategory_id,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_category_record(row: CatalogTaxonomyRow) -> Result<ItemCategory, CatalogStoreError> {
+    Ok(ItemCategory {
+        item_category_id: parse_catalog_category_id(&row.id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_subcategory_record(
+    row: CatalogTaxonomyRow,
+) -> Result<ItemSubcategory, CatalogStoreError> {
+    let parent = row.parent_id.ok_or_else(|| {
+        CatalogStoreError::new("an item sub-category row is missing its parent category")
+    })?;
+    Ok(ItemSubcategory {
+        item_subcategory_id: parse_catalog_subcategory_id(&row.id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        item_category_id: parse_catalog_category_id(&parent)?,
+        name: row.name,
         status: EntityStatus::from_db(&row.status),
     })
 }
@@ -1055,11 +1110,15 @@ fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, 
 
 impl CatalogStore for PostgresCatalog {
     async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
+        let category = item.item_category_id.map(|id| id.to_string());
+        let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         self.insert_item(
             &item.menu_item_id.to_string(),
             &item.tenant_id.to_string(),
             &item.name,
             &item.tax_class_id.to_string(),
+            category.as_deref(),
+            subcategory.as_deref(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))
@@ -1074,11 +1133,15 @@ impl CatalogStore for PostgresCatalog {
     }
 
     async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+        let category = item.item_category_id.map(|id| id.to_string());
+        let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         self.set_item(
             &item.tenant_id.to_string(),
             &item.menu_item_id.to_string(),
             &item.name,
             &item.tax_class_id.to_string(),
+            category.as_deref(),
+            subcategory.as_deref(),
             item.status.as_str(),
         )
         .await
@@ -1112,6 +1175,81 @@ impl CatalogStore for PostgresCatalog {
             &tax_class.tax_class_id.to_string(),
             &tax_class.name,
             tax_class.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_item_category(&self, category: &ItemCategory) -> Result<(), CatalogStoreError> {
+        self.insert_item_category(
+            &category.item_category_id.to_string(),
+            &category.tenant_id.to_string(),
+            &category.name,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_item_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+        let rows = self
+            .fetch_item_categories(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_category_record).collect()
+    }
+
+    async fn update_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        self.set_item_category(
+            &category.tenant_id.to_string(),
+            &category.item_category_id.to_string(),
+            &category.name,
+            category.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.insert_item_subcategory(
+            &subcategory.item_subcategory_id.to_string(),
+            &subcategory.tenant_id.to_string(),
+            &subcategory.item_category_id.to_string(),
+            &subcategory.name,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_item_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+        let rows = self
+            .fetch_item_subcategories(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_subcategory_record).collect()
+    }
+
+    async fn update_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        self.set_item_subcategory(
+            &subcategory.tenant_id.to_string(),
+            &subcategory.item_subcategory_id.to_string(),
+            &subcategory.item_category_id.to_string(),
+            &subcategory.name,
+            subcategory.status.as_str(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))

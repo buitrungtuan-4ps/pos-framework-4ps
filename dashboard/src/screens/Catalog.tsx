@@ -12,6 +12,8 @@ import type {
   CatalogItem,
   ChannelPrice,
   EntityStatus,
+  ItemCategory,
+  ItemSubcategory,
   Menu,
   MenuPlacement,
   SalesChannel,
@@ -41,6 +43,8 @@ const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
 export function Catalog() {
   const [items, setItems] = createSignal<CatalogItem[] | null>(null);
   const [taxClasses, setTaxClasses] = createSignal<TaxClass[]>([]);
+  const [categories, setCategories] = createSignal<ItemCategory[]>([]);
+  const [subcategories, setSubcategories] = createSignal<ItemSubcategory[]>([]);
   const [menus, setMenus] = createSignal<Menu[] | null>(null);
   const [placements, setPlacements] = createSignal<MenuPlacement[] | null>(null);
   const [selectedMenu, setSelectedMenu] = createSignal("");
@@ -51,13 +55,20 @@ export function Catalog() {
   // Create forms.
   const [newItemName, setNewItemName] = createSignal("");
   const [newItemTaxClass, setNewItemTaxClass] = createSignal("");
+  const [newItemCategory, setNewItemCategory] = createSignal("");
+  const [newItemSubcategory, setNewItemSubcategory] = createSignal("");
   const [newTaxClassName, setNewTaxClassName] = createSignal("");
+  const [newCategoryName, setNewCategoryName] = createSignal("");
+  const [newSubcategoryName, setNewSubcategoryName] = createSignal("");
+  const [newSubcategoryParent, setNewSubcategoryParent] = createSignal("");
   const [newMenuName, setNewMenuName] = createSignal("");
   const [newMenuParent, setNewMenuParent] = createSignal("");
 
   // Inline rename.
   const [editingItem, setEditingItem] = createSignal("");
   const [editingTaxClass, setEditingTaxClass] = createSignal("");
+  const [editingCategory, setEditingCategory] = createSignal("");
+  const [editingSubcategory, setEditingSubcategory] = createSignal("");
   const [editingMenu, setEditingMenu] = createSignal("");
   const [draftName, setDraftName] = createSignal("");
 
@@ -81,23 +92,126 @@ export function Catalog() {
   const menuName = (id: string) => menus()?.find((menu) => menu.menu_id === id)?.name ?? id;
   const taxClassName = (id: string) =>
     taxClasses().find((row) => row.tax_class_id === id)?.name ?? id;
+  const categoryName = (id: string | null) =>
+    id ? (categories().find((row) => row.item_category_id === id)?.name ?? id) : "—";
 
   const load = async () => {
     setError("");
     setNotice("");
     setBusy(true);
     try {
-      const [loadedItems, loadedTaxClasses, loadedMenus] = await Promise.all([
-        api.listItems(tenantId()),
-        api.listTaxClasses(tenantId()),
-        api.listMenus(tenantId()),
-      ]);
+      const [loadedItems, loadedTaxClasses, loadedCategories, loadedSubcategories, loadedMenus] =
+        await Promise.all([
+          api.listItems(tenantId()),
+          api.listTaxClasses(tenantId()),
+          api.listItemCategories(tenantId()),
+          api.listItemSubcategories(tenantId()),
+          api.listMenus(tenantId()),
+        ]);
       setItems(loadedItems);
       setTaxClasses(loadedTaxClasses);
+      setCategories(loadedCategories);
+      setSubcategories(loadedSubcategories);
       setMenus(loadedMenus);
       if (selectedMenu()) {
         await loadPlacements(selectedMenu());
       }
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createCategory = async () => {
+    const name = newCategoryName().trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createItemCategory(tenantId(), name);
+      setNewCategoryName("");
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setCategoryFields = async (
+    category: ItemCategory,
+    fields: { name?: string; status?: EntityStatus },
+  ) => {
+    const name = (fields.name ?? category.name).trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateItemCategory(category.item_category_id, tenantId(), {
+        name,
+        status: fields.status ?? category.status,
+      });
+      setEditingCategory("");
+      setDraftName("");
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createSubcategory = async () => {
+    const name = newSubcategoryName().trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    if (!newSubcategoryParent()) {
+      setError(t("catalog.parentCategoryRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createItemSubcategory(tenantId(), newSubcategoryParent(), name);
+      setNewSubcategoryName("");
+      setNewSubcategoryParent("");
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setSubcategoryFields = async (
+    subcategory: ItemSubcategory,
+    fields: { name?: string; itemCategoryId?: string; status?: EntityStatus },
+  ) => {
+    const name = (fields.name ?? subcategory.name).trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateItemSubcategory(subcategory.item_subcategory_id, tenantId(), {
+        itemCategoryId: fields.itemCategoryId ?? subcategory.item_category_id,
+        name,
+        status: fields.status ?? subcategory.status,
+      });
+      setEditingSubcategory("");
+      setDraftName("");
+      await load();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -182,9 +296,14 @@ export function Catalog() {
     setError("");
     setBusy(true);
     try {
-      await api.createItem(tenantId(), name, taxClass);
+      await api.createItem(tenantId(), name, taxClass, {
+        itemCategoryId: newItemCategory() || null,
+        itemSubcategoryId: newItemSubcategory() || null,
+      });
       setNewItemName("");
       setNewItemTaxClass("");
+      setNewItemCategory("");
+      setNewItemSubcategory("");
       await load();
     } catch (caught) {
       fail(caught);
@@ -208,6 +327,8 @@ export function Catalog() {
       await api.updateItem(item.menu_item_id, tenantId(), {
         name,
         taxClassId: item.tax_class_id,
+        itemCategoryId: item.item_category_id,
+        itemSubcategoryId: item.item_subcategory_id,
         status: fields.status ?? item.status,
       });
       setEditingItem("");
@@ -416,6 +537,7 @@ export function Catalog() {
                         <tr class="border-b border-line text-ink-muted">
                           <th class="py-2 pr-4 font-medium">{t("catalog.name")}</th>
                           <th class="py-2 pr-4 font-medium">{t("catalog.taxClass")}</th>
+                          <th class="py-2 pr-4 font-medium">{t("catalog.category")}</th>
                           <th class="py-2 pr-4 font-medium">{t("catalog.status")}</th>
                           <th class="py-2 font-medium">{t("catalog.actions")}</th>
                         </tr>
@@ -462,6 +584,7 @@ export function Catalog() {
                                 </Show>
                               </td>
                               <td class="py-2 pr-4">{taxClassName(item.tax_class_id)}</td>
+                              <td class="py-2 pr-4">{categoryName(item.item_category_id)}</td>
                               <td class="py-2 pr-4">{statusLabel(item.status)}</td>
                               <td class="flex flex-wrap gap-2 py-2">
                                 <Button
@@ -500,7 +623,7 @@ export function Catalog() {
           </Card>
 
           <Card title={t("catalog.createItem")}>
-            <div class="grid gap-4 md:grid-cols-3 md:items-end">
+            <div class="grid gap-4 md:grid-cols-2 md:items-end">
               <TextField
                 label={t("catalog.name")}
                 value={newItemName()}
@@ -523,11 +646,253 @@ export function Catalog() {
                   <p class="mt-1 text-xs text-ink-muted">{t("catalog.taxClassEmpty")}</p>
                 </Show>
               </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-ink">{t("catalog.category")}</span>
+                <select
+                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                  value={newItemCategory()}
+                  onChange={(event) => {
+                    setNewItemCategory(event.currentTarget.value);
+                    setNewItemSubcategory("");
+                  }}
+                >
+                  <option value="">{t("catalog.noCategory")}</option>
+                  <For each={categories().filter((row) => row.status === "active")}>
+                    {(row) => <option value={row.item_category_id}>{row.name}</option>}
+                  </For>
+                </select>
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-ink">
+                  {t("catalog.subcategory")}
+                </span>
+                <select
+                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
+                  value={newItemSubcategory()}
+                  disabled={!newItemCategory()}
+                  onChange={(event) => setNewItemSubcategory(event.currentTarget.value)}
+                >
+                  <option value="">{t("catalog.noSubcategory")}</option>
+                  <For
+                    each={subcategories().filter(
+                      (row) =>
+                        row.status === "active" && row.item_category_id === newItemCategory(),
+                    )}
+                  >
+                    {(row) => <option value={row.item_subcategory_id}>{row.name}</option>}
+                  </For>
+                </select>
+              </label>
               <Button disabled={busy()} onClick={() => void createItem()}>
                 {t("action.create")}
               </Button>
             </div>
           </Card>
+
+          <div class="grid gap-6 lg:grid-cols-2">
+            <Card title={t("catalog.categories")}>
+              <div class="flex flex-col gap-4">
+                <Show
+                  when={categories().length > 0}
+                  fallback={<p class="text-sm text-ink-muted">{t("catalog.categoriesEmpty")}</p>}
+                >
+                  <ul class="flex flex-col gap-2">
+                    <For each={categories()}>
+                      {(row) => (
+                        <li class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 text-sm text-ink">
+                          <Show
+                            when={editingCategory() === row.item_category_id}
+                            fallback={
+                              <span>
+                                {row.name}
+                                <Show when={row.status === "archived"}>
+                                  <span class="ml-2 text-xs text-ink-muted">
+                                    ({t("catalog.statusArchived")})
+                                  </span>
+                                </Show>
+                              </span>
+                            }
+                          >
+                            <input
+                              class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                              aria-label={t("catalog.name")}
+                              value={draftName()}
+                              onInput={(event) => setDraftName(event.currentTarget.value)}
+                            />
+                          </Show>
+                          <div class="flex flex-wrap gap-2">
+                            <Show
+                              when={editingCategory() === row.item_category_id}
+                              fallback={
+                                <Button
+                                  variant="secondary"
+                                  disabled={busy()}
+                                  onClick={() => {
+                                    setEditingCategory(row.item_category_id);
+                                    setDraftName(row.name);
+                                  }}
+                                >
+                                  {t("catalog.rename")}
+                                </Button>
+                              }
+                            >
+                              <Button
+                                disabled={busy()}
+                                onClick={() => void setCategoryFields(row, { name: draftName() })}
+                              >
+                                {t("action.save")}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() => {
+                                  setEditingCategory("");
+                                  setDraftName("");
+                                }}
+                              >
+                                {t("action.cancel")}
+                              </Button>
+                            </Show>
+                            <Button
+                              variant={row.status === "archived" ? "secondary" : "danger"}
+                              disabled={busy()}
+                              onClick={() =>
+                                void setCategoryFields(row, {
+                                  status: row.status === "archived" ? "active" : "archived",
+                                })
+                              }
+                            >
+                              {row.status === "archived"
+                                ? t("catalog.restore")
+                                : t("catalog.archive")}
+                            </Button>
+                          </div>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+                <div class="grid gap-4 md:grid-cols-2 md:items-end">
+                  <TextField
+                    label={t("catalog.categoryName")}
+                    value={newCategoryName()}
+                    onInput={setNewCategoryName}
+                    placeholder={t("catalog.categoryNamePlaceholder")}
+                  />
+                  <Button disabled={busy()} onClick={() => void createCategory()}>
+                    {t("action.create")}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
+            <Card title={t("catalog.subcategories")}>
+              <div class="flex flex-col gap-4">
+                <Show
+                  when={subcategories().length > 0}
+                  fallback={<p class="text-sm text-ink-muted">{t("catalog.subcategoriesEmpty")}</p>}
+                >
+                  <ul class="flex flex-col gap-2">
+                    <For each={subcategories()}>
+                      {(row) => (
+                        <li class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 text-sm text-ink">
+                          <Show
+                            when={editingSubcategory() === row.item_subcategory_id}
+                            fallback={
+                              <span>
+                                {row.name}
+                                <span class="ml-2 text-xs text-ink-muted">
+                                  {categoryName(row.item_category_id)}
+                                </span>
+                              </span>
+                            }
+                          >
+                            <input
+                              class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                              aria-label={t("catalog.name")}
+                              value={draftName()}
+                              onInput={(event) => setDraftName(event.currentTarget.value)}
+                            />
+                          </Show>
+                          <div class="flex flex-wrap gap-2">
+                            <Show
+                              when={editingSubcategory() === row.item_subcategory_id}
+                              fallback={
+                                <Button
+                                  variant="secondary"
+                                  disabled={busy()}
+                                  onClick={() => {
+                                    setEditingSubcategory(row.item_subcategory_id);
+                                    setDraftName(row.name);
+                                  }}
+                                >
+                                  {t("catalog.rename")}
+                                </Button>
+                              }
+                            >
+                              <Button
+                                disabled={busy()}
+                                onClick={() => void setSubcategoryFields(row, { name: draftName() })}
+                              >
+                                {t("action.save")}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() => {
+                                  setEditingSubcategory("");
+                                  setDraftName("");
+                                }}
+                              >
+                                {t("action.cancel")}
+                              </Button>
+                            </Show>
+                            <Button
+                              variant={row.status === "archived" ? "secondary" : "danger"}
+                              disabled={busy()}
+                              onClick={() =>
+                                void setSubcategoryFields(row, {
+                                  status: row.status === "archived" ? "active" : "archived",
+                                })
+                              }
+                            >
+                              {row.status === "archived"
+                                ? t("catalog.restore")
+                                : t("catalog.archive")}
+                            </Button>
+                          </div>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+                <div class="grid gap-4 md:items-end">
+                  <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("catalog.parentCategory")}
+                    </span>
+                    <select
+                      class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                      value={newSubcategoryParent()}
+                      onChange={(event) => setNewSubcategoryParent(event.currentTarget.value)}
+                    >
+                      <option value="">{t("catalog.chooseCategory")}</option>
+                      <For each={categories().filter((row) => row.status === "active")}>
+                        {(row) => <option value={row.item_category_id}>{row.name}</option>}
+                      </For>
+                    </select>
+                  </label>
+                  <TextField
+                    label={t("catalog.subcategoryName")}
+                    value={newSubcategoryName()}
+                    onInput={setNewSubcategoryName}
+                    placeholder={t("catalog.subcategoryNamePlaceholder")}
+                  />
+                  <Button disabled={busy()} onClick={() => void createSubcategory()}>
+                    {t("action.create")}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
 
           <Card title={t("catalog.taxClasses")}>
             <div class="flex flex-col gap-4">

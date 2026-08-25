@@ -31,6 +31,26 @@ pub struct CatalogItemRow {
     pub name: String,
     /// The tax class id (a ULID string).
     pub tax_class_id: String,
+    /// The operational category id (a ULID string), or `None` if unclassified.
+    pub item_category_id: Option<String>,
+    /// The operational sub-category id (a ULID string), or `None`.
+    pub item_subcategory_id: Option<String>,
+    /// `active` or `archived`.
+    pub status: String,
+}
+
+/// An item category or sub-category as listed. A sub-category carries its parent category id; a
+/// top-level category leaves `parent_id` `None`. One row type serves both tables.
+#[derive(Clone, Debug)]
+pub struct CatalogTaxonomyRow {
+    /// The category or sub-category id (a ULID string).
+    pub id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The parent category id for a sub-category, else `None`.
+    pub parent_id: Option<String>,
+    /// The human name.
+    pub name: String,
     /// `active` or `archived`.
     pub status: String,
 }
@@ -103,13 +123,23 @@ impl PostgresCatalog {
         tenant_id: &str,
         name: &str,
         tax_class_id: &str,
+        item_category_id: Option<&str>,
+        item_subcategory_id: Option<&str>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO catalog_items (menu_item_id, tenant_id, name, tax_class_id) \
-                 VALUES ($1, $2, $3, $4)",
-                &[&menu_item_id, &tenant_id, &name, &tax_class_id],
+                "INSERT INTO catalog_items \
+                 (menu_item_id, tenant_id, name, tax_class_id, item_category_id, item_subcategory_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &menu_item_id,
+                    &tenant_id,
+                    &name,
+                    &tax_class_id,
+                    &item_category_id,
+                    &item_subcategory_id,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -125,7 +155,8 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT menu_item_id, tenant_id, name, tax_class_id, status FROM catalog_items \
+                "SELECT menu_item_id, tenant_id, name, tax_class_id, item_category_id, \
+                 item_subcategory_id, status FROM catalog_items \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -138,7 +169,9 @@ impl PostgresCatalog {
                 tenant_id: row.get(1),
                 name: row.get(2),
                 tax_class_id: row.get(3),
-                status: row.get(4),
+                item_category_id: row.get(4),
+                item_subcategory_id: row.get(5),
+                status: row.get(6),
             })
             .collect())
     }
@@ -155,14 +188,25 @@ impl PostgresCatalog {
         menu_item_id: &str,
         name: &str,
         tax_class_id: &str,
+        item_category_id: Option<&str>,
+        item_subcategory_id: Option<&str>,
         status: &str,
     ) -> Result<bool, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let changed = connection
             .execute(
-                "UPDATE catalog_items SET name = $3, tax_class_id = $4, status = $5, updated_at = now() \
+                "UPDATE catalog_items SET name = $3, tax_class_id = $4, item_category_id = $5, \
+                 item_subcategory_id = $6, status = $7, updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2",
-                &[&tenant_id, &menu_item_id, &name, &tax_class_id, &status],
+                &[
+                    &tenant_id,
+                    &menu_item_id,
+                    &name,
+                    &tax_class_id,
+                    &item_category_id,
+                    &item_subcategory_id,
+                    &status,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -241,6 +285,171 @@ impl PostgresCatalog {
                 "UPDATE catalog_tax_classes SET name = $3, status = $4, updated_at = now() \
                  WHERE tenant_id = $1 AND tax_class_id = $2",
                 &[&tenant_id, &tax_class_id, &name, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    // --- item taxonomy: categories and sub-categories (tenant-scoped) ---
+
+    /// Inserts an item category.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_item_category(
+        &self,
+        item_category_id: &str,
+        tenant_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_item_categories (item_category_id, tenant_id, name) \
+                 VALUES ($1, $2, $3)",
+                &[&item_category_id, &tenant_id, &name],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's item categories, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_item_categories(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogTaxonomyRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT item_category_id, tenant_id, name, status FROM catalog_item_categories \
+                 WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogTaxonomyRow {
+                id: row.get(0),
+                tenant_id: row.get(1),
+                parent_id: None,
+                name: row.get(2),
+                status: row.get(3),
+            })
+            .collect())
+    }
+
+    /// Renames an item category and sets its status, within its tenant. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_item_category(
+        &self,
+        tenant_id: &str,
+        item_category_id: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_item_categories SET name = $3, status = $4, updated_at = now() \
+                 WHERE tenant_id = $1 AND item_category_id = $2",
+                &[&tenant_id, &item_category_id, &name, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    /// Inserts an item sub-category under a parent category.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_item_subcategory(
+        &self,
+        item_subcategory_id: &str,
+        tenant_id: &str,
+        item_category_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_item_subcategories \
+                 (item_subcategory_id, tenant_id, item_category_id, name) VALUES ($1, $2, $3, $4)",
+                &[&item_subcategory_id, &tenant_id, &item_category_id, &name],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's item sub-categories, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_item_subcategories(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogTaxonomyRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT item_subcategory_id, tenant_id, item_category_id, name, status \
+                 FROM catalog_item_subcategories WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogTaxonomyRow {
+                id: row.get(0),
+                tenant_id: row.get(1),
+                parent_id: Some(row.get(2)),
+                name: row.get(3),
+                status: row.get(4),
+            })
+            .collect())
+    }
+
+    /// Renames an item sub-category, (re)parents it and sets its status. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_item_subcategory(
+        &self,
+        tenant_id: &str,
+        item_subcategory_id: &str,
+        item_category_id: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_item_subcategories SET item_category_id = $3, name = $4, \
+                 status = $5, updated_at = now() \
+                 WHERE tenant_id = $1 AND item_subcategory_id = $2",
+                &[
+                    &tenant_id,
+                    &item_subcategory_id,
+                    &item_category_id,
+                    &name,
+                    &status,
+                ],
             )
             .await
             .map_err(unavailable)?;
