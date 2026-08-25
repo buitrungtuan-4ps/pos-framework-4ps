@@ -4,21 +4,33 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { DeviceProposalSummary } from "../api/types";
+import type { DeviceProposalSummary, Store } from "../api/types";
 import { t } from "../i18n";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
+  // A proposal carries only its store's ULID; the registry (ADR-0065) supplies the name, so the
+  // operator reads "Bến Thành" rather than a raw `01J9…`. Fetched alongside the proposals.
+  const [names, setNames] = createSignal<Map<string, string>>(new Map());
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+
+  // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
+  // name a store that predates the backfill, or one already archived).
+  const storeName = (storeId: string) => names().get(storeId) ?? storeId;
 
   const load = async () => {
     setError("");
     setBusy(true);
     try {
-      setRows(await api.listProposals(tenantId()));
+      const [proposals, stores] = await Promise.all([
+        api.listProposals(tenantId()),
+        api.listStores(tenantId()),
+      ]);
+      setNames(new Map(stores.map((store: Store) => [store.store_id, store.name])));
+      setRows(proposals);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : String(caught));
     } finally {
@@ -75,7 +87,12 @@ export function Devices() {
                         {(row) => (
                           <tr class="border-b border-line text-ink">
                             <td class="py-2 pr-4 font-mono text-xs">{row.id}</td>
-                            <td class="py-2 pr-4 font-mono text-xs">{row.store_id}</td>
+                            <td class="py-2 pr-4">
+                              <div class="flex flex-col">
+                                <span>{storeName(row.store_id)}</span>
+                                <span class="font-mono text-xs text-ink-muted">{row.store_id}</span>
+                              </div>
+                            </td>
                             <td class="py-2 pr-4">{row.kind}</td>
                             <td class="flex gap-2 py-2">
                               <Button disabled={busy()} onClick={() => void decide(row.id, true)}>

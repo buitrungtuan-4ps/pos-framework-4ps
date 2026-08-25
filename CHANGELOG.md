@@ -32,6 +32,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The new-store wizard now hands the operator a ready-to-run `config.toml`, and a runbook ties store
+  provisioning together end to end** (ADR-0065, WS-C #102). The wizard created a store and issued its
+  API key but stopped short of the one file the store machine actually needs. Its handoff step now
+  generates the edge's bootstrap `config.toml` — the store's `store_id` as the one active key, with the
+  store/tenant names and this cloud's URL as comments — and offers **Copy** and **Download config.toml**.
+  The file is deliberately minimal: the edge's config schema is `deny_unknown_fields` and carries only
+  identity, because a store server gets its credential by activation, never from a file on disk
+  (ADR-0004, ADR-0051) — so the generator emits exactly what the binary accepts and nothing that would
+  make it refuse to start. A new guide, **[Bring a store online](docs/guides/bring-a-store-online.md)**,
+  walks the whole path: create the store → download `config.toml` → install the service → sell offline →
+  activate devices → publish configuration, honest about which steps compose into the shipping binary
+  today. Also: the device-proposals screen now shows a proposal's store by its **registered name**
+  instead of a raw ULID, resolved against the registry. Bilingual EN/VI, behind the no-hardcoded-strings
+  lint.
 - **Device activation now picks (or adds) a device by name — the last raw-ULID entry point is gone**
   (ADR-0065, WS-C #102). The Activation screen asked the operator to type a `Device slot ULID`, the
   final place in the dashboard that still demanded a hand-typed identifier. It now **loads the store's

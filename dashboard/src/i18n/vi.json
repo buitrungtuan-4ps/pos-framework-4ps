@@ -18,6 +18,7 @@
   "action.save": "Lưu",
   "action.issue": "Cấp",
   "action.cancel": "Huỷ",
+  "action.copy": "Sao chép",
 
   "context.tenant": "Tenant",
   "context.tenantPlaceholder": "Mã tenant",
@@ -102,6 +103,10 @@
   "wizard.finish": "Hoàn tất",
   "wizard.storeLabel": "Cửa hàng",
   "wizard.keyLabel": "Mã khoá API",
+  "wizard.configTitle": "Tệp cấu hình cửa hàng (config.toml)",
+  "wizard.configHint": "Lưu tệp này thành config.toml trên máy chủ cửa hàng, cạnh tệp chạy pos_edge (hoặc trỏ POS_EDGE_CONFIG tới nó). Tệp xác định máy này là cửa hàng nào; máy nhận thông tin xác thực qua bước kích hoạt, không phải từ tệp này.",
+  "wizard.downloadConfig": "Tải config.toml",
+  "wizard.configCopied": "Đã sao chép.",
 
   "reports.title": "Báo cáo",
   "reports.description": "Tổng hợp sự kiện theo ngày cho cửa hàng đang chọn. Chỉ là số đếm — không có doanh thu hay dữ liệu cá nhân.",

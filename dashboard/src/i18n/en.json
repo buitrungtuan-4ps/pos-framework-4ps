@@ -18,6 +18,7 @@
   "action.save": "Save",
   "action.issue": "Issue",
   "action.cancel": "Cancel",
+  "action.copy": "Copy",
 
   "context.tenant": "Tenant",
   "context.tenantPlaceholder": "Tenant ID",
@@ -102,6 +103,10 @@
   "wizard.finish": "Finish",
   "wizard.storeLabel": "Store",
   "wizard.keyLabel": "API key id",
+  "wizard.configTitle": "Store config file (config.toml)",
+  "wizard.configHint": "Save this as config.toml on the store server, beside the pos_edge binary (or point POS_EDGE_CONFIG at it). It names which store this box is; the box gets its credentials by activation, not from this file.",
+  "wizard.downloadConfig": "Download config.toml",
+  "wizard.configCopied": "Copied to clipboard.",
 
   "reports.title": "Reports",
   "reports.description": "The daily event rollup for the store in context. Counts only — no revenue or personal data.",
