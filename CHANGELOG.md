@@ -32,6 +32,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A guided new-store wizard onboards a store from zero without a ULID** (ADR-0065, WS-C #102). A
+  three-step flow at `/stores/new` (linked from the Stores screen): name the store and optionally put
+  it under a brand → it is created in the registry → issue the scoped API key its devices use to reach
+  the cloud (shown once) → a handoff summary with the store's id and the next steps (activation,
+  configuration). It composes the registry and API-key admin routes; the tenant comes from the picker.
+  Bilingual EN/VI, behind the no-hardcoded-strings lint. Device activation from inside the flow is the
+  next slice.
 - **A Stores & brands management screen names the stores the registry backfilled** (ADR-0065, WS-C #102).
   The backfill (migration `0011`) surfaced every existing store under a placeholder name like
   `Store 01J9…`; there was no way to fix that or to add a store from the dashboard. A new **Stores**

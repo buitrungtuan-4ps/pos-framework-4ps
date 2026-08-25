@@ -15,6 +15,7 @@ import { ApiKeys } from "./screens/ApiKeys";
 import { Config } from "./screens/Config";
 import { Devices } from "./screens/Devices";
 import { Login } from "./screens/Login";
+import { NewStore } from "./screens/NewStore";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
 import { Stores } from "./screens/Stores";
@@ -51,6 +52,7 @@ export function App() {
         <Route path="/" component={Guarded}>
           <Route path="/" component={Reports} />
           <Route path="/stores" component={Stores} />
+          <Route path="/stores/new" component={NewStore} />
           <Route path="/config" component={Config} />
           <Route path="/api-keys" component={ApiKeys} />
           <Route path="/devices" component={Devices} />
