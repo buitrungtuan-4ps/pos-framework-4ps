@@ -204,6 +204,56 @@ pub struct Menu {
     pub status: EntityStatus,
 }
 
+/// A menu section's identifier — a ULID minted at creation. A section is an authoring grouping within
+/// a menu (ADR-0066 entity 7); like [`MenuId`] it never crosses the wire (the compiled `MenuBook` is a
+/// flat list of entries with no sections), so its id lives beside the seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct MenuSectionId(Ulid);
+
+impl MenuSectionId {
+    /// Wraps a ULID as a menu-section id.
+    #[must_use]
+    pub const fn new(ulid: Ulid) -> Self {
+        Self(ulid)
+    }
+
+    /// The underlying ULID.
+    #[must_use]
+    pub const fn as_ulid(self) -> Ulid {
+        self.0
+    }
+}
+
+impl fmt::Display for MenuSectionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// A menu section — an authoring grouping within a menu (ADR-0066 entity 7), e.g. `Starters`, `Mains`,
+/// `Desserts` on a single menu.
+///
+/// A section is where the operator organises a menu's placements for authoring and printing; a
+/// [`MenuPlacement`] carries an optional `menu_section_id` naming the section it sits under. Sections
+/// are **authoring-only**: the compiled `MenuBook` is a flat set of entries, so a section changes what
+/// the operator sees while authoring, never what the edge is served — the same posture a
+/// [`ModifierGroup`] holds until a `pos-proto` extension carries it.
+#[derive(Debug, Clone, Serialize)]
+pub struct MenuSection {
+    /// The section id.
+    pub menu_section_id: MenuSectionId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The menu this section belongs to.
+    pub menu_id: MenuId,
+    /// The human name (`Starters`, `Mains`, `Desserts`).
+    pub name: String,
+    /// Where the section sorts within its menu, ascending. Ties break by id.
+    pub sort: i32,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
 /// One channel's price for a [`MenuPlacement`].
 ///
 /// This is where dine-in ≠ takeaway ≠ delivery pricing is authored; the compiler emits one channel's
@@ -227,6 +277,9 @@ pub struct MenuPlacement {
     pub menu_id: MenuId,
     /// The item placed.
     pub menu_item_id: MenuItemId,
+    /// The section this placement sits under, or `None` for an unsectioned placement. Authoring-only
+    /// (ADR-0066 entity 7): it groups the row for the operator, and does not reach the compiled book.
+    pub menu_section_id: Option<MenuSectionId>,
     /// The item's price per channel in this menu. A channel with no row here falls to the menu's
     /// parent (inheritance) or, failing that, is not sold on that channel.
     pub prices: Vec<ChannelPrice>,
@@ -529,6 +582,25 @@ pub trait CatalogStore {
         menu: &Menu,
     ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
 
+    /// Inserts a menu section.
+    fn create_menu_section(
+        &self,
+        section: &MenuSection,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a menu's sections, within its tenant.
+    fn list_menu_sections(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> impl Future<Output = Result<Vec<MenuSection>, CatalogStoreError>> + Send;
+
+    /// Renames a menu section, sets its sort and/or status. Returns whether a row changed.
+    fn update_menu_section(
+        &self,
+        section: &MenuSection,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
     /// Inserts or replaces a placement, by its `(menu_id, menu_item_id)` pair.
     fn set_placement(
         &self,
@@ -577,7 +649,7 @@ mod tests {
     use super::{
         CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
         DisplaySubcategory, ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId,
-        MenuPlacement, ModifierGroup, TaxClass,
+        MenuPlacement, MenuSection, ModifierGroup, TaxClass,
     };
     use crate::registry::EntityStatus;
 
@@ -594,6 +666,7 @@ mod tests {
         layout_buttons: Mutex<Vec<LayoutButton>>,
         modifier_groups: Mutex<Vec<ModifierGroup>>,
         menus: Mutex<Vec<Menu>>,
+        menu_sections: Mutex<Vec<MenuSection>>,
         placements: Mutex<Vec<MenuPlacement>>,
     }
 
@@ -942,6 +1015,48 @@ mod tests {
             Ok(true)
         }
 
+        async fn create_menu_section(
+            &self,
+            section: &MenuSection,
+        ) -> Result<(), CatalogStoreError> {
+            self.menu_sections
+                .lock()
+                .expect("lock")
+                .push(section.clone());
+            Ok(())
+        }
+
+        async fn list_menu_sections(
+            &self,
+            tenant_id: TenantId,
+            menu_id: MenuId,
+        ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+            Ok(self
+                .menu_sections
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_menu_section(
+            &self,
+            section: &MenuSection,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut sections = self.menu_sections.lock().expect("lock");
+            let Some(row) = sections.iter_mut().find(|row| {
+                row.menu_section_id == section.menu_section_id && row.tenant_id == section.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&section.name);
+            row.sort = section.sort;
+            row.status = section.status;
+            Ok(true)
+        }
+
         async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
             let mut placements = self.placements.lock().expect("lock");
             if let Some(row) = placements.iter_mut().find(|row| {
@@ -1102,6 +1217,7 @@ mod tests {
             tenant_id: tenant(1),
             menu_id: menu_id(10),
             menu_item_id: item_id(500),
+            menu_section_id: None,
             prices: vec![ChannelPrice {
                 sales_channel: Open::from_known(SalesChannel::DineIn),
                 unit_price: vnd(price),

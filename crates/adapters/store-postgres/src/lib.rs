@@ -38,8 +38,9 @@ pub use activation::{ActivationCodeRow, PostgresActivationCodes};
 pub use admin::{AdminCredentialRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use catalog::{
-    CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, PostgresCatalog,
+    CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
+    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
+    PostgresCatalog,
 };
 pub use config_trees::PostgresConfigTrees;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};

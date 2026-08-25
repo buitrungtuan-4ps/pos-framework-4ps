@@ -16,6 +16,7 @@ import type {
   ItemSubcategory,
   Menu,
   MenuPlacement,
+  MenuSection,
   ModifierGroup,
   SalesChannel,
   TaxClass,
@@ -48,6 +49,7 @@ export function Catalog() {
   const [subcategories, setSubcategories] = createSignal<ItemSubcategory[]>([]);
   const [modifierGroups, setModifierGroups] = createSignal<ModifierGroup[]>([]);
   const [menus, setMenus] = createSignal<Menu[] | null>(null);
+  const [menuSections, setMenuSections] = createSignal<MenuSection[]>([]);
   const [placements, setPlacements] = createSignal<MenuPlacement[] | null>(null);
   const [selectedMenu, setSelectedMenu] = createSignal("");
   const [error, setError] = createSignal("");
@@ -71,6 +73,8 @@ export function Catalog() {
   const [newSubcategoryParent, setNewSubcategoryParent] = createSignal("");
   const [newMenuName, setNewMenuName] = createSignal("");
   const [newMenuParent, setNewMenuParent] = createSignal("");
+  const [newSectionName, setNewSectionName] = createSignal("");
+  const [newSectionSort, setNewSectionSort] = createSignal("0");
 
   // Inline rename.
   const [editingItem, setEditingItem] = createSignal("");
@@ -78,10 +82,13 @@ export function Catalog() {
   const [editingCategory, setEditingCategory] = createSignal("");
   const [editingSubcategory, setEditingSubcategory] = createSignal("");
   const [editingMenu, setEditingMenu] = createSignal("");
+  const [editingSection, setEditingSection] = createSignal("");
+  const [draftSectionSort, setDraftSectionSort] = createSignal("0");
   const [draftName, setDraftName] = createSignal("");
 
   // Placement editor.
   const [placementItem, setPlacementItem] = createSignal("");
+  const [placementSection, setPlacementSection] = createSignal("");
   const [placementCurrency, setPlacementCurrency] = createSignal("VND");
   const [placementAvailable, setPlacementAvailable] = createSignal(true);
   const [priceSheet, setPriceSheet] = createSignal(emptyPriceSheet());
@@ -98,6 +105,8 @@ export function Catalog() {
   const itemName = (id: string) =>
     items()?.find((item) => item.menu_item_id === id)?.name ?? id;
   const menuName = (id: string) => menus()?.find((menu) => menu.menu_id === id)?.name ?? id;
+  const sectionName = (id: string | null) =>
+    id ? (menuSections().find((row) => row.menu_section_id === id)?.name ?? id) : "—";
   const taxClassName = (id: string) =>
     taxClasses().find((row) => row.tax_class_id === id)?.name ?? id;
   const categoryName = (id: string | null) =>
@@ -347,7 +356,12 @@ export function Catalog() {
   };
 
   const loadPlacements = async (menuId: string) => {
-    setPlacements(await api.listPlacements(tenantId(), menuId));
+    const [loadedPlacements, loadedSections] = await Promise.all([
+      api.listPlacements(tenantId(), menuId),
+      api.listMenuSections(tenantId(), menuId),
+    ]);
+    setPlacements(loadedPlacements);
+    setMenuSections(loadedSections);
   };
 
   const openMenu = async (menuId: string) => {
@@ -475,10 +489,66 @@ export function Catalog() {
     }
   };
 
+  // --- menu sections (authoring groupings within the selected menu) ---
+
+  const createMenuSection = async () => {
+    const name = newSectionName().trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    const sort = Number(newSectionSort());
+    if (!Number.isInteger(sort)) {
+      setError(t("catalog.sortInvalid"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createMenuSection(tenantId(), selectedMenu(), name, sort);
+      setNewSectionName("");
+      setNewSectionSort("0");
+      await loadPlacements(selectedMenu());
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setSectionFields = async (
+    section: MenuSection,
+    fields: { name?: string; sort?: number; status?: EntityStatus },
+  ) => {
+    const name = (fields.name ?? section.name).trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateMenuSection(tenantId(), selectedMenu(), section.menu_section_id, {
+        name,
+        sort: fields.sort ?? section.sort,
+        status: fields.status ?? section.status,
+      });
+      setEditingSection("");
+      setDraftName("");
+      setDraftSectionSort("0");
+      await loadPlacements(selectedMenu());
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // --- placements ---
 
   const resetPlacementEditor = () => {
     setPlacementItem("");
+    setPlacementSection("");
     setPlacementCurrency("VND");
     setPlacementAvailable(true);
     setPriceSheet(emptyPriceSheet());
@@ -495,6 +565,7 @@ export function Catalog() {
       }
     }
     setPlacementItem(placement.menu_item_id);
+    setPlacementSection(placement.menu_section_id ?? "");
     setPlacementCurrency(currency);
     setPlacementAvailable(placement.available);
     setPriceSheet(sheet);
@@ -527,7 +598,14 @@ export function Catalog() {
     setError("");
     setBusy(true);
     try {
-      await api.setPlacement(tenantId(), selectedMenu(), item, prices, placementAvailable());
+      await api.setPlacement(
+        tenantId(),
+        selectedMenu(),
+        item,
+        prices,
+        placementAvailable(),
+        placementSection() || null,
+      );
       resetPlacementEditor();
       await loadPlacements(selectedMenu());
     } catch (caught) {
@@ -1408,6 +1486,127 @@ export function Catalog() {
           </Card>
 
           <Show when={selectedMenu()}>
+            <div class="flex flex-col gap-6">
+            <Card title={t("catalog.sectionsFor", { menu: menuName(selectedMenu()) })}>
+              <div class="flex flex-col gap-4">
+                <p class="text-sm text-ink-muted">{t("catalog.sectionsHint")}</p>
+                <Show
+                  when={menuSections().length > 0}
+                  fallback={<p class="text-sm text-ink-muted">{t("catalog.sectionsEmpty")}</p>}
+                >
+                  <ul class="flex flex-col gap-2">
+                    <For each={menuSections()}>
+                      {(row) => (
+                        <li class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 text-sm text-ink">
+                          <Show
+                            when={editingSection() === row.menu_section_id}
+                            fallback={
+                              <span>
+                                {row.name}
+                                <span class="ml-2 text-xs text-ink-muted">
+                                  ({t("catalog.sortLabel", { sort: String(row.sort) })})
+                                </span>
+                                <Show when={row.status === "archived"}>
+                                  <span class="ml-2 text-xs text-ink-muted">
+                                    ({t("catalog.statusArchived")})
+                                  </span>
+                                </Show>
+                              </span>
+                            }
+                          >
+                            <div class="flex flex-wrap gap-2">
+                              <input
+                                class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                aria-label={t("catalog.name")}
+                                value={draftName()}
+                                onInput={(event) => setDraftName(event.currentTarget.value)}
+                              />
+                              <input
+                                class="min-h-touch w-20 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                inputmode="numeric"
+                                aria-label={t("catalog.sort")}
+                                value={draftSectionSort()}
+                                onInput={(event) => setDraftSectionSort(event.currentTarget.value)}
+                              />
+                            </div>
+                          </Show>
+                          <div class="flex flex-wrap gap-2">
+                            <Show
+                              when={editingSection() === row.menu_section_id}
+                              fallback={
+                                <Button
+                                  variant="secondary"
+                                  disabled={busy()}
+                                  onClick={() => {
+                                    setEditingSection(row.menu_section_id);
+                                    setDraftName(row.name);
+                                    setDraftSectionSort(String(row.sort));
+                                  }}
+                                >
+                                  {t("catalog.rename")}
+                                </Button>
+                              }
+                            >
+                              <Button
+                                disabled={busy()}
+                                onClick={() =>
+                                  void setSectionFields(row, {
+                                    name: draftName(),
+                                    sort: Number(draftSectionSort()),
+                                  })
+                                }
+                              >
+                                {t("action.save")}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() => {
+                                  setEditingSection("");
+                                  setDraftName("");
+                                  setDraftSectionSort("0");
+                                }}
+                              >
+                                {t("action.cancel")}
+                              </Button>
+                            </Show>
+                            <Button
+                              variant={row.status === "archived" ? "secondary" : "danger"}
+                              disabled={busy()}
+                              onClick={() =>
+                                void setSectionFields(row, {
+                                  status: row.status === "archived" ? "active" : "archived",
+                                })
+                              }
+                            >
+                              {row.status === "archived"
+                                ? t("catalog.restore")
+                                : t("catalog.archive")}
+                            </Button>
+                          </div>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+                <div class="grid gap-4 md:grid-cols-3 md:items-end">
+                  <TextField
+                    label={t("catalog.sectionName")}
+                    value={newSectionName()}
+                    onInput={setNewSectionName}
+                    placeholder={t("catalog.sectionNamePlaceholder")}
+                  />
+                  <TextField
+                    label={t("catalog.sort")}
+                    value={newSectionSort()}
+                    onInput={setNewSectionSort}
+                    placeholder="0"
+                  />
+                  <Button disabled={busy()} onClick={() => void createMenuSection()}>
+                    {t("action.create")}
+                  </Button>
+                </div>
+              </div>
+            </Card>
             <Card title={t("catalog.placementsFor", { menu: menuName(selectedMenu()) })}>
               <div class="flex flex-col gap-4">
                 <Show
@@ -1426,6 +1625,7 @@ export function Catalog() {
                           <thead>
                             <tr class="border-b border-line text-ink-muted">
                               <th class="py-2 pr-4 font-medium">{t("catalog.item")}</th>
+                              <th class="py-2 pr-4 font-medium">{t("catalog.section")}</th>
                               <th class="py-2 pr-4 font-medium">{t("catalog.prices")}</th>
                               <th class="py-2 pr-4 font-medium">{t("catalog.available")}</th>
                               <th class="py-2 font-medium">{t("catalog.actions")}</th>
@@ -1436,6 +1636,7 @@ export function Catalog() {
                               {(placement) => (
                                 <tr class="border-b border-line align-top text-ink">
                                   <td class="py-2 pr-4">{itemName(placement.menu_item_id)}</td>
+                                  <td class="py-2 pr-4">{sectionName(placement.menu_section_id)}</td>
                                   <td class="py-2 pr-4">{priceSummary(placement)}</td>
                                   <td class="py-2 pr-4">
                                     {placement.available
@@ -1495,6 +1696,23 @@ export function Catalog() {
                       onInput={setPlacementCurrency}
                       placeholder={t("catalog.currencyPlaceholder")}
                     />
+                    <label class="block">
+                      <span class="mb-1 block text-sm font-medium text-ink">
+                        {t("catalog.section")}
+                      </span>
+                      <select
+                        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                        value={placementSection()}
+                        onChange={(event) => setPlacementSection(event.currentTarget.value)}
+                      >
+                        <option value="">{t("catalog.sectionNone")}</option>
+                        <For
+                          each={menuSections().filter((row) => row.status === "active")}
+                        >
+                          {(row) => <option value={row.menu_section_id}>{row.name}</option>}
+                        </For>
+                      </select>
+                    </label>
                   </div>
                   <p class="mt-3 mb-2 text-sm font-medium text-ink">{t("catalog.prices")}</p>
                   <p class="mb-3 text-xs text-ink-muted">{t("catalog.pricesHint")}</p>
@@ -1538,6 +1756,7 @@ export function Catalog() {
                 </div>
               </div>
             </Card>
+            </div>
           </Show>
 
           <Card title={t("catalog.publish")}>

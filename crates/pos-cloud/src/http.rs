@@ -85,7 +85,8 @@ use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup, ModifierGroupId, TaxClass,
+    LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId, ModifierGroup,
+    ModifierGroupId, TaxClass,
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
@@ -1240,6 +1241,12 @@ struct CatalogState<Cat, A, C> {
 /// reads and deletes, the request body for a create or upsert. A placement is addressed by its
 /// `(menu_id, menu_item_id)` pair: `PUT` upserts it, `DELETE` removes it. The routes live under
 /// `/admin/catalog/`, a fresh prefix that never collides with the registry or device surfaces.
+#[expect(
+    clippy::too_many_lines,
+    reason = "this is one flat route table for the whole catalog authoring surface (items, tax \
+              classes, item/display taxonomy, layout buttons, modifier groups, menus, sections and \
+              placements); splitting it would only scatter one router across helpers"
+)]
 pub fn catalog_router<Cat, A, C>(catalog: Cat, admin: A, clock: C) -> Router
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
@@ -1324,6 +1331,14 @@ where
         .route(
             "/admin/catalog/menus/{menu_id}",
             axum::routing::patch(admin_update_menu::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus/{menu_id}/sections",
+            get(admin_list_menu_sections::<Cat, A, C>).post(admin_create_menu_section::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}",
+            axum::routing::patch(admin_update_menu_section::<Cat, A, C>),
         )
         .route(
             "/admin/catalog/menus/{menu_id}/placements",
@@ -1493,8 +1508,27 @@ struct UpdateMenuRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct CreateMenuSectionRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    sort: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateMenuSectionRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    sort: i32,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct SetPlacementRequest {
     tenant_id: String,
+    #[serde(default)]
+    menu_section_id: Option<String>,
     prices: Vec<ChannelPrice>,
     available: bool,
 }
@@ -1563,6 +1597,18 @@ fn parse_optional_display_subcategory(
         Some(text) => text
             .parse::<Ulid>()
             .map(|ulid| Some(DisplaySubcategoryId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
+/// Parses an optional menu-section id, with the same empty-is-`None` rule as
+/// [`parse_optional_category`] — a placement may sit in a menu without a section.
+fn parse_optional_menu_section(value: Option<&str>) -> Result<Option<MenuSectionId>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(MenuSectionId::new(ulid)))
             .map_err(|_| ()),
         None => Ok(None),
     }
@@ -2590,6 +2636,125 @@ where
     }
 }
 
+/// A super-admin lists a menu's sections (tenant named on the query).
+async fn admin_list_menu_sections<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(menu_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the menu id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.catalog.list_menu_sections(tenant_id, menu_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<MenuSection>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a section within a menu.
+async fn admin_create_menu_section<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(menu_id): Path<String>,
+    Json(request): Json<CreateMenuSectionRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the menu id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(menu_section_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuSectionId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = MenuSection {
+        menu_section_id,
+        tenant_id,
+        menu_id,
+        name: request.name,
+        sort: request.sort,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_menu_section(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a menu section, sets its sort and/or status.
+async fn admin_update_menu_section<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path((menu_id, menu_section_id)): Path<(String, String)>,
+    Json(request): Json<UpdateMenuSectionRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id), Ok(menu_section_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+        menu_section_id.parse::<Ulid>().map(MenuSectionId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, the menu id or the section id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = MenuSection {
+        menu_section_id,
+        tenant_id,
+        menu_id,
+        name: request.name,
+        sort: request.sort,
+        status,
+    };
+    match state.catalog.update_menu_section(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such menu section").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
 /// A super-admin lists a menu's placements (tenant named on the query).
 async fn admin_list_placements<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -2647,10 +2812,15 @@ where
         )
             .into_response();
     };
+    let Ok(menu_section_id) = parse_optional_menu_section(request.menu_section_id.as_deref())
+    else {
+        return (StatusCode::BAD_REQUEST, "menu_section_id is not a ULID").into_response();
+    };
     let record = MenuPlacement {
         tenant_id,
         menu_id,
         menu_item_id,
+        menu_section_id,
         prices: request.prices,
         available: request.available,
     };

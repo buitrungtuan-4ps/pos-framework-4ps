@@ -23,12 +23,13 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, OrderQueueRow,
-    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
-    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
+    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
+    DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
+    TenantRow,
 };
 
 use pos_ports::PortError;
@@ -54,7 +55,8 @@ use crate::auth::totp::TotpSecret;
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup, ModifierGroupId, TaxClass,
+    LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId, ModifierGroup,
+    ModifierGroupId, TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1001,6 +1003,14 @@ fn parse_catalog_menu_id(text: &str) -> Result<MenuId, CatalogStoreError> {
     })
 }
 
+fn parse_catalog_menu_section_id(text: &str) -> Result<MenuSectionId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(MenuSectionId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!("a catalog menu section id is not a ULID: {text}"))
+        })
+}
+
 fn parse_catalog_tax_class(text: &str) -> Result<TaxClassId, CatalogStoreError> {
     text.parse::<Ulid>()
         .map(TaxClassId::new)
@@ -1232,17 +1242,36 @@ fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
     })
 }
 
+fn catalog_menu_section_record(
+    row: CatalogMenuSectionRow,
+) -> Result<MenuSection, CatalogStoreError> {
+    Ok(MenuSection {
+        menu_section_id: parse_catalog_menu_section_id(&row.menu_section_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        menu_id: parse_catalog_menu_id(&row.menu_id)?,
+        name: row.name,
+        sort: row.sort,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
 fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, CatalogStoreError> {
     let prices: Vec<ChannelPrice> = serde_json::from_str(&row.prices_json).map_err(|error| {
         CatalogStoreError::new(format!(
             "a placement's stored prices are not valid JSON: {error}"
         ))
     })?;
+    let menu_section_id = match &row.menu_section_id {
+        Some(text) => Some(parse_catalog_menu_section_id(text)?),
+        None => None,
+    };
     Ok(MenuPlacement {
         tenant_id: parse_registry_tenant(&row.tenant_id)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?,
         menu_id: parse_catalog_menu_id(&row.menu_id)?,
         menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+        menu_section_id,
         prices,
         available: row.available,
     })
@@ -1598,14 +1627,52 @@ impl CatalogStore for PostgresCatalog {
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
+    async fn create_menu_section(&self, section: &MenuSection) -> Result<(), CatalogStoreError> {
+        self.insert_menu_section(
+            &section.menu_section_id.to_string(),
+            &section.tenant_id.to_string(),
+            &section.menu_id.to_string(),
+            &section.name,
+            section.sort,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_menu_sections(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+        let rows = self
+            .fetch_menu_sections(&tenant_id.to_string(), &menu_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_menu_section_record).collect()
+    }
+
+    async fn update_menu_section(&self, section: &MenuSection) -> Result<bool, CatalogStoreError> {
+        self.set_menu_section(
+            &section.tenant_id.to_string(),
+            &section.menu_section_id.to_string(),
+            &section.name,
+            section.sort,
+            section.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
     async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
         let prices_json = serde_json::to_string(&placement.prices).map_err(|error| {
             CatalogStoreError::new(format!("could not serialise placement prices: {error}"))
         })?;
+        let section = placement.menu_section_id.map(|id| id.to_string());
         self.upsert_placement(
             &placement.tenant_id.to_string(),
             &placement.menu_id.to_string(),
             &placement.menu_item_id.to_string(),
+            section.as_deref(),
             &prices_json,
             placement.available,
         )

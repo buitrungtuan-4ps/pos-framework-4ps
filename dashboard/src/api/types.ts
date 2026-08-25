@@ -237,6 +237,16 @@ export interface Menu {
   readonly status: EntityStatus;
 }
 
+/** A menu section — an authoring grouping within a menu (ADR-0066 entity 7). Authoring-only. */
+export interface MenuSection {
+  readonly menu_section_id: string;
+  readonly tenant_id: string;
+  readonly menu_id: string;
+  readonly name: string;
+  readonly sort: number;
+  readonly status: EntityStatus;
+}
+
 /** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */
 export interface ChannelPrice {
   readonly sales_channel: SalesChannel | null;
@@ -248,6 +258,7 @@ export interface MenuPlacement {
   readonly tenant_id: string;
   readonly menu_id: string;
   readonly menu_item_id: string;
+  readonly menu_section_id: string | null;
   readonly prices: ChannelPrice[];
   readonly available: boolean;
 }

@@ -127,6 +127,23 @@ pub struct CatalogMenuRow {
     pub status: String,
 }
 
+/// A menu section as listed — an authoring grouping within a menu.
+#[derive(Clone, Debug)]
+pub struct CatalogMenuSectionRow {
+    /// The section id (a ULID string).
+    pub menu_section_id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The menu this section belongs to.
+    pub menu_id: String,
+    /// The human name.
+    pub name: String,
+    /// Where the section sorts within its menu, ascending.
+    pub sort: i32,
+    /// `active` or `archived`.
+    pub status: String,
+}
+
 /// A placement as listed — an item in a menu, with its per-channel prices as a JSON document.
 #[derive(Clone, Debug)]
 pub struct CatalogPlacementRow {
@@ -136,6 +153,8 @@ pub struct CatalogPlacementRow {
     pub menu_id: String,
     /// The item placed.
     pub menu_item_id: String,
+    /// The section this placement sits under, or `None` for an unsectioned placement.
+    pub menu_section_id: Option<String>,
     /// The per-channel prices, as the JSON text stored in the `jsonb` column.
     pub prices_json: String,
     /// Whether the item is for sale in this menu right now (the published-availability floor).
@@ -982,6 +1001,92 @@ impl PostgresCatalog {
         Ok(changed == 1)
     }
 
+    // --- menu sections (tenant-scoped, within a menu) ---
+
+    /// Inserts a menu section.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_menu_section(
+        &self,
+        menu_section_id: &str,
+        tenant_id: &str,
+        menu_id: &str,
+        name: &str,
+        sort: i32,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_menu_sections \
+                 (menu_section_id, tenant_id, menu_id, name, sort) VALUES ($1, $2, $3, $4, $5)",
+                &[&menu_section_id, &tenant_id, &menu_id, &name, &sort],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a menu's sections within a tenant, by sort then id.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_menu_sections(
+        &self,
+        tenant_id: &str,
+        menu_id: &str,
+    ) -> Result<Vec<CatalogMenuSectionRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT menu_section_id, tenant_id, menu_id, name, sort, status \
+                 FROM catalog_menu_sections WHERE tenant_id = $1 AND menu_id = $2 \
+                 ORDER BY sort ASC, menu_section_id ASC",
+                &[&tenant_id, &menu_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogMenuSectionRow {
+                menu_section_id: row.get(0),
+                tenant_id: row.get(1),
+                menu_id: row.get(2),
+                name: row.get(3),
+                sort: row.get(4),
+                status: row.get(5),
+            })
+            .collect())
+    }
+
+    /// Renames a menu section, sets its sort and status, within its tenant. Returns whether a row
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_menu_section(
+        &self,
+        tenant_id: &str,
+        menu_section_id: &str,
+        name: &str,
+        sort: i32,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_menu_sections SET name = $3, sort = $4, status = $5, \
+                 updated_at = now() WHERE tenant_id = $1 AND menu_section_id = $2",
+                &[&tenant_id, &menu_section_id, &name, &sort, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
     // --- placements (tenant-scoped, keyed by (menu_id, menu_item_id)) ---
 
     /// Inserts or replaces a placement by its `(menu_id, menu_item_id)` pair. `prices_json` is the
@@ -995,17 +1100,27 @@ impl PostgresCatalog {
         tenant_id: &str,
         menu_id: &str,
         menu_item_id: &str,
+        menu_section_id: Option<&str>,
         prices_json: &str,
         available: bool,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO catalog_placements (tenant_id, menu_id, menu_item_id, prices, available) \
-                 VALUES ($1, $2, $3, $4::text::jsonb, $5) \
+                "INSERT INTO catalog_placements \
+                 (tenant_id, menu_id, menu_item_id, menu_section_id, prices, available) \
+                 VALUES ($1, $2, $3, $4, $5::text::jsonb, $6) \
                  ON CONFLICT (menu_id, menu_item_id) \
-                 DO UPDATE SET prices = $4::text::jsonb, available = $5, updated_at = now()",
-                &[&tenant_id, &menu_id, &menu_item_id, &prices_json, &available],
+                 DO UPDATE SET menu_section_id = $4, prices = $5::text::jsonb, available = $6, \
+                 updated_at = now()",
+                &[
+                    &tenant_id,
+                    &menu_id,
+                    &menu_item_id,
+                    &menu_section_id,
+                    &prices_json,
+                    &available,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -1025,7 +1140,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT tenant_id, menu_id, menu_item_id, prices::text, available \
+                "SELECT tenant_id, menu_id, menu_item_id, menu_section_id, prices::text, available \
                  FROM catalog_placements WHERE tenant_id = $1 AND menu_id = $2 \
                  ORDER BY created_at DESC",
                 &[&tenant_id, &menu_id],
@@ -1038,8 +1153,9 @@ impl PostgresCatalog {
                 tenant_id: row.get(0),
                 menu_id: row.get(1),
                 menu_item_id: row.get(2),
-                prices_json: row.get(3),
-                available: row.get(4),
+                menu_section_id: row.get(3),
+                prices_json: row.get(4),
+                available: row.get(5),
             })
             .collect())
     }

@@ -31,8 +31,8 @@ use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
-    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup,
-    TaxClass,
+    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection,
+    ModifierGroup, TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -3120,6 +3120,7 @@ struct FakeCatalog {
     layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
     modifier_groups: Arc<Mutex<Vec<ModifierGroup>>>,
     menus: Arc<Mutex<Vec<Menu>>>,
+    menu_sections: Arc<Mutex<Vec<MenuSection>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
 }
 
@@ -3457,6 +3458,43 @@ impl CatalogStore for FakeCatalog {
                 row.name.clone_from(&menu.name);
                 row.parent_menu_id = menu.parent_menu_id;
                 row.status = menu.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_menu_section(&self, section: &MenuSection) -> Result<(), CatalogStoreError> {
+        self.menu_sections
+            .lock()
+            .expect("lock")
+            .push(section.clone());
+        Ok(())
+    }
+
+    async fn list_menu_sections(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+        Ok(self
+            .menu_sections
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_menu_section(&self, section: &MenuSection) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.menu_sections.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_section_id == section.menu_section_id && row.tenant_id == section.tenant_id
+            {
+                row.name.clone_from(&section.name);
+                row.sort = section.sort;
+                row.status = section.status;
                 return Ok(true);
             }
         }
@@ -3989,6 +4027,86 @@ async fn catalog_upserts_lists_and_removes_a_placement() {
         .await
         .expect("route remove missing");
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn catalog_menu_sections_group_placements_within_a_menu() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let item = ulid_text(500);
+    let sections_base = format!("/admin/catalog/menus/{menu}/sections");
+
+    // Create a section under the menu.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &sections_base,
+            &serde_json::json!({ "tenant_id": tenant, "name": "Starters", "sort": 1 }),
+            &cookie,
+        ))
+        .await
+        .expect("route create section");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let section = json_body(created).await;
+    let section_id = section["menu_section_id"].as_str().expect("id").to_owned();
+    assert_eq!(section["name"], "Starters");
+
+    // List sections — the new one is there.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{sections_base}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list sections");
+    let rows = json_body(listed).await;
+    assert_eq!(rows.as_array().expect("array").len(), 1);
+    assert_eq!(rows[0]["menu_section_id"], section_id);
+
+    // Rename and re-sort it.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("{sections_base}/{section_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant, "name": "Appetizers", "sort": 2, "status": "active",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename section");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    assert_eq!(json_body(renamed).await["name"], "Appetizers");
+
+    // A placement can name the section it sits under, and the listing carries it back.
+    let placement = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/menus/{menu}/placements/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "menu_section_id": section_id,
+                "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
+                "available": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set placement in section");
+    assert_eq!(placement.status(), StatusCode::OK);
+
+    let placements = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/menus/{menu}/placements?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list placements");
+    let rows = json_body(placements).await;
+    assert_eq!(rows[0]["menu_section_id"], section_id);
 }
 
 #[tokio::test]

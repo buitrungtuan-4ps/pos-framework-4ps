@@ -356,6 +356,7 @@ mod tests {
             tenant_id: tenant(),
             menu_id: menu_id(menu),
             menu_item_id: item_id(item),
+            menu_section_id: None,
             prices,
             available,
         }

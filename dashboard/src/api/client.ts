@@ -25,6 +25,7 @@ import type {
   LayoutButton,
   Menu,
   MenuPlacement,
+  MenuSection,
   ModifierGroup,
   SalesChannel,
   PublishedConfig,
@@ -359,16 +360,41 @@ export const api = {
     menuItemId: string,
     prices: ChannelPrice[],
     available: boolean,
+    menuSectionId: string | null,
   ) =>
     requestVoid(
       "PUT",
       `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}`,
-      { tenant_id: tenantId, prices, available },
+      { tenant_id: tenantId, menu_section_id: menuSectionId, prices, available },
     ),
   deletePlacement: (tenantId: string, menuId: string, menuItemId: string) =>
     requestVoid(
       "DELETE",
       `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
+    ),
+
+  // --- menu sections (ADR-0066 entity 7): authoring groupings within a menu ---
+  listMenuSections: (tenantId: string, menuId: string) =>
+    requestJson<MenuSection[]>(
+      "GET",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections?${tenantQuery(tenantId)}`,
+    ),
+  createMenuSection: (tenantId: string, menuId: string, name: string, sort: number) =>
+    requestJson<MenuSection>(
+      "POST",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections`,
+      { tenant_id: tenantId, name, sort },
+    ),
+  updateMenuSection: (
+    tenantId: string,
+    menuId: string,
+    menuSectionId: string,
+    fields: { name: string; sort: number; status: EntityStatus },
+  ) =>
+    requestJson<MenuSection>(
+      "PATCH",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections/${encodeURIComponent(menuSectionId)}`,
+      { tenant_id: tenantId, name: fields.name, sort: fields.sort, status: fields.status },
     ),
   publishMenu: (tenantId: string, storeId: string, menuId: string) =>
     requestJson<PublishedConfig>("POST", "/admin/catalog/publish", {

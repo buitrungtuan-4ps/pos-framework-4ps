@@ -32,6 +32,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A menu can now be organised into sections** (ADR-0066 entity 7, Phase 2a). A `MenuSection`
+  (tenant-scoped, per-menu, archived-not-deleted) carries a name and a sort order, behind
+  `/admin/catalog/menus/{menu_id}/sections` (list/create/`PATCH`); a placement names the section it
+  sits under via a new nullable `menu_section_id`, editable by name in the menu editor and shown as a
+  column in the placement list. Backed by migration `0017` (a `catalog_menu_sections` table plus an
+  additive nullable column on `catalog_placements`) and the `PostgresCatalog` adapter;
+  `FakeCatalog`-tested (a section round-trips and a placement carries its section back), and the
+  dashboard typechecks, i18n-lints (en + vi) and builds. **Authoring-only for now:** the compiled
+  `MenuBook` is a flat set of entries with no sections, so a section changes only what the operator
+  sees while authoring — never what the edge is served. Forward-only and additive; greenfield.
 - **The catalog can now author modifier groups — shared option sets attachable to items** (ADR-0066
   entities 4 and 5, Phase 2a). A `ModifierGroup` (tenant-scoped, archived-not-deleted) carries a name,
   a `min_select`/`max_select` choice range, the **member** items that make up its options, and the
