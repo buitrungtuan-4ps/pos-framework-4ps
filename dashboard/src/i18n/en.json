@@ -175,8 +175,21 @@
 
   "activation.title": "Activation",
   "activation.description": "Issue a one-time code a store device exchanges for its credentials.",
-  "activation.issue": "Issue a code",
-  "activation.deviceId": "Device ID",
-  "activation.deviceIdPlaceholder": "Device slot ULID",
-  "activation.codeOnce": "Give this code to the device now — it is shown only once."
+  "activation.devices": "Devices",
+  "activation.loadHint": "Load to see this store's devices.",
+  "activation.noDevices": "No devices yet. Add one below.",
+  "activation.deviceSelect": "Device",
+  "activation.chooseDevice": "Choose a device",
+  "activation.deviceRequired": "Choose a device to issue a code.",
+  "activation.deviceNameRequired": "A name is required.",
+  "activation.createDevice": "Add a device",
+  "activation.deviceName": "Name",
+  "activation.deviceNamePlaceholder": "e.g. Front counter",
+  "activation.deviceKind": "Kind",
+  "activation.codeOnce": "Give this code to the device now — it is shown only once.",
+
+  "device.kind.pos": "POS terminal",
+  "device.kind.printer": "Printer",
+  "device.kind.kds": "Kitchen display",
+  "device.kind.tablet": "Tablet"
 }
