@@ -69,5 +69,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0061](0061-order-relay.md) | Order relay: a durable per-store queue the store pulls; the cloud implements `OrderIn` over it | Accepted |
 | [0063](0063-store-menu-catalog.md) | Store menu catalog: the store's authoritative price book, synced as config; `pos-core` reprices inbound lines from it | Accepted |
 | [0064](0064-edge-order-in.md) | Edge `OrderIn`: the store reprices from its menu, opens a tableless order in its local log, and dedupes on the caller's reference | Accepted |
+| [0065](0065-cloud-org-registry.md) | The cloud org registry: named Tenant/Brand/Store/Device, RLS by tenant, backfilled from config_trees; identity and naming distinct from configuration | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

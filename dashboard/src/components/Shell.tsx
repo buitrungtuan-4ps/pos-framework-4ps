@@ -8,7 +8,8 @@ import { A, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
 import { LOCALES, type Locale, locale, setLocale, t } from "../i18n";
-import { setAuthed, setStoreId, setTenantId, storeId, tenantId } from "../state/session";
+import { setAuthed } from "../state/session";
+import { ContextPicker } from "./ContextPicker";
 
 const NAV: readonly { href: string; key: Parameters<typeof t>[0] }[] = [
   { href: "/", key: "nav.reports" },
@@ -32,20 +33,7 @@ export function Shell(props: ParentProps) {
       <header class="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3">
         <span class="text-lg font-semibold text-ink">{t("app.title")}</span>
         <div class="flex flex-1 flex-wrap items-center gap-2">
-          <input
-            class="min-h-touch w-56 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-            placeholder={t("context.tenantPlaceholder")}
-            aria-label={t("context.tenant")}
-            value={tenantId()}
-            onInput={(event) => setTenantId(event.currentTarget.value)}
-          />
-          <input
-            class="min-h-touch w-56 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-            placeholder={t("context.storePlaceholder")}
-            aria-label={t("context.store")}
-            value={storeId()}
-            onInput={(event) => setStoreId(event.currentTarget.value)}
-          />
+          <ContextPicker />
         </div>
         <label class="text-sm text-ink-muted">
           <span class="sr-only">{t("locale.label")}</span>

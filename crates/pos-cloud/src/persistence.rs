@@ -23,10 +23,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
-    PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTranslations,
-    PostgresWebhooks,
+    BrandRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresApiKeys, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
+    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
+    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -52,6 +52,10 @@ use crate::devices::{
 };
 use crate::orders::StoreDirectory;
 use crate::reconcile::{ReconcileError, ReconcileStore};
+use crate::registry::{
+    BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
+    StoreRecord, TenantRecord,
+};
 use crate::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderStatus, PendingOrder, QueuedOrderPayload,
     StoreOutcome,
@@ -767,5 +771,203 @@ impl StoreDirectory for PostgresStoreDirectory {
                 }),
             None => Ok(None),
         }
+    }
+}
+
+// --- The org registry (ADR-0065) ---------------------------------------------------------------
+
+fn parse_registry_tenant(text: &str) -> Result<TenantId, RegistryStoreError> {
+    text.parse::<Ulid>().map(TenantId::new).map_err(|_ignored| {
+        RegistryStoreError::new(format!("a registry tenant id is not a ULID: {text}"))
+    })
+}
+
+fn parse_registry_brand(text: &str) -> Result<BrandId, RegistryStoreError> {
+    text.parse::<Ulid>().map(BrandId::new).map_err(|_ignored| {
+        RegistryStoreError::new(format!("a registry brand id is not a ULID: {text}"))
+    })
+}
+
+fn parse_registry_store(text: &str) -> Result<StoreId, RegistryStoreError> {
+    text.parse::<Ulid>().map(StoreId::new).map_err(|_ignored| {
+        RegistryStoreError::new(format!("a registry store id is not a ULID: {text}"))
+    })
+}
+
+fn parse_registry_device(text: &str) -> Result<DeviceId, RegistryStoreError> {
+    text.parse::<Ulid>().map(DeviceId::new).map_err(|_ignored| {
+        RegistryStoreError::new(format!("a registry device id is not a ULID: {text}"))
+    })
+}
+
+fn tenant_record(row: TenantRow) -> Result<TenantRecord, RegistryStoreError> {
+    Ok(TenantRecord {
+        tenant_id: parse_registry_tenant(&row.tenant_id)?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn brand_record(row: BrandRow) -> Result<BrandRecord, RegistryStoreError> {
+    Ok(BrandRecord {
+        brand_id: parse_registry_brand(&row.brand_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn store_record(row: StoreRow) -> Result<StoreRecord, RegistryStoreError> {
+    let brand_id = match row.brand_id {
+        Some(text) => Some(parse_registry_brand(&text)?),
+        None => None,
+    };
+    Ok(StoreRecord {
+        store_id: parse_registry_store(&row.store_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)?,
+        brand_id,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn device_record(row: DeviceRow) -> Result<DeviceRecord, RegistryStoreError> {
+    Ok(DeviceRecord {
+        device_id: parse_registry_device(&row.device_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)?,
+        store_id: parse_registry_store(&row.store_id)?,
+        name: row.name,
+        kind: row.kind,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+impl RegistryStore for PostgresRegistry {
+    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<(), RegistryStoreError> {
+        self.insert_tenant(&tenant.tenant_id.to_string(), &tenant.name)
+            .await
+            .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn list_tenants(&self) -> Result<Vec<TenantRecord>, RegistryStoreError> {
+        let rows = self
+            .fetch_tenants()
+            .await
+            .map_err(|error| RegistryStoreError::new(error.to_string()))?;
+        rows.into_iter().map(tenant_record).collect()
+    }
+
+    async fn update_tenant(&self, tenant: &TenantRecord) -> Result<bool, RegistryStoreError> {
+        self.set_tenant(
+            &tenant.tenant_id.to_string(),
+            &tenant.name,
+            tenant.status.as_str(),
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn create_brand(&self, brand: &BrandRecord) -> Result<(), RegistryStoreError> {
+        self.insert_brand(
+            &brand.brand_id.to_string(),
+            &brand.tenant_id.to_string(),
+            &brand.name,
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn list_brands(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<BrandRecord>, RegistryStoreError> {
+        let rows = self
+            .fetch_brands(&tenant_id.to_string())
+            .await
+            .map_err(|error| RegistryStoreError::new(error.to_string()))?;
+        rows.into_iter().map(brand_record).collect()
+    }
+
+    async fn update_brand(&self, brand: &BrandRecord) -> Result<bool, RegistryStoreError> {
+        self.set_brand(
+            &brand.tenant_id.to_string(),
+            &brand.brand_id.to_string(),
+            &brand.name,
+            brand.status.as_str(),
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn create_store(&self, store: &StoreRecord) -> Result<(), RegistryStoreError> {
+        let brand = store.brand_id.map(|brand_id| brand_id.to_string());
+        self.insert_store(
+            &store.store_id.to_string(),
+            &store.tenant_id.to_string(),
+            brand.as_deref(),
+            &store.name,
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn list_stores(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<StoreRecord>, RegistryStoreError> {
+        let rows = self
+            .fetch_stores(&tenant_id.to_string())
+            .await
+            .map_err(|error| RegistryStoreError::new(error.to_string()))?;
+        rows.into_iter().map(store_record).collect()
+    }
+
+    async fn update_store(&self, store: &StoreRecord) -> Result<bool, RegistryStoreError> {
+        let brand = store.brand_id.map(|brand_id| brand_id.to_string());
+        self.set_store(
+            &store.tenant_id.to_string(),
+            &store.store_id.to_string(),
+            brand.as_deref(),
+            &store.name,
+            store.status.as_str(),
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn create_device(&self, device: &DeviceRecord) -> Result<(), RegistryStoreError> {
+        self.insert_device(
+            &device.device_id.to_string(),
+            &device.tenant_id.to_string(),
+            &device.store_id.to_string(),
+            &device.name,
+            &device.kind,
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+
+    async fn list_devices(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<DeviceRecord>, RegistryStoreError> {
+        let rows = self
+            .fetch_devices(&tenant_id.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| RegistryStoreError::new(error.to_string()))?;
+        rows.into_iter().map(device_record).collect()
+    }
+
+    async fn update_device(&self, device: &DeviceRecord) -> Result<bool, RegistryStoreError> {
+        self.set_device(
+            &device.tenant_id.to_string(),
+            &device.device_id.to_string(),
+            &device.name,
+            &device.kind,
+            device.status.as_str(),
+        )
+        .await
+        .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 }

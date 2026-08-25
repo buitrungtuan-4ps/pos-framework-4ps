@@ -7,14 +7,18 @@
 import type {
   ActivationCode,
   ApiKeySummary,
+  Brand,
   ConfigLevel,
   CreateApiKeyResponse,
   DailyRollup,
+  Device,
   DeviceProposalSummary,
   Enrolment,
   Json,
   PublishedConfig,
   RegisterWebhookResponse,
+  Store,
+  Tenant,
   TranslationGrid,
   WebhookSummary,
 } from "./types";
@@ -178,4 +182,25 @@ export const api = {
       store_id: storeId,
       device_id: deviceId,
     }),
+
+  // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
+  listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
+  createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),
+  listBrands: (tenantId: string) =>
+    requestJson<Brand[]>("GET", `/admin/brands?${tenantQuery(tenantId)}`),
+  createBrand: (tenantId: string, name: string) =>
+    requestJson<Brand>("POST", "/admin/brands", { tenant_id: tenantId, name }),
+  listStores: (tenantId: string) =>
+    requestJson<Store[]>("GET", `/admin/stores?${tenantQuery(tenantId)}`),
+  createStore: (tenantId: string, name: string, brandId?: string) =>
+    requestJson<Store>("POST", "/admin/stores", {
+      tenant_id: tenantId,
+      name,
+      ...(brandId === undefined ? {} : { brand_id: brandId }),
+    }),
+  listDevices: (tenantId: string, storeId: string) =>
+    requestJson<Device[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/devices?${tenantQuery(tenantId)}`,
+    ),
 };

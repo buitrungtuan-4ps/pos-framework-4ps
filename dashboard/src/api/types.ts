@@ -80,3 +80,40 @@ export interface ActivationCode {
  * key (the server rejects a grid that breaks the fallback rule, ADR-0020/0043).
  */
 export type TranslationGrid = Record<string, Record<string, string>>;
+
+/** Whether a registry entity is in use or retired (ADR-0065). Entities are archived, never deleted. */
+export type EntityStatus = "active" | "archived";
+
+/** A tenant from `GET /admin/tenants` (ADR-0065) — the root of the org tree. */
+export interface Tenant {
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A brand from `GET /admin/brands` — grouped under a tenant. */
+export interface Brand {
+  readonly brand_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A store from `GET /admin/stores` — grouped under a tenant and, optionally, a brand. */
+export interface Store {
+  readonly store_id: string;
+  readonly tenant_id: string;
+  readonly brand_id: string | null;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A device from `GET /admin/stores/{id}/devices` — the canonical device identity. */
+export interface Device {
+  readonly device_id: string;
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly status: EntityStatus;
+}

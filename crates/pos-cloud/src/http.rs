@@ -87,6 +87,10 @@ use crate::devices::{
 };
 use crate::openapi::ApiDoc;
 use crate::reconcile::ReconcileStore;
+use crate::registry::{
+    BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
+    StoreRecord, TenantRecord,
+};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -631,6 +635,577 @@ fn device_error_response(error: &crate::devices::DeviceProposalError) -> Respons
         "the device service is unavailable",
     )
         .into_response()
+}
+
+// --- Org registry (`/admin/tenants|brands|stores`, ADR-0065) ------------------------------------
+
+/// The collaborators the registry routes need, stated independently of [`CloudApp`]: the registry
+/// store, plus the admin and clock stores every route's session guard uses. Like [`device_router`],
+/// it carries its own state and is merged into the main router rather than adding a `CloudApp` generic.
+#[derive(Clone)]
+struct RegistryState<Rg, A, C> {
+    registry: Rg,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the org-registry sub-router ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+///
+/// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
+/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
+/// listings, the request body for a create. Device routes nest under their store, so they never
+/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]).
+pub fn registry_router<Rg, A, C>(registry: Rg, admin: A, clock: C) -> Router
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/tenants",
+            get(admin_list_tenants::<Rg, A, C>).post(admin_create_tenant::<Rg, A, C>),
+        )
+        .route(
+            "/admin/tenants/{tenant_id}",
+            axum::routing::patch(admin_update_tenant::<Rg, A, C>),
+        )
+        .route(
+            "/admin/brands",
+            get(admin_list_brands::<Rg, A, C>).post(admin_create_brand::<Rg, A, C>),
+        )
+        .route(
+            "/admin/brands/{brand_id}",
+            axum::routing::patch(admin_update_brand::<Rg, A, C>),
+        )
+        .route(
+            "/admin/stores",
+            get(admin_list_stores::<Rg, A, C>).post(admin_create_store::<Rg, A, C>),
+        )
+        .route(
+            "/admin/stores/{store_id}",
+            axum::routing::patch(admin_update_store::<Rg, A, C>),
+        )
+        .route(
+            "/admin/stores/{store_id}/devices",
+            get(admin_list_devices::<Rg, A, C>).post(admin_create_device::<Rg, A, C>),
+        )
+        .route(
+            "/admin/stores/{store_id}/devices/{device_id}",
+            axum::routing::patch(admin_update_device::<Rg, A, C>),
+        )
+        .with_state(RegistryState {
+            registry,
+            admin,
+            clock,
+        })
+}
+
+/// A `?tenant_id=` query for the tenant-scoped listings.
+#[derive(Debug, Clone, Deserialize)]
+struct RegistryTenantQuery {
+    /// The tenant whose entities to list (a 26-character ULID).
+    tenant_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateTenantRequest {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateEntityRequest {
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateBrandRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateBrandRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateStoreRequest {
+    tenant_id: String,
+    brand_id: Option<String>,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateStoreRequest {
+    tenant_id: String,
+    brand_id: Option<String>,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateDeviceRequest {
+    tenant_id: String,
+    name: String,
+    kind: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateDeviceRequest {
+    tenant_id: String,
+    name: String,
+    kind: String,
+    status: String,
+}
+
+/// Maps a registry store failure to a retryable `503`, logging the detail rather than leaking it.
+fn registry_error_response(error: &RegistryStoreError) -> Response {
+    tracing::error!(%error, "a registry store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the registry service is unavailable",
+    )
+        .into_response()
+}
+
+/// The `503` returned when OS entropy is unavailable to mint an id.
+fn registry_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint a registry id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the registry service is unavailable",
+    )
+        .into_response()
+}
+
+/// Parses a status word from a request body; `None` (a `400`) for anything but the two known values.
+fn parse_entity_status(value: &str) -> Option<EntityStatus> {
+    match value {
+        "active" => Some(EntityStatus::Active),
+        "archived" => Some(EntityStatus::Archived),
+        _ => None,
+    }
+}
+
+/// A super-admin lists every tenant.
+async fn admin_list_tenants<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    match state.registry.list_tenants().await {
+        Ok(tenants) => (StatusCode::OK, Json::<Vec<TenantRecord>>(tenants)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin creates a tenant; the id is minted here and returned once in the created record.
+async fn admin_create_tenant<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTenantRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Some(tenant_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TenantId::new)
+    else {
+        return registry_entropy_unavailable();
+    };
+    let record = TenantRecord {
+        tenant_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.registry.create_tenant(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin renames a tenant and/or sets its status.
+async fn admin_update_tenant<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(request): Json<UpdateEntityRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "the tenant id is not a ULID").into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = TenantRecord {
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.registry.update_tenant(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such tenant").into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's brands.
+async fn admin_list_brands<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.registry.list_brands(tenant_id).await {
+        Ok(brands) => (StatusCode::OK, Json::<Vec<BrandRecord>>(brands)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin creates a brand under a tenant.
+async fn admin_create_brand<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateBrandRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(brand_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(BrandId::new)
+    else {
+        return registry_entropy_unavailable();
+    };
+    let record = BrandRecord {
+        brand_id,
+        tenant_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.registry.create_brand(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin renames a brand and/or sets its status.
+async fn admin_update_brand<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path(brand_id): Path<String>,
+    Json(request): Json<UpdateBrandRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(brand_id), Ok(tenant_id)) = (
+        brand_id.parse::<Ulid>().map(BrandId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the brand id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = BrandRecord {
+        brand_id,
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.registry.update_brand(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such brand").into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's stores.
+async fn admin_list_stores<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.registry.list_stores(tenant_id).await {
+        Ok(stores) => (StatusCode::OK, Json::<Vec<StoreRecord>>(stores)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// Parses an optional brand id from a request; `Err` marks a present-but-malformed value.
+fn parse_optional_brand(brand_id: Option<&str>) -> Result<Option<BrandId>, ()> {
+    match brand_id {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(BrandId::new)
+            .map(Some)
+            .map_err(|_ignored| ()),
+        None => Ok(None),
+    }
+}
+
+/// A super-admin creates a store under a tenant, with an optional brand.
+async fn admin_create_store<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStoreRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "brand_id is not a ULID").into_response();
+    };
+    let Some(store_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StoreId::new)
+    else {
+        return registry_entropy_unavailable();
+    };
+    let record = StoreRecord {
+        store_id,
+        tenant_id,
+        brand_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.registry.create_store(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin renames a store, (re)assigns or clears its brand, and/or sets its status.
+async fn admin_update_store<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<UpdateStoreRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(store_id), Ok(tenant_id)) = (
+        store_id.parse::<Ulid>().map(StoreId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the store id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "brand_id is not a ULID").into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = StoreRecord {
+        store_id,
+        tenant_id,
+        brand_id,
+        name: request.name,
+        status,
+    };
+    match state.registry.update_store(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin lists a store's devices (tenant named on the query).
+async fn admin_list_devices<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the store id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.registry.list_devices(tenant_id, store_id).await {
+        Ok(devices) => (StatusCode::OK, Json::<Vec<DeviceRecord>>(devices)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin creates a device under a store.
+async fn admin_create_device<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<CreateDeviceRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the store id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(device_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceId::new)
+    else {
+        return registry_entropy_unavailable();
+    };
+    let record = DeviceRecord {
+        device_id,
+        tenant_id,
+        store_id,
+        name: request.name,
+        kind: request.kind,
+        status: EntityStatus::Active,
+    };
+    match state.registry.create_device(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => registry_error_response(&error),
+    }
+}
+
+/// A super-admin renames a device, sets its kind, and/or sets its status.
+async fn admin_update_device<Rg, A, C>(
+    State(state): State<RegistryState<Rg, A, C>>,
+    headers: HeaderMap,
+    Path((store_id, device_id)): Path<(String, String)>,
+    Json(request): Json<UpdateDeviceRequest>,
+) -> Response
+where
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+        device_id.parse::<Ulid>().map(DeviceId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, the store id, or the device id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = DeviceRecord {
+        device_id,
+        tenant_id,
+        store_id,
+        name: request.name,
+        kind: request.kind,
+        status,
+    };
+    match state.registry.update_device(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such device").into_response(),
+        Err(error) => registry_error_response(&error),
+    }
 }
 
 // --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
