@@ -32,6 +32,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The menu compiler turns authoring into the flat per-channel snapshot the edge reprices from**
+  (ADR-0066, Phase 2a). A pure `compile_menu(items, menus, placements, root)` in `pos-cloud` folds a
+  menu's inheritance chain **most-specific-wins** (a child's placement overrides an ancestor's,
+  untouched items inherited) and selects each placement's per-channel price into that channel's
+  `MenuCatalog`, producing a `MenuBook`. Archived items are omitted; an unavailable placement compiles
+  to a **present-but-86'd** entry (the published-availability floor); an unknown item, a missing menu,
+  or an inheritance cycle is refused with a named `CompileError`, never substituted. Output is
+  deterministic (channels by wire token, entries by item id), so re-compiling unchanged authoring
+  yields a byte-identical snapshot and the config tree ships a new version only on real change. This
+  is the keystone of Phase 2a — where the authoring model actually becomes the price book the store
+  reads. (Wiring it to a store's menu assignment and publishing it to the config tree are later
+  slices.)
 - **The cloud now has a catalog authoring seam — the source of truth a menu compiles from**
   (ADR-0066, Phase 2a). `pos-cloud` gains a `CatalogStore` trait and its records for the item master,
   menus (with a `parent_menu_id` inheritance edge), and menu placements (an item in a menu, with its

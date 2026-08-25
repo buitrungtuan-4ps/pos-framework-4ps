@@ -55,6 +55,7 @@ pub mod activation;
 pub mod assets;
 pub mod auth;
 pub mod catalog;
+pub mod catalog_compiler;
 pub mod clock;
 pub mod cloud;
 pub mod config;
