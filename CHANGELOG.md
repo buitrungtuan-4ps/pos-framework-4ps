@@ -32,6 +32,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Tax classes are now named entities, and an item picks one from a list** (ADR-0066 entity 10, Phase 2a).
+  A `TaxClass` (id + name, tenant-scoped, archived-not-deleted) joins the catalog store behind
+  `/admin/catalog/tax-classes` (list/create, `PATCH` to rename or set status), backed by migration
+  `0013` (`catalog_tax_classes`, RLS by tenant) and the `PostgresCatalog` adapter. The menu editor's
+  item form now offers a **tax-class dropdown** instead of a pasted `TaxClassId` ULID — closing the
+  one raw-ULID entry the editor still had — and the items table shows the class by name. The class is
+  country-agnostic; the *rate* for each `(tax_class, channel)` still lives in the store's locale pack.
+  `FakeCatalog`-tested (create/list/rename/archive, `404` on an unknown id) and typechecked in the
+  dashboard. Migration is forward-only and additive; greenfield, no backfill.
 - **The back-office now has a menu editor** (ADR-0066, Phase 2a). A new **Menu** screen (`/catalog`)
   in the cloud dashboard drives the catalog CRUD and publish routes end to end, all by name: create /
   rename / archive **items** (with their tax class); create / rename / **reparent** (inheritance) /

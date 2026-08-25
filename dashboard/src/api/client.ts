@@ -23,6 +23,7 @@ import type {
   PublishedConfig,
   RegisterWebhookResponse,
   Store,
+  TaxClass,
   Tenant,
   TranslationGrid,
   WebhookSummary,
@@ -226,7 +227,24 @@ export const api = {
       kind,
     }),
 
-  // --- catalog authoring (ADR-0066): items, menus with inheritance, and per-menu placements ---
+  // --- catalog authoring (ADR-0066): items, tax classes, menus with inheritance, and placements ---
+  listTaxClasses: (tenantId: string) =>
+    requestJson<TaxClass[]>("GET", `/admin/catalog/tax-classes?${tenantQuery(tenantId)}`),
+  createTaxClass: (tenantId: string, name: string) =>
+    requestJson<TaxClass>("POST", "/admin/catalog/tax-classes", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateTaxClass: (
+    taxClassId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<TaxClass>(
+      "PATCH",
+      `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
   listItems: (tenantId: string) =>
     requestJson<CatalogItem[]>("GET", `/admin/catalog/items?${tenantQuery(tenantId)}`),
   createItem: (tenantId: string, name: string, taxClassId: string) =>

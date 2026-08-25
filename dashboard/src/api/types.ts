@@ -145,6 +145,14 @@ export interface Money {
   readonly amount_minor: number;
 }
 
+/** A tax class — a named bucket an item belongs to (ADR-0066 entity 10). Its id is the item's `tax_class_id`. */
+export interface TaxClass {
+  readonly tax_class_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
 /** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
 export interface CatalogItem {
   readonly menu_item_id: string;

@@ -23,11 +23,11 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, DeviceRow, OrderQueueRow,
-    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
-    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, CatalogTaxClassRow, DeviceRow,
+    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
+    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
+    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
+    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -46,6 +46,7 @@ use crate::auth::apikey::{
 use crate::auth::totp::TotpSecret;
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
+    TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1011,6 +1012,16 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
     })
 }
 
+fn catalog_tax_class_record(row: CatalogTaxClassRow) -> Result<TaxClass, CatalogStoreError> {
+    Ok(TaxClass {
+        tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
 fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
     let parent_menu_id = match row.parent_menu_id {
         Some(text) => Some(parse_catalog_menu_id(&text)?),
@@ -1069,6 +1080,38 @@ impl CatalogStore for PostgresCatalog {
             &item.name,
             &item.tax_class_id.to_string(),
             item.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+        self.insert_tax_class(
+            &tax_class.tax_class_id.to_string(),
+            &tax_class.tenant_id.to_string(),
+            &tax_class.name,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_tax_classes(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+        let rows = self
+            .fetch_tax_classes(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_tax_class_record).collect()
+    }
+
+    async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+        self.set_tax_class(
+            &tax_class.tenant_id.to_string(),
+            &tax_class.tax_class_id.to_string(),
+            &tax_class.name,
+            tax_class.status.as_str(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))

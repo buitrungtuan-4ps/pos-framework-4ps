@@ -35,6 +35,19 @@ pub struct CatalogItemRow {
     pub status: String,
 }
 
+/// A tax class as listed — a named bucket an item belongs to.
+#[derive(Clone, Debug)]
+pub struct CatalogTaxClassRow {
+    /// The tax-class id (a ULID string), the id an item's `tax_class_id` references.
+    pub tax_class_id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The human name.
+    pub name: String,
+    /// `active` or `archived`.
+    pub status: String,
+}
+
 /// A menu as listed — a named set that may inherit from a parent.
 #[derive(Clone, Debug)]
 pub struct CatalogMenuRow {
@@ -150,6 +163,84 @@ impl PostgresCatalog {
                 "UPDATE catalog_items SET name = $3, tax_class_id = $4, status = $5, updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2",
                 &[&tenant_id, &menu_item_id, &name, &tax_class_id, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    // --- tax classes (tenant-scoped) ---
+
+    /// Inserts a tax class.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_tax_class(
+        &self,
+        tax_class_id: &str,
+        tenant_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_tax_classes (tax_class_id, tenant_id, name) \
+                 VALUES ($1, $2, $3)",
+                &[&tax_class_id, &tenant_id, &name],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's tax classes, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_tax_classes(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogTaxClassRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT tax_class_id, tenant_id, name, status FROM catalog_tax_classes \
+                 WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogTaxClassRow {
+                tax_class_id: row.get(0),
+                tenant_id: row.get(1),
+                name: row.get(2),
+                status: row.get(3),
+            })
+            .collect())
+    }
+
+    /// Renames a tax class and sets its status, within its tenant. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_tax_class(
+        &self,
+        tenant_id: &str,
+        tax_class_id: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_tax_classes SET name = $3, status = $4, updated_at = now() \
+                 WHERE tenant_id = $1 AND tax_class_id = $2",
+                &[&tenant_id, &tax_class_id, &name, &status],
             )
             .await
             .map_err(unavailable)?;

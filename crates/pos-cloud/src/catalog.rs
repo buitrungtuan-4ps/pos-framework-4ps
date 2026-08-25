@@ -59,6 +59,26 @@ impl fmt::Display for MenuId {
     }
 }
 
+/// A tax class — a named bucket an item belongs to, whose rate the store's channel-keyed
+/// [`pos_proto::locale::TaxRateTable`] resolves at reprice time (ADR-0066 entity 10; D6).
+///
+/// The class itself is country-agnostic (`alcohol`, `standard`, `takeaway-reduced`); the *rate* for
+/// each `(tax_class, channel)` lives in the store's locale pack, not here. This entity exists so the
+/// operator picks a tax class **by name** when authoring an item, instead of pasting a
+/// [`TaxClassId`] ULID — the same "kill the ULID" move [ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)
+/// made for tenants and stores. Its id is the [`TaxClassId`] an item's `tax_class_id` references.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaxClass {
+    /// The tax-class id — the [`TaxClassId`] an item references and the rate table is keyed by.
+    pub tax_class_id: TaxClassId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The human name (`Standard 10%`, `Alcohol`, `Takeaway reduced`).
+    pub name: String,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
 /// An item in the catalog — the product master.
 ///
 /// Its id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an
@@ -156,6 +176,24 @@ pub trait CatalogStore {
         item: &CatalogItem,
     ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
 
+    /// Inserts a tax class.
+    fn create_tax_class(
+        &self,
+        tax_class: &TaxClass,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's tax classes.
+    fn list_tax_classes(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<TaxClass>, CatalogStoreError>> + Send;
+
+    /// Renames a tax class and/or sets its status, within its tenant. Returns whether a row changed.
+    fn update_tax_class(
+        &self,
+        tax_class: &TaxClass,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
     /// Inserts a menu.
     fn create_menu(
         &self,
@@ -222,6 +260,7 @@ mod tests {
 
     use super::{
         CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
+        TaxClass,
     };
     use crate::registry::EntityStatus;
 
@@ -230,6 +269,7 @@ mod tests {
     #[derive(Default)]
     struct FakeCatalog {
         items: Mutex<Vec<CatalogItem>>,
+        tax_classes: Mutex<Vec<TaxClass>>,
         menus: Mutex<Vec<Menu>>,
         placements: Mutex<Vec<MenuPlacement>>,
     }
@@ -264,6 +304,40 @@ mod tests {
             row.name.clone_from(&item.name);
             row.tax_class_id = item.tax_class_id;
             row.status = item.status;
+            Ok(true)
+        }
+
+        async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+            self.tax_classes
+                .lock()
+                .expect("lock")
+                .push(tax_class.clone());
+            Ok(())
+        }
+
+        async fn list_tax_classes(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+            Ok(self
+                .tax_classes
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.tax_classes.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.tax_class_id == tax_class.tax_class_id && row.tenant_id == tax_class.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&tax_class.name);
+            row.status = tax_class.status;
             Ok(true)
         }
 

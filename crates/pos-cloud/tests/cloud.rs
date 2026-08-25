@@ -30,7 +30,7 @@ use pos_cloud::auth::apikey::{
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, Menu, MenuId, MenuPlacement,
+    CatalogItem, CatalogStore, CatalogStoreError, Menu, MenuId, MenuPlacement, TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -3108,6 +3108,7 @@ async fn registry_is_behind_the_session_guard() {
 #[derive(Default, Clone)]
 struct FakeCatalog {
     items: Arc<Mutex<Vec<CatalogItem>>>,
+    tax_classes: Arc<Mutex<Vec<TaxClass>>>,
     menus: Arc<Mutex<Vec<Menu>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
 }
@@ -3136,6 +3137,40 @@ impl CatalogStore for FakeCatalog {
                 row.name.clone_from(&item.name);
                 row.tax_class_id = item.tax_class_id;
                 row.status = item.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+        self.tax_classes
+            .lock()
+            .expect("lock")
+            .push(tax_class.clone());
+        Ok(())
+    }
+
+    async fn list_tax_classes(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+        Ok(self
+            .tax_classes
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.tax_classes.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.tax_class_id == tax_class.tax_class_id && row.tenant_id == tax_class.tenant_id {
+                row.name.clone_from(&tax_class.name);
+                row.status = tax_class.status;
                 return Ok(true);
             }
         }
@@ -3297,6 +3332,69 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
         .await
         .expect("route list menus");
     assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+}
+
+#[tokio::test]
+async fn catalog_creates_lists_and_renames_a_tax_class() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // Created by name, the id minted server-side — an operator never types a tax-class ULID.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/tax-classes",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard 10%" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tax class");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Standard 10%");
+    assert_eq!(created["status"], "active");
+    let tax_class_id = created["tax_class_id"]
+        .as_str()
+        .expect("a tax class id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-classes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list tax classes");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+
+    // Rename + archive in one PATCH.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Alcohol", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename tax class");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed = json_body(renamed).await;
+    assert_eq!(renamed["name"], "Alcohol");
+    assert_eq!(renamed["status"], "archived");
+
+    // A PATCH to an unknown id is a 404, not a silent success.
+    let missing = router
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/tax-classes/{}", ulid_text(999)),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Nope", "status": "active" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename unknown tax class");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -80,6 +80,7 @@ use crate::auth::password::hash_password;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
+    TaxClass,
 };
 use crate::catalog_compiler::compile_menu;
 use crate::cloud::{Cloud, DailyRollup};
@@ -1250,6 +1251,14 @@ where
             axum::routing::patch(admin_update_item::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/tax-classes",
+            get(admin_list_tax_classes::<Cat, A, C>).post(admin_create_tax_class::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/tax-classes/{tax_class_id}",
+            axum::routing::patch(admin_update_tax_class::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/menus",
             get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
         )
@@ -1285,6 +1294,19 @@ struct UpdateItemRequest {
     tenant_id: String,
     name: String,
     tax_class_id: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateTaxClassRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateTaxClassRequest {
+    tenant_id: String,
+    name: String,
     status: String,
 }
 
@@ -1445,6 +1467,104 @@ where
     match state.catalog.update_item(&record).await {
         Ok(true) => (StatusCode::OK, Json(record)).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no such item").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's tax classes.
+async fn admin_list_tax_classes<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_tax_classes(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<TaxClass>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a tax class; the id is minted here and returned once in the created record.
+async fn admin_create_tax_class<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTaxClassRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(tax_class_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TaxClassId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = TaxClass {
+        tax_class_id,
+        tenant_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_tax_class(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a tax class and/or sets its status.
+async fn admin_update_tax_class<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(tax_class_id): Path<String>,
+    Json(request): Json<UpdateTaxClassRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tax_class_id), Ok(tenant_id)) = (
+        tax_class_id.parse::<Ulid>().map(TaxClassId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the tax class id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = TaxClass {
+        tax_class_id,
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.catalog.update_tax_class(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such tax class").into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }

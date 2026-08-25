@@ -15,6 +15,7 @@ import type {
   Menu,
   MenuPlacement,
   SalesChannel,
+  TaxClass,
 } from "../api/types";
 import { SALES_CHANNELS } from "../api/types";
 import { t, type MessageKey } from "../i18n";
@@ -39,6 +40,7 @@ const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
 
 export function Catalog() {
   const [items, setItems] = createSignal<CatalogItem[] | null>(null);
+  const [taxClasses, setTaxClasses] = createSignal<TaxClass[]>([]);
   const [menus, setMenus] = createSignal<Menu[] | null>(null);
   const [placements, setPlacements] = createSignal<MenuPlacement[] | null>(null);
   const [selectedMenu, setSelectedMenu] = createSignal("");
@@ -49,11 +51,13 @@ export function Catalog() {
   // Create forms.
   const [newItemName, setNewItemName] = createSignal("");
   const [newItemTaxClass, setNewItemTaxClass] = createSignal("");
+  const [newTaxClassName, setNewTaxClassName] = createSignal("");
   const [newMenuName, setNewMenuName] = createSignal("");
   const [newMenuParent, setNewMenuParent] = createSignal("");
 
   // Inline rename.
   const [editingItem, setEditingItem] = createSignal("");
+  const [editingTaxClass, setEditingTaxClass] = createSignal("");
   const [editingMenu, setEditingMenu] = createSignal("");
   const [draftName, setDraftName] = createSignal("");
 
@@ -75,21 +79,68 @@ export function Catalog() {
   const itemName = (id: string) =>
     items()?.find((item) => item.menu_item_id === id)?.name ?? id;
   const menuName = (id: string) => menus()?.find((menu) => menu.menu_id === id)?.name ?? id;
+  const taxClassName = (id: string) =>
+    taxClasses().find((row) => row.tax_class_id === id)?.name ?? id;
 
   const load = async () => {
     setError("");
     setNotice("");
     setBusy(true);
     try {
-      const [loadedItems, loadedMenus] = await Promise.all([
+      const [loadedItems, loadedTaxClasses, loadedMenus] = await Promise.all([
         api.listItems(tenantId()),
+        api.listTaxClasses(tenantId()),
         api.listMenus(tenantId()),
       ]);
       setItems(loadedItems);
+      setTaxClasses(loadedTaxClasses);
       setMenus(loadedMenus);
       if (selectedMenu()) {
         await loadPlacements(selectedMenu());
       }
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createTaxClass = async () => {
+    const name = newTaxClassName().trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createTaxClass(tenantId(), name);
+      setNewTaxClassName("");
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setTaxClassFields = async (
+    taxClass: TaxClass,
+    fields: { name?: string; status?: EntityStatus },
+  ) => {
+    const name = (fields.name ?? taxClass.name).trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateTaxClass(taxClass.tax_class_id, tenantId(), {
+        name,
+        status: fields.status ?? taxClass.status,
+      });
+      await load();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -410,9 +461,7 @@ export function Catalog() {
                                   </div>
                                 </Show>
                               </td>
-                              <td class="py-2 pr-4 font-mono text-xs text-ink-muted">
-                                {item.tax_class_id}
-                              </td>
+                              <td class="py-2 pr-4">{taxClassName(item.tax_class_id)}</td>
                               <td class="py-2 pr-4">{statusLabel(item.status)}</td>
                               <td class="flex flex-wrap gap-2 py-2">
                                 <Button
@@ -458,18 +507,123 @@ export function Catalog() {
                 onInput={setNewItemName}
                 placeholder={t("catalog.namePlaceholder")}
               />
-              <div>
-                <TextField
-                  label={t("catalog.taxClass")}
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-ink">{t("catalog.taxClass")}</span>
+                <select
+                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
                   value={newItemTaxClass()}
-                  onInput={setNewItemTaxClass}
-                  placeholder={t("catalog.taxClassPlaceholder")}
-                />
-                <p class="mt-1 text-xs text-ink-muted">{t("catalog.taxClassHint")}</p>
-              </div>
+                  onChange={(event) => setNewItemTaxClass(event.currentTarget.value)}
+                >
+                  <option value="">{t("catalog.chooseTaxClass")}</option>
+                  <For each={taxClasses().filter((row) => row.status === "active")}>
+                    {(row) => <option value={row.tax_class_id}>{row.name}</option>}
+                  </For>
+                </select>
+                <Show when={taxClasses().filter((row) => row.status === "active").length === 0}>
+                  <p class="mt-1 text-xs text-ink-muted">{t("catalog.taxClassEmpty")}</p>
+                </Show>
+              </label>
               <Button disabled={busy()} onClick={() => void createItem()}>
                 {t("action.create")}
               </Button>
+            </div>
+          </Card>
+
+          <Card title={t("catalog.taxClasses")}>
+            <div class="flex flex-col gap-4">
+              <Show
+                when={taxClasses().length > 0}
+                fallback={<p class="text-sm text-ink-muted">{t("catalog.taxClassesEmpty")}</p>}
+              >
+                <div class="overflow-x-auto">
+                  <table class="w-full text-left text-sm">
+                    <thead>
+                      <tr class="border-b border-line text-ink-muted">
+                        <th class="py-2 pr-4 font-medium">{t("catalog.name")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("catalog.status")}</th>
+                        <th class="py-2 font-medium">{t("catalog.actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={taxClasses()}>
+                        {(row) => (
+                          <tr class="border-b border-line align-top text-ink">
+                            <td class="py-2 pr-4">
+                              <Show
+                                when={editingTaxClass() === row.tax_class_id}
+                                fallback={<span>{row.name}</span>}
+                              >
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <input
+                                    class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                    aria-label={t("catalog.name")}
+                                    value={draftName()}
+                                    onInput={(event) => setDraftName(event.currentTarget.value)}
+                                  />
+                                  <Button
+                                    disabled={busy()}
+                                    onClick={() =>
+                                      void setTaxClassFields(row, { name: draftName() })
+                                    }
+                                  >
+                                    {t("action.save")}
+                                  </Button>
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() => {
+                                      setEditingTaxClass("");
+                                      setDraftName("");
+                                    }}
+                                  >
+                                    {t("action.cancel")}
+                                  </Button>
+                                </div>
+                              </Show>
+                            </td>
+                            <td class="py-2 pr-4">{statusLabel(row.status)}</td>
+                            <td class="flex flex-wrap gap-2 py-2">
+                              <Button
+                                variant="secondary"
+                                disabled={busy()}
+                                onClick={() => {
+                                  setEditingTaxClass(row.tax_class_id);
+                                  setDraftName(row.name);
+                                }}
+                              >
+                                {t("catalog.rename")}
+                              </Button>
+                              <Button
+                                variant={row.status === "archived" ? "secondary" : "danger"}
+                                disabled={busy()}
+                                onClick={() =>
+                                  void setTaxClassFields(row, {
+                                    status: row.status === "archived" ? "active" : "archived",
+                                  })
+                                }
+                              >
+                                {row.status === "archived"
+                                  ? t("catalog.restore")
+                                  : t("catalog.archive")}
+                              </Button>
+                            </td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </Show>
+              <div class="grid gap-4 md:grid-cols-2 md:items-end">
+                <TextField
+                  label={t("catalog.taxClassName")}
+                  value={newTaxClassName()}
+                  onInput={setNewTaxClassName}
+                  placeholder={t("catalog.taxClassNamePlaceholder")}
+                />
+                <Button disabled={busy()} onClick={() => void createTaxClass()}>
+                  {t("action.create")}
+                </Button>
+              </div>
             </div>
           </Card>
 
