@@ -19,17 +19,27 @@ subdomain.
   logged, spanned, or persisted. A malformed stored hash verifies nothing (returns `false`, not an
   error), so a corrupted credential cannot become a way in.
 
-- **A mandatory TOTP second factor (RFC 6238), over HMAC-SHA256.** There is no password-only path:
+- **A mandatory TOTP second factor (RFC 6238), over HMAC-SHA1.** There is no password-only path:
   [`authenticate`](../../crates/pos-cloud/src/auth/mod.rs) succeeds only when the password verifies
-  *and* a TOTP code verifies. TOTP runs over **HMAC-SHA256** rather than the historical SHA1 default:
-  RFC 6238 permits SHA1/SHA256/SHA512, modern authenticators honour the `otpauth://` URI's
-  `algorithm=SHA256` field, and choosing it lets the cloud reuse the `sha2`/`hmac` already in its tree
-  (webhooks, [ADR-0031](0031-cloud-adapter-transports.md)) instead of adding a **second SHA1 crate
-  version** and a `cargo-deny` skip for it — dependency hygiene deciding a free choice, not a security
-  one (HMAC-SHA1 would also be sound). The provisioning QR must set `algorithm=SHA256`. Codes are
-  6-digit on a 30-second step, accepted within a **±1-step skew window** for clock drift, and
-  **single-use**: verification returns the step it matched and refuses any step at or below the last
-  one accepted, so a code captured within its validity window cannot be replayed.
+  *and* a TOTP code verifies. TOTP runs over **HMAC-SHA1** — the RFC 6238 default and, decisively, the
+  only algorithm the authenticator apps operators actually use compute: Google Authenticator and
+  Microsoft Authenticator **ignore** the `otpauth://` URI's `algorithm` field and always assume SHA1,
+  so a SHA256 secret produced codes that never verified and sign-in failed immediately after
+  enrolment (see the amendment below). The provisioning QR sets `algorithm=SHA1` explicitly anyway, so
+  the URI-honouring apps agree with the ones that assume it. Codes are 6-digit on a 30-second step,
+  accepted within a **±1-step skew window** for clock drift, and **single-use**: verification returns
+  the step it matched and refuses any step at or below the last one accepted, so a code captured
+  within its validity window cannot be replayed.
+
+  > **Amendment (2026-08-25).** This decision originally chose **HMAC-SHA256**, to avoid pulling a
+  > second `sha1` crate version (`sha1` 0.10 is already in the tree via axum's WebSocket handshake, on
+  > the older `digest` 0.10 line that `hmac` 0.13 cannot reuse). That was dependency hygiene deciding
+  > what looked like a free choice — but it was not free: it made first sign-in **impossible** with the
+  > authenticator apps operators actually run, because those apps ignore `algorithm=SHA256`. Switched
+  > to HMAC-SHA1; the duplicate `sha1` line (0.11 on the `digest` 0.11 line, alongside axum's 0.10) is
+  > the accepted cost, carried by a documented `bans.skip` in `deny.toml`. HMAC-SHA1 is sound for TOTP
+  > (the security is the shared secret's entropy and the single-use/skew rules, not the hash). Existing
+  > enrolments must re-enrol via the `reset_admin` break-glass path (ADR-0045); there is at most one.
 
 - **Both factors evaluated, one generic failure to the client.** `authenticate` computes the password
   and TOTP checks before returning any verdict, and the HTTP layer returns a single generic failure
@@ -47,10 +57,11 @@ subdomain.
 
 - **Password-only, or optional/second-factor-on-request TOTP** — rejected: this identity is too
   privileged for one factor, so TOTP is not a setting that can be off.
-- **HMAC-SHA1 TOTP** — rejected here only because it would pull a second `sha1` crate version
-  (`sha1` 0.10 is already in the tree via axum's WebSocket handshake, on the older `digest` line that
-  `hmac` 0.13 cannot use), forcing a duplicate and a skip. SHA256 is spec-compliant, app-supported,
-  and free of that cost. Not a security judgement against HMAC-SHA1.
+- **HMAC-SHA256 TOTP** — tried first and reverted (see the amendment above). It is spec-compliant and
+  avoided a duplicate `sha1` crate, but Google/Microsoft Authenticator ignore `algorithm=SHA256` and
+  compute SHA1 regardless, so real operators could never sign in. Dependency hygiene is not worth an
+  unusable second factor; HMAC-SHA1 is the choice, and the duplicate `sha1` line is skipped in
+  `deny.toml`.
 - **A `Domain`-scoped session cookie** — rejected outright: it is the cross-tenant session leak the
   roadmap names as the worst isolation failure.
 - **Revealing which factor failed** — rejected: it is a free enumeration oracle.

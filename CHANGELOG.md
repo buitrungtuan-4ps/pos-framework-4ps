@@ -16,6 +16,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **Super-admin sign-in after enrolment now works with any authenticator app** (ADR-0034 amended).
+  The mandatory TOTP second factor ran over HMAC-**SHA256**, but Google Authenticator and Microsoft
+  Authenticator ignore the `otpauth://` URI's `algorithm` field and always compute **SHA1** — so the
+  6-digit codes never matched and `/admin/login` rejected every attempt with the generic "code or
+  password not accepted" right after `/admin/setup`. TOTP now runs over **HMAC-SHA1** (the RFC 6238
+  default that every app supports), and the provisioning URI states `algorithm=SHA1`. The 20-byte RFC
+  6238 SHA1 test vectors and the URI assertion prove it. **Upgrade note:** an admin already enrolled
+  under the old SHA256 secret must re-enrol — run `deploy/reset-admin.sh` (the `reset_admin`
+  break-glass, ADR-0045) to re-open `/admin/setup`, then scan the new QR. There is at most one
+  super-admin, so this is a single re-enrolment.
+
 ### Added
 - **The intake idempotency ledger is now durable and written in the order's own transaction**
   (ADR-0064). `IntakeLedger` is promoted to a `pos-ports` port (a `Transactional` one, like

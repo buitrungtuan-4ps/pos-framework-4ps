@@ -85,9 +85,14 @@ tokio-rustls    = { version = "0.26", default-features = false, features = ["rin
 webpki-roots    = "1"
 
 # Super-admin auth (P7, ADR-0034). `argon2` (same version/idiom the edge uses for PIN hashes) hashes
-# and verifies the password. RFC 6238 TOTP runs over HMAC-SHA256 using the `sha2`+`hmac` already
-# added above for webhooks, so it adds no crypto crate (ADR-0034 explains the SHA256 choice).
+# and verifies the password. RFC 6238 TOTP runs over HMAC-**SHA1** via `hmac` (already in the tree for
+# webhooks) plus `sha1` — SHA1 is the algorithm every authenticator app computes by default, so a
+# code from Google/Microsoft Authenticator actually verifies (ADR-0034 amended: SHA256 was
+# app-incompatible). `sha1` 0.11 is on the `digest` 0.11 line `hmac` 0.13 needs; the `sha1` 0.10
+# already pulled in by `axum`'s WebSocket handshake is on the older `digest` 0.10 line and cannot be
+# reused, so the two coexist under a documented `bans.skip` in `deny.toml`.
 argon2 = "0.5"
+sha1   = "0.11"
 # The super-admin session token is 32 CSPRNG bytes minted at the binary edge and hashed before
 # storage (ADR-0034). `getrandom` is the same OS-entropy crate the edge already uses (pairing codes,
 # id-generator seeding), at the same 0.3 version, so no new randomness crate enters the graph.
