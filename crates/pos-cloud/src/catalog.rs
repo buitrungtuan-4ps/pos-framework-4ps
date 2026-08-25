@@ -25,8 +25,9 @@ use core::future::Future;
 
 use serde::{Deserialize, Serialize};
 
+use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
-use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
+use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId};
 use pos_proto::money::Money;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -234,6 +235,67 @@ pub struct MenuPlacement {
     pub available: bool,
 }
 
+/// A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).
+///
+/// Deliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a
+/// "Summer specials" tab whose items report under "Pizza". Its id is a [`DisplayCategoryId`] — the
+/// same id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the
+/// compiled `MenuEntry`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DisplayCategory {
+    /// The display-category id — carried into the compiled `DisplayPlan`.
+    pub display_category_id: DisplayCategoryId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The name a screen shows as a tab or section.
+    pub name: String,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
+/// A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).
+#[derive(Debug, Clone, Serialize)]
+pub struct DisplaySubcategory {
+    /// The display-sub-category id — carried into the compiled plan.
+    pub display_subcategory_id: DisplaySubcategoryId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The parent display category.
+    pub display_category_id: DisplayCategoryId,
+    /// The name a screen shows.
+    pub name: String,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
+/// One item's button in a per-channel layout — the authoring row a compiled [`pos_proto::DisplayButton`]
+/// is made from (ADR-0066 entity 12).
+///
+/// A "layout" is the set of these rows for a channel: the compiler groups them by
+/// `(sales_channel → display category → sub-category)`, orders each group by `sort`, and emits a
+/// [`pos_proto::DisplayPlan`] per channel into a [`pos_proto::LayoutBook`]. Its identity is
+/// `(tenant, sales_channel, menu_item_id)` — an item has at most one button per channel. Presentation
+/// only: it names an item's `menu_item_id` and where its button sits, never a price.
+#[derive(Debug, Clone, Serialize)]
+pub struct LayoutButton {
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The channel this button lays out. `Open`, like [`ChannelPrice::sales_channel`].
+    pub sales_channel: Open<SalesChannel>,
+    /// The display category the button sits under.
+    pub display_category_id: DisplayCategoryId,
+    /// The sub-category within that category, or `None` for a button directly under the category.
+    pub display_subcategory_id: Option<DisplaySubcategoryId>,
+    /// The item this button orders — a `menu_item_id` the compiled `MenuBook` prices.
+    pub menu_item_id: MenuItemId,
+    /// The caption to show (may be shorter than the item's catalog name on a crowded grid).
+    pub label: String,
+    /// The button's grid slot on a POS terminal, or `None` for a flowing layout (tablet, QR).
+    pub position: Option<GridPosition>,
+    /// The display order within its group; lower comes first.
+    pub sort: i32,
+}
+
 /// Persists and reads the catalog authoring model.
 ///
 /// Every entity has the same shape as the registry's: `create` (a freshly-minted record), `list`
@@ -316,6 +378,64 @@ pub trait CatalogStore {
         subcategory: &ItemSubcategory,
     ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
 
+    /// Inserts a display category.
+    fn create_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's display categories.
+    fn list_display_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<DisplayCategory>, CatalogStoreError>> + Send;
+
+    /// Renames a display category and/or sets its status. Returns whether a row changed.
+    fn update_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
+    /// Inserts a display sub-category under a parent display category.
+    fn create_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's display sub-categories.
+    fn list_display_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<DisplaySubcategory>, CatalogStoreError>> + Send;
+
+    /// Renames a display sub-category, (re)parents it, and/or sets its status. Returns whether a row
+    /// changed.
+    fn update_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
+    /// Inserts or replaces a layout button, by its `(tenant, sales_channel, menu_item_id)` identity.
+    fn set_layout_button(
+        &self,
+        button: &LayoutButton,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's layout buttons across all channels.
+    fn list_layout_buttons(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<LayoutButton>, CatalogStoreError>> + Send;
+
+    /// Removes a layout button by its `(tenant, sales_channel, menu_item_id)` identity. Returns
+    /// whether a row was found and removed.
+    fn remove_layout_button(
+        &self,
+        tenant_id: TenantId,
+        sales_channel: Open<SalesChannel>,
+        menu_item_id: MenuItemId,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
     /// Inserts a menu.
     fn create_menu(
         &self,
@@ -381,8 +501,9 @@ mod tests {
     use pos_proto::wire_enum::Open;
 
     use super::{
-        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemSubcategory,
-        Menu, MenuId, MenuPlacement, TaxClass,
+        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+        DisplaySubcategory, ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId,
+        MenuPlacement, TaxClass,
     };
     use crate::registry::EntityStatus;
 
@@ -394,6 +515,9 @@ mod tests {
         tax_classes: Mutex<Vec<TaxClass>>,
         categories: Mutex<Vec<ItemCategory>>,
         subcategories: Mutex<Vec<ItemSubcategory>>,
+        display_categories: Mutex<Vec<DisplayCategory>>,
+        display_subcategories: Mutex<Vec<DisplaySubcategory>>,
+        layout_buttons: Mutex<Vec<LayoutButton>>,
         menus: Mutex<Vec<Menu>>,
         placements: Mutex<Vec<MenuPlacement>>,
     }
@@ -545,6 +669,133 @@ mod tests {
             row.item_category_id = subcategory.item_category_id;
             row.status = subcategory.status;
             Ok(true)
+        }
+
+        async fn create_display_category(
+            &self,
+            category: &DisplayCategory,
+        ) -> Result<(), CatalogStoreError> {
+            self.display_categories
+                .lock()
+                .expect("lock")
+                .push(category.clone());
+            Ok(())
+        }
+
+        async fn list_display_categories(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+            Ok(self
+                .display_categories
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_display_category(
+            &self,
+            category: &DisplayCategory,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.display_categories.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.display_category_id == category.display_category_id
+                    && row.tenant_id == category.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&category.name);
+            row.status = category.status;
+            Ok(true)
+        }
+
+        async fn create_display_subcategory(
+            &self,
+            subcategory: &DisplaySubcategory,
+        ) -> Result<(), CatalogStoreError> {
+            self.display_subcategories
+                .lock()
+                .expect("lock")
+                .push(subcategory.clone());
+            Ok(())
+        }
+
+        async fn list_display_subcategories(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+            Ok(self
+                .display_subcategories
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_display_subcategory(
+            &self,
+            subcategory: &DisplaySubcategory,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.display_subcategories.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.display_subcategory_id == subcategory.display_subcategory_id
+                    && row.tenant_id == subcategory.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            row.name.clone_from(&subcategory.name);
+            row.display_category_id = subcategory.display_category_id;
+            row.status = subcategory.status;
+            Ok(true)
+        }
+
+        async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+            let mut rows = self.layout_buttons.lock().expect("lock");
+            if let Some(row) = rows.iter_mut().find(|row| {
+                row.tenant_id == button.tenant_id
+                    && row.sales_channel == button.sales_channel
+                    && row.menu_item_id == button.menu_item_id
+            }) {
+                *row = button.clone();
+            } else {
+                rows.push(button.clone());
+            }
+            Ok(())
+        }
+
+        async fn list_layout_buttons(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+            Ok(self
+                .layout_buttons
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn remove_layout_button(
+            &self,
+            tenant_id: TenantId,
+            sales_channel: Open<SalesChannel>,
+            menu_item_id: MenuItemId,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.layout_buttons.lock().expect("lock");
+            let before = rows.len();
+            rows.retain(|row| {
+                !(row.tenant_id == tenant_id
+                    && row.sales_channel == sales_channel
+                    && row.menu_item_id == menu_item_id)
+            });
+            Ok(rows.len() != before)
         }
 
         async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {

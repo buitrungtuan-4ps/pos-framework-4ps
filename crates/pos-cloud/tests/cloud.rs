@@ -30,8 +30,8 @@ use pos_cloud::auth::apikey::{
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ItemCategory, ItemSubcategory, Menu, MenuId,
-    MenuPlacement, TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
+    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -60,10 +60,12 @@ use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_proto::BusinessDate;
+use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::Open;
 
 /// The instant `clock()` is fixed at, in milliseconds and in seconds — the second form is what the
 /// TOTP code the admin tests submit is computed for.
@@ -3112,6 +3114,9 @@ struct FakeCatalog {
     tax_classes: Arc<Mutex<Vec<TaxClass>>>,
     categories: Arc<Mutex<Vec<ItemCategory>>>,
     subcategories: Arc<Mutex<Vec<ItemSubcategory>>>,
+    display_categories: Arc<Mutex<Vec<DisplayCategory>>>,
+    display_subcategories: Arc<Mutex<Vec<DisplaySubcategory>>>,
+    layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
     menus: Arc<Mutex<Vec<Menu>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
 }
@@ -3259,6 +3264,135 @@ impl CatalogStore for FakeCatalog {
             }
         }
         Ok(false)
+    }
+
+    async fn create_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.display_categories
+            .lock()
+            .expect("lock")
+            .push(category.clone());
+        Ok(())
+    }
+
+    async fn list_display_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+        Ok(self
+            .display_categories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.display_categories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.display_category_id == category.display_category_id
+                && row.tenant_id == category.tenant_id
+            {
+                row.name.clone_from(&category.name);
+                row.status = category.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.display_subcategories
+            .lock()
+            .expect("lock")
+            .push(subcategory.clone());
+        Ok(())
+    }
+
+    async fn list_display_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+        Ok(self
+            .display_subcategories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.display_subcategories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.display_subcategory_id == subcategory.display_subcategory_id
+                && row.tenant_id == subcategory.tenant_id
+            {
+                row.name.clone_from(&subcategory.name);
+                row.display_category_id = subcategory.display_category_id;
+                row.status = subcategory.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+        let mut rows = self.layout_buttons.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == button.tenant_id
+                && row.sales_channel == button.sales_channel
+                && row.menu_item_id == button.menu_item_id
+        }) {
+            *row = button.clone();
+        } else {
+            rows.push(button.clone());
+        }
+        Ok(())
+    }
+
+    async fn list_layout_buttons(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+        Ok(self
+            .layout_buttons
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_layout_button(
+        &self,
+        tenant_id: TenantId,
+        sales_channel: Open<SalesChannel>,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.layout_buttons.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| {
+            !(row.tenant_id == tenant_id
+                && row.sales_channel == sales_channel
+                && row.menu_item_id == menu_item_id)
+        });
+        Ok(rows.len() != before)
     }
 
     async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
@@ -3573,6 +3707,93 @@ async fn catalog_item_taxonomy_categories_subcategories_and_item_linkage() {
 }
 
 #[tokio::test]
+async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Summer specials" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display category");
+    assert_eq!(category.status(), StatusCode::CREATED);
+    let category_id = json_body(category).await["display_category_id"]
+        .as_str()
+        .expect("a display category id")
+        .to_owned();
+
+    let subcategory = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-subcategories",
+            &serde_json::json!({ "tenant_id": tenant, "display_category_id": category_id, "name": "Cold" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display subcategory");
+    assert_eq!(subcategory.status(), StatusCode::CREATED);
+
+    // Upsert a button for an item onto the dine-in channel under the category.
+    let item = ulid_text(500);
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "display_category_id": category_id,
+                "label": "Margherita",
+                "grid_column": 0,
+                "grid_row": 0,
+                "sort": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set layout button");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/layout-buttons?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list layout buttons");
+    let buttons = json_body(listed).await;
+    assert_eq!(buttons.as_array().expect("array").len(), 1);
+    assert_eq!(buttons[0]["sales_channel"], "SALES_CHANNEL_DINE_IN");
+
+    // Remove it — 204, then the list is empty.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}?tenant_id={tenant}"
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route remove layout button");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let empty = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/layout-buttons?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list layout buttons again");
+    assert_eq!(json_body(empty).await.as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
 async fn catalog_upserts_lists_and_removes_a_placement() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());
     let cookie = admin_cookie(&router).await;
@@ -3787,4 +4008,93 @@ async fn publishing_an_unknown_menu_is_refused() {
         .await
         .expect("route publish unknown menu");
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+
+    // A menu to publish (empty is fine — the layout is compiled independently).
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+
+    // A display category and a dine-in layout button under it.
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Pizza" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display category");
+    let category_id = json_body(category).await["display_category_id"]
+        .as_str()
+        .expect("a display category id")
+        .to_owned();
+
+    let item = ulid_text(500);
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "display_category_id": category_id,
+                "label": "Margherita",
+                "grid_column": 0,
+                "grid_row": 0,
+                "sort": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set layout button");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    // Publish the menu; the layout rides along on the same publish.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's effective config now carries a compiled DisplayPlan on its `layout` node.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    let doc = json_body(effective).await;
+    let channel = &doc["layout"]["channels"][0];
+    assert_eq!(channel["sales_channel"], "SALES_CHANNEL_DINE_IN");
+    let category = &channel["plan"]["categories"][0];
+    assert_eq!(category["name"], "Pizza");
+    assert_eq!(category["buttons"][0]["label"], "Margherita");
+    assert_eq!(category["buttons"][0]["menu_item_id"], item);
 }

@@ -32,6 +32,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The catalog now has a presentation tier — display taxonomy + per-channel layouts, compiled and
+  published beside the price book** (ADR-0066 entities 11 and 12, Phase 2a). The catalog gains a
+  **display taxonomy** (`DisplayCategory` / `DisplaySubcategory` — the grouping a screen shows, distinct
+  from the operational item taxonomy) and **layout buttons** (an item's button on a channel, under a
+  display category/sub-category, with an optional POS grid slot and sort order), behind
+  `/admin/catalog/display-categories`, `/admin/catalog/display-subcategories` and
+  `/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}` (list/create/`PATCH`; the button
+  keyed by `(channel, item)` with `PUT`/`DELETE`). A new pure `compile_layout_book` folds the buttons
+  by `channel → category → sub-category` into a `pos-proto` `LayoutBook`, and **publish now writes it
+  onto the store's `layout` config node** alongside the `MenuBook` on `menu` — so a button moving
+  reprices nothing and a price change relays no buttons, exactly the separation ADR-0066 requires. The
+  layout compiler is forgiving (a button whose category/sub-category is missing or archived is skipped,
+  never failing a publish). Backed by migration `0015` and the `PostgresCatalog` adapter; the dashboard
+  menu editor's layout screen is the next slice. `FakeCatalog`-tested (route round-trips) and the
+  compiler unit-tested (channel/category/sub-category grouping, archived-category skip, and the
+  publish e2e asserting the `layout` node). Forward-only and additive; greenfield.
 - **Items now carry an operational category and sub-category** (ADR-0066 entities 2 and 3, Phase 2a).
   The catalog gains an item taxonomy — `ItemCategory` and `ItemSubcategory` (tenant-scoped,
   archived-not-deleted, a sub-category nested under a category) — behind `/admin/catalog/item-categories`

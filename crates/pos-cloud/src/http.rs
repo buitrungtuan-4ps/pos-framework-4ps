@@ -61,11 +61,15 @@ use pos_ports::config_store::ConfigUpdate;
 use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
+use pos_proto::display::GridPosition;
+use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TaxClassId, TenantId,
+    ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId,
+    StoreId, TaxClassId, TenantId,
 };
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::Open;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
@@ -79,10 +83,11 @@ use crate::auth::enrol::{
 use crate::auth::password::hash_password;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemCategoryId,
-    ItemSubcategory, ItemSubcategoryId, Menu, MenuId, MenuPlacement, TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
+    LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
 };
-use crate::catalog_compiler::compile_menu;
+use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
@@ -1277,6 +1282,33 @@ where
             axum::routing::patch(admin_update_item_subcategory::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/display-categories",
+            get(admin_list_display_categories::<Cat, A, C>)
+                .post(admin_create_display_category::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/display-categories/{display_category_id}",
+            axum::routing::patch(admin_update_display_category::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/display-subcategories",
+            get(admin_list_display_subcategories::<Cat, A, C>)
+                .post(admin_create_display_subcategory::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/display-subcategories/{display_subcategory_id}",
+            axum::routing::patch(admin_update_display_subcategory::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/layout-buttons",
+            get(admin_list_layout_buttons::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
+            axum::routing::put(admin_set_layout_button::<Cat, A, C>)
+                .delete(admin_remove_layout_button::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/menus",
             get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
         )
@@ -1365,6 +1397,49 @@ struct UpdateItemSubcategoryRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct CreateDisplayCategoryRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateDisplayCategoryRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateDisplaySubcategoryRequest {
+    tenant_id: String,
+    display_category_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateDisplaySubcategoryRequest {
+    tenant_id: String,
+    display_category_id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SetLayoutButtonRequest {
+    tenant_id: String,
+    display_category_id: String,
+    #[serde(default)]
+    display_subcategory_id: Option<String>,
+    label: String,
+    #[serde(default)]
+    grid_column: Option<u16>,
+    #[serde(default)]
+    grid_row: Option<u16>,
+    #[serde(default)]
+    sort: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct CreateMenuRequest {
     tenant_id: String,
     name: String,
@@ -1436,6 +1511,20 @@ fn parse_optional_subcategory(value: Option<&str>) -> Result<Option<ItemSubcateg
         Some(text) => text
             .parse::<Ulid>()
             .map(|ulid| Some(ItemSubcategoryId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
+/// Parses an optional display-sub-category id, with the same empty-is-`None` rule as
+/// [`parse_optional_category`] — a layout button may sit directly under a display category.
+fn parse_optional_display_subcategory(
+    value: Option<&str>,
+) -> Result<Option<DisplaySubcategoryId>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(DisplaySubcategoryId::new(ulid)))
             .map_err(|_| ()),
         None => Ok(None),
     }
@@ -1885,6 +1974,345 @@ where
     }
 }
 
+/// A super-admin lists a tenant's display categories.
+async fn admin_list_display_categories<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_display_categories(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<DisplayCategory>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a display category; the id is minted here and returned once.
+async fn admin_create_display_category<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDisplayCategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(display_category_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DisplayCategoryId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = DisplayCategory {
+        display_category_id,
+        tenant_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_display_category(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a display category and/or sets its status.
+async fn admin_update_display_category<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(display_category_id): Path<String>,
+    Json(request): Json<UpdateDisplayCategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(display_category_id), Ok(tenant_id)) = (
+        display_category_id
+            .parse::<Ulid>()
+            .map(DisplayCategoryId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the display category id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = DisplayCategory {
+        display_category_id,
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.catalog.update_display_category(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such display category").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's display sub-categories.
+async fn admin_list_display_subcategories<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_display_subcategories(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<DisplaySubcategory>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a display sub-category under a parent display category; the id is minted here.
+async fn admin_create_display_subcategory<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDisplaySubcategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(display_category_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request
+            .display_category_id
+            .parse::<Ulid>()
+            .map(DisplayCategoryId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or display_category_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(display_subcategory_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DisplaySubcategoryId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = DisplaySubcategory {
+        display_subcategory_id,
+        tenant_id,
+        display_category_id,
+        name: request.name,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_display_subcategory(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a display sub-category, (re)parents it, and/or sets its status.
+async fn admin_update_display_subcategory<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(display_subcategory_id): Path<String>,
+    Json(request): Json<UpdateDisplaySubcategoryRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(display_subcategory_id), Ok(tenant_id), Ok(display_category_id)) = (
+        display_subcategory_id
+            .parse::<Ulid>()
+            .map(DisplaySubcategoryId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request
+            .display_category_id
+            .parse::<Ulid>()
+            .map(DisplayCategoryId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the sub-category id, tenant_id or display_category_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = DisplaySubcategory {
+        display_subcategory_id,
+        tenant_id,
+        display_category_id,
+        name: request.name,
+        status,
+    };
+    match state.catalog.update_display_subcategory(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such display sub-category").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's layout buttons across all channels.
+async fn admin_list_layout_buttons<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_layout_buttons(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<LayoutButton>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin upserts an item's button in a channel's layout. The channel (a wire token) and item
+/// are named on the path; the display grouping, caption, grid slot and order are in the body.
+async fn admin_set_layout_button<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path((sales_channel, menu_item_id)): Path<(String, String)>,
+    Json(request): Json<SetLayoutButtonRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_item_id), Ok(display_category_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
+        request
+            .display_category_id
+            .parse::<Ulid>()
+            .map(DisplayCategoryId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, the item id or display_category_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Ok(display_subcategory_id) =
+        parse_optional_display_subcategory(request.display_subcategory_id.as_deref())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "display_subcategory_id is not a ULID",
+        )
+            .into_response();
+    };
+    // A grid slot exists only when both column and row are given; otherwise the button flows by order.
+    let position = match (request.grid_column, request.grid_row) {
+        (Some(column), Some(row)) => Some(GridPosition { column, row }),
+        _ => None,
+    };
+    let record = LayoutButton {
+        tenant_id,
+        sales_channel: Open::<SalesChannel>::parse(&sales_channel),
+        display_category_id,
+        display_subcategory_id,
+        menu_item_id,
+        label: request.label,
+        position,
+        sort: request.sort,
+    };
+    match state.catalog.set_layout_button(&record).await {
+        Ok(()) => (StatusCode::OK, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin removes an item's button from a channel's layout (tenant named on the query).
+async fn admin_remove_layout_button<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path((sales_channel, menu_item_id)): Path<(String, String)>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_item_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the item id is not a ULID",
+        )
+            .into_response();
+    };
+    match state
+        .catalog
+        .remove_layout_button(
+            tenant_id,
+            Open::<SalesChannel>::parse(&sales_channel),
+            menu_item_id,
+        )
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such layout button").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
 /// A super-admin lists a tenant's menus.
 async fn admin_list_menus<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -2156,8 +2584,16 @@ struct PublishMenuRequest {
     menu_id: String,
 }
 
-/// A super-admin publishes a menu to a store: compile → write the `MenuBook` to the store's `menu`
-/// config node → version it through the config tree.
+/// A super-admin publishes a menu to a store: compile the price book and the presentation layout →
+/// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes → version it
+/// through the config tree.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish is a single linear transaction — load items/menus/placements, compile the \
+              price book, load the display taxonomy and layout buttons, compile the layout, set both \
+              nodes on the Store layer and version it; splitting the load-compile-write flow would \
+              scatter the config-tree state the final publish needs"
+)]
 async fn admin_publish_menu<Cat, Cfg, A, C>(
     State(state): State<CatalogPublishState<Cat, Cfg, A, C>>,
     headers: HeaderMap,
@@ -2202,7 +2638,8 @@ where
         }
     }
 
-    // Compile. A refusal here is a configuration error the operator must fix, not a store failure.
+    // Compile the price book. A refusal here is a configuration error the operator must fix, not a
+    // store failure.
     let book = match compile_menu(&items, &menus, &placements, menu_id) {
         Ok(book) => book,
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -2216,9 +2653,35 @@ where
             .into_response();
     };
 
-    // Load the store's tree (or start one), set the `menu` key on its Store layer, re-publish that
-    // layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order (`ConfigLevel::ORDER`);
-    // writing the whole layer back preserves any other Store-level keys already there.
+    // Compile the presentation layout alongside the price book (ADR-0066): the display taxonomy plus
+    // the tenant's layout buttons resolve to a per-channel `LayoutBook`, delivered on a separate
+    // `layout` node so a button moving reprices nothing. The layout compiler is forgiving (a stale
+    // button is skipped), so this never fails a publish that the price compile accepted.
+    let display_categories = match state.catalog.list_display_categories(tenant_id).await {
+        Ok(rows) => rows,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let display_subcategories = match state.catalog.list_display_subcategories(tenant_id).await {
+        Ok(rows) => rows,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let layout_buttons = match state.catalog.list_layout_buttons(tenant_id).await {
+        Ok(rows) => rows,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let layout = compile_layout_book(&display_categories, &display_subcategories, &layout_buttons);
+    let Ok(layout_value) = serde_json::to_value(&layout) else {
+        tracing::error!("could not serialise a compiled layout book");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the catalog service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Load the store's tree (or start one), set the `menu` and `layout` keys on its Store layer, and
+    // re-publish that layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order
+    // (`ConfigLevel::ORDER`); writing the whole layer back preserves any other Store-level keys there.
     let state_before = match state.config_trees.load(tenant_id, store_id).await {
         Ok(state) => state,
         Err(error) => return config_store_error_response(&error),
@@ -2229,8 +2692,9 @@ where
     );
     if let serde_json::Value::Object(map) = &mut store_layer {
         map.insert("menu".to_owned(), book_value);
+        map.insert("layout".to_owned(), layout_value);
     } else {
-        store_layer = serde_json::json!({ "menu": book_value });
+        store_layer = serde_json::json!({ "menu": book_value, "layout": layout_value });
     }
 
     let mut tree = match state_before {

@@ -23,18 +23,24 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogMenuRow, CatalogPlacementRow, CatalogTaxClassRow,
-    CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
-    PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
-    TenantRow,
+    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogPlacementRow,
+    CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow,
+    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees,
+    PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile, PostgresRegistry,
+    PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTranslations,
+    PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
-use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, SubjectId, TaxClassId, TenantId};
+use pos_proto::display::GridPosition;
+use pos_proto::enums::SalesChannel;
+use pos_proto::ids::{
+    DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId, StoreId, SubjectId,
+    TaxClassId, TenantId,
+};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::Open;
 
 use pos_core::activation::CodeStatus;
 
@@ -46,8 +52,9 @@ use crate::auth::apikey::{
 };
 use crate::auth::totp::TotpSecret;
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, ItemCategory, ItemCategoryId,
-    ItemSubcategory, ItemSubcategoryId, Menu, MenuId, MenuPlacement, TaxClass,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
+    LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1077,6 +1084,92 @@ fn catalog_tax_class_record(row: CatalogTaxClassRow) -> Result<TaxClass, Catalog
     })
 }
 
+fn parse_catalog_display_category(text: &str) -> Result<DisplayCategoryId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(DisplayCategoryId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!(
+                "a catalog display category id is not a ULID: {text}"
+            ))
+        })
+}
+
+fn parse_catalog_display_subcategory(
+    text: &str,
+) -> Result<DisplaySubcategoryId, CatalogStoreError> {
+    text.parse::<Ulid>()
+        .map(DisplaySubcategoryId::new)
+        .map_err(|_ignored| {
+            CatalogStoreError::new(format!(
+                "a catalog display sub-category id is not a ULID: {text}"
+            ))
+        })
+}
+
+fn catalog_display_category_record(
+    row: CatalogTaxonomyRow,
+) -> Result<DisplayCategory, CatalogStoreError> {
+    Ok(DisplayCategory {
+        display_category_id: parse_catalog_display_category(&row.id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_display_subcategory_record(
+    row: CatalogTaxonomyRow,
+) -> Result<DisplaySubcategory, CatalogStoreError> {
+    let parent = row.parent_id.ok_or_else(|| {
+        CatalogStoreError::new("a display sub-category row is missing its parent category")
+    })?;
+    Ok(DisplaySubcategory {
+        display_subcategory_id: parse_catalog_display_subcategory(&row.id)?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        display_category_id: parse_catalog_display_category(&parent)?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+fn catalog_layout_button_record(
+    row: CatalogLayoutButtonRow,
+) -> Result<LayoutButton, CatalogStoreError> {
+    let display_subcategory_id = match row.display_subcategory_id {
+        Some(text) => Some(parse_catalog_display_subcategory(&text)?),
+        None => None,
+    };
+    // A grid slot exists only when both column and row are stored; a flowing button has neither.
+    let position = match (row.grid_column, row.grid_row) {
+        (Some(column), Some(grid_row)) => {
+            let column = u16::try_from(column).map_err(|_ignored| {
+                CatalogStoreError::new("a layout button's grid column is out of range")
+            })?;
+            let row_index = u16::try_from(grid_row).map_err(|_ignored| {
+                CatalogStoreError::new("a layout button's grid row is out of range")
+            })?;
+            Some(GridPosition {
+                column,
+                row: row_index,
+            })
+        }
+        _ => None,
+    };
+    Ok(LayoutButton {
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        sales_channel: Open::<SalesChannel>::parse(&row.sales_channel),
+        display_category_id: parse_catalog_display_category(&row.display_category_id)?,
+        display_subcategory_id,
+        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+        label: row.label,
+        position,
+        sort: row.sort,
+    })
+}
+
 fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
     let parent_menu_id = match row.parent_menu_id {
         Some(text) => Some(parse_catalog_menu_id(&text)?),
@@ -1250,6 +1343,131 @@ impl CatalogStore for PostgresCatalog {
             &subcategory.item_category_id.to_string(),
             &subcategory.name,
             subcategory.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.insert_display_category(
+            &category.display_category_id.to_string(),
+            &category.tenant_id.to_string(),
+            &category.name,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_display_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+        let rows = self
+            .fetch_display_categories(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter()
+            .map(catalog_display_category_record)
+            .collect()
+    }
+
+    async fn update_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        self.set_display_category(
+            &category.tenant_id.to_string(),
+            &category.display_category_id.to_string(),
+            &category.name,
+            category.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.insert_display_subcategory(
+            &subcategory.display_subcategory_id.to_string(),
+            &subcategory.tenant_id.to_string(),
+            &subcategory.display_category_id.to_string(),
+            &subcategory.name,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_display_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+        let rows = self
+            .fetch_display_subcategories(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter()
+            .map(catalog_display_subcategory_record)
+            .collect()
+    }
+
+    async fn update_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        self.set_display_subcategory(
+            &subcategory.tenant_id.to_string(),
+            &subcategory.display_subcategory_id.to_string(),
+            &subcategory.display_category_id.to_string(),
+            &subcategory.name,
+            subcategory.status.as_str(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+        let subcategory = button.display_subcategory_id.map(|id| id.to_string());
+        self.upsert_layout_button(
+            &button.tenant_id.to_string(),
+            button.sales_channel.as_wire(),
+            &button.display_category_id.to_string(),
+            subcategory.as_deref(),
+            &button.menu_item_id.to_string(),
+            &button.label,
+            button.position.map(|p| i32::from(p.column)),
+            button.position.map(|p| i32::from(p.row)),
+            button.sort,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_layout_buttons(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+        let rows = self
+            .fetch_layout_buttons(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_layout_button_record).collect()
+    }
+
+    async fn remove_layout_button(
+        &self,
+        tenant_id: TenantId,
+        sales_channel: Open<SalesChannel>,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        self.delete_layout_button(
+            &tenant_id.to_string(),
+            sales_channel.as_wire(),
+            &menu_item_id.to_string(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))

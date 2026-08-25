@@ -68,6 +68,29 @@ pub struct CatalogTaxClassRow {
     pub status: String,
 }
 
+/// A layout button as listed — one item's button in a per-channel layout.
+#[derive(Clone, Debug)]
+pub struct CatalogLayoutButtonRow {
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The channel wire token this button lays out.
+    pub sales_channel: String,
+    /// The display category (a ULID string) the button sits under.
+    pub display_category_id: String,
+    /// The display sub-category (a ULID string), or `None` for a button directly under the category.
+    pub display_subcategory_id: Option<String>,
+    /// The item the button orders (a ULID string).
+    pub menu_item_id: String,
+    /// The caption to show.
+    pub label: String,
+    /// The grid column, or `None` for a flowing layout.
+    pub grid_column: Option<i32>,
+    /// The grid row, or `None` for a flowing layout.
+    pub grid_row: Option<i32>,
+    /// The display order within its group.
+    pub sort: i32,
+}
+
 /// A menu as listed — a named set that may inherit from a parent.
 #[derive(Clone, Debug)]
 pub struct CatalogMenuRow {
@@ -450,6 +473,290 @@ impl PostgresCatalog {
                     &name,
                     &status,
                 ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    // --- display taxonomy: categories and sub-categories (tenant-scoped) ---
+
+    /// Inserts a display category.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_display_category(
+        &self,
+        display_category_id: &str,
+        tenant_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_display_categories (display_category_id, tenant_id, name) \
+                 VALUES ($1, $2, $3)",
+                &[&display_category_id, &tenant_id, &name],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's display categories, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_display_categories(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogTaxonomyRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT display_category_id, tenant_id, name, status FROM catalog_display_categories \
+                 WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogTaxonomyRow {
+                id: row.get(0),
+                tenant_id: row.get(1),
+                parent_id: None,
+                name: row.get(2),
+                status: row.get(3),
+            })
+            .collect())
+    }
+
+    /// Renames a display category and sets its status. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_display_category(
+        &self,
+        tenant_id: &str,
+        display_category_id: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_display_categories SET name = $3, status = $4, updated_at = now() \
+                 WHERE tenant_id = $1 AND display_category_id = $2",
+                &[&tenant_id, &display_category_id, &name, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    /// Inserts a display sub-category under a parent display category.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_display_subcategory(
+        &self,
+        display_subcategory_id: &str,
+        tenant_id: &str,
+        display_category_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_display_subcategories \
+                 (display_subcategory_id, tenant_id, display_category_id, name) \
+                 VALUES ($1, $2, $3, $4)",
+                &[
+                    &display_subcategory_id,
+                    &tenant_id,
+                    &display_category_id,
+                    &name,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's display sub-categories, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_display_subcategories(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogTaxonomyRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT display_subcategory_id, tenant_id, display_category_id, name, status \
+                 FROM catalog_display_subcategories WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogTaxonomyRow {
+                id: row.get(0),
+                tenant_id: row.get(1),
+                parent_id: Some(row.get(2)),
+                name: row.get(3),
+                status: row.get(4),
+            })
+            .collect())
+    }
+
+    /// Renames a display sub-category, (re)parents it and sets its status. Returns whether a row
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_display_subcategory(
+        &self,
+        tenant_id: &str,
+        display_subcategory_id: &str,
+        display_category_id: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_display_subcategories SET display_category_id = $3, name = $4, \
+                 status = $5, updated_at = now() \
+                 WHERE tenant_id = $1 AND display_subcategory_id = $2",
+                &[
+                    &tenant_id,
+                    &display_subcategory_id,
+                    &display_category_id,
+                    &name,
+                    &status,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    // --- layout buttons (tenant-scoped, keyed by (tenant, sales_channel, menu_item_id)) ---
+
+    /// Inserts or replaces a layout button by its `(sales_channel, menu_item_id)` pair within a tenant.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a layout button is a flat row of presentation columns (channel, category, \
+                  optional sub-category, item, label, optional grid column/row, sort); a params \
+                  struct would only move the list up one level"
+    )]
+    pub async fn upsert_layout_button(
+        &self,
+        tenant_id: &str,
+        sales_channel: &str,
+        display_category_id: &str,
+        display_subcategory_id: Option<&str>,
+        menu_item_id: &str,
+        label: &str,
+        grid_column: Option<i32>,
+        grid_row: Option<i32>,
+        sort: i32,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_layout_buttons \
+                 (tenant_id, sales_channel, display_category_id, display_subcategory_id, \
+                  menu_item_id, label, grid_column, grid_row, sort) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 ON CONFLICT (tenant_id, sales_channel, menu_item_id) DO UPDATE SET \
+                  display_category_id = $3, display_subcategory_id = $4, label = $6, \
+                  grid_column = $7, grid_row = $8, sort = $9, updated_at = now()",
+                &[
+                    &tenant_id,
+                    &sales_channel,
+                    &display_category_id,
+                    &display_subcategory_id,
+                    &menu_item_id,
+                    &label,
+                    &grid_column,
+                    &grid_row,
+                    &sort,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's layout buttons across all channels, by channel then display order.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_layout_buttons(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogLayoutButtonRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT tenant_id, sales_channel, display_category_id, display_subcategory_id, \
+                 menu_item_id, label, grid_column, grid_row, sort \
+                 FROM catalog_layout_buttons WHERE tenant_id = $1 \
+                 ORDER BY sales_channel, sort",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogLayoutButtonRow {
+                tenant_id: row.get(0),
+                sales_channel: row.get(1),
+                display_category_id: row.get(2),
+                display_subcategory_id: row.get(3),
+                menu_item_id: row.get(4),
+                label: row.get(5),
+                grid_column: row.get(6),
+                grid_row: row.get(7),
+                sort: row.get(8),
+            })
+            .collect())
+    }
+
+    /// Removes a layout button by its `(sales_channel, menu_item_id)` pair within a tenant. Returns
+    /// whether a row was found and removed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn delete_layout_button(
+        &self,
+        tenant_id: &str,
+        sales_channel: &str,
+        menu_item_id: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "DELETE FROM catalog_layout_buttons \
+                 WHERE tenant_id = $1 AND sales_channel = $2 AND menu_item_id = $3",
+                &[&tenant_id, &sales_channel, &menu_item_id],
             )
             .await
             .map_err(unavailable)?;
