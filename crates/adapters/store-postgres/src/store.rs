@@ -46,6 +46,8 @@ const MIGRATION_0010: &str = include_str!("../migrations/0010_cloud_order_queue.
 
 /// The cloud org registry — named Tenant/Brand/Store/Device ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
 const MIGRATION_0011: &str = include_str!("../migrations/0011_cloud_registry.sql");
+/// The catalog authoring model (Phase 2a, ADR-0066).
+const MIGRATION_0012: &str = include_str!("../migrations/0012_cloud_catalog.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -144,6 +146,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0011)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0012)
             .await
             .map_err(unavailable)
     }
@@ -255,6 +261,15 @@ impl PostgresStore {
     #[must_use]
     pub fn registry(&self) -> crate::registry::PostgresRegistry {
         crate::registry::PostgresRegistry::new(self.pool.clone())
+    }
+
+    /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `CatalogStore` seam over it and
+    /// compiles the authored model into a `MenuBook`.
+    #[must_use]
+    pub fn catalog(&self) -> crate::catalog::PostgresCatalog {
+        crate::catalog::PostgresCatalog::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

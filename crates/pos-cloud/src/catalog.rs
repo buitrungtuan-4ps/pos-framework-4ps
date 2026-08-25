@@ -23,7 +23,7 @@
 use core::fmt;
 use core::future::Future;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
@@ -102,7 +102,7 @@ pub struct Menu {
 ///
 /// This is where dine-in ≠ takeaway ≠ delivery pricing is authored; the compiler emits one channel's
 /// prices into that channel's [`pos_proto::MenuCatalog`] within the store's `MenuBook`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelPrice {
     /// The channel this price applies on. `Open`, the same shape [`pos_proto::locale::TaxRateRow`]
     /// uses, so authoring stored under a channel a later build learns still round-trips.
