@@ -8,6 +8,8 @@ import type {
   ActivationCode,
   ApiKeySummary,
   Brand,
+  CatalogItem,
+  ChannelPrice,
   ConfigLevel,
   CreateApiKeyResponse,
   DailyRollup,
@@ -16,6 +18,8 @@ import type {
   EntityStatus,
   Enrolment,
   Json,
+  Menu,
+  MenuPlacement,
   PublishedConfig,
   RegisterWebhookResponse,
   Store,
@@ -220,5 +224,73 @@ export const api = {
       tenant_id: tenantId,
       name,
       kind,
+    }),
+
+  // --- catalog authoring (ADR-0066): items, menus with inheritance, and per-menu placements ---
+  listItems: (tenantId: string) =>
+    requestJson<CatalogItem[]>("GET", `/admin/catalog/items?${tenantQuery(tenantId)}`),
+  createItem: (tenantId: string, name: string, taxClassId: string) =>
+    requestJson<CatalogItem>("POST", "/admin/catalog/items", {
+      tenant_id: tenantId,
+      name,
+      tax_class_id: taxClassId,
+    }),
+  updateItem: (
+    menuItemId: string,
+    tenantId: string,
+    fields: { name: string; taxClassId: string; status: EntityStatus },
+  ) =>
+    requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      tax_class_id: fields.taxClassId,
+      status: fields.status,
+    }),
+  listMenus: (tenantId: string) =>
+    requestJson<Menu[]>("GET", `/admin/catalog/menus?${tenantQuery(tenantId)}`),
+  createMenu: (tenantId: string, name: string, parentMenuId?: string) =>
+    requestJson<Menu>("POST", "/admin/catalog/menus", {
+      tenant_id: tenantId,
+      name,
+      parent_menu_id: parentMenuId ?? null,
+    }),
+  updateMenu: (
+    menuId: string,
+    tenantId: string,
+    fields: { name: string; parentMenuId: string | null; status: EntityStatus },
+  ) =>
+    requestJson<Menu>("PATCH", `/admin/catalog/menus/${encodeURIComponent(menuId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      parent_menu_id: fields.parentMenuId,
+      status: fields.status,
+    }),
+  listPlacements: (tenantId: string, menuId: string) =>
+    requestJson<MenuPlacement[]>(
+      "GET",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements?${tenantQuery(tenantId)}`,
+    ),
+  setPlacement: (
+    tenantId: string,
+    menuId: string,
+    menuItemId: string,
+    prices: ChannelPrice[],
+    available: boolean,
+  ) =>
+    requestVoid(
+      "PUT",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}`,
+      { tenant_id: tenantId, prices, available },
+    ),
+  deletePlacement: (tenantId: string, menuId: string, menuItemId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
+    ),
+  publishMenu: (tenantId: string, storeId: string, menuId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/catalog/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      menu_id: menuId,
     }),
 };

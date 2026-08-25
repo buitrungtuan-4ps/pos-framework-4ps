@@ -117,3 +117,63 @@ export interface Device {
   readonly kind: string;
   readonly status: EntityStatus;
 }
+
+/**
+ * A sales channel wire token (ADR-0066, `pos-proto` `SalesChannel`). The value is the full
+ * `wire_enum!` token — `SALES_CHANNEL_DINE_IN`, not `DINE_IN` — because the server round-trips it
+ * through `Open<SalesChannel>`, which serialises the whole prefixed token.
+ */
+export type SalesChannel =
+  | "SALES_CHANNEL_DINE_IN"
+  | "SALES_CHANNEL_TAKEAWAY"
+  | "SALES_CHANNEL_DELIVERY"
+  | "SALES_CHANNEL_QR"
+  | "SALES_CHANNEL_API";
+
+/** The channels an operator can price, in the order they appear on the placement editor. */
+export const SALES_CHANNELS: readonly SalesChannel[] = [
+  "SALES_CHANNEL_DINE_IN",
+  "SALES_CHANNEL_TAKEAWAY",
+  "SALES_CHANNEL_DELIVERY",
+  "SALES_CHANNEL_QR",
+  "SALES_CHANNEL_API",
+];
+
+/** Integer money (`pos-proto` `Money`): a currency and an amount in that currency's smallest unit. */
+export interface Money {
+  readonly currency_code: string;
+  readonly amount_minor: number;
+}
+
+/** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
+export interface CatalogItem {
+  readonly menu_item_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly tax_class_id: string;
+  readonly status: EntityStatus;
+}
+
+/** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
+export interface Menu {
+  readonly menu_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly parent_menu_id: string | null;
+  readonly status: EntityStatus;
+}
+
+/** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */
+export interface ChannelPrice {
+  readonly sales_channel: SalesChannel | null;
+  readonly unit_price: Money;
+}
+
+/** An item placed in a menu, with its per-channel prices and its published availability floor. */
+export interface MenuPlacement {
+  readonly tenant_id: string;
+  readonly menu_id: string;
+  readonly menu_item_id: string;
+  readonly prices: ChannelPrice[];
+  readonly available: boolean;
+}

@@ -32,6 +32,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The back-office now has a menu editor** (ADR-0066, Phase 2a). A new **Menu** screen (`/catalog`)
+  in the cloud dashboard drives the catalog CRUD and publish routes end to end, all by name: create /
+  rename / archive **items** (with their tax class); create / rename / **reparent** (inheritance) /
+  archive **menus**; open a menu to edit the **items placed in it** — each with a per-channel price
+  sheet (dine-in / takeaway / delivery / QR / API, blank = not sold on that channel) and a published
+  availability toggle — and finally **publish** a chosen menu to the store in the top-bar context,
+  which returns the new config version. Tenant and store come from the existing context picker (no
+  ULID typed for either); prices are entered in the currency's smallest unit. All labels run through
+  the i18n runtime (English + Vietnamese, `en` the enforced fallback) so the no-hardcoded-strings gate
+  stays green. One known gap, called out in the UI: an item's **tax class** is still a pasted ULID —
+  a named tax-class picker is a later slice. This completes Phase 2a's operator-facing surface.
 - **A menu now publishes to a store — compiled and written onto its config tree** (ADR-0066, Phase 2a).
   A `catalog_publish_router` adds `POST /admin/catalog/publish` behind the super-admin session guard:
   given `(tenant_id, store_id, menu_id)` it loads that tenant's items, menus and placements, runs the

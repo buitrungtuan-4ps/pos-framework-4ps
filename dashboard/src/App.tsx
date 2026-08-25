@@ -12,6 +12,7 @@ import { t } from "./i18n";
 import { authed, setAuthed } from "./state/session";
 import { Activation } from "./screens/Activation";
 import { ApiKeys } from "./screens/ApiKeys";
+import { Catalog } from "./screens/Catalog";
 import { Config } from "./screens/Config";
 import { Devices } from "./screens/Devices";
 import { Login } from "./screens/Login";
@@ -53,6 +54,7 @@ export function App() {
           <Route path="/" component={Reports} />
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
+          <Route path="/catalog" component={Catalog} />
           <Route path="/config" component={Config} />
           <Route path="/api-keys" component={ApiKeys} />
           <Route path="/devices" component={Devices} />
