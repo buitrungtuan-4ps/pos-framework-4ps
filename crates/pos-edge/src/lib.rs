@@ -65,7 +65,7 @@ pub use discovery::{Advertiser, NoopAdvertiser};
 pub use error::EdgeError;
 pub use fanout::{Fanout, ServerMessage};
 pub use idgen::EdgeIdGenerator;
-pub use order_in::{EdgeOrderIn, InMemoryIntakeLedger, IntakeLedger};
+pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};
 pub use pairing::{Code, DeviceToken, Pairing};
 pub use queue::{InMemoryQueueNumbers, QueueNumberAuthority};

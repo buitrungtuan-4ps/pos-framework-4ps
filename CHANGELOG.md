@@ -17,6 +17,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The intake idempotency ledger is now durable and written in the order's own transaction**
+  (ADR-0064). `IntakeLedger` is promoted to a `pos-ports` port (a `Transactional` one, like
+  `ConfigStore`): `record` buffers the `(sales_channel, external_reference) → record` row into the
+  caller's transaction, so it and `sales.order.opened` **commit together or not at all** — a crash
+  between opening an order and recording it can no longer let a retry open a second one. `store-sqlite`
+  implements it against an `intake_ledger` table (migration 0004); the fake implements it in memory;
+  both pass the shared `OrderIn` contract suite. The key is a **plain** insert, so a second order
+  racing in on the same reference fails its commit with `already_exists` (the one writer thread
+  serialises the two) and rolls back rather than duplicating — `EdgeOrderIn` resolves the loss by
+  looking the winner up. A store-sqlite test proves a recorded key survives reopening the database
+  and that a duplicate key is refused. With this, **nothing in the order-intake path is in-memory
+  any more** — both the dedupe ledger and the daily queue counter are durable. `EdgeOrderIn` drops
+  its injected ledger generic (`EdgeOrderIn<S, Q>`): the store `S` now supplies both the event log
+  and the ledger, which is what lets them share one transaction.
 - **The edge implements `OrderIn`** (ADR-0064) — the store side of order intake. `EdgeOrderIn` reprices
   each inbound line from the store's synced menu catalog (ADR-0063), opens a **tableless** order in the
   local event log (`sales.order.opened` + `sales.order_line.added` in one transaction), and dedupes on

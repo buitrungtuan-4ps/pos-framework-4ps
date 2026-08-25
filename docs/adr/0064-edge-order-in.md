@@ -37,15 +37,22 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
   `Money::tax_included` extracts it at bill time, it is never *added* on top). This is what the
   `OrderIn` contract suite asserts: the total comes from the store’s own menu.
 
-- **Idempotency is `(sales_channel, external_reference)`, held in a durable per-store intake
-  ledger.** The caller’s reference is not in the event log (the log carries the order’s own identity,
-  not a marketplace’s), so — exactly as the cloud relay dedupes on a stored queue key
-  ([ADR-0061](0061-order-relay.md)) — the edge records `(channel, reference) → (order_id,
-  acceptance)` and returns the existing acceptance with `created: false` on a repeat. The production
-  ledger is a `store-sqlite` table written **in the order’s own transaction** (so a crash cannot
-  leave an order the ledger does not know about); the in-memory ledger is the tests-and-example
-  implementation, the same split as [`ReceiptAuthority`](../../crates/pos-edge/src/receipt.rs).
-  `look_up` reads the ledger — the resolution path for a caller whose `submit` timed out.
+- **Idempotency is `(sales_channel, external_reference)`, held in a durable intake ledger written in
+  the order’s own transaction.** The caller’s reference is not in the event log (the log carries the
+  order’s own identity, not a marketplace’s), so — exactly as the cloud relay dedupes on a stored
+  queue key ([ADR-0061](0061-order-relay.md)) — the edge records `(channel, reference) → record` and
+  returns the existing acceptance with `created: false` on a repeat. This is a **`pos-ports` port**,
+  `IntakeLedger`, and — like `ConfigStore` — a [`Transactional`](../../crates/pos-ports/src/tx.rs)
+  one: `record` buffers into the caller’s transaction, so the ledger row and `sales.order.opened`
+  **commit together or not at all** and a crash between them is impossible. `store-sqlite` implements
+  it against a table (migration 0004); the fake implements it in memory; both are proven by the
+  shared `OrderIn` contract suite. The key is a **plain** insert, not insert-or-ignore: a second
+  order racing in on the same key fails its commit with `already_exists` (the one writer thread
+  serialises the two) and rolls back rather than duplicating, and `submit` resolves the loss by
+  looking the key up. `look_up` also serves a caller whose `submit` timed out. The `queue_number` is
+  **not** stored in the record — it is reconstructed from the (order-keyed, idempotent) queue
+  authority on a repeat, so a crash that opened the order but never numbered it still yields exactly
+  one number; the record stores the `business_date` so that reconstruction keys the right day.
 
 - **Staff confirmation follows the channel.** `awaiting_staff_confirmation` is true when the order
   names a table — a QR guest’s order waits for a member of staff before the kitchen sees it
@@ -73,11 +80,11 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
 - **The durable queue number landed with this design** (`QueueNumberAuthority` + a `store-sqlite`
   `queue_counter`/`queue_allocations` pair, migration 0003), proven by a store-sqlite test that the
   sequence survives reopening the database and still restarts on a new business date.
-- **Still deferred to a follow-up commit, not designed away:** the intake **ledger’s** durable
-  SQLite backing. This commit ships the in-memory ledger behind the trait and the shared `OrderIn`
-  contract suite that proves the dedupe behaviour; making that ledger a `store-sqlite` table written
-  **in the order’s own transaction** is the tx-atomic change described above, named here so the seam
-  is right.
+- **The durable, tx-atomic intake ledger landed too** (`IntakeLedger` as a `pos-ports` port +
+  a `store-sqlite` `intake_ledger` table, migration 0004, plus the fake’s in-memory implementation),
+  proven by a store-sqlite test that a recorded key survives reopening the database and that a
+  duplicate key is refused with `already_exists` rather than opening a second order. Nothing in the
+  order-intake path is left in-memory now: both the dedupe ledger and the queue counter are durable.
 
 **Rejected.**
 

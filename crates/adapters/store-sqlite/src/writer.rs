@@ -25,12 +25,24 @@ use pos_proto::time::BusinessDate;
 /// back-pressure behaves identically in tests and in the field.
 pub const OUTBOX_CAPACITY: usize = 10_000;
 
+/// An inbound-order idempotency row buffered for the order's transaction (ADR-0064). The record is
+/// pre-serialised to JSON by the store so the writer thread stays free of `pos_ports` types.
+#[derive(Debug)]
+pub(crate) struct IntakeWrite {
+    pub(crate) store_id: StoreId,
+    pub(crate) sales_channel: String,
+    pub(crate) external_reference: String,
+    pub(crate) record_json: String,
+}
+
 /// A unit of work for the writer thread. Every variant carries the channel its result returns on.
 pub(crate) enum Command {
-    /// Flush a transaction's buffered events and config update in one SQLite transaction.
+    /// Flush a transaction's buffered events, config update, and intake row in one SQLite
+    /// transaction.
     Commit {
         events: Vec<EventEnvelope<RawPayload>>,
         config: Option<ConfigUpdate>,
+        intake: Option<IntakeWrite>,
         reply: oneshot::Sender<Result<(), PortError>>,
     },
     /// Read a store's events, ascending by `event_id`, after an optional cursor.
@@ -87,6 +99,14 @@ pub(crate) enum Command {
         order_id: OrderId,
         reply: oneshot::Sender<Result<u64, PortError>>,
     },
+    /// The intake-ledger record a `(store, sales_channel, external_reference)` already produced, as
+    /// stored JSON, or `None`.
+    LookUpIntake {
+        store_id: StoreId,
+        sales_channel: String,
+        external_reference: String,
+        reply: oneshot::Sender<Result<Option<String>, PortError>>,
+    },
 }
 
 /// The writer loop: drain commands until every sender is gone, then close the connection.
@@ -99,9 +119,10 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             Command::Commit {
                 events,
                 config,
+                intake,
                 reply,
             } => {
-                let _ = reply.send(commit(&mut conn, &events, config));
+                let _ = reply.send(commit(&mut conn, &events, config, intake));
             }
             Command::Read {
                 store_id,
@@ -162,6 +183,19 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     order_id,
                 ));
             }
+            Command::LookUpIntake {
+                store_id,
+                sales_channel,
+                external_reference,
+                reply,
+            } => {
+                let _ = reply.send(look_up_intake(
+                    &conn,
+                    store_id,
+                    &sales_channel,
+                    &external_reference,
+                ));
+            }
         }
     }
 }
@@ -180,6 +214,7 @@ fn commit(
     conn: &mut Connection,
     events: &[EventEnvelope<RawPayload>],
     config: Option<ConfigUpdate>,
+    intake: Option<IntakeWrite>,
 ) -> Result<(), PortError> {
     let port = PortName::EventStore;
     let tx = conn
@@ -247,7 +282,41 @@ fn commit(
         }
     }
 
+    if let Some(intake) = intake {
+        // A PLAIN insert, not insert-or-ignore: a second order racing in on the same key must fail
+        // and roll the whole transaction back (this one writer thread serialises the two), never
+        // duplicate. The caller resolves the loss by looking the key up (ADR-0064). Returning here
+        // drops `tx`, rolling back the events written above with it — atomic by construction.
+        let result = tx.execute(
+            "INSERT INTO intake_ledger (store_id, sales_channel, external_reference, record)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                intake.store_id.to_string(),
+                intake.sales_channel,
+                intake.external_reference,
+                intake.record_json,
+            ],
+        );
+        if let Err(error) = result {
+            return Err(intake_conflict_or_db_error(error));
+        }
+    }
+
     tx.commit().map_err(|error| db_error(port, error))
+}
+
+/// A failed intake insert is either the key already existing — the concurrent-duplicate case the
+/// plain insert exists to catch, reported as [`PortError::already_exists`] so the caller re-resolves
+/// with a look-up — or a genuine store fault.
+fn intake_conflict_or_db_error(error: rusqlite::Error) -> PortError {
+    let port = PortName::OrderIn;
+    if let rusqlite::Error::SqliteFailure(failure, _) = &error
+        && failure.code == rusqlite::ErrorCode::ConstraintViolation
+    {
+        return PortError::already_exists(port, "an order already exists for this reference")
+            .with_source(error);
+    }
+    db_error(port, error)
 }
 
 fn read(
@@ -486,6 +555,25 @@ fn allocate_queue_number(
 
     tx.commit().map_err(|error| db_error(port, error))?;
     Ok(u64::try_from(number).unwrap_or(0))
+}
+
+/// The stored `IntakeRecord` JSON for a `(store, sales_channel, external_reference)`, or `None`
+/// (ADR-0064). The store layer deserialises; the writer stays free of `pos_ports` types.
+fn look_up_intake(
+    conn: &Connection,
+    store_id: StoreId,
+    sales_channel: &str,
+    external_reference: &str,
+) -> Result<Option<String>, PortError> {
+    let port = PortName::OrderIn;
+    conn.query_row(
+        "SELECT record FROM intake_ledger
+         WHERE store_id = ?1 AND sales_channel = ?2 AND external_reference = ?3",
+        params![store_id.to_string(), sales_channel, external_reference],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| db_error(port, error))
 }
 
 fn snapshot(
