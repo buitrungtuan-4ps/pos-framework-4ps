@@ -44,10 +44,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   onto the store's `layout` config node** alongside the `MenuBook` on `menu` — so a button moving
   reprices nothing and a price change relays no buttons, exactly the separation ADR-0066 requires. The
   layout compiler is forgiving (a button whose category/sub-category is missing or archived is skipped,
-  never failing a publish). Backed by migration `0015` and the `PostgresCatalog` adapter; the dashboard
-  menu editor's layout screen is the next slice. `FakeCatalog`-tested (route round-trips) and the
+  never failing a publish). Backed by migration `0015` and the `PostgresCatalog` adapter. A new
+  back-office **Layout** screen (`/layout`, kept deliberately apart from the Menu/pricing screen) edits
+  the display taxonomy and, per channel, the item buttons a screen shows — item, display category and
+  sub-category, an optional POS grid slot (column/row) and a sort order — all by name; the layout ships
+  to the store on the same publish as the price book. `FakeCatalog`-tested (route round-trips) and the
   compiler unit-tested (channel/category/sub-category grouping, archived-category skip, and the
-  publish e2e asserting the `layout` node). Forward-only and additive; greenfield.
+  publish e2e asserting the `layout` node); the dashboard typechecks, i18n-lints (en + vi) and builds.
+  Forward-only and additive; greenfield.
 - **Items now carry an operational category and sub-category** (ADR-0066 entities 2 and 3, Phase 2a).
   The catalog gains an item taxonomy — `ItemCategory` and `ItemSubcategory` (tenant-scoped,
   archived-not-deleted, a sub-category nested under a category) — behind `/admin/catalog/item-categories`

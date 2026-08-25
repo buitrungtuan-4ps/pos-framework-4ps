@@ -170,6 +170,41 @@ export interface ItemSubcategory {
   readonly status: EntityStatus;
 }
 
+/** A display category — the presentation taxonomy a screen groups by (ADR-0066 entity 11). */
+export interface DisplayCategory {
+  readonly display_category_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A display sub-category, nested under a display category (ADR-0066 entity 11). */
+export interface DisplaySubcategory {
+  readonly display_subcategory_id: string;
+  readonly tenant_id: string;
+  readonly display_category_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A button's grid slot on a POS terminal (`pos-proto` `GridPosition`). */
+export interface GridPosition {
+  readonly column: number;
+  readonly row: number;
+}
+
+/** An item's button in a per-channel layout (ADR-0066 entity 12). */
+export interface LayoutButton {
+  readonly tenant_id: string;
+  readonly sales_channel: SalesChannel | null;
+  readonly display_category_id: string;
+  readonly display_subcategory_id: string | null;
+  readonly menu_item_id: string;
+  readonly label: string;
+  readonly position: GridPosition | null;
+  readonly sort: number;
+}
+
 /** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
 export interface CatalogItem {
   readonly menu_item_id: string;

@@ -15,13 +15,17 @@ import type {
   DailyRollup,
   Device,
   DeviceProposalSummary,
+  DisplayCategory,
+  DisplaySubcategory,
   EntityStatus,
   Enrolment,
   ItemCategory,
   ItemSubcategory,
   Json,
+  LayoutButton,
   Menu,
   MenuPlacement,
+  SalesChannel,
   PublishedConfig,
   RegisterWebhookResponse,
   Store,
@@ -371,4 +375,85 @@ export const api = {
       store_id: storeId,
       menu_id: menuId,
     }),
+
+  // --- presentation tier (ADR-0066): display taxonomy + per-channel layout buttons ---
+  listDisplayCategories: (tenantId: string) =>
+    requestJson<DisplayCategory[]>(
+      "GET",
+      `/admin/catalog/display-categories?${tenantQuery(tenantId)}`,
+    ),
+  createDisplayCategory: (tenantId: string, name: string) =>
+    requestJson<DisplayCategory>("POST", "/admin/catalog/display-categories", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateDisplayCategory: (
+    displayCategoryId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<DisplayCategory>(
+      "PATCH",
+      `/admin/catalog/display-categories/${encodeURIComponent(displayCategoryId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  listDisplaySubcategories: (tenantId: string) =>
+    requestJson<DisplaySubcategory[]>(
+      "GET",
+      `/admin/catalog/display-subcategories?${tenantQuery(tenantId)}`,
+    ),
+  createDisplaySubcategory: (tenantId: string, displayCategoryId: string, name: string) =>
+    requestJson<DisplaySubcategory>("POST", "/admin/catalog/display-subcategories", {
+      tenant_id: tenantId,
+      display_category_id: displayCategoryId,
+      name,
+    }),
+  updateDisplaySubcategory: (
+    displaySubcategoryId: string,
+    tenantId: string,
+    fields: { displayCategoryId: string; name: string; status: EntityStatus },
+  ) =>
+    requestJson<DisplaySubcategory>(
+      "PATCH",
+      `/admin/catalog/display-subcategories/${encodeURIComponent(displaySubcategoryId)}`,
+      {
+        tenant_id: tenantId,
+        display_category_id: fields.displayCategoryId,
+        name: fields.name,
+        status: fields.status,
+      },
+    ),
+  listLayoutButtons: (tenantId: string) =>
+    requestJson<LayoutButton[]>("GET", `/admin/catalog/layout-buttons?${tenantQuery(tenantId)}`),
+  setLayoutButton: (
+    tenantId: string,
+    salesChannel: SalesChannel,
+    menuItemId: string,
+    fields: {
+      displayCategoryId: string;
+      displaySubcategoryId: string | null;
+      label: string;
+      gridColumn: number | null;
+      gridRow: number | null;
+      sort: number;
+    },
+  ) =>
+    requestJson<LayoutButton>(
+      "PUT",
+      `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}`,
+      {
+        tenant_id: tenantId,
+        display_category_id: fields.displayCategoryId,
+        display_subcategory_id: fields.displaySubcategoryId,
+        label: fields.label,
+        grid_column: fields.gridColumn,
+        grid_row: fields.gridRow,
+        sort: fields.sort,
+      },
+    ),
+  removeLayoutButton: (tenantId: string, salesChannel: SalesChannel, menuItemId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
+    ),
 };

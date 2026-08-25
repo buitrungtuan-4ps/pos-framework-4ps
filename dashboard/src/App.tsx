@@ -14,6 +14,7 @@ import { Activation } from "./screens/Activation";
 import { ApiKeys } from "./screens/ApiKeys";
 import { Catalog } from "./screens/Catalog";
 import { Config } from "./screens/Config";
+import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
 import { Login } from "./screens/Login";
 import { NewStore } from "./screens/NewStore";
@@ -55,6 +56,7 @@ export function App() {
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
+          <Route path="/layout" component={Layout} />
           <Route path="/config" component={Config} />
           <Route path="/api-keys" component={ApiKeys} />
           <Route path="/devices" component={Devices} />
