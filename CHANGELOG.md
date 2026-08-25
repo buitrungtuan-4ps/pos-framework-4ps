@@ -32,6 +32,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The compiled menu now carries a per-channel presentation plan, separate from its prices**
+  (ADR-0066, Phase 2a). `pos-proto` gains `DisplayPlan` (display categories → sub-categories →
+  item buttons, each with an optional POS grid position) and its channel-keyed `LayoutBook` — the
+  layout twin of `MenuBook`, delivered on a separate `layout` config node so a button moving reprices
+  nothing and a price change relays no buttons. The display taxonomy (`DisplayCategoryId`/
+  `DisplaySubcategoryId`) is deliberately distinct from an item's operational category: a screen can
+  group "Summer specials" while those items report under "Pizza". `LayoutBook::plan_for(channel)` is
+  total (unconfigured channel → empty plan), and `pos-core` never reads any of it — only the POS /
+  tablet / QR / marketplace UI does. Additive and forward-compatible.
 - **The compiled menu can now price per sales channel** (ADR-0066, Phase 2a). `pos-proto` gains a
   `MenuBook` — a channel-keyed set of `MenuCatalog`s plus a fallback — so the same item can be one
   price dine-in and another on delivery without touching the tested `MenuEntry`/`reprice_line`

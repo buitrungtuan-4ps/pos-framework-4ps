@@ -201,6 +201,17 @@ resource_id! {
     /// person is deleting one row rather than rewriting history and every backup.
     SubjectId
 }
+resource_id! {
+    /// A display category — the top grouping a screen shows a menu under (ADR-0066).
+    ///
+    /// This is a **presentation** taxonomy, deliberately distinct from an item's operational
+    /// category: a screen may group "Summer specials" while the same items report under "Pizza".
+    DisplayCategoryId
+}
+resource_id! {
+    /// A display sub-category: a second grouping level under a [`DisplayCategoryId`].
+    DisplaySubcategoryId
+}
 
 #[cfg(test)]
 mod tests {
