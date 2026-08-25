@@ -32,6 +32,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The compiled menu can now price per sales channel** (ADR-0066, Phase 2a). `pos-proto` gains a
+  `MenuBook` — a channel-keyed set of `MenuCatalog`s plus a fallback — so the same item can be one
+  price dine-in and another on delivery without touching the tested `MenuEntry`/`reprice_line`
+  contract: the cloud resolves the channel at compile time and the edge selects the right catalog
+  with `MenuBook::catalog_for(channel)` (total — an unpriced channel gets an empty catalog and refuses
+  every line, never guesses). This is the first `pos-proto` shape of the cloud catalog whose design
+  ADR-0066 fixed; the compiler that fills it and the edge wiring that reads it land in later slices.
+  Additive and forward-compatible (the fallback is `#[serde(default)]`); `MenuCatalog`/`MenuEntry`/
+  `TaxRateTable` are unchanged.
 - **The new-store wizard now hands the operator a ready-to-run `config.toml`, and a runbook ties store
   provisioning together end to end** (ADR-0065, WS-C #102). The wizard created a store and issued its
   API key but stopped short of the one file the store machine actually needs. Its handoff step now
