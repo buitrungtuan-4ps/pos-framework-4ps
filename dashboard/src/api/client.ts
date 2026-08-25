@@ -215,4 +215,10 @@ export const api = {
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/devices?${tenantQuery(tenantId)}`,
     ),
+  createDevice: (tenantId: string, storeId: string, name: string, kind: string) =>
+    requestJson<Device>("POST", `/admin/stores/${encodeURIComponent(storeId)}/devices`, {
+      tenant_id: tenantId,
+      name,
+      kind,
+    }),
 };

@@ -32,6 +32,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Device activation now picks (or adds) a device by name — the last raw-ULID entry point is gone**
+  (ADR-0065, WS-C #102). The Activation screen asked the operator to type a `Device slot ULID`, the
+  final place in the dashboard that still demanded a hand-typed identifier. It now **loads the store's
+  devices from the registry** (`GET /admin/stores/{store_id}/devices`) and lets the operator choose one
+  by name and kind, or **add a device** inline (name + a kind picker: POS terminal, printer, kitchen
+  display, tablet) over `POST /admin/stores/{store_id}/devices`, before issuing the one-time activation
+  code (still shown once). Both cards are scoped to the picker's tenant and store and sit behind the
+  super-admin session. Bilingual EN/VI, behind the no-hardcoded-strings lint. This completes WS-C's goal
+  of removing every ULID-entry field from the operator-facing dashboard.
 - **A guided new-store wizard onboards a store from zero without a ULID** (ADR-0065, WS-C #102). A
   three-step flow at `/stores/new` (linked from the Stores screen): name the store and optionally put
   it under a brand → it is created in the registry → issue the scoped API key its devices use to reach

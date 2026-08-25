@@ -175,8 +175,21 @@
 
   "activation.title": "Kích hoạt",
   "activation.description": "Cấp mã một lần để thiết bị cửa hàng đổi lấy thông tin xác thực.",
-  "activation.issue": "Cấp mã",
-  "activation.deviceId": "Mã thiết bị",
-  "activation.deviceIdPlaceholder": "ULID khe thiết bị",
-  "activation.codeOnce": "Đưa mã này cho thiết bị ngay — chỉ hiển thị một lần."
+  "activation.devices": "Thiết bị",
+  "activation.loadHint": "Bấm Tải để xem thiết bị của cửa hàng này.",
+  "activation.noDevices": "Chưa có thiết bị nào. Thêm ở bên dưới.",
+  "activation.deviceSelect": "Thiết bị",
+  "activation.chooseDevice": "Chọn thiết bị",
+  "activation.deviceRequired": "Chọn thiết bị để cấp mã.",
+  "activation.deviceNameRequired": "Cần nhập tên.",
+  "activation.createDevice": "Thêm thiết bị",
+  "activation.deviceName": "Tên",
+  "activation.deviceNamePlaceholder": "vd. Quầy trước",
+  "activation.deviceKind": "Loại",
+  "activation.codeOnce": "Đưa mã này cho thiết bị ngay — chỉ hiển thị một lần.",
+
+  "device.kind.pos": "Máy POS",
+  "device.kind.printer": "Máy in",
+  "device.kind.kds": "Màn hình bếp",
+  "device.kind.tablet": "Máy tính bảng"
 }
