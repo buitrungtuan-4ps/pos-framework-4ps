@@ -29,6 +29,9 @@ use pos_cloud::auth::apikey::{
 };
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
+use pos_cloud::catalog::{
+    CatalogItem, CatalogStore, CatalogStoreError, Menu, MenuId, MenuPlacement,
+};
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::devices::{
@@ -3095,6 +3098,285 @@ async fn registry_is_behind_the_session_guard() {
     // No session cookie → the guard denies before any listing is revealed.
     let denied = router
         .oneshot(get("/admin/tenants", None))
+        .await
+        .expect("route unauthenticated");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- Catalog authoring admin routes (ADR-0066) --------------------------------------------------
+
+#[derive(Default, Clone)]
+struct FakeCatalog {
+    items: Arc<Mutex<Vec<CatalogItem>>>,
+    menus: Arc<Mutex<Vec<Menu>>>,
+    placements: Arc<Mutex<Vec<MenuPlacement>>>,
+}
+
+impl CatalogStore for FakeCatalog {
+    async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
+        self.items.lock().expect("lock").push(item.clone());
+        Ok(())
+    }
+
+    async fn list_items(&self, tenant_id: TenantId) -> Result<Vec<CatalogItem>, CatalogStoreError> {
+        Ok(self
+            .items
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|item| item.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.items.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
+                row.name.clone_from(&item.name);
+                row.tax_class_id = item.tax_class_id;
+                row.status = item.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
+        self.menus.lock().expect("lock").push(menu.clone());
+        Ok(())
+    }
+
+    async fn list_menus(&self, tenant_id: TenantId) -> Result<Vec<Menu>, CatalogStoreError> {
+        Ok(self
+            .menus
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|menu| menu.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_menu(&self, menu: &Menu) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.menus.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_id == menu.menu_id && row.tenant_id == menu.tenant_id {
+                row.name.clone_from(&menu.name);
+                row.parent_menu_id = menu.parent_menu_id;
+                row.status = menu.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+        let mut rows = self.placements.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == placement.tenant_id
+                && row.menu_id == placement.menu_id
+                && row.menu_item_id == placement.menu_item_id
+        }) {
+            *row = placement.clone();
+        } else {
+            rows.push(placement.clone());
+        }
+        Ok(())
+    }
+
+    async fn list_placements(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+        Ok(self
+            .placements
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_placement(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.placements.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| {
+            !(row.tenant_id == tenant_id
+                && row.menu_id == menu_id
+                && row.menu_item_id == menu_item_id)
+        });
+        Ok(rows.len() != before)
+    }
+}
+
+/// The main router (for `/admin/login`) and the catalog sub-router, sharing one admin store.
+fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::catalog_router(catalog, admin, clock()))
+}
+
+/// A ULID string an operator never types — the routes accept it in the body/path, the fake scopes by
+/// it. Distinct constants keep the tenant, a menu, an item and a tax class from colliding.
+fn ulid_text(n: u128) -> String {
+    Ulid::from_u128(n).to_string()
+}
+
+#[tokio::test]
+async fn catalog_creates_and_lists_an_item_and_a_menu() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Margherita");
+    assert_eq!(created["status"], "active");
+    let item_id = created["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list items");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let items = json_body(listed).await;
+    assert_eq!(items.as_array().expect("array").len(), 1);
+    assert_eq!(items[0]["menu_item_id"], item_id);
+
+    // A menu, optionally with a parent — created by name, id minted server-side.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        json_body(created).await["parent_menu_id"],
+        serde_json::Value::Null
+    );
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/menus?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list menus");
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+}
+
+#[tokio::test]
+async fn catalog_upserts_lists_and_removes_a_placement() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let item = ulid_text(500);
+    let base = format!("/admin/catalog/menus/{menu}/placements");
+
+    let set = |price: i64| {
+        serde_json::json!({
+            "tenant_id": tenant,
+            "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": price } }],
+            "available": true,
+        })
+    };
+
+    // Upsert the placement, then upsert it again with a new price — the pair is replaced, not doubled.
+    for price in [150_000, 160_000] {
+        let put = router
+            .clone()
+            .oneshot(put_with_cookie(
+                &format!("{base}/{item}"),
+                &set(price),
+                &cookie,
+            ))
+            .await
+            .expect("route upsert placement");
+        assert_eq!(put.status(), StatusCode::OK);
+    }
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list placements");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows.as_array().expect("array").len(),
+        1,
+        "the pair replaces, not appends"
+    );
+    assert_eq!(rows[0]["prices"][0]["unit_price"]["amount_minor"], 160_000);
+
+    // Remove it, then removing it again is a 404.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("{base}/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove placement");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let gone = router
+        .oneshot(delete_with_cookie(
+            &format!("{base}/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove missing");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn catalog_is_behind_the_session_guard() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    // A well-formed request (valid `tenant_id`) but no session cookie → the guard denies before any
+    // listing is revealed. The query is well-formed so the guard, not the extractor, is what refuses.
+    let denied = router
+        .oneshot(get(
+            &format!("/admin/catalog/items?tenant_id={}", ulid_text(1)),
+            None,
+        ))
         .await
         .expect("route unauthenticated");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);

@@ -32,6 +32,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The catalog is now editable over `/admin`** (ADR-0066, Phase 2a). A `catalog_router` exposes the
+  authoring model behind the super-admin session guard: `/admin/catalog/items` and
+  `/admin/catalog/menus` (list scoped to `?tenant_id=`, create with the id minted server-side,
+  `PATCH` to rename / set status / reparent), and `/admin/catalog/menus/{menu_id}/placements` (list,
+  `PUT` to upsert an item's per-channel prices and availability by its `(menu_id, menu_item_id)` pair,
+  `DELETE` to remove it). Tenant named the admin-is-global way; every write is `FakeCatalog`-tested for
+  create/list/upsert/remove and the session guard. Wired into `pos_cloud`. The menu editor UI and the
+  publish path (compile → config tree) are the next slices.
 - **The catalog authoring model now persists in PostgreSQL** (ADR-0066, Phase 2a). Migration `0012`
   adds `catalog_items`, `catalog_menus` (with an inheritance edge) and `catalog_placements` (an item
   in a menu, its per-channel prices as a `jsonb` document keyed by `(menu_id, menu_item_id)`), all

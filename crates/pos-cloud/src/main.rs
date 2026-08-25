@@ -184,6 +184,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Catalog authoring (ADR-0066): the write surface for the menu source of truth — items,
+        // menus with inheritance, and per-channel placements — from which a MenuBook is compiled.
+        .merge(http::catalog_router(
+            store.catalog(),
+            store.admin(),
+            SystemClock,
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay

@@ -62,7 +62,9 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId, TenantId};
+use pos_proto::ids::{
+    ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TaxClassId, TenantId,
+};
 use pos_proto::ulid::Ulid;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
@@ -76,6 +78,9 @@ use crate::auth::enrol::{
 };
 use crate::auth::password::hash_password;
 use crate::auth::session::{clear_cookie, set_cookie};
+use crate::catalog::{
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Menu, MenuId, MenuPlacement,
+};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
@@ -1205,6 +1210,453 @@ where
         Ok(true) => (StatusCode::OK, Json(record)).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no such device").into_response(),
         Err(error) => registry_error_response(&error),
+    }
+}
+
+// --- Catalog authoring (`/admin/catalog/...`, ADR-0066) -----------------------------------------
+
+/// The collaborators the catalog routes need, stated independently of [`CloudApp`], like
+/// [`RegistryState`]: the catalog authoring store, plus the admin and clock every session guard uses.
+#[derive(Clone)]
+struct CatalogState<Cat, A, C> {
+    catalog: Cat,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the catalog authoring sub-router ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+///
+/// The write surface for the menu source of truth an operator edits — items, menus (with an
+/// inheritance edge), and the per-channel placements a menu is compiled from. Every route is behind
+/// the super-admin session guard and names a tenant the admin-is-global way
+/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
+/// reads and deletes, the request body for a create or upsert. A placement is addressed by its
+/// `(menu_id, menu_item_id)` pair: `PUT` upserts it, `DELETE` removes it. The routes live under
+/// `/admin/catalog/`, a fresh prefix that never collides with the registry or device surfaces.
+pub fn catalog_router<Cat, A, C>(catalog: Cat, admin: A, clock: C) -> Router
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/catalog/items",
+            get(admin_list_items::<Cat, A, C>).post(admin_create_item::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/items/{menu_item_id}",
+            axum::routing::patch(admin_update_item::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus",
+            get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus/{menu_id}",
+            axum::routing::patch(admin_update_menu::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus/{menu_id}/placements",
+            get(admin_list_placements::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
+            axum::routing::put(admin_set_placement::<Cat, A, C>)
+                .delete(admin_remove_placement::<Cat, A, C>),
+        )
+        .with_state(CatalogState {
+            catalog,
+            admin,
+            clock,
+        })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateItemRequest {
+    tenant_id: String,
+    name: String,
+    tax_class_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateItemRequest {
+    tenant_id: String,
+    name: String,
+    tax_class_id: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateMenuRequest {
+    tenant_id: String,
+    name: String,
+    parent_menu_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateMenuRequest {
+    tenant_id: String,
+    name: String,
+    parent_menu_id: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SetPlacementRequest {
+    tenant_id: String,
+    prices: Vec<ChannelPrice>,
+    available: bool,
+}
+
+/// Maps a catalog store failure to a retryable `503`, logging the detail rather than leaking it.
+fn catalog_error_response(error: &CatalogStoreError) -> Response {
+    tracing::error!(%error, "a catalog store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the catalog service is unavailable",
+    )
+        .into_response()
+}
+
+/// The `503` returned when OS entropy is unavailable to mint a catalog id.
+fn catalog_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint a catalog id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the catalog service is unavailable",
+    )
+        .into_response()
+}
+
+/// Parses an optional parent-menu id from a request body; `Err` for a present-but-malformed value.
+fn parse_optional_menu(value: Option<&str>) -> Result<Option<MenuId>, ()> {
+    match value {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(MenuId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
+/// A super-admin lists a tenant's items.
+async fn admin_list_items<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_items(tenant_id).await {
+        Ok(items) => (StatusCode::OK, Json::<Vec<CatalogItem>>(items)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates an item; the id is minted here and returned once in the created record.
+async fn admin_create_item<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateItemRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(tax_class_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.tax_class_id.parse::<Ulid>().map(TaxClassId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or tax_class_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(menu_item_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuItemId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = CatalogItem {
+        menu_item_id,
+        tenant_id,
+        name: request.name,
+        tax_class_id,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_item(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames an item, sets its tax class and/or status.
+async fn admin_update_item<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(menu_item_id): Path<String>,
+    Json(request): Json<UpdateItemRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(menu_item_id), Ok(tenant_id), Ok(tax_class_id)) = (
+        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.tax_class_id.parse::<Ulid>().map(TaxClassId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the item id, tenant_id or tax_class_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = CatalogItem {
+        menu_item_id,
+        tenant_id,
+        name: request.name,
+        tax_class_id,
+        status,
+    };
+    match state.catalog.update_item(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such item").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's menus.
+async fn admin_list_menus<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_menus(tenant_id).await {
+        Ok(menus) => (StatusCode::OK, Json::<Vec<Menu>>(menus)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a menu, optionally under a parent it inherits from.
+async fn admin_create_menu<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateMenuRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "parent_menu_id is not a ULID").into_response();
+    };
+    let Some(menu_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = Menu {
+        menu_id,
+        tenant_id,
+        name: request.name,
+        parent_menu_id,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_menu(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a menu, (re)sets its parent and/or status.
+async fn admin_update_menu<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(menu_id): Path<String>,
+    Json(request): Json<UpdateMenuRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(menu_id), Ok(tenant_id)) = (
+        menu_id.parse::<Ulid>().map(MenuId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the menu id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "parent_menu_id is not a ULID").into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = Menu {
+        menu_id,
+        tenant_id,
+        name: request.name,
+        parent_menu_id,
+        status,
+    };
+    match state.catalog.update_menu(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such menu").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a menu's placements (tenant named on the query).
+async fn admin_list_placements<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(menu_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the menu id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.catalog.list_placements(tenant_id, menu_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<MenuPlacement>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin upserts an item's placement in a menu — its per-channel prices and availability.
+async fn admin_set_placement<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path((menu_id, menu_item_id)): Path<(String, String)>,
+    Json(request): Json<SetPlacementRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, the menu id or the item id is not a ULID",
+        )
+            .into_response();
+    };
+    let record = MenuPlacement {
+        tenant_id,
+        menu_id,
+        menu_item_id,
+        prices: request.prices,
+        available: request.available,
+    };
+    match state.catalog.set_placement(&record).await {
+        Ok(()) => (StatusCode::OK, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin removes an item from a menu (tenant named on the query).
+async fn admin_remove_placement<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path((menu_id, menu_item_id)): Path<(String, String)>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        menu_id.parse::<Ulid>().map(MenuId::new),
+        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, the menu id or the item id is not a ULID",
+        )
+            .into_response();
+    };
+    match state
+        .catalog
+        .remove_placement(tenant_id, menu_id, menu_item_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such placement").into_response(),
+        Err(error) => catalog_error_response(&error),
     }
 }
 
