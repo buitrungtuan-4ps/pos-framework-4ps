@@ -16,6 +16,7 @@ import type {
   ItemSubcategory,
   Menu,
   MenuPlacement,
+  ModifierGroup,
   SalesChannel,
   TaxClass,
 } from "../api/types";
@@ -45,6 +46,7 @@ export function Catalog() {
   const [taxClasses, setTaxClasses] = createSignal<TaxClass[]>([]);
   const [categories, setCategories] = createSignal<ItemCategory[]>([]);
   const [subcategories, setSubcategories] = createSignal<ItemSubcategory[]>([]);
+  const [modifierGroups, setModifierGroups] = createSignal<ModifierGroup[]>([]);
   const [menus, setMenus] = createSignal<Menu[] | null>(null);
   const [placements, setPlacements] = createSignal<MenuPlacement[] | null>(null);
   const [selectedMenu, setSelectedMenu] = createSignal("");
@@ -58,6 +60,12 @@ export function Catalog() {
   const [newItemCategory, setNewItemCategory] = createSignal("");
   const [newItemSubcategory, setNewItemSubcategory] = createSignal("");
   const [newTaxClassName, setNewTaxClassName] = createSignal("");
+  const [newGroupName, setNewGroupName] = createSignal("");
+  const [newGroupMin, setNewGroupMin] = createSignal("0");
+  const [newGroupMax, setNewGroupMax] = createSignal("1");
+  const [newGroupMembers, setNewGroupMembers] = createSignal<string[]>([]);
+  const [newGroupAttached, setNewGroupAttached] = createSignal<string[]>([]);
+  const [editingGroup, setEditingGroup] = createSignal("");
   const [newCategoryName, setNewCategoryName] = createSignal("");
   const [newSubcategoryName, setNewSubcategoryName] = createSignal("");
   const [newSubcategoryParent, setNewSubcategoryParent] = createSignal("");
@@ -100,22 +108,98 @@ export function Catalog() {
     setNotice("");
     setBusy(true);
     try {
-      const [loadedItems, loadedTaxClasses, loadedCategories, loadedSubcategories, loadedMenus] =
-        await Promise.all([
-          api.listItems(tenantId()),
-          api.listTaxClasses(tenantId()),
-          api.listItemCategories(tenantId()),
-          api.listItemSubcategories(tenantId()),
-          api.listMenus(tenantId()),
-        ]);
+      const [
+        loadedItems,
+        loadedTaxClasses,
+        loadedCategories,
+        loadedSubcategories,
+        loadedGroups,
+        loadedMenus,
+      ] = await Promise.all([
+        api.listItems(tenantId()),
+        api.listTaxClasses(tenantId()),
+        api.listItemCategories(tenantId()),
+        api.listItemSubcategories(tenantId()),
+        api.listModifierGroups(tenantId()),
+        api.listMenus(tenantId()),
+      ]);
       setItems(loadedItems);
       setTaxClasses(loadedTaxClasses);
       setCategories(loadedCategories);
       setSubcategories(loadedSubcategories);
+      setModifierGroups(loadedGroups);
       setMenus(loadedMenus);
       if (selectedMenu()) {
         await loadPlacements(selectedMenu());
       }
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedValues = (select: HTMLSelectElement): string[] =>
+    Array.from(select.selectedOptions, (option) => option.value);
+
+  const createGroup = async () => {
+    const name = newGroupName().trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    const min = Number(newGroupMin().trim() || "0");
+    const max = Number(newGroupMax().trim() || "0");
+    if (!Number.isInteger(min) || min < 0 || !Number.isInteger(max) || max < min) {
+      setError(t("catalog.groupRuleInvalid"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.createModifierGroup(tenantId(), {
+        name,
+        minSelect: min,
+        maxSelect: max,
+        memberItemIds: newGroupMembers(),
+        attachedItemIds: newGroupAttached(),
+      });
+      setNewGroupName("");
+      setNewGroupMin("0");
+      setNewGroupMax("1");
+      setNewGroupMembers([]);
+      setNewGroupAttached([]);
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setGroupFields = async (
+    group: ModifierGroup,
+    fields: { name?: string; status?: EntityStatus },
+  ) => {
+    const name = (fields.name ?? group.name).trim();
+    if (!name) {
+      setError(t("catalog.nameRequired"));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateModifierGroup(group.modifier_group_id, tenantId(), {
+        name,
+        minSelect: group.min_select,
+        maxSelect: group.max_select,
+        memberItemIds: group.member_item_ids,
+        attachedItemIds: group.attached_item_ids,
+        status: fields.status ?? group.status,
+      });
+      setEditingGroup("");
+      setDraftName("");
+      await load();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -988,6 +1072,187 @@ export function Catalog() {
                 <Button disabled={busy()} onClick={() => void createTaxClass()}>
                   {t("action.create")}
                 </Button>
+              </div>
+            </div>
+          </Card>
+
+          <Card title={t("catalog.modifierGroups")}>
+            <div class="flex flex-col gap-4">
+              <p class="text-sm text-ink-muted">{t("catalog.modifierGroupsHint")}</p>
+              <Show
+                when={modifierGroups().length > 0}
+                fallback={<p class="text-sm text-ink-muted">{t("catalog.modifierGroupsEmpty")}</p>}
+              >
+                <div class="overflow-x-auto">
+                  <table class="w-full text-left text-sm">
+                    <thead>
+                      <tr class="border-b border-line text-ink-muted">
+                        <th class="py-2 pr-4 font-medium">{t("catalog.name")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("catalog.groupRule")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("catalog.groupMembers")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("catalog.groupAttached")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("catalog.status")}</th>
+                        <th class="py-2 font-medium">{t("catalog.actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={modifierGroups()}>
+                        {(group) => (
+                          <tr class="border-b border-line align-top text-ink">
+                            <td class="py-2 pr-4">
+                              <Show
+                                when={editingGroup() === group.modifier_group_id}
+                                fallback={<span>{group.name}</span>}
+                              >
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <input
+                                    class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                    aria-label={t("catalog.name")}
+                                    value={draftName()}
+                                    onInput={(event) => setDraftName(event.currentTarget.value)}
+                                  />
+                                  <Button
+                                    disabled={busy()}
+                                    onClick={() => void setGroupFields(group, { name: draftName() })}
+                                  >
+                                    {t("action.save")}
+                                  </Button>
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() => {
+                                      setEditingGroup("");
+                                      setDraftName("");
+                                    }}
+                                  >
+                                    {t("action.cancel")}
+                                  </Button>
+                                </div>
+                              </Show>
+                            </td>
+                            <td class="py-2 pr-4">
+                              {group.min_select}–{group.max_select}
+                            </td>
+                            <td class="py-2 pr-4">{group.member_item_ids.length}</td>
+                            <td class="py-2 pr-4">{group.attached_item_ids.length}</td>
+                            <td class="py-2 pr-4">{statusLabel(group.status)}</td>
+                            <td class="flex flex-wrap gap-2 py-2">
+                              <Button
+                                variant="secondary"
+                                disabled={busy()}
+                                onClick={() => {
+                                  setEditingGroup(group.modifier_group_id);
+                                  setDraftName(group.name);
+                                }}
+                              >
+                                {t("catalog.rename")}
+                              </Button>
+                              <Button
+                                variant={group.status === "archived" ? "secondary" : "danger"}
+                                disabled={busy()}
+                                onClick={() =>
+                                  void setGroupFields(group, {
+                                    status: group.status === "archived" ? "active" : "archived",
+                                  })
+                                }
+                              >
+                                {group.status === "archived"
+                                  ? t("catalog.restore")
+                                  : t("catalog.archive")}
+                              </Button>
+                            </td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </Show>
+
+              <div class="rounded-token border border-line bg-surface-raised p-4">
+                <h3 class="mb-3 text-base font-semibold text-ink">{t("catalog.createGroup")}</h3>
+                <div class="grid gap-4 md:grid-cols-3">
+                  <TextField
+                    label={t("catalog.name")}
+                    value={newGroupName()}
+                    onInput={setNewGroupName}
+                    placeholder={t("catalog.groupNamePlaceholder")}
+                  />
+                  <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("catalog.groupMin")}
+                    </span>
+                    <input
+                      class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-base text-ink"
+                      inputmode="numeric"
+                      aria-label={t("catalog.groupMin")}
+                      value={newGroupMin()}
+                      onInput={(event) => setNewGroupMin(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("catalog.groupMax")}
+                    </span>
+                    <input
+                      class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-base text-ink"
+                      inputmode="numeric"
+                      aria-label={t("catalog.groupMax")}
+                      value={newGroupMax()}
+                      onInput={(event) => setNewGroupMax(event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
+                <div class="mt-4 grid gap-4 md:grid-cols-2">
+                  <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("catalog.groupMembers")}
+                    </span>
+                    <select
+                      multiple
+                      class="w-full rounded-token border border-line bg-surface p-2 text-sm text-ink"
+                      size="5"
+                      onChange={(event) => setNewGroupMembers(selectedValues(event.currentTarget))}
+                    >
+                      <For each={items() ?? []}>
+                        {(item) => (
+                          <option
+                            value={item.menu_item_id}
+                            selected={newGroupMembers().includes(item.menu_item_id)}
+                          >
+                            {item.name}
+                          </option>
+                        )}
+                      </For>
+                    </select>
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("catalog.groupAttached")}
+                    </span>
+                    <select
+                      multiple
+                      class="w-full rounded-token border border-line bg-surface p-2 text-sm text-ink"
+                      size="5"
+                      onChange={(event) => setNewGroupAttached(selectedValues(event.currentTarget))}
+                    >
+                      <For each={items() ?? []}>
+                        {(item) => (
+                          <option
+                            value={item.menu_item_id}
+                            selected={newGroupAttached().includes(item.menu_item_id)}
+                          >
+                            {item.name}
+                          </option>
+                        )}
+                      </For>
+                    </select>
+                  </label>
+                </div>
+                <div class="mt-4">
+                  <Button disabled={busy()} onClick={() => void createGroup()}>
+                    {t("action.create")}
+                  </Button>
+                </div>
               </div>
             </div>
           </Card>

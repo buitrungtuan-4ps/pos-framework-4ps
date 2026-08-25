@@ -25,6 +25,7 @@ import type {
   LayoutButton,
   Menu,
   MenuPlacement,
+  ModifierGroup,
   SalesChannel,
   PublishedConfig,
   RegisterWebhookResponse,
@@ -375,6 +376,53 @@ export const api = {
       store_id: storeId,
       menu_id: menuId,
     }),
+
+  // --- modifier groups (ADR-0066 entities 4/5): a selection rule + members, attached to items ---
+  listModifierGroups: (tenantId: string) =>
+    requestJson<ModifierGroup[]>("GET", `/admin/catalog/modifier-groups?${tenantQuery(tenantId)}`),
+  createModifierGroup: (
+    tenantId: string,
+    fields: {
+      name: string;
+      minSelect: number;
+      maxSelect: number;
+      memberItemIds: string[];
+      attachedItemIds: string[];
+    },
+  ) =>
+    requestJson<ModifierGroup>("POST", "/admin/catalog/modifier-groups", {
+      tenant_id: tenantId,
+      name: fields.name,
+      min_select: fields.minSelect,
+      max_select: fields.maxSelect,
+      member_item_ids: fields.memberItemIds,
+      attached_item_ids: fields.attachedItemIds,
+    }),
+  updateModifierGroup: (
+    modifierGroupId: string,
+    tenantId: string,
+    fields: {
+      name: string;
+      minSelect: number;
+      maxSelect: number;
+      memberItemIds: string[];
+      attachedItemIds: string[];
+      status: EntityStatus;
+    },
+  ) =>
+    requestJson<ModifierGroup>(
+      "PATCH",
+      `/admin/catalog/modifier-groups/${encodeURIComponent(modifierGroupId)}`,
+      {
+        tenant_id: tenantId,
+        name: fields.name,
+        min_select: fields.minSelect,
+        max_select: fields.maxSelect,
+        member_item_ids: fields.memberItemIds,
+        attached_item_ids: fields.attachedItemIds,
+        status: fields.status,
+      },
+    ),
 
   // --- presentation tier (ADR-0066): display taxonomy + per-channel layout buttons ---
   listDisplayCategories: (tenantId: string) =>

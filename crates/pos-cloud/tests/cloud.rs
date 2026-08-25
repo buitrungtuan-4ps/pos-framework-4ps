@@ -31,7 +31,8 @@ use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
-    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
+    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup,
+    TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -3117,6 +3118,7 @@ struct FakeCatalog {
     display_categories: Arc<Mutex<Vec<DisplayCategory>>>,
     display_subcategories: Arc<Mutex<Vec<DisplaySubcategory>>>,
     layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
+    modifier_groups: Arc<Mutex<Vec<ModifierGroup>>>,
     menus: Arc<Mutex<Vec<Menu>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
 }
@@ -3393,6 +3395,43 @@ impl CatalogStore for FakeCatalog {
                 && row.menu_item_id == menu_item_id)
         });
         Ok(rows.len() != before)
+    }
+
+    async fn create_modifier_group(&self, group: &ModifierGroup) -> Result<(), CatalogStoreError> {
+        self.modifier_groups
+            .lock()
+            .expect("lock")
+            .push(group.clone());
+        Ok(())
+    }
+
+    async fn list_modifier_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+        Ok(self
+            .modifier_groups
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.modifier_groups.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.modifier_group_id == group.modifier_group_id && row.tenant_id == group.tenant_id
+            {
+                *row = group.clone();
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
@@ -3791,6 +3830,97 @@ async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
         .await
         .expect("route list layout buttons again");
     assert_eq!(json_body(empty).await.as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
+async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let modifier = ulid_text(600);
+    let pizza = ulid_text(500);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/modifier-groups",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Size",
+                "min_select": 1,
+                "max_select": 1,
+                "member_item_ids": [modifier],
+                "attached_item_ids": [pizza],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create modifier group");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Size");
+    assert_eq!(created["min_select"], 1);
+    assert_eq!(created["member_item_ids"][0], modifier);
+    assert_eq!(created["attached_item_ids"][0], pizza);
+    let group_id = created["modifier_group_id"]
+        .as_str()
+        .expect("a group id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/modifier-groups?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list modifier groups");
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+
+    // Update the rule + archive in one PATCH.
+    let updated = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/modifier-groups/{group_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Size",
+                "min_select": 0,
+                "max_select": 2,
+                "member_item_ids": [modifier],
+                "attached_item_ids": [],
+                "status": "archived",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route update modifier group");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(updated["max_select"], 2);
+    assert_eq!(updated["status"], "archived");
+    assert_eq!(
+        updated["attached_item_ids"]
+            .as_array()
+            .expect("array")
+            .len(),
+        0
+    );
+
+    // A malformed member id is rejected.
+    let bad = router
+        .oneshot(post_with_cookie(
+            "/admin/catalog/modifier-groups",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Broken",
+                "member_item_ids": ["not-a-ulid"],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create with bad member");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

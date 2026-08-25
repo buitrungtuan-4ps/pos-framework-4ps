@@ -85,7 +85,7 @@ use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
+    LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
@@ -1309,6 +1309,15 @@ where
                 .delete(admin_remove_layout_button::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/modifier-groups",
+            get(admin_list_modifier_groups::<Cat, A, C>)
+                .post(admin_create_modifier_group::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/modifier-groups/{modifier_group_id}",
+            axum::routing::patch(admin_update_modifier_group::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/menus",
             get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
         )
@@ -1440,6 +1449,35 @@ struct SetLayoutButtonRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct CreateModifierGroupRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    min_select: u16,
+    #[serde(default)]
+    max_select: u16,
+    #[serde(default)]
+    member_item_ids: Vec<String>,
+    #[serde(default)]
+    attached_item_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateModifierGroupRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    min_select: u16,
+    #[serde(default)]
+    max_select: u16,
+    #[serde(default)]
+    member_item_ids: Vec<String>,
+    #[serde(default)]
+    attached_item_ids: Vec<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct CreateMenuRequest {
     tenant_id: String,
     name: String,
@@ -1528,6 +1566,14 @@ fn parse_optional_display_subcategory(
             .map_err(|_| ()),
         None => Ok(None),
     }
+}
+
+/// Parses a list of item ids from a request body; `Err` if any entry is not a ULID.
+fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, ()> {
+    values
+        .iter()
+        .map(|text| text.parse::<Ulid>().map(MenuItemId::new).map_err(|_| ()))
+        .collect()
 }
 
 /// A super-admin lists a tenant's items.
@@ -2309,6 +2355,132 @@ where
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no such layout button").into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's modifier groups.
+async fn admin_list_modifier_groups<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.catalog.list_modifier_groups(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json::<Vec<ModifierGroup>>(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a modifier group; the id is minted here and returned once.
+async fn admin_create_modifier_group<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateModifierGroupRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let (Ok(member_item_ids), Ok(attached_item_ids)) = (
+        parse_item_id_list(&request.member_item_ids),
+        parse_item_id_list(&request.attached_item_ids),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a member or attached item id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(modifier_group_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ModifierGroupId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = ModifierGroup {
+        modifier_group_id,
+        tenant_id,
+        name: request.name,
+        min_select: request.min_select,
+        max_select: request.max_select,
+        member_item_ids,
+        attached_item_ids,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_modifier_group(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a modifier group, sets its rule, members, attachments and/or status.
+async fn admin_update_modifier_group<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(modifier_group_id): Path<String>,
+    Json(request): Json<UpdateModifierGroupRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(modifier_group_id), Ok(tenant_id)) = (
+        modifier_group_id.parse::<Ulid>().map(ModifierGroupId::new),
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the modifier group id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    let (Ok(member_item_ids), Ok(attached_item_ids)) = (
+        parse_item_id_list(&request.member_item_ids),
+        parse_item_id_list(&request.attached_item_ids),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a member or attached item id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let record = ModifierGroup {
+        modifier_group_id,
+        tenant_id,
+        name: request.name,
+        min_select: request.min_select,
+        max_select: request.max_select,
+        member_item_ids,
+        attached_item_ids,
+        status,
+    };
+    match state.catalog.update_modifier_group(&record).await {
+        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such modifier group").into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }

@@ -235,6 +235,61 @@ pub struct MenuPlacement {
     pub available: bool,
 }
 
+/// A modifier group's identifier — a ULID minted at creation. A modifier group is an authoring
+/// concept (a compiled `MenuEntry` does not yet carry modifiers — that is a later `pos-proto`
+/// extension), so its id lives beside the seam like [`MenuId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ModifierGroupId(Ulid);
+
+impl ModifierGroupId {
+    /// Wraps a ULID as a modifier-group id.
+    #[must_use]
+    pub const fn new(ulid: Ulid) -> Self {
+        Self(ulid)
+    }
+
+    /// The underlying ULID.
+    #[must_use]
+    pub const fn as_ulid(self) -> Ulid {
+        self.0
+    }
+}
+
+impl fmt::Display for ModifierGroupId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// A modifier group — a set of modifier choices with a min/max selection rule, attached to items
+/// (ADR-0066 entities 4 and 5).
+///
+/// A **modifier is itself an item** (a [`MenuItemId`] priced in the same money, ADR-0063), so this
+/// entity needs no separate modifier type: `member_item_ids` are the items offered as choices, and
+/// `attached_item_ids` are the items this group modifies (a pizza's "Size", "Extra toppings"). The
+/// selection rule is `min_select..=max_select`. This is **authoring only** today — the compiled
+/// [`pos_proto::MenuEntry`] carries no modifier reference yet; wiring modifiers to the edge is a
+/// `pos-proto`/ADR-0063 extension and its own resolver slice.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModifierGroup {
+    /// The group id.
+    pub modifier_group_id: ModifierGroupId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The human name (`Size`, `Extra toppings`).
+    pub name: String,
+    /// The minimum number of choices a guest must select (0 for optional).
+    pub min_select: u16,
+    /// The maximum number of choices a guest may select.
+    pub max_select: u16,
+    /// The items offered as choices in this group — each a modifier, i.e. an item.
+    pub member_item_ids: Vec<MenuItemId>,
+    /// The items this group is attached to (the products that show this modifier set).
+    pub attached_item_ids: Vec<MenuItemId>,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
 /// A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).
 ///
 /// Deliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a
@@ -436,6 +491,25 @@ pub trait CatalogStore {
         menu_item_id: MenuItemId,
     ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
 
+    /// Inserts a modifier group.
+    fn create_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+
+    /// Lists a tenant's modifier groups.
+    fn list_modifier_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<ModifierGroup>, CatalogStoreError>> + Send;
+
+    /// Renames a modifier group, sets its selection rule, members, attachments and/or status. Returns
+    /// whether a row changed.
+    fn update_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> impl Future<Output = Result<bool, CatalogStoreError>> + Send;
+
     /// Inserts a menu.
     fn create_menu(
         &self,
@@ -503,7 +577,7 @@ mod tests {
     use super::{
         CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
         DisplaySubcategory, ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId,
-        MenuPlacement, TaxClass,
+        MenuPlacement, ModifierGroup, TaxClass,
     };
     use crate::registry::EntityStatus;
 
@@ -518,6 +592,7 @@ mod tests {
         display_categories: Mutex<Vec<DisplayCategory>>,
         display_subcategories: Mutex<Vec<DisplaySubcategory>>,
         layout_buttons: Mutex<Vec<LayoutButton>>,
+        modifier_groups: Mutex<Vec<ModifierGroup>>,
         menus: Mutex<Vec<Menu>>,
         placements: Mutex<Vec<MenuPlacement>>,
     }
@@ -796,6 +871,45 @@ mod tests {
                     && row.menu_item_id == menu_item_id)
             });
             Ok(rows.len() != before)
+        }
+
+        async fn create_modifier_group(
+            &self,
+            group: &ModifierGroup,
+        ) -> Result<(), CatalogStoreError> {
+            self.modifier_groups
+                .lock()
+                .expect("lock")
+                .push(group.clone());
+            Ok(())
+        }
+
+        async fn list_modifier_groups(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+            Ok(self
+                .modifier_groups
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn update_modifier_group(
+            &self,
+            group: &ModifierGroup,
+        ) -> Result<bool, CatalogStoreError> {
+            let mut rows = self.modifier_groups.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.modifier_group_id == group.modifier_group_id && row.tenant_id == group.tenant_id
+            }) else {
+                return Ok(false);
+            };
+            *row = group.clone();
+            Ok(true)
         }
 
         async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {

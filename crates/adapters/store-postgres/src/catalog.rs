@@ -91,6 +91,27 @@ pub struct CatalogLayoutButtonRow {
     pub sort: i32,
 }
 
+/// A modifier group as listed — a selection rule plus its members and attachments as JSON arrays.
+#[derive(Clone, Debug)]
+pub struct CatalogModifierGroupRow {
+    /// The modifier-group id (a ULID string).
+    pub modifier_group_id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The human name.
+    pub name: String,
+    /// The minimum number of choices.
+    pub min_select: i32,
+    /// The maximum number of choices.
+    pub max_select: i32,
+    /// The member item ids (the modifiers offered), as the JSON text stored in the `jsonb` column.
+    pub member_item_ids_json: String,
+    /// The attached item ids (the items this group modifies), as JSON text.
+    pub attached_item_ids_json: String,
+    /// `active` or `archived`.
+    pub status: String,
+}
+
 /// A menu as listed — a named set that may inherit from a parent.
 #[derive(Clone, Debug)]
 pub struct CatalogMenuRow {
@@ -757,6 +778,125 @@ impl PostgresCatalog {
                 "DELETE FROM catalog_layout_buttons \
                  WHERE tenant_id = $1 AND sales_channel = $2 AND menu_item_id = $3",
                 &[&tenant_id, &sales_channel, &menu_item_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    // --- modifier groups (tenant-scoped) ---
+
+    /// Inserts a modifier group. `member_item_ids_json` / `attached_item_ids_json` are JSON arrays of
+    /// ULID strings, cast into `jsonb` columns.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_modifier_group(
+        &self,
+        modifier_group_id: &str,
+        tenant_id: &str,
+        name: &str,
+        min_select: i32,
+        max_select: i32,
+        member_item_ids_json: &str,
+        attached_item_ids_json: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO catalog_modifier_groups \
+                 (modifier_group_id, tenant_id, name, min_select, max_select, member_item_ids, \
+                  attached_item_ids) \
+                 VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7::text::jsonb)",
+                &[
+                    &modifier_group_id,
+                    &tenant_id,
+                    &name,
+                    &min_select,
+                    &max_select,
+                    &member_item_ids_json,
+                    &attached_item_ids_json,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a tenant's modifier groups, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_modifier_groups(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CatalogModifierGroupRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT modifier_group_id, tenant_id, name, min_select, max_select, \
+                 member_item_ids::text, attached_item_ids::text, status \
+                 FROM catalog_modifier_groups WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogModifierGroupRow {
+                modifier_group_id: row.get(0),
+                tenant_id: row.get(1),
+                name: row.get(2),
+                min_select: row.get(3),
+                max_select: row.get(4),
+                member_item_ids_json: row.get(5),
+                attached_item_ids_json: row.get(6),
+                status: row.get(7),
+            })
+            .collect())
+    }
+
+    /// Renames a modifier group, sets its selection rule, members, attachments and status. Returns
+    /// whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "an update sets each authored column explicitly; a params struct would only move \
+                  the list into the seam that calls this"
+    )]
+    pub async fn set_modifier_group(
+        &self,
+        tenant_id: &str,
+        modifier_group_id: &str,
+        name: &str,
+        min_select: i32,
+        max_select: i32,
+        member_item_ids_json: &str,
+        attached_item_ids_json: &str,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE catalog_modifier_groups SET name = $3, min_select = $4, max_select = $5, \
+                 member_item_ids = $6::text::jsonb, attached_item_ids = $7::text::jsonb, \
+                 status = $8, updated_at = now() \
+                 WHERE tenant_id = $1 AND modifier_group_id = $2",
+                &[
+                    &tenant_id,
+                    &modifier_group_id,
+                    &name,
+                    &min_select,
+                    &max_select,
+                    &member_item_ids_json,
+                    &attached_item_ids_json,
+                    &status,
+                ],
             )
             .await
             .map_err(unavailable)?;

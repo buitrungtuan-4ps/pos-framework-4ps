@@ -32,6 +32,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The catalog can now author modifier groups — shared option sets attachable to items** (ADR-0066
+  entities 4 and 5, Phase 2a). A `ModifierGroup` (tenant-scoped, archived-not-deleted) carries a name,
+  a `min_select`/`max_select` choice range, the **member** items that make up its options, and the
+  items it is **attached** to — behind `/admin/catalog/modifier-groups` (list/create/`PATCH`), with
+  members and attachments authored by name in the menu editor. Backed by migration `0016` (members and
+  attachments stored as JSONB arrays of item ULIDs on a single row — no child tables) and the
+  `PostgresCatalog` adapter; `FakeCatalog`-tested for the round-trip of members and attachments, and
+  the dashboard typechecks, i18n-lints (en + vi) and builds. **Authoring-only for now:** modifier
+  groups are captured and published in the cloud but do not yet ride the compiled `MenuBook` to the
+  edge — the wire cannot carry a modifier reference on a `MenuEntry` until `pos-proto`/ADR-0063 gains
+  that field, which is a flagged follow-up. Forward-only and additive; greenfield.
 - **The catalog now has a presentation tier — display taxonomy + per-channel layouts, compiled and
   published beside the price book** (ADR-0066 entities 11 and 12, Phase 2a). The catalog gains a
   **display taxonomy** (`DisplayCategory` / `DisplaySubcategory` — the grouping a screen shows, distinct

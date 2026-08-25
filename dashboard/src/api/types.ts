@@ -205,6 +205,18 @@ export interface LayoutButton {
   readonly sort: number;
 }
 
+/** A modifier group — a min/max selection rule with member modifiers, attached to items (ADR-0066 4/5). */
+export interface ModifierGroup {
+  readonly modifier_group_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly min_select: number;
+  readonly max_select: number;
+  readonly member_item_ids: string[];
+  readonly attached_item_ids: string[];
+  readonly status: EntityStatus;
+}
+
 /** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
 export interface CatalogItem {
   readonly menu_item_id: string;

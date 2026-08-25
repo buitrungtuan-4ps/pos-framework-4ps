@@ -23,12 +23,12 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogPlacementRow,
-    CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow,
-    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees,
-    PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile, PostgresRegistry,
-    PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTranslations,
-    PostgresWebhooks, StoreRow, TenantRow,
+    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogModifierGroupRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, OrderQueueRow,
+    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -54,7 +54,7 @@ use crate::auth::totp::TotpSecret;
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, TaxClass,
+    LayoutButton, Menu, MenuId, MenuPlacement, ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1170,6 +1170,53 @@ fn catalog_layout_button_record(
     })
 }
 
+fn item_id_list_json(ids: &[MenuItemId]) -> Result<String, CatalogStoreError> {
+    let raw: Vec<String> = ids.iter().map(ToString::to_string).collect();
+    serde_json::to_string(&raw).map_err(|error| {
+        CatalogStoreError::new(format!("could not serialise an item id list: {error}"))
+    })
+}
+
+fn parse_catalog_item_id_list(json: &str) -> Result<Vec<MenuItemId>, CatalogStoreError> {
+    let raw: Vec<String> = serde_json::from_str(json).map_err(|error| {
+        CatalogStoreError::new(format!(
+            "a modifier group's item id list is not valid JSON: {error}"
+        ))
+    })?;
+    raw.iter().map(|text| parse_catalog_item_id(text)).collect()
+}
+
+fn catalog_modifier_group_record(
+    row: CatalogModifierGroupRow,
+) -> Result<ModifierGroup, CatalogStoreError> {
+    let min_select = u16::try_from(row.min_select).map_err(|_ignored| {
+        CatalogStoreError::new("a modifier group's min_select is out of range")
+    })?;
+    let max_select = u16::try_from(row.max_select).map_err(|_ignored| {
+        CatalogStoreError::new("a modifier group's max_select is out of range")
+    })?;
+    Ok(ModifierGroup {
+        modifier_group_id: row
+            .modifier_group_id
+            .parse::<Ulid>()
+            .map(ModifierGroupId::new)
+            .map_err(|_ignored| {
+                CatalogStoreError::new(format!(
+                    "a modifier group id is not a ULID: {}",
+                    row.modifier_group_id
+                ))
+            })?,
+        tenant_id: parse_registry_tenant(&row.tenant_id)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+        name: row.name,
+        min_select,
+        max_select,
+        member_item_ids: parse_catalog_item_id_list(&row.member_item_ids_json)?,
+        attached_item_ids: parse_catalog_item_id_list(&row.attached_item_ids_json)?,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
 fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
     let parent_menu_id = match row.parent_menu_id {
         Some(text) => Some(parse_catalog_menu_id(&text)?),
@@ -1468,6 +1515,51 @@ impl CatalogStore for PostgresCatalog {
             &tenant_id.to_string(),
             sales_channel.as_wire(),
             &menu_item_id.to_string(),
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_modifier_group(&self, group: &ModifierGroup) -> Result<(), CatalogStoreError> {
+        self.insert_modifier_group(
+            &group.modifier_group_id.to_string(),
+            &group.tenant_id.to_string(),
+            &group.name,
+            i32::from(group.min_select),
+            i32::from(group.max_select),
+            &item_id_list_json(&group.member_item_ids)?,
+            &item_id_list_json(&group.attached_item_ids)?,
+        )
+        .await
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_modifier_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+        let rows = self
+            .fetch_modifier_groups(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter()
+            .map(catalog_modifier_group_record)
+            .collect()
+    }
+
+    async fn update_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> Result<bool, CatalogStoreError> {
+        self.set_modifier_group(
+            &group.tenant_id.to_string(),
+            &group.modifier_group_id.to_string(),
+            &group.name,
+            i32::from(group.min_select),
+            i32::from(group.max_select),
+            &item_id_list_json(&group.member_item_ids)?,
+            &item_id_list_json(&group.attached_item_ids)?,
+            group.status.as_str(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))
