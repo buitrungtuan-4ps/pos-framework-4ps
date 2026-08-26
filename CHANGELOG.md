@@ -65,9 +65,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   Translations — so every list is a consistent sortable table, every destructive action (revoke,
   delete, reject, archive) goes through a confirmation instead of a one-click button, ULIDs move
   behind a "Technical details" disclosure, and write outcomes surface as toasts. Stores keeps inline
-  brand reassignment. **Still to come in F2** (flagged): the API foundation — list
-  pagination/filter/sort + read-one, AIP-193 errors on `/admin`, `ETag`/`If-Match` concurrency,
-  `/admin` in the OpenAPI drift-gate, and `(tenant_id, created_at)` indexes.
+  brand reassignment, and the `DataTable` gained built-in **search + pagination** (client-side, over
+  the rows a screen already holds — right-sized for the admin lists' volumes). **Still to come in F2**
+  (flagged): AIP-193 errors on `/admin`, read-one endpoints, and `ETag`/`If-Match` concurrency;
+  server-side list push-down (with `(tenant_id, created_at)` indexes and `/admin` in the OpenAPI
+  drift-gate) is deferred until a list is large enough to need it, rather than churning every store
+  seam and the `/admin` response shape now.
 - **The admin console gains a framework-standard shell: grouped scope-aware nav, breadcrumbs, a
   command palette, toasts, a notification center, org-switcher search, and locale persistence**
   (roadmap v2, Track F1). The flat ten-item nav is now five labelled groups, each item carrying a dot

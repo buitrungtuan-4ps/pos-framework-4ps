@@ -16,6 +16,7 @@ import {
   Show,
 } from "solid-js";
 
+import { t } from "../i18n";
 import { Button, TextField } from "./ui";
 
 // --- DataTable ----------------------------------------------------------------------------------
@@ -35,9 +36,11 @@ export type Column<T> = {
 };
 
 /**
- * A sortable table over `rows`. Sorting is client-side today; the `total` / `onPage` / `onQuery`
- * props are reserved so the same component can drive a server-paged list once the API foundation
- * lands, without the screens changing shape again.
+ * A table over `rows` with client-side column sort and, optionally, a search box (`searchText`) and
+ * pagination (`pageSize`). This is right-sized for the admin lists' volumes (tens–hundreds of rows
+ * per tenant); a list large enough to need server-side push-down is a later, targeted change. Its
+ * own generic controls — the search box and pager — read their labels from `t()` (every caller would
+ * pass the identical strings); the columns' headers and cells are still supplied by the caller.
  */
 export function DataTable<T>(props: {
   columns: readonly Column<T>[];
@@ -45,21 +48,37 @@ export function DataTable<T>(props: {
   empty: JSX.Element;
   actions?: (row: T) => JSX.Element;
   actionsHeader?: string;
+  /** When present, a search box filters rows on this text (case-insensitive substring). */
+  searchText?: (row: T) => string;
+  /** When greater than 0, rows are paginated at this page size, with a pager below the table. */
+  pageSize?: number;
 }) {
   const [sortKey, setSortKey] = createSignal<string | null>(null);
   const [ascending, setAscending] = createSignal(true);
+  const [query, setQuery] = createSignal("");
+  const [page, setPage] = createSignal(0);
+
+  const filtered = createMemo(() => {
+    const needle = query().trim().toLowerCase();
+    const text = props.searchText;
+    if (!needle || !text) {
+      return props.rows;
+    }
+    return props.rows.filter((row) => text(row).toLowerCase().includes(needle));
+  });
 
   const sorted = createMemo(() => {
     const key = sortKey();
+    const base = filtered();
     if (key === null) {
-      return props.rows;
+      return base;
     }
     const value = props.columns.find((column) => column.key === key)?.sortValue;
     if (!value) {
-      return props.rows;
+      return base;
     }
     const direction = ascending() ? 1 : -1;
-    return [...props.rows].sort((a, b) => {
+    return [...base].sort((a, b) => {
       const av = value(a);
       const bv = value(b);
       if (typeof av === "number" && typeof bv === "number") {
@@ -68,6 +87,21 @@ export function DataTable<T>(props: {
       return String(av).localeCompare(String(bv)) * direction;
     });
   });
+
+  const perPage = () => props.pageSize ?? 0;
+  const total = () => sorted().length;
+  const pageCount = () => (perPage() > 0 ? Math.max(1, Math.ceil(total() / perPage())) : 1);
+  // Clamp defensively: the row set can shrink under a page (a delete, a tighter search).
+  const current = () => Math.min(page(), pageCount() - 1);
+  const visible = createMemo(() => {
+    if (perPage() <= 0) {
+      return sorted();
+    }
+    const start = current() * perPage();
+    return sorted().slice(start, start + perPage());
+  });
+  const from = () => (total() === 0 ? 0 : current() * perPage() + 1);
+  const to = () => Math.min(total(), (current() + 1) * perPage());
 
   const toggleSort = (column: Column<T>) => {
     if (!column.sortValue) {
@@ -82,53 +116,94 @@ export function DataTable<T>(props: {
   };
 
   return (
-    <Show when={props.rows.length > 0} fallback={props.empty}>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
-          <thead>
-            <tr class="border-b border-line text-ink-muted">
-              <For each={props.columns}>
-                {(column) => (
-                  <th class={`py-2 pr-4 font-medium ${column.class ?? ""}`}>
-                    <Show when={column.sortValue} fallback={<span>{column.header}</span>}>
-                      <button
-                        type="button"
-                        class="inline-flex items-center gap-1 font-medium hover:text-ink"
-                        onClick={() => toggleSort(column)}
-                      >
-                        <span>{column.header}</span>
-                        <Show when={sortKey() === column.key}>
-                          <span aria-hidden="true">{ascending() ? "▲" : "▼"}</span>
-                        </Show>
-                      </button>
-                    </Show>
-                  </th>
-                )}
-              </For>
-              <Show when={props.actions}>
-                <th class="py-2 font-medium">{props.actionsHeader}</th>
-              </Show>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={sorted()}>
-              {(row) => (
-                <tr class="border-b border-line text-ink">
+    <div class="flex flex-col gap-3">
+      <Show when={props.searchText}>
+        <input
+          type="search"
+          aria-label={t("table.search")}
+          placeholder={t("table.search")}
+          value={query()}
+          onInput={(event) => {
+            setQuery(event.currentTarget.value);
+            setPage(0);
+          }}
+          class="min-h-touch w-full max-w-xs rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+        />
+      </Show>
+      <Show when={props.rows.length > 0} fallback={props.empty}>
+        <Show
+          when={total() > 0}
+          fallback={<p class="py-4 text-sm text-ink-muted">{t("table.noMatch")}</p>}
+        >
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b border-line text-ink-muted">
                   <For each={props.columns}>
                     {(column) => (
-                      <td class={`py-2 pr-4 ${column.class ?? ""}`}>{column.cell(row)}</td>
+                      <th class={`py-2 pr-4 font-medium ${column.class ?? ""}`}>
+                        <Show when={column.sortValue} fallback={<span>{column.header}</span>}>
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-1 font-medium hover:text-ink"
+                            onClick={() => toggleSort(column)}
+                          >
+                            <span>{column.header}</span>
+                            <Show when={sortKey() === column.key}>
+                              <span aria-hidden="true">{ascending() ? "▲" : "▼"}</span>
+                            </Show>
+                          </button>
+                        </Show>
+                      </th>
                     )}
                   </For>
                   <Show when={props.actions}>
-                    <td class="py-2">{props.actions?.(row)}</td>
+                    <th class="py-2 font-medium">{props.actionsHeader}</th>
                   </Show>
                 </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </div>
-    </Show>
+              </thead>
+              <tbody>
+                <For each={visible()}>
+                  {(row) => (
+                    <tr class="border-b border-line text-ink">
+                      <For each={props.columns}>
+                        {(column) => (
+                          <td class={`py-2 pr-4 ${column.class ?? ""}`}>{column.cell(row)}</td>
+                        )}
+                      </For>
+                      <Show when={props.actions}>
+                        <td class="py-2">{props.actions?.(row)}</td>
+                      </Show>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
+          <Show when={perPage() > 0 && total() > perPage()}>
+            <div class="flex items-center justify-between gap-2 text-sm text-ink-muted">
+              <span>{t("table.range", { from: from(), to: to(), total: total() })}</span>
+              <div class="flex gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={current() === 0}
+                  onClick={() => setPage(current() - 1)}
+                >
+                  {t("table.prev")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={current() >= pageCount() - 1}
+                  onClick={() => setPage(current() + 1)}
+                >
+                  {t("table.next")}
+                </Button>
+              </div>
+            </div>
+          </Show>
+        </Show>
+      </Show>
+    </div>
   );
 }
 

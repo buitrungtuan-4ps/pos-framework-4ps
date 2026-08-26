@@ -146,6 +146,8 @@ export function Webhooks() {
                 <DataTable
                   columns={columns()}
                   rows={loaded()}
+                  searchText={(row) => row.url}
+                  pageSize={12}
                   empty={<EmptyState title={t("webhooks.empty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (

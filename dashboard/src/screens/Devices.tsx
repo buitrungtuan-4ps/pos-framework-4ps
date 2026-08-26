@@ -103,6 +103,8 @@ export function Devices() {
               <DataTable
                 columns={columns()}
                 rows={loaded()}
+                searchText={(row) => `${storeName(row.store_id)} ${row.kind}`}
+                pageSize={12}
                 empty={<EmptyState title={t("devices.empty")} />}
                 actionsHeader={t("common.actions")}
                 actions={(row) => (

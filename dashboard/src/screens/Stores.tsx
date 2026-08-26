@@ -287,6 +287,8 @@ export function Stores() {
                 <DataTable
                   columns={columns()}
                   rows={loaded()}
+                  searchText={(row) => row.name}
+                  pageSize={12}
                   empty={<EmptyState title={t("stores.empty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (

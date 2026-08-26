@@ -142,6 +142,8 @@ export function ApiKeys() {
                 <DataTable
                   columns={columns()}
                   rows={loaded()}
+                  searchText={(row) => `${row.id} ${row.scopes.join(" ")}`}
+                  pageSize={12}
                   empty={<EmptyState title={t("apiKeys.empty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (
