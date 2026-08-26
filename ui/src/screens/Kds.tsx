@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 
+import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
 import { bump, firedLines } from "../state/store";
@@ -18,7 +19,7 @@ export function Kds() {
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-xl font-semibold">{t("kds.title")}</h1>
+      <PageHeader title={t("kds.title")} size="xl" />
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <For each={visible()} fallback={<p class="text-ink-muted">{t("kds.empty")}</p>}>
           {(line) => (

@@ -43,6 +43,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The operator UI gains a shared component kit, and the design tokens are drift-guarded** (UX
+  polish, WS-E / #104). A `PageHeader` component (the edge counterpart of the dashboard's
+  `components/ui.tsx` kit) replaces the `<h1>` markup every edge screen hand-rolled; it takes a `size`
+  prop so the KDS and expo screens keep their deliberately larger two-metre titles while the
+  operator screens keep theirs — a faithful consolidation, no rendered change (the built CSS is
+  byte-identical). The design tokens and the WCAG contrast gate are duplicated verbatim across the
+  two separate front-end build roots (`ui/` and `dashboard/`), which cannot share a module; a new
+  `cargo xtask mirrored-files` check — in `just preflight` and CI — fails the build the moment a
+  mirrored pair diverges, so a token darkened in one root but not the other can no longer silently
+  leave one theme failing AA. **Scope:** the deeper visual pass over both surfaces stays human-gated
+  (it needs rendered-screen review, like the WCAG *visual* and hardware checks); this lands the
+  mechanical, verifiable half.
 - **A config publish that carries an unparseable menu is now rejected, not silently dropped**
   (ops hardening, WS-D / #103). The cloud's `CapabilityValidator` — the gate every publish passes,
   including the generic `PUT /admin/stores/{id}/config/{level}` route — now round-trips a `menu` or

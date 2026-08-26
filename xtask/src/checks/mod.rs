@@ -13,6 +13,7 @@ pub mod deps_rule;
 pub mod links;
 pub mod lint_config;
 pub mod migrations;
+pub mod mirrored_files;
 pub mod snapshot;
 
 /// Anything that stopped a check from running.

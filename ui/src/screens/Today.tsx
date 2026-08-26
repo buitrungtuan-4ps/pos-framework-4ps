@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 
+import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { openBillCount, state, tableCounts } from "../state/store";
@@ -21,7 +22,7 @@ export function Today() {
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-lg font-semibold">{t("today.title")}</h1>
+      <PageHeader title={t("today.title")} />
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <For each={ORDER}>
           {(key) => (

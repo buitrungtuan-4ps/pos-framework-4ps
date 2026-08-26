@@ -26,6 +26,7 @@ cargo xtask <check>
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
+  mirrored-files  files duplicated across the ui/ and dashboard/ build roots stay identical
 ";
 
 fn main() -> ExitCode {
@@ -44,6 +45,7 @@ fn main() -> ExitCode {
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),
+        "mirrored-files" => checks::mirrored_files::run(&rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
