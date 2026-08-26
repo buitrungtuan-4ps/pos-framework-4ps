@@ -26,6 +26,7 @@
 pub mod admin;
 pub mod apikey;
 pub mod bearer;
+pub mod console_rbac;
 pub mod enrol;
 pub mod password;
 pub mod session;
