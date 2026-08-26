@@ -32,6 +32,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The store can now pull its order queue from the cloud and report each outcome back** (ADR-0061,
+  P11a-2, edge half). A new `pos-edge` relay client long-polls the cloud's per-store queue, feeds each
+  pulled order through the store's own `EdgeOrderIn` (which reprices, opens it in the local log, and
+  dedupes on the caller's reference — so a redelivery converges on one order in the kitchen), and acks
+  the outcome — an `Accepted` record or a typed refusal — back to the cloud. A malformed payload is
+  acked as `invalid_argument` rather than dropped, so the cloud stops re-parking it. The HTTP is a
+  seam (`RelayTransport`), so the pull→make→ack loop is tested with no socket against the real
+  `EdgeOrderIn`; the wire shapes are re-declared to mirror `pos_cloud::relay` (the edge must not depend
+  on the cloud crate) and pinned to the cloud's JSON by a round-trip test. The client and its
+  background `run` loop are library-ready; wiring the production TLS transport and spawning the loop in
+  `serve()` land with the edge config-pull integration (WS-B) that shares the same plumbing.
+  Forward-only and additive; no migration, no protocol change.
 - **Guests can order from a table QR code, and the public order API is now in the OpenAPI document**
   (ADR-0057/ADR-0012 QR ordering; ADR-0019/ADR-0056 for the doc; P11a-2). A new guest-facing
   `POST /v1/qr/orders` takes an HMAC-signed table token as its only credential — a guest carries no

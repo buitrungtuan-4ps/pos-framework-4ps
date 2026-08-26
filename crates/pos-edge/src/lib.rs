@@ -48,6 +48,7 @@ pub mod ota;
 pub mod pairing;
 pub mod queue;
 pub mod receipt;
+pub mod relay_client;
 pub mod server;
 pub mod sntp;
 pub mod state;
