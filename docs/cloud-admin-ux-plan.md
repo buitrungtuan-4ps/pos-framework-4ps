@@ -1,206 +1,274 @@
-# Cloud admin dashboard — UX & master-data management plan
+# Cloud admin console — complete overhaul plan (v2)
 
 **Status** Proposed · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-26
 
-The cloud dashboard grew screen-by-screen alongside the runtime it configures. Each screen works,
-but together they do not yet read as one **admin console**: entities are scattered across a flat menu,
-the working context is a hidden per-browser toggle that fails with a raw backend error when unset, and
-some screens still expose raw ULIDs and raw JSON. This plan re-frames the whole surface around a
-single idea — **everything the fleet is configured with is master data, managed the same way** — and
-sets out a phased path to a framework-standard, multi-country admin console.
+Version 2 of the console plan. Version 1 (the A0–A8 roadmap) framed the problem — one context
+contract, everything as master data, one screen pattern — and it survives here intact. What changed:
+v2 is grounded in an **exhaustive code audit** (8 parallel review passes, 154 findings, every one
+cited to file and line) that measured the console against a framework-standard multi-tenant admin
+(Shopify admin / Stripe dashboard / Toast back office class). The audit found that A0–A8 under-scoped
+three whole pillars — **fleet observability, audit trail & multi-admin identity, and the media/file
+rail** — and surfaced **seven real functional bugs** to fix immediately. This document is the complete
+plan: the verdict, the bugs, the gap map, the target standard, and a re-cut roadmap in four tracks.
 
-It is a companion to `docs/roadmap.md` (which took the *runtime* to pilot-ready) and to
-`docs/ui-ux.md` (the operator-facing design principles, which this reuses). It changes no runtime
-behaviour on its own; each phase lands as its own reviewed PR, with an ADR where it moves a contract.
-
----
-
-## 1. The problem, concretely
-
-**Symptom the user hit:** `tenant_id or the store id is not a ULID` (HTTP 400).
-
-**Root cause:** the dashboard's working context (`tenantId`/`storeId`) is remembered per-browser in
-`localStorage` and **defaults to an empty string**. Several screens issue a store-scoped request on
-mount; before the operator has picked a store in the context picker (or in a fresh browser), the
-request carries `""`, which the server correctly rejects as a non-ULID. `Config.tsx` already guards
-with `when={tenantId() && storeId()}`, but the guard is applied inconsistently across the other ten
-context-reading screens. So the same class of failure surfaces as a cryptic backend error rather than
-"pick a store first".
-
-**The deeper problem it points to.** The 400 is a symptom of four structural gaps:
-
-1. **No global context contract.** Context is optional, hidden, and unguarded, so screens fail
-   instead of guiding.
-2. **No master-data model.** Only Tenant/Brand/Store/Device and Catalog are managed entities.
-   Employees, roles/permissions, payment methods, channels, countries/locales, tax and suppliers are
-   either edited as raw config/JSON or not manageable at all.
-3. **No standard screen pattern.** There is no shared List → Detail → Edit CRUD pattern, no
-   breadcrumbs, no search/filter/sort/bulk, no consistent empty/loading/error states.
-4. **Raw internals leak.** `Config` is a raw-JSON textarea; ULIDs still surface in places; validation
-   errors are backend strings, not field-level messages.
+Companions: `docs/roadmap.md` (runtime to pilot-ready — done), `docs/ui-ux.md` (design principles).
+Each phase lands as reviewed PRs; contract changes get ADRs.
 
 ---
 
-## 2. Where we are today (audit)
+## 1. Verdict — the direct answer to "is it complete?"
 
-| Area | Today | Gap |
+| Question | Verdict | Evidence (from the audit) |
 |---|---|---|
-| **Navigation** | 12 flat routes (Reports, Stores, Catalog, Layout, Config, API keys, Devices, Webhooks, Translations, Activation, New store, Login/Setup) | No grouping, no breadcrumbs, no scope cues (which sections are global vs tenant- vs store-scoped) |
-| **Context** | `ContextPicker` (ADR-0065) picks tenant→store by name; stored in `localStorage`, default empty | Optional and unguarded; no "you must choose a store" gate; not reflected in the URL, so a screen can't be linked or reloaded into a context |
-| **Master data present** | Organization tree (Tenant/Brand/Store/Device); Catalog (items, menus, modifiers, categories, sections, tax classes, display taxonomy, layouts) | — |
-| **Master data missing** | — | **Employees & roles/permissions** (the registry exists in `pos-core` but has no admin UI), **payment methods**, **sales channels**, **countries/locales/currencies** (locale packs exist in `pos-country` but aren't managed), **suppliers/inventory master**, first-class **tax-rate tables per channel/country** |
-| **Entity screens** | Bespoke per screen; `Stores` and `Catalog` are the most complete; others are thin | No shared CRUD kit; create/edit/archive/audit patterns differ per screen |
-| **Config** | Raw JSON textarea per level + effective-config viewer | No form-driven capability/flag editing; no diff/preview; validation is a backend error list |
-| **Design system** | `dashboard/src/components/ui.tsx` (Card, PageHeader, Button, TextField, TextArea, Banner) | No DataTable, EntityPicker, DetailLayout, StatusBadge, EmptyState, ConfirmDialog, breadcrumb, tabs |
-| **i18n / multi-country** | ICU i18n runtime + translation grid; `en` fallback | Country/locale/currency/tax not surfaced as managed data; no per-tenant branding; no per-country default sets |
-| **Cross-linking** | Screens are islands | A store doesn't link to its devices → its config → its published menu; no "related entities" |
+| **Dễ sử dụng (usable)?** | **No — internal-ops-tool maturity.** | No screen loads data on mount (every screen sits blank behind a manual "Load" button); zero confirm dialogs anywhere (revoke key / delete webhook / reject device fire on first click); one shared `busy` flag disables every button on a screen during any single call; editing panels sit at the bottom of a card with no scroll-into-view; no toasts — outcomes vanish on navigation. |
+| **Master data đầy đủ (complete)?** | **No — 2 of 12 domains.** | Present: Organization, Catalog & pricing. Missing entirely despite the runtime already supporting them: employees + PIN, roles/permissions, campaigns/vouchers, inventory/BOM/86, floor plan & tables, kitchen stations & printer routing, tax-rate tables, receipt templates/branding, payment methods, channel policies, suppliers (light), multilingual names. |
+| **Tính năng CRUD đầy đủ (dropdown, drag-drop, edit/add/delete…)?** | **No.** | Dropdowns: yes, pervasive (ADR-0065 killed ULID entry). Drag-and-drop: **zero in the whole app** — every ordering is a hand-typed integer, and the Layout editor designs a POS touch screen with **no visual grid at all**. Search/filter/sort/pagination: **zero on any list** (client and server). Bulk actions: none. Delete: no confirmation, no undo. Read-one endpoints: none. Update: full-replace PATCH, last-write-wins, no concurrency token. |
+| **Admin nắm được toàn hệ thống, xử lý kịp thời?** | **No — effectively blind.** | The cloud never observes store liveness (no heartbeat, no last-seen column anywhere); no fleet-health screen; **0 of 6** of the archive's mandatory minimum alert set implemented; no alerting channel of any kind; relay queue depth invisible; OTA has no report-back (the cloud never learns what version a device runs); reconciliation has **no edge caller** — it never actually runs. |
+| **Audit trail đầy đủ?** | **No — none.** | No audit table in any of 17 migrations; ~60 admin write routes record nothing; **one anonymous super-admin enforced at schema level** (`boolean PRIMARY KEY CHECK (id)`), so attribution is impossible by construction; catalog UPDATEs destroy prior values (a price change is unrecoverable); config versions keep history but expose no author, no browse, no diff, no rollback endpoint. |
+| **Performance?** | **Built to a "tens of rows" assumption.** | ~20 unbounded list endpoints (no LIMIT anywhere); full-tenant refetch of six collections after every single mutation; 10k items would ship the whole master per request and render 100k+ DOM nodes; projector does a serial O(stores) sweep plus a `SELECT DISTINCT` full scan every 30 s; no compression/timeout/body-limit layers in the binary; no cache headers on hashed assets. Good bones: materialized rollups (<10 ms reads), parallel in-screen fetches, tenant indexes, 216 KB bundle. |
+| **International adaptive?** | **Foundation strong, multi-country thin.** | Genuinely bilingual (en+vi at 100% key parity, ICU runtime, CI-enforced string extraction). But: locale not persisted (resets to en every load); money formatting breaks for fractional currencies; currency is a free-text field; zero date/timezone handling; translation-grid columns hardcoded to en/vi (cannot add ja/ko); the whole `pos-country` locale-pack framework is invisible to the cloud; no per-locale item names; no RTL. |
+
+**Overall:** the delivery rails (config tree, publish, compile, event log, rollups) are
+production-shaped; the console on top of them is roughly 30% of a complete admin dashboard.
 
 ---
 
-## 3. The target: one master-data console
+## 2. Fix now — real bugs the audit found (F0)
 
-### 3.1 Principle
+Not UX opinions; functional defects, each small enough to fix immediately:
 
-Everything the fleet runs on is **master data** — authoritative reference entities, managed centrally
-in the cloud, versioned, validated, and delivered to stores through the existing config tree and
-catalog publish paths. Operational data (orders, shifts, rollups, telemetry) is **not** master data:
-it is read-only reporting, kept in a separate part of the console.
+1. **A tenant cannot be created from the UI at all.** `api.createTenant` exists in the client and is
+   called by zero screens; the ContextPicker's empty state offers no create. First-run is a dead end
+   without curl. *(ContextPicker.tsx, client.ts)*
+2. **The context-gate ULID error** (v1's A0): scoped screens fire requests with an empty tenant/store
+   id and surface `… is not a ULID`. One shared guard + "choose a store to continue". *(session.ts)*
+3. **New-store wizard duplicates stores**: Back from step 2 then Next calls `createStore` again with
+   no idempotency guard. *(NewStore.tsx:64-81)*
+4. **Session death mid-edit is unhandled**: `ApiError.isUnauthorized` is defined and consumed
+   nowhere; when the absolute 8 h TTL lapses, every action fails with a raw "unauthorized" banner
+   instead of a re-login redirect preserving work. *(client.ts)*
+5. **Webhook re-enable is impossible**: the dispatcher auto-disables a failing endpoint (correct) but
+   no admin route or button can re-enable it — delete-and-recreate rotates the secret. *(http.rs)*
+6. **No screen auto-loads** — add fetch-on-mount everywhere (with loading skeletons), retire the
+   "Load" buttons.
+7. **Static assets ship with no cache headers** despite content-hashed filenames — one line
+   (`cache-control: immutable`) per hashed asset. *(assets.rs)*
 
-### 3.2 Master-data domains
-
-| Domain | Entities | Scope | Delivery to edge | Classification |
-|---|---|---|---|---|
-| **Organization** | Tenant, Brand, Store, Device | global → store | registry + activation | T3 internal |
-| **Catalog & Pricing** | Item, Menu (inheritance), Modifier group, Category, Section, Tax class, Display taxonomy, Layout | tenant → store | catalog compile → `menu`/`layout` nodes | **T2** (prices) |
-| **People & Access** | Employee, Role template, Permission set, PIN policy | tenant → store | synced PIN hashes + role config | **T1** (employee PII) |
-| **Localization** | Country, Locale pack, Currency, Channel-keyed tax-rate table, Receipt template | global → tenant | locale pack + config nodes | T3 |
-| **Channels & Payments** | Sales channel, Payment method, Terminal binding | tenant → store | config nodes | T3 (terminal creds server-side) |
-| **Integrations** | API key, Webhook endpoint, Marketplace/ERP/shipping binding | tenant | provisioned server-side | T2 (vendor terms) |
-| **Delivery/Config** | Effective config tree, capability flags, OTA rings | all levels | config tree (existing) | T3 |
-| **Operations (read-only)** | Orders, Shifts, Rollups, Reconciliation, Telemetry | store | — (reporting) | T1/T2 mix — anonymize |
-
-The rows already built are Organization and Catalog & Pricing. The rest is the growth path.
-
-### 3.3 Every entity, managed the same way
-
-A single, repeatable pattern (the "framework-standard" the user asked for):
-
-- **List** — searchable, filterable, sortable table; status column (Active/Draft/Archived via the
-  existing `EntityStatus`); bulk actions; "New" affordance; empty state that explains and offers the
-  first action.
-- **Detail** — header with name + status + key facts; tabs for related entities (a Store → Devices,
-  Config, Menu, Staff); an **audit trail** (who changed what, when); actions (edit, archive, publish).
-- **Edit** — validated forms with **field-level errors** (never a raw backend string), no raw JSON,
-  optimistic save with confirmation; destructive actions behind a confirm dialog.
-- **Cross-links** everywhere — an id is always rendered as a name that links to that entity's Detail;
-  raw ULIDs appear only in a muted "technical details" area.
+Two larger correctness gaps discovered by the audit are scheduled into their tracks below, flagged
+here because they are silent no-ops today: **published capability flags never reach the running
+store** (`session_from_config` rebuilds only the `menu` node, so flag publishes do nothing → M8), and
+**QR table tokens cannot be minted outside tests** (no admin route/UI calls `mint_table_token`, so QR
+ordering is unusable in production → M2).
 
 ---
 
-## 4. Navigation & context model (kills the ULID error class)
+## 3. Gap map — what the audit measured, per pillar
 
-### 4.1 Grouped, scope-aware navigation
+154 findings across 8 dimensions. Summary per pillar (details in the audit digest; every finding has
+file:line evidence):
 
-Replace the flat 12-item menu with grouped sections, each tagged by the scope it needs:
+### 3.1 Screen interactions (22 findings)
+Present: dropdown pickers everywhere, inline rename, archive/restore, per-channel price sheet, empty
+states, a genuinely good 3-step New-store wizard, WCAG-audited tokens.
+Missing, cross-cutting: auto-load on mount · confirm dialogs (zero) · search/filter/sort/pagination
+(zero) · bulk actions · optimistic updates (full refetch per mutation; one `busy` flag freezes the
+whole screen) · field-level validation (all errors are one shared banner showing raw backend strings)
+· drag-and-drop (zero; all ordering is typed integers) · modals (zero; bottom-of-card editor panels
+with no focus move) · Enter-to-save/Escape-to-cancel on inline edits · ULIDs still *displayed*
+pervasively (and are the *only* identity for API keys and device proposals). The Catalog screen is an
+1801-line single page stacking nine editors; the Layout editor has **no visual preview** of the grid
+it edits.
 
-```
-Overview            (global)     — fleet health, recent activity
-Organization        (global)     — Tenants, Brands, Stores, Devices
-Catalog & Pricing   (tenant)     — Items, Menus, Modifiers, Categories, Tax classes, Layouts
-People & Access     (tenant)     — Employees, Roles, PIN policy
-Localization        (global)     — Countries, Locales, Currencies, Tax tables, Receipt templates
-Channels & Payments (tenant)     — Sales channels, Payment methods, Terminals
-Integrations        (tenant)     — API keys, Webhooks, Marketplaces
-Config & Rollout    (store)      — Effective config, Capabilities, OTA rings
-Operations          (store)      — Reports, Reconciliation, Activation
-System              (global)     — Translations, Audit log, Settings
-```
+### 3.2 Admin API (27 findings)
+Dominant pattern: create + unpaginated tenant-scoped list + full-record PATCH, archive via status.
+Missing: read-one on **every** entity · pagination/limit/cursor on **every** list · server-side
+search/filter/sort · batch/bulk (incl. bulk price update; publish pays an N+1 per-menu placement
+loop) · structured error envelope (admin errors are plain-text sentences; the AIP-193 envelope exists
+for /v1 but not /admin) · partial PATCH + ETag/If-Match (all writes are last-write-wins) · API-key
+names/labels · webhook update/rotate/ping/enable · activation-code listing · config version
+list/diff/rollback routes · the /admin surface in OpenAPI (no machine contract, no drift gate).
 
-### 4.2 The context contract
+### 3.3 Master data (17 findings) — the runtime is dramatically ahead of the console
+pos-core ships a **complete permission catalogue (23 permissions, role matrix)**, a **finished
+campaign engine (5 kinds, schedules, quotas, vouchers)**, **full inventory (per-item and per-modifier
+BOM, five ledger kinds, auto-86)**, and table/station flows — none of it authorable. The edge
+hardcodes an 8-table floor and station "S01" *"until the store's real layout syncs from config"*.
+TaxClass is a name-only label; the per-(class × channel) rate table has no editor and is never read
+by the edge session. BrandRecord is name+status — no logo, no receipt template. Payment methods,
+channel enablement, vendor policies: config-JSON-only theoretical paths, nothing validated, nothing
+read. Suppliers: unmodeled (lightweight reference only — full purchasing stays ERP territory, spec
+§19). Customers/loyalty: correctly out of scope.
 
-- A section declares its scope: **global**, **tenant**, or **store**.
-- An **org switcher** in the top bar sets tenant → store, reflected in the **URL** (e.g.
-  `/t/:tenant/stores/:store/config`) so a screen is linkable, reloadable, and shareable.
-- A **context gate**: entering a tenant- or store-scoped section without the required context does
-  **not** fire a request — it shows a friendly "Choose a {tenant|store} to continue" panel that opens
-  the switcher. This removes the entire `… is not a ULID` failure class at the UX layer (the server
-  guard stays as defence in depth).
-- **Breadcrumbs** show the path (Tenant › Store › Config) and are themselves the quickest switcher.
+### 3.4 Observability & alerting (24 findings)
+The only working view is per-store daily event counts behind a manual Load. Missing: fleet-health
+overview · store online/offline & last-seen (never observed) · the six-item minimum alert set (0/6:
+store offline, e-invoice backlog, invoice range nearly exhausted, disk, clock drift, print-error
+spike) · any notification channel (email/webhook/Zalo/Telegram/in-console) · config-version-held per
+store (the pull protocol carries it; the handler discards it) · relay queue depth/age per store · OTA
+report-back (CloudSync exposes only activate/fetch_update — the cloud never learns installed
+versions or self-test failures) · reconciliation scheduler and **any edge caller** · webhook delivery
+lag (cursor is in the wire type, never rendered) · JetStream 80% capacity check (primitive exists,
+never called) · clock-drift alarm (computed, delivered to no one) · remote log tail · real-time
+updates in the console (no WS/SSE/polling) · background-task health surfacing · admin-action audit.
 
----
+### 3.5 Audit trail & identity (12 findings)
+Single anonymous super-admin **enforced by schema** · no audit_log table · no actor parameter on any
+store seam (`authenticate_session` returns `()`) · catalog UPDATEs overwrite in place, placements
+hard-DELETE · timestamps exist in every table but no Rust record surfaces them · config history is
+append-only (good foundation) but exposes no author/browse/diff/rollback · sessions have no listing
+or revocation, no IP/UA, absolute TTL only · device approve/reject records when, never who · the
+break-glass reset leaves no in-database trace. Contrast: the *domain* event log is audit-grade — the
+pattern exists in this codebase; it was never applied to the control plane.
 
-## 5. Multi-country / multi-tenant as first-class
+### 3.6 Performance (22 findings)
+Good: rollup reads, incremental projector cursor, tenant-scoped + partial indexes, cheap session
+check, small no-VDOM bundle, compile-at-publish. Scale blockers: unbounded lists end-to-end ·
+full-tenant refetch per mutation · items table renders every row (~10 interactive elements each) ·
+O(n) `find()` name resolution per cell (O(items×placements) renders) · projector serial sweep +
+`SELECT DISTINCT` over the events table every 30 s (should read the registry) · rollup blob keeps
+every trading day ever, rewritten whole every pass, shipped whole to Reports (no date range) ·
+compiled MenuBook duplicated into every store's config blob (multi-MB at 10k items; no delta) · no
+compression/timeout/body-limit tower layers · no asset cache headers · no code splitting · `ORDER BY
+created_at` uncovered by indexes · context picker refetches the world on every open · zero request
+metrics.
 
-A framework meant for many countries must manage the country differences as data, not code:
+### 3.7 i18n & multi-country (20 findings)
+Present: ICU runtime with typed keys, en+vi at 100% parity with idiomatic Vietnamese, language
+switcher, en-fallback floor, CI string-extraction lint, Vietnamese glyph coverage. Missing: locale
+persistence/detection (resets to en) · endonym labels ("Tiếng Việt") and localized `<title>` ·
+locale-pack-aware money (fractional currencies render in minor units; currency is free text; prices
+typed as raw minor integers) · any date/timezone handling · dynamic translation-grid locales (en/vi
+hardcoded — ja/ko invisible) · country modules/locale packs surfaced in the cloud (the Rust framework
+exists; pos_cloud builds no CountryRegistry) · tax-rate table editor · per-locale item/menu names ·
+translated names flowing into the compiled MenuBook · CSV import/export + completion % for the grid ·
+RTL (logical properties) · Intl.Collator sorting.
 
-- **Countries & locales** become managed master data: currency, timezone, date/number formats,
-  channel-keyed tax rates, receipt template, fiscal profile (for the future `fiscal-vn` and its
-  siblings). New-country onboarding is a data task, not a deploy.
-- **Per-tenant branding** — name, logo, colours (within the token system) — so the console and the
-  store UI can carry the brand.
-- **i18n throughout** — the ICU runtime already exists; every new screen routes strings through it,
-  and layouts must survive text 30% longer than English and RTL.
-- **Currency & timezone awareness** — money always shows its currency; times always show the store's
-  timezone and business date (the classic rollup-in-server-timezone bug is already handled in
-  `pos-core`; the console must not reintroduce it in display).
-
-Data-protection posture (roadmap A6, PDPD): **People & Access** and any operational report handle T1
-PII — lawful-basis and retention rules apply, no employee-behaviour monitoring is to be designed, and
-raw PII is never shown where an anonymized reference will do.
-
----
-
-## 6. Design system
-
-Promote the current token kit to a real component library so every screen is built from the same
-parts: **DataTable, EntityPicker, DetailLayout (header+tabs), FormField (label+control+error),
-StatusBadge, EmptyState, ConfirmDialog, Breadcrumbs, Tabs, Toast**, on top of the existing tokens.
-
-**Decision to confirm (fork A):** whether the edge UI (`ui/`) and the cloud dashboard (`dashboard/`)
-consume **one shared component/token package**, or stay two roots kept in sync (today the tokens and
-the contrast gate are duplicated and drift-guarded by `xtask mirrored-files`). Recommendation: extract
-a shared `web-kit` package once the console kit stabilises (Phase 2), because the two surfaces have
-different device targets but the same design language.
-
----
-
-## 7. Phased roadmap
-
-Sizes relative (S ≈ one PR · M ≈ a few · L ≈ many), dependency-ordered.
-
-| Phase | Scope | Size | Outcome |
-|---|---|---|---|
-| **A0 — Context gate** | Shared `requireContext` guard + friendly "choose a store" empty state applied to all scoped screens; consistent empty/loading/error states | **S** | The `… is not a ULID` error class is gone; no screen fires an empty-id request |
-| **A1 — Console shell** | Grouped scope-aware nav, URL-encoded context (`/t/:tenant/…`), breadcrumbs, org switcher upgrade | **M** | One coherent frame; every screen linkable and reloadable |
-| **A2 — Entity CRUD kit** | DataTable/DetailLayout/FormField/StatusBadge/EmptyState/ConfirmDialog; migrate Stores, Devices, Catalog onto it | **M** | One repeatable List→Detail→Edit pattern; field-level validation |
-| **A3 — People & Access** | Employee + Role/Permission master data (UI over the `pos-core` permission registry), PIN policy; PDPD-aware | **L** | Staff and roles are managed data, synced to stores |
-| **A4 — Localization console** | Countries, Locales, Currencies, channel-keyed Tax tables, Receipt templates as master data | **L** | New-country onboarding is a data task |
-| **A5 — Channels & Payments** | Sales channels + payment methods as master data (payment terminals gated on Track A A1) | **M** | Channel/payment config leaves raw JSON |
-| **A6 — Config without JSON** | Form-driven capability/flag editor with inter-flag validation surfaced inline, diff/preview before publish, audit trail | **M** | `Config` stops being a raw-JSON textarea |
-| **A7 — Operations & reporting** | Reports/reconciliation/telemetry as a distinct read-only area with the console's shell | **M** | Clear master-data vs operational-data split |
-| **A8 — Shared web-kit + branding** | Extract the shared component package (fork A); per-tenant branding | **M** | One design system across edge + cloud |
-
-**Cross-cutting:** an **audit log** (who changed which master-data entity, when) added with the CRUD
-kit (A2) and shown on every Detail; **RBAC-aware nav** (a console operator sees only what their role
-allows) once People & Access lands (A3).
-
----
-
-## 8. Decisions to confirm
-
-- **Fork A — shared web-kit:** one package for `ui/` + `dashboard/`, or keep two drift-guarded roots?
-  (Recommend: extract at A8.)
-- **Fork B — master-data scope:** ship all domains in §3.2, or start with People & Access + Localization
-  (the two that unlock multi-country) and defer Suppliers/Inventory master to a later track?
-  (Recommend: People & Access + Localization first.)
-- **Fork C — approach:** incremental refactor screen-by-screen onto the new shell/kit (lower risk,
-  the whole thing keeps working throughout), or a parallel rebuild? (Recommend: incremental — A0/A1
-  first make everything better immediately without a rewrite.)
+### 3.8 Completeness critic (10 findings the first seven passes missed)
+Tenant-creation dead end (above) · PDPD/GDPR **data-subject request tooling** (the masking machinery
+exists; there is no lookup/export/erase-by-subject surface — rights PDPD Decree 13/2023 grants) ·
+**zero file I/O platform-wide** (no upload or CSV/XLSX export anywhere; spec §16's menu import
+unimplementable) · **the ADR-0042 image pipeline is dead code** (no upload route, no storage wiring,
+no image field on CatalogItem, no media UI) · session-security residuals (absolute TTL, no sliding
+renewal, no security headers, no TOTP recovery, unauth handling unused) · no global search / command
+palette / keyboard-shortcut layer (mouse-only console) · no scheduled/effective-dated publishes (a
+Tet menu needs a human awake at midnight) · no toast/notification-center primitive · no in-app help
+or version visibility (five operator guides ship in-repo, linked from nowhere) · responsive
+foundation present but thinning (context picker unusable at 360 px).
 
 ---
 
-## 9. Immediate next step
+## 4. The target standard — the console contract
 
-Land **A0 (context gate)** now — it removes the reported error, is small and safe, and every later
-phase builds on the same guard. A1 (console shell) follows. Everything after is sequenced by the forks
-above once confirmed.
+One sentence per rule; every phase below builds toward all of them.
+
+**Interaction contract (every screen):** loads on navigation (skeleton, no Load button) · every list
+is searchable, sortable, filterable, paginated (server-side), virtualized past ~200 rows · every
+entity follows List → Detail (tabs: related entities + audit trail) → Edit (field-level validation,
+partial save, optimistic concurrency) · every destructive action confirms (typed-name confirm for
+high-risk) and archives rather than deletes where the domain allows · everything orderable is
+drag-and-drop with live preview (layout grid, menu sections, taxonomy) · ids render as names that
+link; ULIDs live in a copyable "technical details" disclosure · outcomes are toasts + a notification
+center, not vanishing banners · Ctrl/Cmd-K command palette (jump to entity/screen) · keyboard
+complete (Enter saves, Escape cancels, dialogs trap focus) · responsive to 360 px.
+
+**Data contract (every entity):** master data, versioned, validated, delivered over the config
+tree/publish rails · read-one + paginated-list + partial-PATCH + archive endpoints · created/updated
+at/by surfaced · every write audited (actor, action, old → new) · importable/exportable (CSV/XLSX)
+where tabular · effective-dating for anything price- or menu-shaped.
+
+**Operations contract:** the fleet's live state is one screen away (online/offline, last sync,
+config version held, queue depth, device versions) · every documented alert exists, is stored, and
+reaches an admin through at least one channel · every remediation lever in the server has a button
+(rollup reset, webhook re-enable, OTA kill switch, config rollback) · the console itself is observed
+(request latencies, task health).
+
+**International contract:** locale persists per admin and is detected on first visit · a new locale
+is a data drop, never a deploy (dynamic grid columns, per-locale entity names) · money always renders
+via the store's locale pack (currency, exponent, separators) and is entered through a currency-aware
+field · times render in the store's timezone with the business date · countries/locale packs/tax
+tables are managed master data · layouts tolerate +30% text and are logical-property-ready for RTL.
+
+**Performance targets (NFRs):** any list P95 < 500 ms server-side at 10k items / 1000 stores (≤100
+rows/page) · screen interactive < 1 s on the pilot VPS · one mutation refetches only what changed ·
+projector tick O(changed stores), not O(events) · publish does not materialize a full tenant ·
+per-route latency histograms exist before the fleet does.
+
+---
+
+## 5. The roadmap, re-cut — four tracks
+
+v1's A0–A8 maps into this; nothing is dropped. Sizes: S ≈ one PR · M ≈ a few · L ≈ many.
+**Recommended order: F0 → F1 → F2 → G1 → O1 → G2 → M1 → M8 → M2 → O2 → M4 → M5 → M3 → O3 → M6 → M7 → O4 → P2 → F3.**
+(F-track first because every later screen is built from its parts; G1 before G2 because audit needs
+actors; O1 early because fleet blindness is the operational risk.)
+
+### Track F — Foundations (was A0/A1/A2)
+
+| Phase | Scope | Size |
+|---|---|---|
+| **F0 · Fix now** | The seven bugs of §2: tenant-create UI, context gate, wizard idempotency, session-expiry redirect, webhook re-enable (route + button), auto-load everywhere, asset cache headers. | **S–M** |
+| **F1 · Console shell** | Grouped scope-aware nav (§4 of v1), URL-encoded context (`/t/:tenant/s/:store/…`), breadcrumbs, org switcher with search + caching, toast + notification-center primitives, command palette (screens + entities), locale persistence + endonyms + localized title, in-app help links to the shipped guides, version footer. | **M** |
+| **F2 · CRUD kit + API foundation** | Components: DataTable (server search/sort/pagination, virtualization, bulk-select), FormField (label+control+field error, aria-invalid), ConfirmDialog (typed-name for high-risk), Modal/Drawer, StatusBadge, EmptyState, dnd-list primitive, "technical details" ULID disclosure. API: pagination/filter/sort/q params + read-one on every entity; true partial PATCH + ETag/If-Match; AIP-193 structured errors on /admin; API-key labels; `(tenant_id, created_at)` indexes; compression/timeout/body-limit layers; /admin in OpenAPI with drift gate. Migrate Stores, Devices (merge proposals + registry into one Devices area), ApiKeys, Webhooks, Translations onto the kit. Perf wave 1 lands here. | **L** |
+| **F3 · Catalog & Layout rebuild** | Split the 1801-line Catalog into kit-based sub-screens (Items / Menus / Modifiers / Taxonomy / Tax classes) with search + bulk price editing; rebuild Layout as a **visual drag-and-drop grid** with device-shaped preview, collision detection, copy-between-channels; drag-to-reorder sections and taxonomy; currency-aware price fields. (Sequenced last in F because it consumes everything F2 builds.) | **L** |
+
+### Track G — Identity & audit (new — was missing from v1)
+
+| Phase | Scope | Size |
+|---|---|---|
+| **G1 · Multi-admin + console RBAC** | `admin_users` (id, email, name, role, status, per-user password/TOTP) replacing the single-row `super_admin`; invitation flow; console roles (owner/admin/ops/viewer, per-tenant scoping — reuse the §9 registry pattern); sessions gain admin_id/IP/UA, listing + revocation, sliding TTL + idle timeout; login rate-limit; security headers; TOTP re-enrolment + recovery codes. ADR supersedes ADR-0034. | **L** |
+| **G2 · Audit trail** | Append-only `audit_log` (actor, action, entity type+id, old→new JSON, at, request id); actor threaded through every store seam; audit tab on every Detail view + global filterable Audit screen; config version history **list/diff/rollback** endpoints + UI (the `effective_at` domain method finally exposed); catalog price-change journal; `created/updated at/by` surfaced on all records; resolved_by on device proposals; break-glass reset writes a tombstone record. | **L** |
+
+### Track M — Master data completion (was A3–A6, expanded)
+
+| Phase | Scope | Size |
+|---|---|---|
+| **M1 · People & access** (A3) | Employees (name, code, per-store assignment, Argon2id PIN set/reset — T1 PII, PDPD-scoped), role templates over the pos-core catalogue, per-store grants; publish to a `permissions` config node; **edge applies it** (EdgeSession gains the permission set). | **L** |
+| **M2 · Floor & kitchen** (new) | Areas/tables master data + **visual floor editor (drag-drop)**; table QR token minting + printable QR sheets (wires the orphaned `mint_table_token`); kitchen stations + item→station routing rules + backup-printer fallback; publish to `floor`/`stations` nodes; edge reads them (kills hardcoded FLOOR/S01). | **L** |
+| **M3 · Campaigns & scheduling** (new) | Campaign/promotion/voucher authoring over the finished pos-core engine (5 kinds, windows, quotas, exclusions); voucher batch generation; **effective-dated & scheduled publishes** (menu/config/campaign — the Tet-menu case); publish preview/diff. | **L** |
+| **M4 · Localization & tax** (A4) | Countries/locale packs surfaced as master data (pos_cloud builds the CountryRegistry); per-(tax class × channel) rate-table editor, validated and **read by the edge**; currency picker + locale-pack money entry/formatting; store timezone + business-date display; dynamic translation-grid locales + completion % + missing-only filter; per-locale item/menu names flowing into the compiled MenuBook; receipt templates + brand logo/footer (consumes M5). | **L** |
+| **M5 · Media & file rail** (new) | Upload route + object-storage wiring for the existing ADR-0042 image pipeline; image fields on items/brands; media library UI; **CSV/XLSX import/export rail** (items, placements/prices, translations, employees, reports) with dry-run validation report; PDPD subject-request tooling (lookup/export/erase by subject id, itself audited). | **M–L** |
+| **M6 · Inventory & suppliers** | Ingredients + units, recipe/BOM editor per item and modifier, auto-86 thresholds, lightweight supplier reference on receipts (full purchasing stays ERP, spec §19). | **L** |
+| **M7 · Channels & payments** (A5) | Per-store channel enablement, payment-method/tender configuration, QR guardrail form editor (business hours, rate limits, staff-confirm), marketplace vendor policies (86-handling, throttling); terminal config gated on Track A A1. | **M** |
+| **M8 · Config without JSON** (A6) | Form-driven capability editor (toggles + presets + inter-flag conflict preview inline), per-level authored-document read-back, diff-before-publish; **edge applies every structured node** (capabilities today are a silent no-op — session_from_config must rebuild CapabilityContext, rates, and future nodes, not only `menu`). | **M** |
+
+### Track O — Observability & operations (new — was one line in v1; plus A7)
+
+| Phase | Scope | Size |
+|---|---|---|
+| **O1 · Fleet liveness + overview** | Record last-seen + config-version-held on every store pull (the handler currently discards it); lightweight edge heartbeat; **Fleet home screen**: stores online/offline, last sync, version held vs published, relay queue depth + oldest-pending age, drill-down Store detail page (devices, health, config, recent activity); background-task health endpoint (cursor lag, last tick); console polling/SSE for live refresh. | **L** |
+| **O2 · Alerting** | Alert engine + storage + delivery (in-console notification center + email/webhook channel; Zalo/Telegram adapter seam). Implements the six-item minimum set: store offline > 5 min; sync/e-invoice backlog; invoice-range nearly exhausted (when fiscal lands); disk low; clock drift (wire the computed-but-unread `Drift::Alarm`); print-error spike (mined from the event stream). Plus JetStream 80% (call the existing `capacity()`), webhook-endpoint auto-disable notices, projector failure streaks. | **L** |
+| **O3 · Sync & OTA closure** | ADR: extend CloudSync with `report()` (installed version, self-test outcome) — the cloud finally learns ring progress; OTA progress UI + kill-switch button (no more hand-editing JSON); reconciliation scheduler + **edge caller** (it has never run end-to-end) + results history UI; remote last-30-minutes log tail over NATS; rollup-reset and other levers get buttons. | **L** |
+| **O4 · Reports & analytics** (A7) | Date-range + windowed rollups API (stop shipping all history); revenue/product-mix rollups (extend the projector; prices are T2 — role-gated); charts + CSV export; cross-store comparison; X/Z-report semantics per the spec-gap issue. Perf wave 2 lands here: projector reads the registry (not `SELECT DISTINCT` events), dirty-marking, windowed blobs, config-blob delta, request-latency histograms. | **L** |
+
+### Cross-cutting (holds for every phase)
+i18n for every new string (en+vi minimum) · WCAG-AA + contrast gate · audit events from G2 onward ·
+OpenAPI + drift gate for every new /admin route · pagination on every new list · docs + CHANGELOG in
+the same PR · PDPD posture for T1 (employees, subjects) and T2 (prices, vendor terms).
+
+### v1 → v2 mapping
+A0→F0 · A1→F1 · A2→F2 · A3→M1 · A4→M4 · A5→M7 · A6→M8 · A7→O4 · A8 (shared web-kit + branding) →
+folded into F2/F3 (kit) and M4 (branding); the shared-package extraction decision (Fork A) is
+unchanged and lands when the kit stabilizes.
+
+---
+
+## 6. Decisions to confirm
+
+- **Fork A — shared web-kit** for `ui/` + `dashboard/`: extract after F3 stabilizes (unchanged
+  recommendation).
+- **Fork B — master-data order**: recommended M1 → M8 → M2 → M4 → M5 → M3 → M6 → M7 (people and
+  config-that-actually-applies first; media before localization's logo/receipt needs; inventory and
+  payments last). Confirm or reorder.
+- **Fork C — incremental refactor** (screen-by-screen onto the kit) over parallel rebuild:
+  unchanged; F-track is designed for it.
+- **Fork D (new) — alert delivery channel**: in-console + email first, or in-console + Zalo/Telegram
+  first (the archive names Zalo/Telegram for VN ops)? Recommend in-console + webhook (generic) first,
+  channel adapters after.
+- **Fork E (new) — G1 identity scope**: console accounts only (recommended — store staff already have
+  the edge PIN system), or one unified identity for console + store staff?
+
+## 7. Immediate next step
+
+**F0** — all seven fixes are small, independent, and testable; it removes the reported ULID error,
+the tenant-creation dead end, and the duplicate-store trap in one PR. F1 and F2 follow. The full
+sequence is §5's recommended order, re-confirmable at each track boundary.
