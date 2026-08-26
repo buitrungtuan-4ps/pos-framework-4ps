@@ -49,6 +49,21 @@ const MIGRATION_0011: &str = include_str!("../migrations/0011_cloud_registry.sql
 /// The catalog authoring model (Phase 2a, ADR-0066).
 const MIGRATION_0012: &str = include_str!("../migrations/0012_cloud_catalog.sql");
 
+/// Tax classes for the catalog (Phase 2a, ADR-0066 entity 10).
+const MIGRATION_0013: &str = include_str!("../migrations/0013_catalog_tax_classes.sql");
+
+/// The operational item taxonomy — categories and sub-categories (Phase 2a, ADR-0066 entities 2/3).
+const MIGRATION_0014: &str = include_str!("../migrations/0014_catalog_item_taxonomy.sql");
+
+/// The presentation tier — display taxonomy and per-channel layout buttons (Phase 2a, ADR-0066 11/12).
+const MIGRATION_0015: &str = include_str!("../migrations/0015_catalog_display_layout.sql");
+
+/// Modifier groups (Phase 2a, ADR-0066 entities 4/5).
+const MIGRATION_0016: &str = include_str!("../migrations/0016_catalog_modifier_groups.sql");
+
+/// Menu sections (Phase 2a, ADR-0066 entity 7).
+const MIGRATION_0017: &str = include_str!("../migrations/0017_catalog_menu_sections.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -150,6 +165,26 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0012)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0013)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0014)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0015)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0016)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0017)
             .await
             .map_err(unavailable)
     }
