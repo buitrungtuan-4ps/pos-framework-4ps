@@ -18,6 +18,7 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
   store: "config.level.store",
   device: "config.level.device",
 };
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextArea } from "../components/ui";
 
@@ -44,6 +45,9 @@ export function Config() {
     }
   };
 
+  // Load on open and whenever the tenant/store changes — never with an empty context (F0).
+  onScopedContext("store", () => void load());
+
   const publish = async () => {
     setError("");
     setOk("");
@@ -69,16 +73,13 @@ export function Config() {
   return (
     <div>
       <PageHeader title={t("config.title")} description={t("config.description")} />
-      <Show
-        when={tenantId() && storeId()}
-        fallback={<Banner tone="danger" message={t("context.required")} />}
-      >
+      <RequireContext need="store">
         <div class="grid gap-6 lg:grid-cols-2">
           <Card
             title={t("config.effective")}
             actions={
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
+                {t("action.refresh")}
               </Button>
             }
           >
@@ -125,7 +126,7 @@ export function Config() {
             </div>
           </Card>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

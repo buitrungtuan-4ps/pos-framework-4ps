@@ -274,6 +274,10 @@ where
             "/admin/webhooks/{id}",
             delete(admin_delete_webhook::<S, R, K, C, A, T, W>),
         )
+        .route(
+            "/admin/webhooks/{id}/enable",
+            post(admin_enable_webhook::<S, R, K, C, A, T, W>),
+        )
         .with_state(app)
 }
 
@@ -4396,6 +4400,80 @@ where
         Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "deleting a webhook endpoint failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Re-enables a webhook endpoint that a day of continuous failure had auto-disabled (super-admin
+/// only). Delivery resumes from the endpoint's stored cursor, so nothing that queued while it was
+/// down is skipped ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+///
+/// Tenant-scoped like deletion, but enforced differently: [`WebhookEndpointStore::set_disabled`]
+/// addresses an endpoint by id alone — the delivery task, which also calls it, holds no tenant — so
+/// the scope is checked here by confirming the id appears in this tenant's own listing before the
+/// flag is cleared. An id that is not this tenant's is a `404`, never a cross-tenant write. Idempotent:
+/// re-enabling an already-active endpoint is a no-op `204`.
+async fn admin_enable_webhook<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<WebhookTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: WebhookEndpointStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let (Ok(tenant_id), Ok(endpoint_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        id.parse::<Ulid>().map(WebhookEndpointId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or the endpoint id is not a ULID",
+        )
+            .into_response();
+    };
+    // Confirm the endpoint is this tenant's before clearing its flag: `set_disabled` is not itself
+    // tenant-scoped, so the scope is enforced here against the tenant's own listing.
+    match app.webhooks.list_for_tenant(tenant_id).await {
+        Ok(summaries) => {
+            if !summaries
+                .iter()
+                .any(|summary| summary.id == endpoint_id.to_string())
+            {
+                return (
+                    StatusCode::NOT_FOUND,
+                    "no such webhook endpoint for this tenant",
+                )
+                    .into_response();
+            }
+        }
+        Err(error) => {
+            tracing::error!(%error, "listing webhook endpoints failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the webhook service is unavailable",
+            )
+                .into_response();
+        }
+    }
+    match app.webhooks.set_disabled(endpoint_id, false).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "re-enabling a webhook endpoint failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the webhook service is unavailable",

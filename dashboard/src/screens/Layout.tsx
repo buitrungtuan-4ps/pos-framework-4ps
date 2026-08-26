@@ -18,6 +18,7 @@ import type {
 } from "../api/types";
 import { SALES_CHANNELS } from "../api/types";
 import { t, type MessageKey } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -88,6 +89,9 @@ export function Layout() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const reloadButtons = async () => {
     setButtons(await api.listLayoutButtons(tenantId()));
@@ -294,10 +298,7 @@ export function Layout() {
   return (
     <div>
       <PageHeader title={t("layout.title")} description={t("layout.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
@@ -321,7 +322,7 @@ export function Layout() {
                   </select>
                 </label>
                 <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.load")}
+                  {t("action.refresh")}
                 </Button>
               </div>
             }
@@ -703,7 +704,7 @@ export function Layout() {
             </Card>
           </div>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

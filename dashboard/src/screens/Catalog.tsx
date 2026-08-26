@@ -24,6 +24,7 @@ import type {
 import { SALES_CHANNELS } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatMoney } from "../lib/format";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -147,6 +148,9 @@ export function Catalog() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const selectedValues = (select: HTMLSelectElement): string[] =>
     Array.from(select.selectedOptions, (option) => option.value);
@@ -668,10 +672,7 @@ export function Catalog() {
   return (
     <div>
       <PageHeader title={t("catalog.title")} description={t("catalog.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={notice()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
@@ -680,7 +681,7 @@ export function Catalog() {
             title={t("catalog.items")}
             actions={
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
+                {t("action.refresh")}
               </Button>
             }
           >
@@ -1795,7 +1796,7 @@ export function Catalog() {
             </div>
           </Card>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

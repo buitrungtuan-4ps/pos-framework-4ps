@@ -18,6 +18,9 @@ export function ContextPicker() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [failed, setFailed] = createSignal(false);
+  const [newTenant, setNewTenant] = createSignal("");
+  const [tenantSearch, setTenantSearch] = createSignal("");
+  const [storeSearch, setStoreSearch] = createSignal("");
 
   const loadTenants = async () => {
     setFailed(false);
@@ -48,8 +51,12 @@ export function ContextPicker() {
     const next = !open();
     setOpen(next);
     if (next) {
-      void loadTenants();
-      if (tenantId()) {
+      // Cache across opens: fetch only what has not loaded yet. Choosing a tenant reloads its stores
+      // and creating one refreshes the tenant list, so the cache never goes stale unnoticed.
+      if (tenants() === null) {
+        void loadTenants();
+      }
+      if (tenantId() && stores() === null) {
         void loadStores(tenantId());
       }
     }
@@ -64,6 +71,38 @@ export function ContextPicker() {
     selectStore(store.store_id, store.name);
     setOpen(false);
   };
+
+  // Create a tenant right here (F0). Before this, an empty registry was a dead end: the picker read
+  // "No tenants yet." with nowhere to go, so a fresh install could not start provisioning at all. A
+  // newly created tenant is selected and its (empty) store list loaded, so the operator flows
+  // straight on to adding the first store.
+  const createTenant = async () => {
+    const name = newTenant().trim();
+    if (!name) {
+      return;
+    }
+    setFailed(false);
+    setBusy(true);
+    try {
+      const created = await api.createTenant(name);
+      setNewTenant("");
+      await loadTenants();
+      selectTenant(created.tenant_id, created.name);
+      void loadStores(created.tenant_id);
+    } catch (caught) {
+      setFailed(caught instanceof ApiError || caught instanceof Error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The org switcher's search: filter each list by name as the operator types.
+  const matchesSearch = (name: string, needle: string) =>
+    name.toLowerCase().includes(needle.trim().toLowerCase());
+  const shownTenants = (all: Tenant[]) =>
+    tenantSearch().trim() ? all.filter((tenant) => matchesSearch(tenant.name, tenantSearch())) : all;
+  const shownStores = (all: Store[]) =>
+    storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
 
   return (
     <div class="relative">
@@ -113,8 +152,16 @@ export function ContextPicker() {
                     <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noTenants")}</p>
                   }
                 >
+                  <input
+                    type="text"
+                    aria-label={t("context.search")}
+                    placeholder={t("context.search")}
+                    value={tenantSearch()}
+                    onInput={(event) => setTenantSearch(event.currentTarget.value)}
+                    class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                  />
                   <ul>
-                    <For each={loaded()}>
+                    <For each={shownTenants(loaded())}>
                       {(tenant) => (
                         <li>
                           <button
@@ -131,9 +178,35 @@ export function ContextPicker() {
                       )}
                     </For>
                   </ul>
+                  <Show when={shownTenants(loaded()).length === 0}>
+                    <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
+                  </Show>
                 </Show>
               )}
             </Show>
+
+            <div class="mt-2 flex gap-2">
+              <input
+                type="text"
+                aria-label={t("context.newTenantLabel")}
+                placeholder={t("context.newTenantLabel")}
+                value={newTenant()}
+                onInput={(event) => setNewTenant(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void createTenant();
+                  }
+                }}
+                class="min-h-touch min-w-0 flex-1 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+              />
+              <Button
+                variant="secondary"
+                disabled={busy() || !newTenant().trim()}
+                onClick={() => void createTenant()}
+              >
+                {t("action.create")}
+              </Button>
+            </div>
 
             <Show when={tenantId()}>
               <p class="mt-3 px-1 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted">
@@ -154,8 +227,16 @@ export function ContextPicker() {
                       <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noStores")}</p>
                     }
                   >
+                    <input
+                      type="text"
+                      aria-label={t("context.search")}
+                      placeholder={t("context.search")}
+                      value={storeSearch()}
+                      onInput={(event) => setStoreSearch(event.currentTarget.value)}
+                      class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                    />
                     <ul>
-                      <For each={loaded()}>
+                      <For each={shownStores(loaded())}>
                         {(store) => (
                           <li>
                             <button
@@ -172,6 +253,9 @@ export function ContextPicker() {
                         )}
                       </For>
                     </ul>
+                    <Show when={shownStores(loaded()).length === 0}>
+                      <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
+                    </Show>
                   </Show>
                 )}
               </Show>

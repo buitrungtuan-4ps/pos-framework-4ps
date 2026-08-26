@@ -36,6 +36,7 @@ import type {
   TranslationGrid,
   WebhookSummary,
 } from "./types";
+import { setAuthed } from "../state/session";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -58,6 +59,12 @@ export class ApiError extends Error {
 }
 
 async function failure(response: Response): Promise<ApiError> {
+  // A 401 means the session is gone or expired. Drop the client's authed flag so the shell's route
+  // guard sends the operator back to the login screen, rather than stranding them on a view that can
+  // no longer load anything (F0).
+  if (response.status === 401) {
+    setAuthed(false);
+  }
   const text = await response.text().catch(() => "");
   const trimmed = text.trim();
   // A rejected config publish answers `422 {"violations": [...]}`; join them into one message.
@@ -182,6 +189,8 @@ export const api = {
     }),
   deleteWebhook: (tenantId: string, id: string) =>
     requestVoid("DELETE", `/admin/webhooks/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),
+  enableWebhook: (tenantId: string, id: string) =>
+    requestVoid("POST", `/admin/webhooks/${encodeURIComponent(id)}/enable?${tenantQuery(tenantId)}`),
 
   // --- translations (ADR-0043) ---
   getTranslations: (tenantId: string) =>

@@ -8,6 +8,7 @@ import { api, ApiError } from "../api/client";
 import type { DailyRollup } from "../api/types";
 import { t } from "../i18n";
 import { formatCount } from "../lib/format";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 
@@ -28,6 +29,9 @@ export function Reports() {
     }
   };
 
+  // Load on open and whenever the tenant/store changes — never with an empty context (F0).
+  onScopedContext("store", () => void load());
+
   const topTypes = (row: DailyRollup) =>
     Object.entries(row.by_type)
       .sort(([, a], [, b]) => b - a)
@@ -38,15 +42,12 @@ export function Reports() {
   return (
     <div>
       <PageHeader title={t("reports.title")} description={t("reports.description")} />
-      <Show
-        when={tenantId() && storeId()}
-        fallback={<Banner tone="danger" message={t("context.required")} />}
-      >
+      <RequireContext need="store">
         <Card
           title={t("reports.daily")}
           actions={
             <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.load")}
+              {t("action.refresh")}
             </Button>
           }
         >
@@ -83,7 +84,7 @@ export function Reports() {
             )}
           </Show>
         </Card>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

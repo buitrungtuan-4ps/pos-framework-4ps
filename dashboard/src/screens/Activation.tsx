@@ -7,6 +7,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { Device } from "../api/types";
 import { type MessageKey, t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -43,6 +44,9 @@ export function Activation() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant/store changes — never with an empty context (F0).
+  onScopedContext("store", () => void load());
 
   const createDevice = async () => {
     const name = newName().trim();
@@ -85,16 +89,13 @@ export function Activation() {
   return (
     <div>
       <PageHeader title={t("activation.title")} description={t("activation.description")} />
-      <Show
-        when={tenantId() && storeId()}
-        fallback={<Banner tone="danger" message={t("context.required")} />}
-      >
+      <RequireContext need="store">
         <div class="flex flex-col gap-6">
           <Card
             title={t("activation.devices")}
             actions={
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
+                {t("action.refresh")}
               </Button>
             }
           >
@@ -177,7 +178,7 @@ export function Activation() {
             </div>
           </Card>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

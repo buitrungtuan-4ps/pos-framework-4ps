@@ -62,6 +62,12 @@ export function NewStore() {
   };
 
   const createStore = async () => {
+    // Idempotency (F0): the wizard mints the store exactly once. If it already did — the operator
+    // stepped back to step 1 and forward again — advance without creating a second, orphaned store.
+    if (created()) {
+      setStep(2);
+      return;
+    }
     const storeName = name().trim();
     if (!storeName) {
       setError(t("stores.nameRequired"));
