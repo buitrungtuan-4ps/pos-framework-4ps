@@ -43,6 +43,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A config publish that carries an unparseable menu is now rejected, not silently dropped**
+  (ops hardening, WS-D / #103). The cloud's `CapabilityValidator` — the gate every publish passes,
+  including the generic `PUT /admin/stores/{id}/config/{level}` route — now round-trips a `menu` or
+  `layout` node through the *exact* path the edge reads them (`to_string` → `from_str`), and rejects a
+  publish the store could not consume. Before, a malformed delivery node validated, published, and was
+  silently ignored by the edge's forgiving `session_from_config`, leaving a store on its old menu with
+  no error anywhere — a "successful" publish that never reached the counter. A `docs/security-review-ws-d.md`
+  records the finding (low severity — the route is super-admin-only) and the surrounding review of the
+  QR, relay, config and metrics surfaces. Forward-only; no migration, no protocol change.
+- **The optional monitoring profile is now wired into `pos_cloud`** (observability, WS-D / #103,
+  ADR-0031). A new `[metrics]` config section constructs the `metrics-vm` sink and spawns a sparse
+  liveness heartbeat (`pos.cloud.up`) off the sales path, alongside the other background tasks. It is
+  **off by default**: per `docs/capacity-and-reliability.md` the monitoring profile stays off below
+  ~50 stores in favour of sparse sampling, so a pilot cell leaves `[metrics]` unset and emits nothing.
+  The heartbeat carries no labels and no PII, and the sink's bounded queue drops under pressure — a
+  metrics backend can never become a trading outage. **Upgrade note:** a new optional `[metrics]`
+  config key; absent means the profile is off, so existing deployments are unaffected.
+- **A durable KDS bump survives a restart** (WS-D / #103). Projection-rebuild-on-load already replays
+  the log on boot (`pos_edge`'s `rebuild`); a regression test now proves the `kitchen.ticket.bumped`
+  event folds back on rebuild, so a kitchen screen coming up after a restart does not re-show a ticket
+  the kitchen already made.
 - **A kitchen-display bump is now durable and agreed across every screen** (P6 residual / #44). A bump
   used to be UI-local — each KDS held its own "done" set, so a second screen or one that reconnected
   never agreed a ticket was made. `POST /api/kds/bump` now records the durable `kitchen.ticket.bumped`

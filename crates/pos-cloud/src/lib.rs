@@ -65,6 +65,7 @@ pub mod dashboard;
 pub mod devices;
 pub mod http;
 pub mod images;
+pub mod metrics;
 mod openapi;
 pub mod orders;
 mod persistence;

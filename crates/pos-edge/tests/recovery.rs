@@ -154,3 +154,36 @@ fn rebuild_is_idempotent() {
         assert_eq!(edge.table_state(table), TableState::Occupied);
     });
 }
+
+#[test]
+fn a_bump_survives_a_restart() {
+    // A durable KDS bump (#44) is projection state like any other, so it must come back on rebuild —
+    // otherwise a restart would re-show a ticket the kitchen already made.
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let table = TableId::new(Ulid::from_u128(802));
+        let station = StationId::new(Ulid::from_u128(9));
+        let line_id = {
+            let edge = edge_over(store.clone());
+            edge.seat_table(actor(), table).await.expect("seats");
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.fire_line(actor(), line.order_line_id, station)
+                .await
+                .expect("fires");
+            edge.bump_ticket(actor(), line.order_id, station, vec![line.order_line_id])
+                .await
+                .expect("bumps");
+            line.order_line_id
+        };
+
+        // A fresh edge over the same store knows nothing until it replays the log.
+        let edge = edge_over(store.clone());
+        assert!(edge.bumped_line_ids().is_empty());
+        edge.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(
+            edge.bumped_line_ids(),
+            vec![line_id],
+            "the bump was folded back from the log, so the ticket stays made across a restart"
+        );
+    });
+}

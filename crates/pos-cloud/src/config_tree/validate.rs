@@ -13,6 +13,8 @@ use serde_json::Value;
 
 use pos_core::capability::{Capability, CapabilityContext, conflicts};
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
+use pos_proto::display::LayoutBook;
+use pos_proto::menu::MenuBook;
 
 /// Checks an effective config document, returning every violation (empty on success).
 ///
@@ -61,6 +63,7 @@ impl ConfigValidator for CapabilityValidator {
             .map(|rule| rule.description.to_owned())
             .collect();
         violations.extend(ota_violations(document));
+        violations.extend(delivery_node_violations(document));
         if violations.is_empty() {
             Ok(())
         } else {
@@ -96,6 +99,46 @@ fn ota_violations(document: &Value) -> Vec<String> {
         }
     }
     violations
+}
+
+/// Validates the compiled delivery nodes — `menu` and `layout` — the way the *edge* reads them, so a
+/// node the store could not parse is rejected here rather than published and silently dropped.
+///
+/// This closes a real ops hazard: the catalog publish path compiles a typed book, but the generic
+/// config-publish route (`PUT /admin/stores/{id}/config/{level}`) accepts an arbitrary document, and
+/// nothing else checks these nodes. If a `menu` node does not deserialize back to a [`MenuBook`], the
+/// edge's `session_from_config` leaves the price book unchanged and no error surfaces — a "successful"
+/// publish that never reaches the counter. Parsing is done via `to_string` → `from_str`, not
+/// `from_value`, because some wire types (e.g. `CurrencyCode`) deserialize from a *borrowed* `&str`
+/// that `from_value` cannot supply — this is byte-for-byte the path the edge uses, so validation
+/// accepts exactly what the store will. An absent node is not a violation.
+fn delivery_node_violations(document: &Value) -> Vec<String> {
+    let mut violations = Vec::new();
+    if let Some(value) = document.get("menu")
+        && !parses_as::<MenuBook>(value)
+    {
+        violations.push(
+            "the `menu` node is not a parseable MenuBook — the store would silently ignore it"
+                .to_owned(),
+        );
+    }
+    if let Some(value) = document.get("layout")
+        && !parses_as::<LayoutBook>(value)
+    {
+        violations.push(
+            "the `layout` node is not a parseable LayoutBook — the store would silently ignore it"
+                .to_owned(),
+        );
+    }
+    violations
+}
+
+/// Whether `value` deserializes to `T` through the edge's `to_string` → `from_str` path.
+fn parses_as<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
+    serde_json::to_string(value)
+        .ok()
+        .and_then(|text| serde_json::from_str::<T>(&text).ok())
+        .is_some()
 }
 
 /// Reads the capability flags out of an effective document, defaulting each to its declared default
@@ -243,6 +286,61 @@ mod tests {
         // The OTA checks fire only on fleet_update / device_ota; an ordinary config still validates.
         assert_eq!(
             CapabilityValidator.validate(&json!({ "tips_enabled": true })),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_compiled_menu_node_is_accepted() {
+        use pos_proto::enums::SalesChannel;
+        use pos_proto::ids::{MenuItemId, TaxClassId};
+        use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
+        use pos_proto::money::{CurrencyCode, Money};
+        use pos_proto::text::DisplayName;
+        use pos_proto::ulid::Ulid;
+
+        // A real compiled book — exactly what the catalog publish emits — must validate, so the
+        // hardening never rejects a legitimate publish.
+        let catalog = MenuCatalog::new().with(MenuEntry::new(
+            MenuItemId::new(Ulid::from_u128(1)),
+            DisplayName::new("Margherita"),
+            Money::new(CurrencyCode::VND, 99_000),
+            TaxClassId::new(Ulid::from_u128(2)),
+        ));
+        let book = MenuBook::new().with(SalesChannel::DineIn, catalog);
+        let document = json!({ "menu": serde_json::to_value(&book).expect("serialize") });
+        assert_eq!(CapabilityValidator.validate(&document), Ok(()));
+    }
+
+    #[test]
+    fn a_malformed_menu_node_is_rejected_before_a_store_can_silently_drop_it() {
+        // The generic config-publish route accepts any document; a `menu` node the edge could not
+        // parse must be caught here, not published and silently ignored by the store.
+        let violations = CapabilityValidator
+            .validate(&json!({ "menu": "not a book" }))
+            .expect_err("a malformed menu node must be rejected");
+        assert!(
+            violations.iter().any(|v| v.contains("`menu` node")),
+            "the reason names the menu node: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_layout_node_is_rejected() {
+        let violations = CapabilityValidator
+            .validate(&json!({ "layout": [1, 2, 3] }))
+            .expect_err("a malformed layout node must be rejected");
+        assert!(
+            violations.iter().any(|v| v.contains("`layout` node")),
+            "the reason names the layout node: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_document_with_no_delivery_nodes_is_unaffected() {
+        // The menu/layout checks fire only when those keys are present.
+        assert_eq!(
+            CapabilityValidator.validate(&json!({ "tables_enabled": true })),
             Ok(())
         );
     }

@@ -53,6 +53,13 @@ const fn default_webhook_delivery_timeout_secs() -> u64 {
     10
 }
 
+/// How often the metrics heartbeat samples, in seconds, when the monitoring profile is on but the
+/// config does not say — 60, the low end of `docs/capacity-and-reliability.md`'s 60–120s sparse
+/// sampling cadence.
+const fn default_metrics_interval_secs() -> u64 {
+    60
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -103,6 +110,24 @@ pub struct CloudConfig {
     /// same way it mints the admin setup token; it never leaves the server.
     #[serde(default)]
     pub table_token_secret: Option<String>,
+    /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
+    /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
+    /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of
+    /// sparse sampling straight into PostgreSQL, so a pilot cell leaves this unset and emits no
+    /// telemetry. Set it only when the `monitoring` compose profile is running.
+    #[serde(default)]
+    pub metrics: Option<MetricsConfig>,
+}
+
+/// The optional monitoring profile: where the sparse metrics heartbeat imports, and how often.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsConfig {
+    /// The `VictoriaMetrics` JSON-import base URL (an `http://host:port`; the cloud reaches its own
+    /// backend over the box's private network, so plain `http` — TLS terminates at the proxy, P8).
+    pub url: String,
+    /// How often the heartbeat samples, in seconds.
+    #[serde(default = "default_metrics_interval_secs")]
+    pub sample_interval_secs: u64,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -185,6 +210,27 @@ mod tests {
         assert_eq!(
             config.table_token_secret, None,
             "with no configured QR secret the /v1/qr/orders endpoint stays off"
+        );
+        assert!(
+            config.metrics.is_none(),
+            "no [metrics] means the monitoring profile is off — sparse-sampling posture below ~50 stores"
+        );
+    }
+
+    #[test]
+    fn parses_the_metrics_section_with_defaults() {
+        let config = CloudConfig::from_toml(
+            "bind = \"127.0.0.1:8443\"\n\
+             database_url = \"host=localhost dbname=poscloud\"\n\
+             [metrics]\n\
+             url = \"http://127.0.0.1:8428\"\n",
+        )
+        .expect("valid config");
+        let metrics = config.metrics.expect("a [metrics] section");
+        assert_eq!(metrics.url, "http://127.0.0.1:8428");
+        assert_eq!(
+            metrics.sample_interval_secs, 60,
+            "the sample interval defaults to 60s (sparse-sampling cadence)"
         );
     }
 

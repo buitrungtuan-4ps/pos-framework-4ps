@@ -1518,6 +1518,7 @@ dependencies = [
  "hyper-util",
  "image",
  "link-nats",
+ "metrics-vm",
  "pos-contract-tests",
  "pos-core",
  "pos-fakes",

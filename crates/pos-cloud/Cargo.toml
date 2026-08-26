@@ -39,6 +39,10 @@ store-postgres = { path = "../adapters/store-postgres" }
 # (src/cursor.rs) drives Cloud::ingest; the ack policy is tested without a broker, and the loop is
 # proven against real JetStream by link-nats's own integration test.
 link-nats = { path = "../adapters/link-nats" }
+# The optional monitoring profile: the MetricsSink over VictoriaMetrics (ADR-0031), off the sales
+# path with a bounded queue that drops under pressure. Gated by the [metrics] config and off by
+# default — capacity-and-reliability turns the monitoring profile off below ~50 stores.
+metrics-vm = { path = "../adapters/metrics-vm" }
 # The config tree validates a version against pos-core's §10 inter-flag capability rules before
 # publishing (ADR-0033), reusing the domain's own rule set so the cloud and edge cannot disagree.
 # pos-core is pure (the dependency-rule test keeps it I/O-free), so composing it here is sound.
