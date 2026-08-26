@@ -1,6 +1,6 @@
-// Per-tenant API-key provisioning (ADR-0037): list a tenant's keys, issue a new scoped key (the
-// token is shown exactly once — only its hash is stored), and revoke one. Deny-by-default: a key
-// grants only the scopes ticked here.
+// Per-tenant API-key provisioning (ADR-0037), on the F2 CRUD kit: list a tenant's keys in a sortable
+// table, issue a new scoped key (the token is shown exactly once — only its hash is stored), and
+// revoke one behind a confirmation. Deny-by-default: a key grants only the scopes ticked here.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -10,6 +10,15 @@ import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
+import {
+  type Column,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  StatusBadge,
+  TechnicalDetails,
+} from "../components/kit";
+import { toast } from "../components/Toast";
 
 const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_rollups", key: "scope.read_rollups" },
@@ -24,6 +33,7 @@ export function ApiKeys() {
   const [token, setToken] = createSignal("");
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [pendingRevoke, setPendingRevoke] = createSignal<ApiKeySummary | null>(null);
 
   const load = async () => {
     setError("");
@@ -58,25 +68,61 @@ export function ApiKeys() {
       const created = await api.createApiKey(tenantId(), [...chosen()]);
       setToken(created.token);
       setChosen(new Set<string>());
+      toast.ok(t("apiKeys.created"));
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      const message = caught instanceof ApiError ? caught.message : String(caught);
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
   };
 
-  const revoke = async (id: string) => {
+  const revoke = async () => {
+    const key = pendingRevoke();
+    if (!key) {
+      return;
+    }
     setBusy(true);
     try {
-      await api.revokeApiKey(id);
+      await api.revokeApiKey(key.id);
+      toast.ok(t("apiKeys.revokeDone"));
+      setPendingRevoke(null);
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      const message = caught instanceof ApiError ? caught.message : String(caught);
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
   };
+
+  const columns = (): Column<ApiKeySummary>[] => [
+    {
+      key: "scopes",
+      header: t("apiKeys.scopes"),
+      cell: (row) => <span class="text-ink-muted">{row.scopes.join(", ")}</span>,
+    },
+    {
+      key: "status",
+      header: t("apiKeys.status"),
+      cell: (row) => (
+        <StatusBadge
+          tone={row.revoked ? "disabled" : "active"}
+          label={row.revoked ? t("status.revoked") : t("status.active")}
+        />
+      ),
+    },
+    {
+      key: "id",
+      header: t("apiKeys.id"),
+      cell: (row) => (
+        <TechnicalDetails label={t("common.technicalDetails")}>{row.id}</TechnicalDetails>
+      ),
+    },
+  ];
 
   return (
     <div>
@@ -93,48 +139,23 @@ export function ApiKeys() {
           >
             <Show when={rows()}>
               {(loaded) => (
-                <Show
-                  when={loaded().length > 0}
-                  fallback={<p class="text-sm text-ink-muted">{t("apiKeys.empty")}</p>}
-                >
-                  <div class="overflow-x-auto">
-                    <table class="w-full text-left text-sm">
-                      <thead>
-                        <tr class="border-b border-line text-ink-muted">
-                          <th class="py-2 pr-4 font-medium">{t("apiKeys.id")}</th>
-                          <th class="py-2 pr-4 font-medium">{t("apiKeys.scopes")}</th>
-                          <th class="py-2 font-medium">{t("apiKeys.status")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <For each={loaded()}>
-                          {(row) => (
-                            <tr class="border-b border-line text-ink">
-                              <td class="py-2 pr-4 font-mono text-xs">{row.id}</td>
-                              <td class="py-2 pr-4 text-ink-muted">{row.scopes.join(", ")}</td>
-                              <td class="py-2">
-                                <Show
-                                  when={row.revoked}
-                                  fallback={
-                                    <Button
-                                      variant="danger"
-                                      disabled={busy()}
-                                      onClick={() => void revoke(row.id)}
-                                    >
-                                      {t("action.revoke")}
-                                    </Button>
-                                  }
-                                >
-                                  <span class="text-ink-muted">{t("apiKeys.revoked")}</span>
-                                </Show>
-                              </td>
-                            </tr>
-                          )}
-                        </For>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
+                <DataTable
+                  columns={columns()}
+                  rows={loaded()}
+                  empty={<EmptyState title={t("apiKeys.empty")} />}
+                  actionsHeader={t("common.actions")}
+                  actions={(row) => (
+                    <Show when={!row.revoked}>
+                      <Button
+                        variant="danger"
+                        disabled={busy()}
+                        onClick={() => setPendingRevoke(row)}
+                      >
+                        {t("action.revoke")}
+                      </Button>
+                    </Show>
+                  )}
+                />
               )}
             </Show>
           </Card>
@@ -172,6 +193,19 @@ export function ApiKeys() {
             </Button>
           </Card>
         </div>
+
+        <ConfirmDialog
+          open={pendingRevoke() !== null}
+          title={t("apiKeys.revokeTitle")}
+          message={t("apiKeys.revokeMessage")}
+          confirmLabel={t("action.revoke")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          danger
+          busy={busy()}
+          onConfirm={() => void revoke()}
+          onCancel={() => setPendingRevoke(null)}
+        />
       </RequireContext>
     </div>
   );

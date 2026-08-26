@@ -42,7 +42,6 @@ export type Column<T> = {
 export function DataTable<T>(props: {
   columns: readonly Column<T>[];
   rows: readonly T[];
-  rowKey: (row: T) => string;
   empty: JSX.Element;
   actions?: (row: T) => JSX.Element;
   actionsHeader?: string;

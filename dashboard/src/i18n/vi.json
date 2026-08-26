@@ -1,6 +1,17 @@
 {
   "app.title": "Pizza 4P's — Quản trị",
   "common.loading": "Đang tải…",
+  "common.technicalDetails": "Chi tiết kỹ thuật",
+  "common.actions": "Thao tác",
+  "status.active": "Đang dùng",
+  "status.archived": "Đã lưu trữ",
+  "status.disabled": "Đã tắt",
+  "status.revoked": "Đã thu hồi",
+  "action.close": "Đóng",
+  "apiKeys.created": "Đã cấp khóa API.",
+  "apiKeys.revokeDone": "Đã thu hồi khóa API.",
+  "apiKeys.revokeTitle": "Thu hồi khóa này?",
+  "apiKeys.revokeMessage": "Khóa ngừng hoạt động ngay; thiết bị đang dùng sẽ cần khóa mới.",
   "locale.label": "Ngôn ngữ",
 
   "action.logout": "Đăng xuất",

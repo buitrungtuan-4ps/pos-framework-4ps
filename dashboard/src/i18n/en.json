@@ -1,6 +1,17 @@
 {
   "app.title": "Pizza 4P's — Back office",
   "common.loading": "Loading…",
+  "common.technicalDetails": "Technical details",
+  "common.actions": "Actions",
+  "status.active": "Active",
+  "status.archived": "Archived",
+  "status.disabled": "Disabled",
+  "status.revoked": "Revoked",
+  "action.close": "Close",
+  "apiKeys.created": "API key issued.",
+  "apiKeys.revokeDone": "API key revoked.",
+  "apiKeys.revokeTitle": "Revoke this key?",
+  "apiKeys.revokeMessage": "The key stops working immediately; any device using it will need a new key.",
   "locale.label": "Language",
 
   "action.logout": "Sign out",
