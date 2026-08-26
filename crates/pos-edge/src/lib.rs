@@ -37,6 +37,7 @@ pub mod app;
 pub mod auth;
 pub mod clock;
 pub mod config;
+pub mod config_client;
 pub mod countries;
 pub mod discovery;
 pub mod error;

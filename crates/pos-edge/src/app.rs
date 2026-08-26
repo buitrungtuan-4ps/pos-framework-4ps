@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::billing::{self, BillInput, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
@@ -471,7 +471,12 @@ impl Projection {
 pub struct Edge<S> {
     store: S,
     identity: StoreIdentity,
-    session: EdgeSession,
+    /// The live session (menu, tax table, capabilities, locale) an inbound `OrderIn` reprices from
+    /// and every command reads. Behind an `RwLock<Arc<…>>` so the config-pull loop
+    /// ([`crate::config_client`], ADR-0033/ADR-0039) can swap in a rebuilt session while the store is
+    /// trading: a reader takes a cheap `Arc` snapshot ([`Edge::session`]) that is coherent for the
+    /// duration of its command even if a swap lands mid-flight.
+    session_cell: RwLock<Arc<EdgeSession>>,
     clock: SystemClock,
     ids: Mutex<EdgeIdGenerator<SystemClock>>,
     fanout: Fanout,
@@ -498,6 +503,40 @@ pub struct IntakeIntent<'a> {
     pub repriced: bool,
 }
 
+impl<S> Edge<S> {
+    /// A snapshot of the synced session — the menu catalog and tax table an inbound `OrderIn`
+    /// reprices from. A cheap `Arc` clone, so a caller reads a coherent session for the whole of its
+    /// command even if the config-pull loop swaps in a new one mid-flight.
+    #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the only panic is a poisoned session lock, unreachable here: the critical section \
+                  just clones an Arc and cannot itself panic"
+    )]
+    pub fn session(&self) -> Arc<EdgeSession> {
+        self.session_cell
+            .read()
+            .expect("session lock is not poisoned")
+            .clone()
+    }
+
+    /// Swaps in a rebuilt session — the config-pull loop's apply step
+    /// ([ADR-0039](../../../docs/adr/0039-config-delivery.md)). Commands already in flight keep the
+    /// [`Arc`] snapshot they took; the next command sees the new session. Cloud-owned configuration
+    /// (ADR-0004): the store never edits this, it only receives it.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the only panic is a poisoned session lock, unreachable here: the critical section \
+                  just replaces an Arc and cannot itself panic"
+    )]
+    pub fn apply_session(&self, session: EdgeSession) {
+        *self
+            .session_cell
+            .write()
+            .expect("session lock is not poisoned") = Arc::new(session);
+    }
+}
+
 impl<S: EventStore> Edge<S> {
     /// Composes an edge over `store` for a given identity and session, allocating receipt numbers
     /// from `receipts`.
@@ -517,7 +556,7 @@ impl<S: EventStore> Edge<S> {
         Ok(Self {
             store,
             identity,
-            session,
+            session_cell: RwLock::new(Arc::new(session)),
             clock: SystemClock,
             ids: Mutex::new(EdgeIdGenerator::new(SystemClock)?),
             fanout: Fanout::new(),
@@ -539,12 +578,6 @@ impl<S: EventStore> Edge<S> {
         self.identity.store_id
     }
 
-    /// The synced session — the menu catalog and tax table an inbound `OrderIn` reprices from.
-    #[must_use]
-    pub fn session(&self) -> &EdgeSession {
-        &self.session
-    }
-
     /// Records that this box completed device activation and may now trade
     /// (`device.activation.completed`, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
     ///
@@ -560,7 +593,8 @@ impl<S: EventStore> Edge<S> {
     /// cannot be written.
     pub async fn record_activation(&self, activated_device_id: DeviceId) -> Result<(), AppError> {
         let now = self.clock.now();
-        let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
+        let session = self.session();
+        let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
         let payload = DeviceActivationCompleted {
             activated_device_id,
@@ -619,7 +653,8 @@ impl<S: EventStore> Edge<S> {
         S: IntakeLedger,
     {
         let now = self.clock.now();
-        let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
+        let session = self.session();
+        let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
         let order_id = self.next_order_id();
 
@@ -888,7 +923,7 @@ impl<S: EventStore> Edge<S> {
             quantity: record.quantity,
             course: record.course_id,
         };
-        let decision = decide_line(record.state, command, &ctx, &self.session.recipes)?;
+        let decision = decide_line(record.state, command, &ctx, &self.session().recipes)?;
 
         let payload = SalesOrderLineFired {
             order_id: record.order_id,
@@ -991,7 +1026,8 @@ impl<S: EventStore> Edge<S> {
         // Assemble the amount owed from the order's captured line totals, grouped per tax class.
         let lines = self.lock_projection().lines_for_order(bill.order_id);
         let class_bases = Self::class_bases(&lines)?;
-        let totals = billing::assemble(&self.bill_input(&class_bases))?;
+        let session = self.session();
+        let totals = billing::assemble(&Self::bill_input(&session, &class_bases))?;
 
         // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal.
         let current_table = self.table_state(bill.table_id);
@@ -999,7 +1035,7 @@ impl<S: EventStore> Edge<S> {
 
         // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
         // open shift's blind-close roll-up. Summed before the payments move into the command.
-        let mut cash_taken = Money::zero(self.session.currency);
+        let mut cash_taken = Money::zero(self.session().currency);
         for payment in &payments {
             if payment.method == PaymentMethod::Cash {
                 cash_taken = cash_taken
@@ -1036,7 +1072,7 @@ impl<S: EventStore> Edge<S> {
         // transaction so a crash never leaves a receipt without its payments (or the reverse). The
         // captured payments are what let the shift cash roll-up be rebuilt from the log; each records
         // its own change, and tips are held apart from the sale (per-payment tip capture is P7).
-        let zero = Money::zero(self.session.currency);
+        let zero = Money::zero(self.session().currency);
         let mut envelopes = Vec::with_capacity(payments.len() + 1);
         let mut messages = Vec::with_capacity(payments.len() + 1);
         for payment in &payments {
@@ -1122,7 +1158,7 @@ impl<S: EventStore> Edge<S> {
             ShiftRecord {
                 state: ShiftState::Open,
                 opening_float,
-                cash_collected: Money::zero(self.session.currency),
+                cash_collected: Money::zero(self.session().currency),
                 counted: None,
             },
         );
@@ -1159,7 +1195,7 @@ impl<S: EventStore> Edge<S> {
             .ok_or(AppError::UnknownShift)?;
         let decision = decide_shift(record.state, ShiftCommand::Count { counted_minor }, &ctx)?;
 
-        let counted_amount = Money::new(self.session.currency, counted_minor);
+        let counted_amount = Money::new(self.session().currency, counted_minor);
         let payload = CashShiftCounted {
             counted_shift_id: shift_id,
             counted_amount,
@@ -1206,7 +1242,7 @@ impl<S: EventStore> Edge<S> {
         // fires but keeps this off any panic path.
         let counted_amount = record
             .counted
-            .unwrap_or_else(|| Money::zero(self.session.currency));
+            .unwrap_or_else(|| Money::zero(self.session().currency));
         let expected_amount = record.expected()?;
         let variance = counted_amount
             .checked_sub(expected_amount)
@@ -1394,8 +1430,8 @@ impl<S: EventStore> Edge<S> {
     /// Builds the bill-assembly input from the session's tax configuration. The P5 bootstrap runs
     /// with no bill-level discount, no service charge and no cash rounding; the cloud config tree
     /// (P7) supplies those, and the shape here is ready for them.
-    fn bill_input<'a>(&'a self, class_bases: &'a [ClassBase]) -> BillInput<'a> {
-        let currency = self.session.currency;
+    fn bill_input<'a>(session: &'a EdgeSession, class_bases: &'a [ClassBase]) -> BillInput<'a> {
+        let currency = session.currency;
         BillInput {
             currency_code: currency,
             class_bases,
@@ -1404,8 +1440,8 @@ impl<S: EventStore> Edge<S> {
             service_charge: Money::zero(currency),
             service_charge_taxable: true,
             service_charge_tax_class: None,
-            rates: &self.session.tax_rates,
-            sales_channel: self.session.sales_channel,
+            rates: &session.tax_rates,
+            sales_channel: session.sales_channel,
             cash_rounding_increment: None,
             rounding_mode: Rounding::HalfUp,
         }
@@ -1538,16 +1574,17 @@ impl<S: EventStore> Edge<S> {
     /// Assembles the decision context from the clock and the session.
     fn decision_ctx(&self, actor: Actor) -> Result<DecisionCtx, AppError> {
         let now = self.clock.now();
-        let business_date = derive_business_date(now, &self.session.timezone, self.session.cutoff)
+        let session = self.session();
+        let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_| AppError::Clock)?;
         Ok(DecisionCtx {
             now,
             business_date,
             actor,
-            granted: self.session.granted,
-            capabilities: self.session.capabilities,
-            connectivity: self.session.connectivity,
-            currency: self.session.currency,
+            granted: session.granted,
+            capabilities: session.capabilities,
+            connectivity: session.connectivity,
+            currency: session.currency,
         })
     }
 

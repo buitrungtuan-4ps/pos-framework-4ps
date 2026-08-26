@@ -32,6 +32,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A menu published from the dashboard now reaches a trading store's counter without a restart**
+  (ADR-0004 cloud-owned config, ADR-0039 config delivery, WS-B / #101). The edge's `EdgeSession` — the
+  price book, tax table, capabilities and locale a command reads — is now held behind an
+  `RwLock<Arc<…>>` so it can be swapped live: a reader takes a cheap coherent `Arc` snapshot for the
+  whole of its command, and `Edge::apply_session` installs a rebuilt one for the next. A new config-pull
+  client long-polls the store's effective config from the cloud, rebuilds the session with the pure,
+  forgiving `session_from_config` (it reads the compiled `menu` node the catalog publish writes, and an
+  absent or malformed node leaves the price book unchanged — a bad publish never blanks a trading
+  store), and hot-swaps it into the running edge. The HTTP is a seam (`ConfigTransport`), so the loop is
+  tested with no socket, and an integration test proves a live edge that booted with an empty menu
+  picks up a published one on the next pull. The whole 60-test edge domain suite still passes over the
+  new session cell, unchanged. **Scope:** this rebuilds and hot-swaps the live session; persisting the
+  pulled document to the edge's local `ConfigStore` (so a restart keeps the last menu without a
+  round-trip), applying the delta form of an update, and reading tax/capability nodes as they gain a
+  published shape, layer on this seam. Forward-only and additive; no migration, no protocol change.
 - **The store can now pull its order queue from the cloud and report each outcome back** (ADR-0061,
   P11a-2, edge half). A new `pos-edge` relay client long-polls the cloud's per-store queue, feeds each
   pulled order through the store's own `EdgeOrderIn` (which reprices, opens it in the local log, and
