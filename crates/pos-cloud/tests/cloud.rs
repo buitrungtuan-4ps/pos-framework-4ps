@@ -29,6 +29,11 @@ use pos_cloud::auth::apikey::{
 };
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
+use pos_cloud::catalog::{
+    CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
+    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection,
+    ModifierGroup, TaxClass,
+};
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::devices::{
@@ -56,10 +61,12 @@ use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_proto::BusinessDate;
+use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::Open;
 
 /// The instant `clock()` is fixed at, in milliseconds and in seconds — the second form is what the
 /// TOTP code the admin tests submit is computed for.
@@ -3098,4 +3105,1244 @@ async fn registry_is_behind_the_session_guard() {
         .await
         .expect("route unauthenticated");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- Catalog authoring admin routes (ADR-0066) --------------------------------------------------
+
+#[derive(Default, Clone)]
+struct FakeCatalog {
+    items: Arc<Mutex<Vec<CatalogItem>>>,
+    tax_classes: Arc<Mutex<Vec<TaxClass>>>,
+    categories: Arc<Mutex<Vec<ItemCategory>>>,
+    subcategories: Arc<Mutex<Vec<ItemSubcategory>>>,
+    display_categories: Arc<Mutex<Vec<DisplayCategory>>>,
+    display_subcategories: Arc<Mutex<Vec<DisplaySubcategory>>>,
+    layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
+    modifier_groups: Arc<Mutex<Vec<ModifierGroup>>>,
+    menus: Arc<Mutex<Vec<Menu>>>,
+    menu_sections: Arc<Mutex<Vec<MenuSection>>>,
+    placements: Arc<Mutex<Vec<MenuPlacement>>>,
+}
+
+impl CatalogStore for FakeCatalog {
+    async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
+        self.items.lock().expect("lock").push(item.clone());
+        Ok(())
+    }
+
+    async fn list_items(&self, tenant_id: TenantId) -> Result<Vec<CatalogItem>, CatalogStoreError> {
+        Ok(self
+            .items
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|item| item.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.items.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
+                row.name.clone_from(&item.name);
+                row.tax_class_id = item.tax_class_id;
+                row.item_category_id = item.item_category_id;
+                row.item_subcategory_id = item.item_subcategory_id;
+                row.status = item.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+        self.tax_classes
+            .lock()
+            .expect("lock")
+            .push(tax_class.clone());
+        Ok(())
+    }
+
+    async fn list_tax_classes(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+        Ok(self
+            .tax_classes
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.tax_classes.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.tax_class_id == tax_class.tax_class_id && row.tenant_id == tax_class.tenant_id {
+                row.name.clone_from(&tax_class.name);
+                row.status = tax_class.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_item_category(&self, category: &ItemCategory) -> Result<(), CatalogStoreError> {
+        self.categories.lock().expect("lock").push(category.clone());
+        Ok(())
+    }
+
+    async fn list_item_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+        Ok(self
+            .categories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.categories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.item_category_id == category.item_category_id
+                && row.tenant_id == category.tenant_id
+            {
+                row.name.clone_from(&category.name);
+                row.status = category.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.subcategories
+            .lock()
+            .expect("lock")
+            .push(subcategory.clone());
+        Ok(())
+    }
+
+    async fn list_item_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+        Ok(self
+            .subcategories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_item_subcategory(
+        &self,
+        subcategory: &ItemSubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.subcategories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.item_subcategory_id == subcategory.item_subcategory_id
+                && row.tenant_id == subcategory.tenant_id
+            {
+                row.name.clone_from(&subcategory.name);
+                row.item_category_id = subcategory.item_category_id;
+                row.status = subcategory.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.display_categories
+            .lock()
+            .expect("lock")
+            .push(category.clone());
+        Ok(())
+    }
+
+    async fn list_display_categories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+        Ok(self
+            .display_categories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_display_category(
+        &self,
+        category: &DisplayCategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.display_categories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.display_category_id == category.display_category_id
+                && row.tenant_id == category.tenant_id
+            {
+                row.name.clone_from(&category.name);
+                row.status = category.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<(), CatalogStoreError> {
+        self.display_subcategories
+            .lock()
+            .expect("lock")
+            .push(subcategory.clone());
+        Ok(())
+    }
+
+    async fn list_display_subcategories(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+        Ok(self
+            .display_subcategories
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_display_subcategory(
+        &self,
+        subcategory: &DisplaySubcategory,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.display_subcategories.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.display_subcategory_id == subcategory.display_subcategory_id
+                && row.tenant_id == subcategory.tenant_id
+            {
+                row.name.clone_from(&subcategory.name);
+                row.display_category_id = subcategory.display_category_id;
+                row.status = subcategory.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+        let mut rows = self.layout_buttons.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == button.tenant_id
+                && row.sales_channel == button.sales_channel
+                && row.menu_item_id == button.menu_item_id
+        }) {
+            *row = button.clone();
+        } else {
+            rows.push(button.clone());
+        }
+        Ok(())
+    }
+
+    async fn list_layout_buttons(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+        Ok(self
+            .layout_buttons
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_layout_button(
+        &self,
+        tenant_id: TenantId,
+        sales_channel: Open<SalesChannel>,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.layout_buttons.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| {
+            !(row.tenant_id == tenant_id
+                && row.sales_channel == sales_channel
+                && row.menu_item_id == menu_item_id)
+        });
+        Ok(rows.len() != before)
+    }
+
+    async fn create_modifier_group(&self, group: &ModifierGroup) -> Result<(), CatalogStoreError> {
+        self.modifier_groups
+            .lock()
+            .expect("lock")
+            .push(group.clone());
+        Ok(())
+    }
+
+    async fn list_modifier_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+        Ok(self
+            .modifier_groups
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.modifier_groups.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.modifier_group_id == group.modifier_group_id && row.tenant_id == group.tenant_id
+            {
+                *row = group.clone();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
+        self.menus.lock().expect("lock").push(menu.clone());
+        Ok(())
+    }
+
+    async fn list_menus(&self, tenant_id: TenantId) -> Result<Vec<Menu>, CatalogStoreError> {
+        Ok(self
+            .menus
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|menu| menu.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_menu(&self, menu: &Menu) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.menus.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_id == menu.menu_id && row.tenant_id == menu.tenant_id {
+                row.name.clone_from(&menu.name);
+                row.parent_menu_id = menu.parent_menu_id;
+                row.status = menu.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn create_menu_section(&self, section: &MenuSection) -> Result<(), CatalogStoreError> {
+        self.menu_sections
+            .lock()
+            .expect("lock")
+            .push(section.clone());
+        Ok(())
+    }
+
+    async fn list_menu_sections(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+        Ok(self
+            .menu_sections
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_menu_section(&self, section: &MenuSection) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.menu_sections.lock().expect("lock");
+        for row in rows.iter_mut() {
+            if row.menu_section_id == section.menu_section_id && row.tenant_id == section.tenant_id
+            {
+                row.name.clone_from(&section.name);
+                row.sort = section.sort;
+                row.status = section.status;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+        let mut rows = self.placements.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == placement.tenant_id
+                && row.menu_id == placement.menu_id
+                && row.menu_item_id == placement.menu_item_id
+        }) {
+            *row = placement.clone();
+        } else {
+            rows.push(placement.clone());
+        }
+        Ok(())
+    }
+
+    async fn list_placements(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+    ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+        Ok(self
+            .placements
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_placement(
+        &self,
+        tenant_id: TenantId,
+        menu_id: MenuId,
+        menu_item_id: MenuItemId,
+    ) -> Result<bool, CatalogStoreError> {
+        let mut rows = self.placements.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| {
+            !(row.tenant_id == tenant_id
+                && row.menu_id == menu_id
+                && row.menu_item_id == menu_item_id)
+        });
+        Ok(rows.len() != before)
+    }
+}
+
+/// The main router (for `/admin/login`) and the catalog sub-router, sharing one admin store.
+fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::catalog_router(catalog, admin, clock()))
+}
+
+/// A ULID string an operator never types — the routes accept it in the body/path, the fake scopes by
+/// it. Distinct constants keep the tenant, a menu, an item and a tax class from colliding.
+fn ulid_text(n: u128) -> String {
+    Ulid::from_u128(n).to_string()
+}
+
+#[tokio::test]
+async fn catalog_creates_and_lists_an_item_and_a_menu() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Margherita");
+    assert_eq!(created["status"], "active");
+    let item_id = created["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list items");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let items = json_body(listed).await;
+    assert_eq!(items.as_array().expect("array").len(), 1);
+    assert_eq!(items[0]["menu_item_id"], item_id);
+
+    // A menu, optionally with a parent — created by name, id minted server-side.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        json_body(created).await["parent_menu_id"],
+        serde_json::Value::Null
+    );
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/menus?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list menus");
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+}
+
+#[tokio::test]
+async fn catalog_creates_lists_and_renames_a_tax_class() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // Created by name, the id minted server-side — an operator never types a tax-class ULID.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/tax-classes",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard 10%" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tax class");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Standard 10%");
+    assert_eq!(created["status"], "active");
+    let tax_class_id = created["tax_class_id"]
+        .as_str()
+        .expect("a tax class id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-classes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list tax classes");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+
+    // Rename + archive in one PATCH.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Alcohol", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename tax class");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed = json_body(renamed).await;
+    assert_eq!(renamed["name"], "Alcohol");
+    assert_eq!(renamed["status"], "archived");
+
+    // A PATCH to an unknown id is a 404, not a silent success.
+    let missing = router
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/tax-classes/{}", ulid_text(999)),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Nope", "status": "active" }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename unknown tax class");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn catalog_item_taxonomy_categories_subcategories_and_item_linkage() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // A category, by name.
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/item-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Pizza" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create category");
+    assert_eq!(category.status(), StatusCode::CREATED);
+    let category_id = json_body(category).await["item_category_id"]
+        .as_str()
+        .expect("a category id")
+        .to_owned();
+
+    // A sub-category under it.
+    let subcategory = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/item-subcategories",
+            &serde_json::json!({ "tenant_id": tenant, "item_category_id": category_id, "name": "Thin crust" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create subcategory");
+    assert_eq!(subcategory.status(), StatusCode::CREATED);
+    let subcategory = json_body(subcategory).await;
+    assert_eq!(subcategory["item_category_id"], category_id);
+    let subcategory_id = subcategory["item_subcategory_id"]
+        .as_str()
+        .expect("a sub-category id")
+        .to_owned();
+
+    // An item that references both — the linkage round-trips through create and list.
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+                "item_category_id": category_id,
+                "item_subcategory_id": subcategory_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(item.status(), StatusCode::CREATED);
+    let item = json_body(item).await;
+    assert_eq!(item["item_category_id"], category_id);
+    assert_eq!(item["item_subcategory_id"], subcategory_id);
+
+    let categories = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/item-categories?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list categories");
+    assert_eq!(
+        json_body(categories).await.as_array().expect("array").len(),
+        1
+    );
+
+    let subcategories = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/item-subcategories?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list subcategories");
+    assert_eq!(
+        json_body(subcategories)
+            .await
+            .as_array()
+            .expect("array")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Summer specials" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display category");
+    assert_eq!(category.status(), StatusCode::CREATED);
+    let category_id = json_body(category).await["display_category_id"]
+        .as_str()
+        .expect("a display category id")
+        .to_owned();
+
+    let subcategory = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-subcategories",
+            &serde_json::json!({ "tenant_id": tenant, "display_category_id": category_id, "name": "Cold" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display subcategory");
+    assert_eq!(subcategory.status(), StatusCode::CREATED);
+
+    // Upsert a button for an item onto the dine-in channel under the category.
+    let item = ulid_text(500);
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "display_category_id": category_id,
+                "label": "Margherita",
+                "grid_column": 0,
+                "grid_row": 0,
+                "sort": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set layout button");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/layout-buttons?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list layout buttons");
+    let buttons = json_body(listed).await;
+    assert_eq!(buttons.as_array().expect("array").len(), 1);
+    assert_eq!(buttons[0]["sales_channel"], "SALES_CHANNEL_DINE_IN");
+
+    // Remove it — 204, then the list is empty.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}?tenant_id={tenant}"
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route remove layout button");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let empty = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/layout-buttons?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list layout buttons again");
+    assert_eq!(json_body(empty).await.as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
+async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let modifier = ulid_text(600);
+    let pizza = ulid_text(500);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/modifier-groups",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Size",
+                "min_select": 1,
+                "max_select": 1,
+                "member_item_ids": [modifier],
+                "attached_item_ids": [pizza],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create modifier group");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    assert_eq!(created["name"], "Size");
+    assert_eq!(created["min_select"], 1);
+    assert_eq!(created["member_item_ids"][0], modifier);
+    assert_eq!(created["attached_item_ids"][0], pizza);
+    let group_id = created["modifier_group_id"]
+        .as_str()
+        .expect("a group id")
+        .to_owned();
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/modifier-groups?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list modifier groups");
+    assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+
+    // Update the rule + archive in one PATCH.
+    let updated = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/catalog/modifier-groups/{group_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Size",
+                "min_select": 0,
+                "max_select": 2,
+                "member_item_ids": [modifier],
+                "attached_item_ids": [],
+                "status": "archived",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route update modifier group");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(updated["max_select"], 2);
+    assert_eq!(updated["status"], "archived");
+    assert_eq!(
+        updated["attached_item_ids"]
+            .as_array()
+            .expect("array")
+            .len(),
+        0
+    );
+
+    // A malformed member id is rejected.
+    let bad = router
+        .oneshot(post_with_cookie(
+            "/admin/catalog/modifier-groups",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Broken",
+                "member_item_ids": ["not-a-ulid"],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create with bad member");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn catalog_upserts_lists_and_removes_a_placement() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let item = ulid_text(500);
+    let base = format!("/admin/catalog/menus/{menu}/placements");
+
+    let set = |price: i64| {
+        serde_json::json!({
+            "tenant_id": tenant,
+            "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": price } }],
+            "available": true,
+        })
+    };
+
+    // Upsert the placement, then upsert it again with a new price — the pair is replaced, not doubled.
+    for price in [150_000, 160_000] {
+        let put = router
+            .clone()
+            .oneshot(put_with_cookie(
+                &format!("{base}/{item}"),
+                &set(price),
+                &cookie,
+            ))
+            .await
+            .expect("route upsert placement");
+        assert_eq!(put.status(), StatusCode::OK);
+    }
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list placements");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows.as_array().expect("array").len(),
+        1,
+        "the pair replaces, not appends"
+    );
+    assert_eq!(rows[0]["prices"][0]["unit_price"]["amount_minor"], 160_000);
+
+    // Remove it, then removing it again is a 404.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("{base}/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove placement");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let gone = router
+        .oneshot(delete_with_cookie(
+            &format!("{base}/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove missing");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn catalog_menu_sections_group_placements_within_a_menu() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let item = ulid_text(500);
+    let sections_base = format!("/admin/catalog/menus/{menu}/sections");
+
+    // Create a section under the menu.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &sections_base,
+            &serde_json::json!({ "tenant_id": tenant, "name": "Starters", "sort": 1 }),
+            &cookie,
+        ))
+        .await
+        .expect("route create section");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let section = json_body(created).await;
+    let section_id = section["menu_section_id"].as_str().expect("id").to_owned();
+    assert_eq!(section["name"], "Starters");
+
+    // List sections — the new one is there.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{sections_base}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list sections");
+    let rows = json_body(listed).await;
+    assert_eq!(rows.as_array().expect("array").len(), 1);
+    assert_eq!(rows[0]["menu_section_id"], section_id);
+
+    // Rename and re-sort it.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("{sections_base}/{section_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant, "name": "Appetizers", "sort": 2, "status": "active",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route rename section");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    assert_eq!(json_body(renamed).await["name"], "Appetizers");
+
+    // A placement can name the section it sits under, and the listing carries it back.
+    let placement = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/menus/{menu}/placements/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "menu_section_id": section_id,
+                "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
+                "available": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set placement in section");
+    assert_eq!(placement.status(), StatusCode::OK);
+
+    let placements = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/menus/{menu}/placements?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list placements");
+    let rows = json_body(placements).await;
+    assert_eq!(rows[0]["menu_section_id"], section_id);
+}
+
+#[tokio::test]
+async fn catalog_is_behind_the_session_guard() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    // A well-formed request (valid `tenant_id`) but no session cookie → the guard denies before any
+    // listing is revealed. The query is well-formed so the guard, not the extractor, is what refuses.
+    let denied = router
+        .oneshot(get(
+            &format!("/admin/catalog/items?tenant_id={}", ulid_text(1)),
+            None,
+        ))
+        .await
+        .expect("route unauthenticated");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// The main router (for login + the effective-config read), the catalog CRUD router, and the publish
+/// router — all sharing one admin, one catalog, and one config-tree store, as production merges them.
+fn catalog_publish_app(
+    admin: FakeAdmin,
+    catalog: FakeCatalog,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::catalog_router(
+            catalog.clone(),
+            admin.clone(),
+            clock(),
+        ))
+        .merge(http::catalog_publish_router(
+            catalog,
+            config_trees,
+            admin,
+            clock(),
+        ))
+}
+
+#[tokio::test]
+async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+
+    // Author an item, a menu, and a dine-in placement.
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    let item_id = json_body(item).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/menus/{menu_id}/placements/{item_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "prices": [{ "sales_channel": "SALES_CHANNEL_DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
+                "available": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route place item");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    // Publish the menu to the store.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's effective config now carries the compiled MenuBook on its `menu` node.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+    let dine_in = &doc["menu"]["channels"][0];
+    assert_eq!(dine_in["sales_channel"], "SALES_CHANNEL_DINE_IN");
+    let entry = &dine_in["catalog"]["items"][0];
+    assert_eq!(entry["menu_item_id"], item_id);
+    assert_eq!(entry["unit_price"]["amount_minor"], 150_000);
+    assert_eq!(entry["display_name"], "Margherita");
+}
+
+#[tokio::test]
+async fn publishing_an_unknown_menu_is_refused() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    // No menu authored → the compiler refuses with a named error, surfaced as 422 (not a store 5xx).
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": ulid_text(1), "store_id": ulid_text(2), "menu_id": ulid_text(10) }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish unknown menu");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+
+    // A menu to publish (empty is fine — the layout is compiled independently).
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+
+    // A display category and a dine-in layout button under it.
+    let category = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/display-categories",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Pizza" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create display category");
+    let category_id = json_body(category).await["display_category_id"]
+        .as_str()
+        .expect("a display category id")
+        .to_owned();
+
+    let item = ulid_text(500);
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "display_category_id": category_id,
+                "label": "Margherita",
+                "grid_column": 0,
+                "grid_row": 0,
+                "sort": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route set layout button");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    // Publish the menu; the layout rides along on the same publish.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's effective config now carries a compiled DisplayPlan on its `layout` node.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    let doc = json_body(effective).await;
+    let channel = &doc["layout"]["channels"][0];
+    assert_eq!(channel["sales_channel"], "SALES_CHANNEL_DINE_IN");
+    let category = &channel["plan"]["categories"][0];
+    assert_eq!(category["name"], "Pizza");
+    assert_eq!(category["buttons"][0]["label"], "Margherita");
+    assert_eq!(category["buttons"][0]["menu_item_id"], item);
 }

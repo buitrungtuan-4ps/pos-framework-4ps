@@ -8,17 +8,30 @@ import type {
   ActivationCode,
   ApiKeySummary,
   Brand,
+  CatalogItem,
+  ChannelPrice,
   ConfigLevel,
   CreateApiKeyResponse,
   DailyRollup,
   Device,
   DeviceProposalSummary,
+  DisplayCategory,
+  DisplaySubcategory,
   EntityStatus,
   Enrolment,
+  ItemCategory,
+  ItemSubcategory,
   Json,
+  LayoutButton,
+  Menu,
+  MenuPlacement,
+  MenuSection,
+  ModifierGroup,
+  SalesChannel,
   PublishedConfig,
   RegisterWebhookResponse,
   Store,
+  TaxClass,
   Tenant,
   TranslationGrid,
   WebhookSummary,
@@ -221,4 +234,300 @@ export const api = {
       name,
       kind,
     }),
+
+  // --- catalog authoring (ADR-0066): items, tax classes, menus with inheritance, and placements ---
+  listTaxClasses: (tenantId: string) =>
+    requestJson<TaxClass[]>("GET", `/admin/catalog/tax-classes?${tenantQuery(tenantId)}`),
+  createTaxClass: (tenantId: string, name: string) =>
+    requestJson<TaxClass>("POST", "/admin/catalog/tax-classes", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateTaxClass: (
+    taxClassId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<TaxClass>(
+      "PATCH",
+      `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  listItemCategories: (tenantId: string) =>
+    requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
+  createItemCategory: (tenantId: string, name: string) =>
+    requestJson<ItemCategory>("POST", "/admin/catalog/item-categories", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateItemCategory: (
+    itemCategoryId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<ItemCategory>(
+      "PATCH",
+      `/admin/catalog/item-categories/${encodeURIComponent(itemCategoryId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  listItemSubcategories: (tenantId: string) =>
+    requestJson<ItemSubcategory[]>(
+      "GET",
+      `/admin/catalog/item-subcategories?${tenantQuery(tenantId)}`,
+    ),
+  createItemSubcategory: (tenantId: string, itemCategoryId: string, name: string) =>
+    requestJson<ItemSubcategory>("POST", "/admin/catalog/item-subcategories", {
+      tenant_id: tenantId,
+      item_category_id: itemCategoryId,
+      name,
+    }),
+  updateItemSubcategory: (
+    itemSubcategoryId: string,
+    tenantId: string,
+    fields: { itemCategoryId: string; name: string; status: EntityStatus },
+  ) =>
+    requestJson<ItemSubcategory>(
+      "PATCH",
+      `/admin/catalog/item-subcategories/${encodeURIComponent(itemSubcategoryId)}`,
+      {
+        tenant_id: tenantId,
+        item_category_id: fields.itemCategoryId,
+        name: fields.name,
+        status: fields.status,
+      },
+    ),
+  listItems: (tenantId: string) =>
+    requestJson<CatalogItem[]>("GET", `/admin/catalog/items?${tenantQuery(tenantId)}`),
+  createItem: (
+    tenantId: string,
+    name: string,
+    taxClassId: string,
+    taxonomy: { itemCategoryId: string | null; itemSubcategoryId: string | null },
+  ) =>
+    requestJson<CatalogItem>("POST", "/admin/catalog/items", {
+      tenant_id: tenantId,
+      name,
+      tax_class_id: taxClassId,
+      item_category_id: taxonomy.itemCategoryId,
+      item_subcategory_id: taxonomy.itemSubcategoryId,
+    }),
+  updateItem: (
+    menuItemId: string,
+    tenantId: string,
+    fields: {
+      name: string;
+      taxClassId: string;
+      itemCategoryId: string | null;
+      itemSubcategoryId: string | null;
+      status: EntityStatus;
+    },
+  ) =>
+    requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      tax_class_id: fields.taxClassId,
+      item_category_id: fields.itemCategoryId,
+      item_subcategory_id: fields.itemSubcategoryId,
+      status: fields.status,
+    }),
+  listMenus: (tenantId: string) =>
+    requestJson<Menu[]>("GET", `/admin/catalog/menus?${tenantQuery(tenantId)}`),
+  createMenu: (tenantId: string, name: string, parentMenuId?: string) =>
+    requestJson<Menu>("POST", "/admin/catalog/menus", {
+      tenant_id: tenantId,
+      name,
+      parent_menu_id: parentMenuId ?? null,
+    }),
+  updateMenu: (
+    menuId: string,
+    tenantId: string,
+    fields: { name: string; parentMenuId: string | null; status: EntityStatus },
+  ) =>
+    requestJson<Menu>("PATCH", `/admin/catalog/menus/${encodeURIComponent(menuId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      parent_menu_id: fields.parentMenuId,
+      status: fields.status,
+    }),
+  listPlacements: (tenantId: string, menuId: string) =>
+    requestJson<MenuPlacement[]>(
+      "GET",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements?${tenantQuery(tenantId)}`,
+    ),
+  setPlacement: (
+    tenantId: string,
+    menuId: string,
+    menuItemId: string,
+    prices: ChannelPrice[],
+    available: boolean,
+    menuSectionId: string | null,
+  ) =>
+    requestVoid(
+      "PUT",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}`,
+      { tenant_id: tenantId, menu_section_id: menuSectionId, prices, available },
+    ),
+  deletePlacement: (tenantId: string, menuId: string, menuItemId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
+    ),
+
+  // --- menu sections (ADR-0066 entity 7): authoring groupings within a menu ---
+  listMenuSections: (tenantId: string, menuId: string) =>
+    requestJson<MenuSection[]>(
+      "GET",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections?${tenantQuery(tenantId)}`,
+    ),
+  createMenuSection: (tenantId: string, menuId: string, name: string, sort: number) =>
+    requestJson<MenuSection>(
+      "POST",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections`,
+      { tenant_id: tenantId, name, sort },
+    ),
+  updateMenuSection: (
+    tenantId: string,
+    menuId: string,
+    menuSectionId: string,
+    fields: { name: string; sort: number; status: EntityStatus },
+  ) =>
+    requestJson<MenuSection>(
+      "PATCH",
+      `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections/${encodeURIComponent(menuSectionId)}`,
+      { tenant_id: tenantId, name: fields.name, sort: fields.sort, status: fields.status },
+    ),
+  publishMenu: (tenantId: string, storeId: string, menuId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/catalog/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      menu_id: menuId,
+    }),
+
+  // --- modifier groups (ADR-0066 entities 4/5): a selection rule + members, attached to items ---
+  listModifierGroups: (tenantId: string) =>
+    requestJson<ModifierGroup[]>("GET", `/admin/catalog/modifier-groups?${tenantQuery(tenantId)}`),
+  createModifierGroup: (
+    tenantId: string,
+    fields: {
+      name: string;
+      minSelect: number;
+      maxSelect: number;
+      memberItemIds: string[];
+      attachedItemIds: string[];
+    },
+  ) =>
+    requestJson<ModifierGroup>("POST", "/admin/catalog/modifier-groups", {
+      tenant_id: tenantId,
+      name: fields.name,
+      min_select: fields.minSelect,
+      max_select: fields.maxSelect,
+      member_item_ids: fields.memberItemIds,
+      attached_item_ids: fields.attachedItemIds,
+    }),
+  updateModifierGroup: (
+    modifierGroupId: string,
+    tenantId: string,
+    fields: {
+      name: string;
+      minSelect: number;
+      maxSelect: number;
+      memberItemIds: string[];
+      attachedItemIds: string[];
+      status: EntityStatus;
+    },
+  ) =>
+    requestJson<ModifierGroup>(
+      "PATCH",
+      `/admin/catalog/modifier-groups/${encodeURIComponent(modifierGroupId)}`,
+      {
+        tenant_id: tenantId,
+        name: fields.name,
+        min_select: fields.minSelect,
+        max_select: fields.maxSelect,
+        member_item_ids: fields.memberItemIds,
+        attached_item_ids: fields.attachedItemIds,
+        status: fields.status,
+      },
+    ),
+
+  // --- presentation tier (ADR-0066): display taxonomy + per-channel layout buttons ---
+  listDisplayCategories: (tenantId: string) =>
+    requestJson<DisplayCategory[]>(
+      "GET",
+      `/admin/catalog/display-categories?${tenantQuery(tenantId)}`,
+    ),
+  createDisplayCategory: (tenantId: string, name: string) =>
+    requestJson<DisplayCategory>("POST", "/admin/catalog/display-categories", {
+      tenant_id: tenantId,
+      name,
+    }),
+  updateDisplayCategory: (
+    displayCategoryId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestJson<DisplayCategory>(
+      "PATCH",
+      `/admin/catalog/display-categories/${encodeURIComponent(displayCategoryId)}`,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  listDisplaySubcategories: (tenantId: string) =>
+    requestJson<DisplaySubcategory[]>(
+      "GET",
+      `/admin/catalog/display-subcategories?${tenantQuery(tenantId)}`,
+    ),
+  createDisplaySubcategory: (tenantId: string, displayCategoryId: string, name: string) =>
+    requestJson<DisplaySubcategory>("POST", "/admin/catalog/display-subcategories", {
+      tenant_id: tenantId,
+      display_category_id: displayCategoryId,
+      name,
+    }),
+  updateDisplaySubcategory: (
+    displaySubcategoryId: string,
+    tenantId: string,
+    fields: { displayCategoryId: string; name: string; status: EntityStatus },
+  ) =>
+    requestJson<DisplaySubcategory>(
+      "PATCH",
+      `/admin/catalog/display-subcategories/${encodeURIComponent(displaySubcategoryId)}`,
+      {
+        tenant_id: tenantId,
+        display_category_id: fields.displayCategoryId,
+        name: fields.name,
+        status: fields.status,
+      },
+    ),
+  listLayoutButtons: (tenantId: string) =>
+    requestJson<LayoutButton[]>("GET", `/admin/catalog/layout-buttons?${tenantQuery(tenantId)}`),
+  setLayoutButton: (
+    tenantId: string,
+    salesChannel: SalesChannel,
+    menuItemId: string,
+    fields: {
+      displayCategoryId: string;
+      displaySubcategoryId: string | null;
+      label: string;
+      gridColumn: number | null;
+      gridRow: number | null;
+      sort: number;
+    },
+  ) =>
+    requestJson<LayoutButton>(
+      "PUT",
+      `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}`,
+      {
+        tenant_id: tenantId,
+        display_category_id: fields.displayCategoryId,
+        display_subcategory_id: fields.displaySubcategoryId,
+        label: fields.label,
+        grid_column: fields.gridColumn,
+        grid_row: fields.gridRow,
+        sort: fields.sort,
+      },
+    ),
+  removeLayoutButton: (tenantId: string, salesChannel: SalesChannel, menuItemId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
+    ),
 };

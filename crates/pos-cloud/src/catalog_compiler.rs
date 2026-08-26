@@ -27,12 +27,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pos_proto::enums::SalesChannel;
-use pos_proto::ids::MenuItemId;
+use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId};
 use pos_proto::text::DisplayName;
 use pos_proto::wire_enum::WireEnum;
-use pos_proto::{MenuBook, MenuCatalog, MenuEntry};
+use pos_proto::{
+    DisplayButton, DisplayCategory as ProtoDisplayCategory, DisplayPlan,
+    DisplaySubcategory as ProtoDisplaySubcategory, LayoutBook, MenuBook, MenuCatalog, MenuEntry,
+};
 
-use crate::catalog::{CatalogItem, Menu, MenuId, MenuPlacement};
+use crate::catalog::{
+    CatalogItem, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId, MenuPlacement,
+};
 use crate::registry::EntityStatus;
 
 /// A refusal to compile a menu — a configuration error the operator must fix, distinct from a store
@@ -135,16 +140,165 @@ pub fn compile_menu(
     Ok(book)
 }
 
+/// Compiles a tenant's display taxonomy and layout buttons into a per-channel [`LayoutBook`] — the
+/// `layout` config node the POS / tablet / QR UI reads and the domain never does.
+///
+/// The layout twin of [`compile_menu`]: the same pure, deterministic move, on the presentation side.
+/// Buttons are grouped `channel → display category → sub-category`, each group ordered by the button's
+/// `sort` (ties broken by item id for determinism), and emitted as a [`DisplayPlan`] per channel.
+///
+/// It is **forgiving by design**, because a layout references two taxonomies that a person edits
+/// independently: a button whose display category or sub-category is missing or archived is simply
+/// **skipped** (the item just shows no button on that channel), rather than failing the whole publish
+/// — the opposite of [`compile_menu`]'s refuse-on-unknown-item stance, because a stale button is a
+/// presentation gap, not a pricing error. A button on an unrecognised or unspecified channel is
+/// skipped too. Categories appear in ascending order of their buttons' minimum `sort`, so the plan is
+/// stable across re-compiles.
+#[must_use]
+pub fn compile_layout_book(
+    display_categories: &[DisplayCategory],
+    display_subcategories: &[DisplaySubcategory],
+    buttons: &[LayoutButton],
+) -> LayoutBook {
+    // Active taxonomy only; an archived grouping drops its buttons.
+    let active_categories: BTreeMap<DisplayCategoryId, &DisplayCategory> = display_categories
+        .iter()
+        .filter(|category| category.status != EntityStatus::Archived)
+        .map(|category| (category.display_category_id, category))
+        .collect();
+    let active_subcategories: BTreeMap<DisplaySubcategoryId, &DisplaySubcategory> =
+        display_subcategories
+            .iter()
+            .filter(|subcategory| subcategory.status != EntityStatus::Archived)
+            .map(|subcategory| (subcategory.display_subcategory_id, subcategory))
+            .collect();
+
+    // Group usable buttons by channel (wire token → known channel), preserving the sort key.
+    let mut by_channel: BTreeMap<&'static str, (SalesChannel, Vec<&LayoutButton>)> =
+        BTreeMap::new();
+    for button in buttons {
+        if button.sales_channel.is_unrecognised() {
+            continue;
+        }
+        let channel = button.sales_channel.known();
+        if channel == <SalesChannel as WireEnum>::UNSPECIFIED {
+            continue;
+        }
+        if !active_categories.contains_key(&button.display_category_id) {
+            continue;
+        }
+        // A named sub-category must exist, be active, and belong to the button's category.
+        if let Some(subcategory_id) = button.display_subcategory_id {
+            match active_subcategories.get(&subcategory_id) {
+                Some(subcategory)
+                    if subcategory.display_category_id == button.display_category_id => {}
+                _ => continue,
+            }
+        }
+        by_channel
+            .entry(channel.as_wire())
+            .or_insert_with(|| (channel, Vec::new()))
+            .1
+            .push(button);
+    }
+
+    let mut book = LayoutBook::new();
+    for (_wire, (channel, mut channel_buttons)) in by_channel {
+        // Deterministic order: by sort, then by item id to break ties.
+        channel_buttons.sort_by(|a, b| {
+            a.sort
+                .cmp(&b.sort)
+                .then(a.menu_item_id.cmp(&b.menu_item_id))
+        });
+
+        // Category display order = ascending minimum sort of its buttons.
+        let mut category_order: Vec<DisplayCategoryId> = Vec::new();
+        for button in &channel_buttons {
+            if !category_order.contains(&button.display_category_id) {
+                category_order.push(button.display_category_id);
+            }
+        }
+
+        let mut plan = DisplayPlan::new();
+        for category_id in category_order {
+            let Some(category) = active_categories.get(&category_id) else {
+                continue;
+            };
+            let group: Vec<&&LayoutButton> = channel_buttons
+                .iter()
+                .filter(|button| button.display_category_id == category_id)
+                .collect();
+
+            // Buttons placed directly under the category (no sub-category).
+            let direct: Vec<DisplayButton> = group
+                .iter()
+                .filter(|button| button.display_subcategory_id.is_none())
+                .map(|button| proto_button(button))
+                .collect();
+
+            // Sub-categories, in the order their first button appears.
+            let mut subcategory_order: Vec<DisplaySubcategoryId> = Vec::new();
+            for button in &group {
+                if let Some(id) = button.display_subcategory_id
+                    && !subcategory_order.contains(&id)
+                {
+                    subcategory_order.push(id);
+                }
+            }
+            let subcategories: Vec<ProtoDisplaySubcategory> = subcategory_order
+                .into_iter()
+                .filter_map(|subcategory_id| {
+                    let subcategory = active_subcategories.get(&subcategory_id)?;
+                    let sub_buttons: Vec<DisplayButton> = group
+                        .iter()
+                        .filter(|button| button.display_subcategory_id == Some(subcategory_id))
+                        .map(|button| proto_button(button))
+                        .collect();
+                    Some(ProtoDisplaySubcategory {
+                        display_subcategory_id: subcategory_id,
+                        name: DisplayName::new(subcategory.name.as_str()),
+                        buttons: sub_buttons,
+                    })
+                })
+                .collect();
+
+            plan = plan.with(ProtoDisplayCategory {
+                display_category_id: category_id,
+                name: DisplayName::new(category.name.as_str()),
+                buttons: direct,
+                subcategories,
+            });
+        }
+        book = book.with(channel, plan);
+    }
+    book
+}
+
+/// A compiled [`DisplayButton`] from an authoring [`LayoutButton`].
+fn proto_button(button: &LayoutButton) -> DisplayButton {
+    DisplayButton {
+        menu_item_id: button.menu_item_id,
+        label: DisplayName::new(button.label.as_str()),
+        position: button.position,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use pos_proto::display::GridPosition;
     use pos_proto::enums::SalesChannel;
-    use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
+    use pos_proto::ids::{
+        DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId,
+    };
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::ulid::Ulid;
     use pos_proto::wire_enum::Open;
 
-    use super::{CompileError, compile_menu};
-    use crate::catalog::{CatalogItem, ChannelPrice, Menu, MenuId, MenuPlacement};
+    use super::{CompileError, compile_layout_book, compile_menu};
+    use crate::catalog::{
+        CatalogItem, ChannelPrice, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId,
+        MenuPlacement,
+    };
     use crate::registry::EntityStatus;
 
     fn tenant() -> TenantId {
@@ -169,6 +323,8 @@ mod tests {
             tenant_id: tenant(),
             name: name.to_owned(),
             tax_class_id: TaxClassId::new(Ulid::from_u128(7)),
+            item_category_id: None,
+            item_subcategory_id: None,
             status: EntityStatus::Active,
         }
     }
@@ -200,6 +356,7 @@ mod tests {
             tenant_id: tenant(),
             menu_id: menu_id(menu),
             menu_item_id: item_id(item),
+            menu_section_id: None,
             prices,
             available,
         }
@@ -373,6 +530,111 @@ mod tests {
             serde_json::to_string(&first).expect("serialise"),
             serde_json::to_string(&second).expect("serialise"),
             "the same authoring compiles to a byte-identical snapshot"
+        );
+    }
+
+    fn display_category_id(n: u128) -> DisplayCategoryId {
+        DisplayCategoryId::new(Ulid::from_u128(n))
+    }
+
+    fn display_subcategory_id(n: u128) -> DisplaySubcategoryId {
+        DisplaySubcategoryId::new(Ulid::from_u128(n))
+    }
+
+    fn display_category(n: u128, name: &str, status: EntityStatus) -> DisplayCategory {
+        DisplayCategory {
+            display_category_id: display_category_id(n),
+            tenant_id: tenant(),
+            name: name.to_owned(),
+            status,
+        }
+    }
+
+    fn display_subcategory(n: u128, parent: u128, name: &str) -> DisplaySubcategory {
+        DisplaySubcategory {
+            display_subcategory_id: display_subcategory_id(n),
+            tenant_id: tenant(),
+            display_category_id: display_category_id(parent),
+            name: name.to_owned(),
+            status: EntityStatus::Active,
+        }
+    }
+
+    fn layout_button(
+        channel: SalesChannel,
+        category: u128,
+        subcategory: Option<u128>,
+        item: u128,
+        label: &str,
+        position: Option<GridPosition>,
+        sort: i32,
+    ) -> LayoutButton {
+        LayoutButton {
+            tenant_id: tenant(),
+            sales_channel: Open::from_known(channel),
+            display_category_id: display_category_id(category),
+            display_subcategory_id: subcategory.map(display_subcategory_id),
+            menu_item_id: item_id(item),
+            label: label.to_owned(),
+            position,
+            sort,
+        }
+    }
+
+    #[test]
+    fn a_layout_compiles_to_a_per_channel_plan_grouped_by_category_and_subcategory() {
+        let categories = [display_category(10, "Pizza", EntityStatus::Active)];
+        let subcategories = [display_subcategory(20, 10, "Vegetarian")];
+        let buttons = [
+            layout_button(
+                SalesChannel::DineIn,
+                10,
+                None,
+                500,
+                "Margherita",
+                Some(GridPosition { column: 0, row: 0 }),
+                0,
+            ),
+            layout_button(
+                SalesChannel::DineIn,
+                10,
+                Some(20),
+                501,
+                "Marinara",
+                Some(GridPosition { column: 1, row: 0 }),
+                1,
+            ),
+        ];
+
+        let book = compile_layout_book(&categories, &subcategories, &buttons);
+        let plan = book.plan_for(SalesChannel::DineIn);
+        assert_eq!(plan.categories().len(), 1);
+        let pizza = plan.categories().first().expect("a category");
+        assert_eq!(pizza.name.as_str(), "Pizza");
+        assert_eq!(pizza.buttons.len(), 1, "the direct button");
+        assert_eq!(pizza.buttons[0].label.as_str(), "Margherita");
+        assert_eq!(pizza.subcategories.len(), 1);
+        assert_eq!(pizza.subcategories[0].buttons[0].label.as_str(), "Marinara");
+        // A channel with no button of its own gets the empty fallback.
+        assert!(book.plan_for(SalesChannel::Delivery).is_empty());
+    }
+
+    #[test]
+    fn a_layout_button_under_an_archived_category_is_skipped() {
+        let categories = [display_category(10, "Retired", EntityStatus::Archived)];
+        let buttons = [layout_button(
+            SalesChannel::DineIn,
+            10,
+            None,
+            500,
+            "Ghost",
+            None,
+            0,
+        )];
+        let book = compile_layout_book(&categories, &[], &buttons);
+        assert!(
+            book.plan_for(SalesChannel::DineIn).is_empty(),
+            "an archived display category drops its buttons"
         );
     }
 }

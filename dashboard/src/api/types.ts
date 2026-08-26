@@ -117,3 +117,148 @@ export interface Device {
   readonly kind: string;
   readonly status: EntityStatus;
 }
+
+/**
+ * A sales channel wire token (ADR-0066, `pos-proto` `SalesChannel`). The value is the full
+ * `wire_enum!` token — `SALES_CHANNEL_DINE_IN`, not `DINE_IN` — because the server round-trips it
+ * through `Open<SalesChannel>`, which serialises the whole prefixed token.
+ */
+export type SalesChannel =
+  | "SALES_CHANNEL_DINE_IN"
+  | "SALES_CHANNEL_TAKEAWAY"
+  | "SALES_CHANNEL_DELIVERY"
+  | "SALES_CHANNEL_QR"
+  | "SALES_CHANNEL_API";
+
+/** The channels an operator can price, in the order they appear on the placement editor. */
+export const SALES_CHANNELS: readonly SalesChannel[] = [
+  "SALES_CHANNEL_DINE_IN",
+  "SALES_CHANNEL_TAKEAWAY",
+  "SALES_CHANNEL_DELIVERY",
+  "SALES_CHANNEL_QR",
+  "SALES_CHANNEL_API",
+];
+
+/** Integer money (`pos-proto` `Money`): a currency and an amount in that currency's smallest unit. */
+export interface Money {
+  readonly currency_code: string;
+  readonly amount_minor: number;
+}
+
+/** A tax class — a named bucket an item belongs to (ADR-0066 entity 10). Its id is the item's `tax_class_id`. */
+export interface TaxClass {
+  readonly tax_class_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
+export interface ItemCategory {
+  readonly item_category_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** An item sub-category, nested under a category (ADR-0066 entity 3). */
+export interface ItemSubcategory {
+  readonly item_subcategory_id: string;
+  readonly tenant_id: string;
+  readonly item_category_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A display category — the presentation taxonomy a screen groups by (ADR-0066 entity 11). */
+export interface DisplayCategory {
+  readonly display_category_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A display sub-category, nested under a display category (ADR-0066 entity 11). */
+export interface DisplaySubcategory {
+  readonly display_subcategory_id: string;
+  readonly tenant_id: string;
+  readonly display_category_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A button's grid slot on a POS terminal (`pos-proto` `GridPosition`). */
+export interface GridPosition {
+  readonly column: number;
+  readonly row: number;
+}
+
+/** An item's button in a per-channel layout (ADR-0066 entity 12). */
+export interface LayoutButton {
+  readonly tenant_id: string;
+  readonly sales_channel: SalesChannel | null;
+  readonly display_category_id: string;
+  readonly display_subcategory_id: string | null;
+  readonly menu_item_id: string;
+  readonly label: string;
+  readonly position: GridPosition | null;
+  readonly sort: number;
+}
+
+/** A modifier group — a min/max selection rule with member modifiers, attached to items (ADR-0066 4/5). */
+export interface ModifierGroup {
+  readonly modifier_group_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly min_select: number;
+  readonly max_select: number;
+  readonly member_item_ids: string[];
+  readonly attached_item_ids: string[];
+  readonly status: EntityStatus;
+}
+
+/** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
+export interface CatalogItem {
+  readonly menu_item_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly tax_class_id: string;
+  readonly item_category_id: string | null;
+  readonly item_subcategory_id: string | null;
+  readonly status: EntityStatus;
+}
+
+/** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
+export interface Menu {
+  readonly menu_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly parent_menu_id: string | null;
+  readonly status: EntityStatus;
+}
+
+/** A menu section — an authoring grouping within a menu (ADR-0066 entity 7). Authoring-only. */
+export interface MenuSection {
+  readonly menu_section_id: string;
+  readonly tenant_id: string;
+  readonly menu_id: string;
+  readonly name: string;
+  readonly sort: number;
+  readonly status: EntityStatus;
+}
+
+/** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */
+export interface ChannelPrice {
+  readonly sales_channel: SalesChannel | null;
+  readonly unit_price: Money;
+}
+
+/** An item placed in a menu, with its per-channel prices and its published availability floor. */
+export interface MenuPlacement {
+  readonly tenant_id: string;
+  readonly menu_id: string;
+  readonly menu_item_id: string;
+  readonly menu_section_id: string | null;
+  readonly prices: ChannelPrice[];
+  readonly available: boolean;
+}

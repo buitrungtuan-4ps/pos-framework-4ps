@@ -32,6 +32,99 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A menu can now be organised into sections** (ADR-0066 entity 7, Phase 2a). A `MenuSection`
+  (tenant-scoped, per-menu, archived-not-deleted) carries a name and a sort order, behind
+  `/admin/catalog/menus/{menu_id}/sections` (list/create/`PATCH`); a placement names the section it
+  sits under via a new nullable `menu_section_id`, editable by name in the menu editor and shown as a
+  column in the placement list. Backed by migration `0017` (a `catalog_menu_sections` table plus an
+  additive nullable column on `catalog_placements`) and the `PostgresCatalog` adapter;
+  `FakeCatalog`-tested (a section round-trips and a placement carries its section back), and the
+  dashboard typechecks, i18n-lints (en + vi) and builds. **Authoring-only for now:** the compiled
+  `MenuBook` is a flat set of entries with no sections, so a section changes only what the operator
+  sees while authoring — never what the edge is served. Forward-only and additive; greenfield.
+- **The catalog can now author modifier groups — shared option sets attachable to items** (ADR-0066
+  entities 4 and 5, Phase 2a). A `ModifierGroup` (tenant-scoped, archived-not-deleted) carries a name,
+  a `min_select`/`max_select` choice range, the **member** items that make up its options, and the
+  items it is **attached** to — behind `/admin/catalog/modifier-groups` (list/create/`PATCH`), with
+  members and attachments authored by name in the menu editor. Backed by migration `0016` (members and
+  attachments stored as JSONB arrays of item ULIDs on a single row — no child tables) and the
+  `PostgresCatalog` adapter; `FakeCatalog`-tested for the round-trip of members and attachments, and
+  the dashboard typechecks, i18n-lints (en + vi) and builds. **Authoring-only for now:** modifier
+  groups are captured and published in the cloud but do not yet ride the compiled `MenuBook` to the
+  edge — the wire cannot carry a modifier reference on a `MenuEntry` until `pos-proto`/ADR-0063 gains
+  that field, which is a flagged follow-up. Forward-only and additive; greenfield.
+- **The catalog now has a presentation tier — display taxonomy + per-channel layouts, compiled and
+  published beside the price book** (ADR-0066 entities 11 and 12, Phase 2a). The catalog gains a
+  **display taxonomy** (`DisplayCategory` / `DisplaySubcategory` — the grouping a screen shows, distinct
+  from the operational item taxonomy) and **layout buttons** (an item's button on a channel, under a
+  display category/sub-category, with an optional POS grid slot and sort order), behind
+  `/admin/catalog/display-categories`, `/admin/catalog/display-subcategories` and
+  `/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}` (list/create/`PATCH`; the button
+  keyed by `(channel, item)` with `PUT`/`DELETE`). A new pure `compile_layout_book` folds the buttons
+  by `channel → category → sub-category` into a `pos-proto` `LayoutBook`, and **publish now writes it
+  onto the store's `layout` config node** alongside the `MenuBook` on `menu` — so a button moving
+  reprices nothing and a price change relays no buttons, exactly the separation ADR-0066 requires. The
+  layout compiler is forgiving (a button whose category/sub-category is missing or archived is skipped,
+  never failing a publish). Backed by migration `0015` and the `PostgresCatalog` adapter. A new
+  back-office **Layout** screen (`/layout`, kept deliberately apart from the Menu/pricing screen) edits
+  the display taxonomy and, per channel, the item buttons a screen shows — item, display category and
+  sub-category, an optional POS grid slot (column/row) and a sort order — all by name; the layout ships
+  to the store on the same publish as the price book. `FakeCatalog`-tested (route round-trips) and the
+  compiler unit-tested (channel/category/sub-category grouping, archived-category skip, and the
+  publish e2e asserting the `layout` node); the dashboard typechecks, i18n-lints (en + vi) and builds.
+  Forward-only and additive; greenfield.
+- **Items now carry an operational category and sub-category** (ADR-0066 entities 2 and 3, Phase 2a).
+  The catalog gains an item taxonomy — `ItemCategory` and `ItemSubcategory` (tenant-scoped,
+  archived-not-deleted, a sub-category nested under a category) — behind `/admin/catalog/item-categories`
+  and `/admin/catalog/item-subcategories` (list/create/`PATCH`), plus two additive nullable columns on
+  `catalog_items` linking an item to its category and sub-category. Backed by migration `0014` and the
+  `PostgresCatalog` adapter. The menu editor's item form gains category + (category-filtered)
+  sub-category pickers, an editable Categories and Sub-categories card, and a Category column on the
+  items table. This is the taxonomy a product-mix report will total by — **distinct** from the
+  presentation taxonomy a screen groups by (that is the display taxonomy, entities 11/12). It is
+  authoring metadata today; the reporting that consumes it is a later phase. `FakeCatalog`-tested
+  (category + sub-category + item linkage round-trips) and typechecked in the dashboard. Forward-only
+  and additive; greenfield, no backfill.
+- **Tax classes are now named entities, and an item picks one from a list** (ADR-0066 entity 10, Phase 2a).
+  A `TaxClass` (id + name, tenant-scoped, archived-not-deleted) joins the catalog store behind
+  `/admin/catalog/tax-classes` (list/create, `PATCH` to rename or set status), backed by migration
+  `0013` (`catalog_tax_classes`, RLS by tenant) and the `PostgresCatalog` adapter. The menu editor's
+  item form now offers a **tax-class dropdown** instead of a pasted `TaxClassId` ULID — closing the
+  one raw-ULID entry the editor still had — and the items table shows the class by name. The class is
+  country-agnostic; the *rate* for each `(tax_class, channel)` still lives in the store's locale pack.
+  `FakeCatalog`-tested (create/list/rename/archive, `404` on an unknown id) and typechecked in the
+  dashboard. Migration is forward-only and additive; greenfield, no backfill.
+- **The back-office now has a menu editor** (ADR-0066, Phase 2a). A new **Menu** screen (`/catalog`)
+  in the cloud dashboard drives the catalog CRUD and publish routes end to end, all by name: create /
+  rename / archive **items** (with their tax class); create / rename / **reparent** (inheritance) /
+  archive **menus**; open a menu to edit the **items placed in it** — each with a per-channel price
+  sheet (dine-in / takeaway / delivery / QR / API, blank = not sold on that channel) and a published
+  availability toggle — and finally **publish** a chosen menu to the store in the top-bar context,
+  which returns the new config version. Tenant and store come from the existing context picker (no
+  ULID typed for either); prices are entered in the currency's smallest unit. All labels run through
+  the i18n runtime (English + Vietnamese, `en` the enforced fallback) so the no-hardcoded-strings gate
+  stays green. One known gap, called out in the UI: an item's **tax class** is still a pasted ULID —
+  a named tax-class picker is a later slice. This completes Phase 2a's operator-facing surface.
+- **A menu now publishes to a store — compiled and written onto its config tree** (ADR-0066, Phase 2a).
+  A `catalog_publish_router` adds `POST /admin/catalog/publish` behind the super-admin session guard:
+  given `(tenant_id, store_id, menu_id)` it loads that tenant's items, menus and placements, runs the
+  pure `compile_menu` to a `MenuBook`, and writes the book onto the store's **Store-layer** `menu`
+  config node (index 2 in the Tenant→Brand→Store→Device order), re-publishing that whole layer through
+  the versioned config tree — so the price book reaches the store exactly like every other config
+  change, no new transport. A compiler refusal (unknown or cyclic menu) surfaces as **422**, an
+  operator error to fix, distinct from a store 5xx; a store with no tree yet gets one started. Proven
+  end to end against the fakes: authoring an item + a dine-in placement, publishing, then reading the
+  store's effective config back and finding the compiled `MenuBook` on its `menu` node. Wired into
+  `pos_cloud`. Prices stay a T2 asset — compiled and shipped in config, never logged. This closes the
+  Phase 2a authoring→compile→publish path; the menu editor UI is the next slice.
+- **The catalog is now editable over `/admin`** (ADR-0066, Phase 2a). A `catalog_router` exposes the
+  authoring model behind the super-admin session guard: `/admin/catalog/items` and
+  `/admin/catalog/menus` (list scoped to `?tenant_id=`, create with the id minted server-side,
+  `PATCH` to rename / set status / reparent), and `/admin/catalog/menus/{menu_id}/placements` (list,
+  `PUT` to upsert an item's per-channel prices and availability by its `(menu_id, menu_item_id)` pair,
+  `DELETE` to remove it). Tenant named the admin-is-global way; every write is `FakeCatalog`-tested for
+  create/list/upsert/remove and the session guard. Wired into `pos_cloud`. The publish path (compile →
+  config tree) lands in this release; the menu editor UI is the next slice.
 - **The catalog authoring model now persists in PostgreSQL** (ADR-0066, Phase 2a). Migration `0012`
   adds `catalog_items`, `catalog_menus` (with an inheritance edge) and `catalog_placements` (an item
   in a menu, its per-channel prices as a `jsonb` document keyed by `(menu_id, menu_item_id)`), all
