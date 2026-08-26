@@ -1,8 +1,8 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
-import { firedLines, type KitchenLine } from "../state/store";
+import { bump, firedLines, type KitchenLine } from "../state/store";
 
 interface TableGroup {
   label: string;
@@ -10,18 +10,15 @@ interface TableGroup {
 }
 
 // The pass: fired lines gathered by table, so the expeditor runs a whole table together. "All away"
-// clears that table from the pass — a local acknowledgement, like the KDS bump, until a durable
-// event carries it.
+// bumps the whole table's lines — the same durable `kitchen.ticket.bumped` event a KDS records (#44),
+// so the pass and every kitchen screen agree the table is done rather than each holding a private
+// acknowledgement. One table has one open order, so a group's lines share an order id.
 export function Expo() {
   useDarkTakeover();
-  const [away, setAway] = createSignal<ReadonlySet<string>>(new Set());
 
   const groups = createMemo<TableGroup[]>(() => {
     const byTable = new Map<string, KitchenLine[]>();
     for (const line of firedLines()) {
-      if (away().has(line.orderLineId)) {
-        continue;
-      }
       const lines = byTable.get(line.tableLabel) ?? [];
       lines.push(line);
       byTable.set(line.tableLabel, lines);
@@ -31,14 +28,16 @@ export function Expo() {
       .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
   });
 
-  const runAway = (lines: KitchenLine[]) =>
-    setAway((current) => {
-      const next = new Set(current);
-      for (const line of lines) {
-        next.add(line.orderLineId);
-      }
-      return next;
-    });
+  const runAway = (lines: KitchenLine[]) => {
+    const [first] = lines;
+    if (first === undefined) {
+      return;
+    }
+    void bump(
+      first.orderId,
+      lines.map((line) => line.orderLineId),
+    );
+  };
 
   return (
     <section class="p-4">

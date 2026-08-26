@@ -60,7 +60,7 @@
   --accent-ink: oklch(0.99 0 0);
   --danger: oklch(0.55 0.19 25);
   --danger-ink: oklch(0.99 0 0);
-  --ok: oklch(0.6 0.13 155);
+  --ok: oklch(0.52 0.13 155); /* darkened from 0.6 so `text-ok` clears AA 4.5:1 on surface/canvas (see docs/wcag-contrast-audit.md) */
 
   --free: oklch(0.7 0.03 260);
   --occupied: oklch(0.6 0.14 240);

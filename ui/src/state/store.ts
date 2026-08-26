@@ -41,6 +41,9 @@ interface StoreShape {
   orderTable: Record<string, string>;
   lines: Record<string, OrderLine>;
   openBill: Record<string, string>;
+  // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
+  // per-screen, so every KDS agrees a ticket is done (#44).
+  bumped: Record<string, boolean>;
   shift: ShiftInfo | null;
 }
 
@@ -59,6 +62,7 @@ const [state, setState] = createStore<StoreShape>({
   orderTable: {},
   lines: {},
   openBill: {},
+  bumped: {},
   shift: null,
 });
 
@@ -171,6 +175,21 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    case "kitchen.ticket.bumped": {
+      const ids = payload["order_line_ids"];
+      if (Array.isArray(ids)) {
+        setState(
+          produce((draft) => {
+            for (const id of ids) {
+              if (typeof id === "string") {
+                draft.bumped[id] = true;
+              }
+            }
+          }),
+        );
+      }
+      break;
+    }
     case "billing.bill.opened": {
       const bill = str(payload, "bill_id");
       const order = str(payload, "order_id");
@@ -225,18 +244,27 @@ export function tableLabel(tableId: string): string {
 
 export interface KitchenLine {
   orderLineId: string;
+  orderId: string;
   name: string;
   tableLabel: string;
 }
 
 // Every fired line still on an open order, newest tables last — what the kitchen and the pass work
-// from. A line whose table has been cleaned (its bill settled) drops out, because the order is done.
+// from. A line whose table has been cleaned (its bill settled) drops out, because the order is done;
+// a line a station has bumped (`kitchen.ticket.bumped`) drops out too, so a KDS coming online after
+// the bump agrees the ticket is made rather than re-showing it.
 export function firedLines(): KitchenLine[] {
   const liveOrders = new Set(Object.values(state.tableOrder));
   return Object.values(state.lines)
-    .filter((line) => line.state === "ORDER_LINE_STATE_FIRED" && liveOrders.has(line.orderId))
+    .filter(
+      (line) =>
+        line.state === "ORDER_LINE_STATE_FIRED" &&
+        liveOrders.has(line.orderId) &&
+        state.bumped[line.orderLineId] !== true,
+    )
     .map((line) => ({
       orderLineId: line.orderLineId,
+      orderId: line.orderId,
       name: line.name,
       tableLabel: tableLabel(state.orderTable[line.orderId] ?? ""),
     }));
@@ -299,6 +327,20 @@ export async function addItem(tableId: string, item: MenuItem): Promise<void> {
 export async function fire(lineId: string): Promise<void> {
   const response = await api.fireLine(lineId, { station_id: STATION });
   setState("lines", lineId, "state", response.state);
+}
+
+// A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`
+// event and fans it out, so every KDS folds the same prepared set; the line drops off this screen at
+// once and stays off when its own event returns.
+export async function bump(orderId: string, orderLineIds: string[]): Promise<void> {
+  await api.bumpTicket({ order_id: orderId, station_id: STATION, order_line_ids: orderLineIds });
+  setState(
+    produce((draft) => {
+      for (const id of orderLineIds) {
+        draft.bumped[id] = true;
+      }
+    }),
+  );
 }
 
 export async function openBill(tableId: string): Promise<string> {

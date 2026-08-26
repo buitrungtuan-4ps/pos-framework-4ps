@@ -16,7 +16,7 @@
 //! ([ADR-0013](../../../docs/adr/0013-async-strategy.md)). It wires the **table floor cycle** (seat,
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -38,8 +38,8 @@ use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
-    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, SalesOrderLineAdded,
-    SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
+    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, KitchenTicketBumped,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
@@ -253,6 +253,17 @@ pub struct LineView {
     pub state: OrderLineState,
 }
 
+/// What a KDS bump looks like to a caller: the order and station, and the lines now marked prepared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BumpView {
+    /// The order whose ticket was bumped.
+    pub order_id: OrderId,
+    /// The station that bumped it.
+    pub station_id: StationId,
+    /// The lines now marked prepared.
+    pub order_line_ids: Vec<OrderLineId>,
+}
+
 /// What a bill looks like to a caller after a command.
 ///
 /// After a settle it carries the gapless receipt number and the total the guest paid, plus the
@@ -358,6 +369,10 @@ struct Projection {
     /// The one shift currently trading or counted, if any — the drawer cash lands on it, and every
     /// event minted while it is set carries its id. Cleared when the shift closes.
     open_shift: Option<ShiftId>,
+    /// The lines a station has bumped (marked prepared, `kitchen.ticket.bumped`). Tracked apart from
+    /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
+    /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.
+    bumped_lines: HashSet<OrderLineId>,
 }
 
 impl Projection {
@@ -401,6 +416,19 @@ impl Projection {
         if let Some(record) = self.lines.get_mut(&line_id) {
             record.state = state;
         }
+    }
+
+    /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
+    fn mark_bumped(&mut self, order_line_ids: &[OrderLineId]) {
+        self.bumped_lines.extend(order_line_ids.iter().copied());
+    }
+
+    /// Every bumped line, in id order — the current prepared set a KDS reads on (re)connect so a
+    /// screen that joined late agrees with the ones that were already open.
+    fn bumped_line_ids(&self) -> Vec<OrderLineId> {
+        let mut ids: Vec<OrderLineId> = self.bumped_lines.iter().copied().collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// The lines on an order, in id order so the assembly (and its rounding residual) is
@@ -534,6 +562,20 @@ impl<S> Edge<S> {
             .session_cell
             .write()
             .expect("session lock is not poisoned") = Arc::new(session);
+    }
+
+    /// The lines currently marked prepared (`kitchen.ticket.bumped`), for a KDS reading the current
+    /// state on (re)connect.
+    ///
+    /// # Panics
+    ///
+    /// If the projection lock is poisoned — unreachable, as its critical section only reads the set.
+    #[must_use]
+    pub fn bumped_line_ids(&self) -> Vec<OrderLineId> {
+        self.projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .bumped_line_ids()
     }
 }
 
@@ -939,6 +981,38 @@ impl<S: EventStore> Edge<S> {
             order_id: record.order_id,
             order_line_id,
             state: decision.next_state,
+        })
+    }
+
+    /// Bumps a kitchen ticket — a station marks lines prepared (`kitchen.ticket.bumped`,
+    /// [ADR-0026](../../../docs/adr/0026-port-shapes.md) event catalogue §18). Durable and fanned out,
+    /// so a second KDS agrees the ticket is done rather than each screen holding a private, divergent
+    /// "done" flag. A bump is orthogonal to a line's order state (a made line is still "fired"), so it
+    /// is recorded on the projection's bumped set, not as a state-machine transition.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
+    /// cannot be written.
+    pub async fn bump_ticket(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        station_id: StationId,
+        order_line_ids: Vec<OrderLineId>,
+    ) -> Result<BumpView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let payload = KitchenTicketBumped {
+            order_id,
+            station_id,
+            order_line_ids: order_line_ids.clone(),
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+        self.lock_projection().mark_bumped(&order_line_ids);
+        Ok(BumpView {
+            order_id,
+            station_id,
+            order_line_ids,
         })
     }
 
@@ -1395,6 +1469,11 @@ impl<S: EventStore> Edge<S> {
             EventType::CashShiftClosed => {
                 let event: CashShiftClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.close_shift_record(event.closed_shift_id);
+            }
+            EventType::KitchenTicketBumped => {
+                let event: KitchenTicketBumped =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.mark_bumped(&event.order_line_ids);
             }
             _ => {}
         }

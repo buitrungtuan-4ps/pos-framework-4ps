@@ -17,6 +17,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Fixed
+- **The "success" green now clears WCAG-AA contrast as text in the light theme** (P6 exit criterion,
+  #44). A numeric audit of the design-token palettes (`docs/wcag-contrast-audit.md`) measured every
+  colour pair the interface renders, in both themes, and found the light-theme `--ok` token at 3.72:1
+  on `surface` — below the 4.5:1 needed for normal text, and `ok` is used as small text (the fired-line
+  badge, the shift-variance line, the paired/settled confirmations). It was darkened from
+  `oklch(0.6 …)` to `oklch(0.52 …)`, giving 5.16:1. Every other text pair already passed. A new
+  `pnpm contrast` gate parses `tokens.css` and fails the build if any text pair drops below AA; it runs
+  in both the `ui` and `dashboard` builds and CI. The remaining sub-3:1 tokens (the 1px separator and
+  the table-state dots) are non-text and exempt — the dots are `aria-hidden` and always ride with a
+  text label, so meaning never depends on the hue. **Upgrade note:** a default value moved — the light
+  `--ok` token is darker; the dark theme is unchanged.
 - **Super-admin sign-in after enrolment now works with any authenticator app** (ADR-0034 amended).
   The mandatory TOTP second factor ran over HMAC-**SHA256**, but Google Authenticator and Microsoft
   Authenticator ignore the `otpauth://` URI's `algorithm` field and always compute **SHA1** — so the
@@ -32,6 +43,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A kitchen-display bump is now durable and agreed across every screen** (P6 residual / #44). A bump
+  used to be UI-local — each KDS held its own "done" set, so a second screen or one that reconnected
+  never agreed a ticket was made. `POST /api/kds/bump` now records the durable `kitchen.ticket.bumped`
+  event and fans it out, and the edge marks a projection set (`Edge::bumped_line_ids`) so the prepared
+  lines survive a rebuild. A bump is orthogonal to a line's order state (a made line is still
+  `Fired`), so it is written as an event and folded, not as a state-machine transition. The kitchen
+  and expo screens fold the same event, so the bumped line drops off every connected screen at once;
+  "All away" on the pass bumps a whole table's lines through the one path. A domain test proves the
+  event is written, the projection reflects it, and it reaches the fan-out. **Scope:** connected
+  screens agree live; seeding a *late-joining* KDS with the already-bumped set on connect rides on the
+  same projection-rebuild-on-resync follow-up the rest of the client's live projection waits for
+  (`ui/src/App.tsx`). Forward-only and additive; no migration, no protocol change (the event was
+  already in the catalogue).
 - **A menu published from the dashboard now reaches a trading store's counter without a restart**
   (ADR-0004 cloud-owned config, ADR-0039 config delivery, WS-B / #101). The edge's `EdgeSession` — the
   price book, tax table, capabilities and locale a command reads — is now held behind an

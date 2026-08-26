@@ -39,7 +39,7 @@ The real users are staff standing for eight-hour shifts, with wet or greasy hand
 | Spacing | 4 px scale: 4 · 8 · 12 · 16 · 24 · 32 |
 | Touch targets | 48 px standard; 56–64 px for money and primary actions |
 | Type | 12 (meta) · 14 (label) · 16 (body) · 20 (heading) · 28 (KDS) · 40+ tabular (totals) |
-| Semantic colour | success / warning / error / info at WCAG AA contrast. **Never carry meaning by colour alone** — always pair with an icon or text (8% of men have red-green colour deficiency). |
+| Semantic colour | success / warning / error / info at WCAG AA contrast — every token pair measured in `docs/wcag-contrast-audit.md` and gated in CI (`pnpm contrast`). **Never carry meaning by colour alone** — always pair with an icon or text (8% of men have red-green colour deficiency). |
 | Shape | One radius (8 px), one border width (1 px). That is enough. |
 | Motion | 100–150 ms ease-out, only for entrance and orientation |
 | Theme | Light and dark across the product, configured per device (kitchen displays default to dark). Colour tokens are separate from structural tokens. |

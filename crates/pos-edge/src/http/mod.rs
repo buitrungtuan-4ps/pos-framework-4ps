@@ -13,6 +13,7 @@
 pub mod assets;
 pub mod bills;
 pub mod health;
+pub mod kds;
 pub mod lines;
 pub mod pair;
 pub mod shifts;
@@ -74,6 +75,8 @@ where
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))
+        // The kitchen display: bump a ticket (mark lines prepared), durable and fanned out.
+        .route("/api/kds/bump", post(kds::bump::<S>))
         // The bill: open on a table, settle.
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))

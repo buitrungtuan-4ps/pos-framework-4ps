@@ -5,6 +5,8 @@
 
 import type {
   BillResponse,
+  BumpRequest,
+  BumpResponse,
   CountShiftRequest,
   FireRequest,
   LineRequest,
@@ -56,6 +58,8 @@ export const api = {
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),
   fireLine: (lineId: string, fire: FireRequest) =>
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
+  bumpTicket: (bump: BumpRequest) =>
+    request<BumpResponse>("POST", "/api/kds/bump", bump),
 
   openBill: (tableId: string) =>
     request<BillResponse>("POST", `/api/tables/${tableId}/bill`),

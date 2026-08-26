@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && pnpm i18n:lint && vite build",
+    "build": "tsc --noEmit && pnpm i18n:lint && pnpm contrast && vite build",
     "typecheck": "tsc --noEmit",
     "i18n:lint": "node scripts/i18n-lint.mjs",
+    "contrast": "node scripts/wcag-contrast.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

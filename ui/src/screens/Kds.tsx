@@ -1,18 +1,20 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show } from "solid-js";
 
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
-import { firedLines } from "../state/store";
+import { bump, firedLines } from "../state/store";
 
-// The kitchen display: every fired line, large, on a dark panel. Bumping a ticket clears it from
-// this screen. That acknowledgement is local for now — the domain has no "line made" transition yet,
-// so a bump does not travel; a durable bump event is the follow-up that lets a second KDS agree.
+// The kitchen display: every fired line, large, on a dark panel. Bumping a ticket records the durable
+// `kitchen.ticket.bumped` event (#44) and fans it out, so a second KDS agrees the ticket is done
+// rather than holding a private, divergent "done" flag — and a screen coming online after the bump
+// reads the same prepared set. The bumped line drops off this screen at once; the store folds the
+// returning event so it stays off.
 export function Kds() {
   useDarkTakeover();
-  const [bumped, setBumped] = createSignal<ReadonlySet<string>>(new Set());
-  const visible = () => firedLines().filter((line) => !bumped().has(line.orderLineId));
-  const bump = (orderLineId: string) =>
-    setBumped((current) => new Set(current).add(orderLineId));
+  const visible = () => firedLines();
+  const onBump = (orderId: string, orderLineId: string) => {
+    void bump(orderId, [orderLineId]);
+  };
 
   return (
     <section class="p-4">
@@ -23,7 +25,7 @@ export function Kds() {
             <button
               type="button"
               class="flex min-h-money flex-col items-start gap-1 rounded-token border border-line bg-surface-raised p-4 text-left"
-              onClick={() => bump(line.orderLineId)}
+              onClick={() => onBump(line.orderId, line.orderLineId)}
             >
               <span class="text-sm text-ink-muted">{t("common.table", { label: line.tableLabel })}</span>
               <span class="text-xl font-semibold">{line.name}</span>
