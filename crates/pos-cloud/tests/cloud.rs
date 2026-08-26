@@ -42,6 +42,8 @@ use pos_cloud::devices::{
 };
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
+use pos_cloud::qr::{TableTokenSecret, mint_table_token};
+use pos_cloud::qr_http::qr_router;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::registry::{
     BrandRecord, DeviceRecord, RegistryStore, RegistryStoreError, StoreRecord, TenantRecord,
@@ -63,7 +65,7 @@ use pos_ports::PortError;
 use pos_proto::BusinessDate;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -2562,6 +2564,73 @@ async fn a_qr_order_awaits_staff_confirmation_and_a_stale_quote_is_repriced() {
         value["repriced"].as_bool(),
         Some(true),
         "a stale quote is reported, not honoured"
+    );
+}
+
+// --- Guest QR ordering (POST /v1/qr/orders) — P11a-2, ADR-0057 ---------------------------------
+
+/// The table a QR test signs a token for, in `order_store()`.
+fn qr_table() -> TableId {
+    TableId::new(Ulid::from_u128(0x7AB1E))
+}
+
+/// A guest QR body: no store/table/channel on the wire (they ride the token), just the reference,
+/// the lines, and when it was placed.
+fn qr_body(token: &str, reference: &str, menu_item: MenuItemId) -> serde_json::Value {
+    serde_json::json!({
+        "table_token": token,
+        "external_reference": reference,
+        "lines": [{ "menu_item_id": menu_item.to_string(), "quantity_milli": 1000 }],
+        "placed_at_ms": NOW_MS,
+    })
+}
+
+#[tokio::test]
+async fn a_signed_qr_order_is_accepted_and_awaits_staff_confirmation() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
+    let (known, _price) = known_menu_item();
+    let router = qr_router(secret, FakeIntake::new(), EmptyConfigTrees, clock());
+    let response = router
+        .oneshot(post_json("/v1/qr/orders", &qr_body(&token, "qr-1", known)))
+        .await
+        .expect("route the QR order");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value["created"].as_bool(), Some(true));
+    assert_eq!(
+        value["awaiting_staff_confirmation"].as_bool(),
+        Some(true),
+        "a QR order (a table order) waits for staff by default (ADR-0057)"
+    );
+}
+
+#[tokio::test]
+async fn an_unsigned_qr_token_is_forbidden_and_never_reaches_intake() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    // A token minted with a different secret does not verify against ours.
+    let forged = mint_table_token(
+        &TableTokenSecret::new("someone-elses-secret"),
+        tenant(),
+        order_store(),
+        qr_table(),
+    );
+    let (known, _price) = known_menu_item();
+    let router = qr_router(secret, FakeIntake::new(), EmptyConfigTrees, clock());
+    let response = router
+        .oneshot(post_json("/v1/qr/orders", &qr_body(&forged, "qr-x", known)))
+        .await
+        .expect("route the forged QR order");
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "an untrusted table token is refused before intake"
     );
 }
 

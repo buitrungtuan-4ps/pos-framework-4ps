@@ -69,6 +69,7 @@ mod openapi;
 pub mod orders;
 mod persistence;
 pub mod qr;
+pub mod qr_http;
 pub mod reconcile;
 pub mod registry;
 pub mod relay;

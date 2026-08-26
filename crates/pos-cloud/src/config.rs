@@ -96,6 +96,13 @@ pub struct CloudConfig {
     /// ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)).
     #[serde(default = "default_webhook_delivery_timeout_secs")]
     pub webhook_delivery_timeout_secs: u64,
+    /// The secret the cloud signs and verifies table QR tokens with
+    /// ([ADR-0057](../../../docs/adr/0057-qr-ordering.md)). **No default**: a guest QR order carries no
+    /// API key — the signed token is its only credential — so without a secret the `/v1/qr/orders`
+    /// endpoint is off (any token would be unverifiable). `bootstrap.sh` mints it into this file, the
+    /// same way it mints the admin setup token; it never leaves the server.
+    #[serde(default)]
+    pub table_token_secret: Option<String>,
 }
 
 /// Where the ingest cursor reads, and how it batches.
@@ -174,6 +181,10 @@ mod tests {
         assert_eq!(
             config.webhook_delivery_timeout_secs, 10,
             "the webhook delivery timeout defaults to ten seconds when unset"
+        );
+        assert_eq!(
+            config.table_token_secret, None,
+            "with no configured QR secret the /v1/qr/orders endpoint stays off"
         );
     }
 

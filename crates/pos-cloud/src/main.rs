@@ -14,6 +14,8 @@ use tracing_subscriber::EnvFilter;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
+use pos_cloud::qr::TableTokenSecret;
+use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
@@ -220,11 +222,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.order_queue(),
             store.api_keys(),
             SystemClock,
+        ));
+
+    // Guest QR ordering (ADR-0057), only when a signing secret is configured: the guest carries no
+    // API key, so the HMAC-signed table token is the only credential and an absent secret leaves the
+    // endpoint off (any token would be unverifiable). It forwards accepted orders into the same relay
+    // `POST /v1/orders` uses, guardrailed by the store's `qr` config.
+    let service = if let Some(secret) = config.table_token_secret.clone() {
+        tracing::info!("QR ordering enabled (POST /v1/qr/orders)");
+        service.merge(qr_http::qr_router(
+            TableTokenSecret::new(secret),
+            OrderRelay::new(
+                store.store_directory(),
+                store.config_trees(),
+                store.order_queue(),
+                SystemClock,
+            ),
+            store.config_trees(),
+            SystemClock,
         ))
-        // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
-        // first, and everything else — `/`, client-routed paths, the built static assets — is served
-        // the single-page app, with an unknown path returning index.html for client-side routing.
-        .fallback(assets::serve);
+    } else {
+        tracing::warn!("no table_token_secret configured; the QR ordering endpoint is off");
+        service
+    };
+
+    // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
+    // first, and everything else — `/`, client-routed paths, the built static assets — is served
+    // the single-page app, with an unknown path returning index.html for client-side routing.
+    let service = service.fallback(assets::serve);
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

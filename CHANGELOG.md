@@ -32,6 +32,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Guests can order from a table QR code, and the public order API is now in the OpenAPI document**
+  (ADR-0057/ADR-0012 QR ordering; ADR-0019/ADR-0056 for the doc; P11a-2). A new guest-facing
+  `POST /v1/qr/orders` takes an HMAC-signed table token as its only credential — a guest carries no
+  API key — verifies it, weighs the store's QR guardrails (offline, business hours, a per-table rate
+  limit, staff-confirmation **on by default**) with the existing pure decision, and on acceptance
+  forwards the order into the very same relay `POST /v1/orders` uses, on the QR channel for the token's
+  table. The guardrail settings come from the store's `qr` config node (all forgiving defaults); the
+  per-table rate limit is an in-process sliding window (the cloud is one VPS, ADR-0003). The endpoint
+  is off until a `table_token_secret` is configured, the same way `/admin/setup` is gated — a guest
+  order to a cloud with no secret is unverifiable, so there is nothing to serve. Separately, the
+  public `POST`/`GET /v1/orders` handlers are now annotated for OpenAPI, so `docs/openapi.json`
+  registers them (with the `OrderRequest`/`OrderResponse` schemas) alongside the daily-rollups path —
+  the generated document, regenerated in this change, is once again the whole external `/v1` contract.
+  `FakeIntake`-tested (a signed token is accepted and awaits staff confirmation; a token signed with
+  another secret is refused `403` before intake) plus unit tests for the business-hours window and the
+  rate limiter. **Upgrade note:** set `table_token_secret` in the cloud config to turn on QR ordering;
+  leaving it unset keeps the endpoint off. Forward-only and additive; no migration.
 - **A menu can now be organised into sections** (ADR-0066 entity 7, Phase 2a). A `MenuSection`
   (tenant-scoped, per-menu, archived-not-deleted) carries a name and a sort order, behind
   `/admin/catalog/menus/{menu_id}/sections` (list/create/`PATCH`); a placement names the section it
