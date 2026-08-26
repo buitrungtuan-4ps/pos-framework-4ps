@@ -2,6 +2,7 @@ import { For, Show, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { FLOOR, clean, seat, tableState } from "../state/store";
@@ -40,7 +41,7 @@ export function Floor() {
 
   return (
     <section class="p-4">
-      <h1 class="mb-4 text-lg font-semibold">{t("floor.title")}</h1>
+      <PageHeader title={t("floor.title")} />
       <Show when={error()}>
         {(message) => (
           <p class="mb-4 rounded-token border border-danger px-3 py-2 text-danger" role="alert">

@@ -1,6 +1,7 @@
 import { Show, createSignal } from "solid-js";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatMoney, money, parseWhole } from "../lib/money";
 import { closeShift, countShift, openShift, state } from "../state/store";
@@ -29,7 +30,7 @@ export function Shift() {
 
   return (
     <section class="mx-auto max-w-md p-4">
-      <h1 class="mb-4 text-lg font-semibold">{t("shift.title")}</h1>
+      <PageHeader title={t("shift.title")} />
 
       <Show when={error()}>
         {(message) => (

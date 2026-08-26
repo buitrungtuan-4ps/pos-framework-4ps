@@ -17,6 +17,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Fixed
+- **The "success" green now clears WCAG-AA contrast as text in the light theme** (P6 exit criterion,
+  #44). A numeric audit of the design-token palettes (`docs/wcag-contrast-audit.md`) measured every
+  colour pair the interface renders, in both themes, and found the light-theme `--ok` token at 3.72:1
+  on `surface` — below the 4.5:1 needed for normal text, and `ok` is used as small text (the fired-line
+  badge, the shift-variance line, the paired/settled confirmations). It was darkened from
+  `oklch(0.6 …)` to `oklch(0.52 …)`, giving 5.16:1. Every other text pair already passed. A new
+  `pnpm contrast` gate parses `tokens.css` and fails the build if any text pair drops below AA; it runs
+  in both the `ui` and `dashboard` builds and CI. The remaining sub-3:1 tokens (the 1px separator and
+  the table-state dots) are non-text and exempt — the dots are `aria-hidden` and always ride with a
+  text label, so meaning never depends on the hue. **Upgrade note:** a default value moved — the light
+  `--ok` token is darker; the dark theme is unchanged.
 - **Super-admin sign-in after enrolment now works with any authenticator app** (ADR-0034 amended).
   The mandatory TOTP second factor ran over HMAC-**SHA256**, but Google Authenticator and Microsoft
   Authenticator ignore the `otpauth://` URI's `algorithm` field and always compute **SHA1** — so the
@@ -32,6 +43,96 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The operator UI gains a shared component kit, and the design tokens are drift-guarded** (UX
+  polish, WS-E / #104). A `PageHeader` component (the edge counterpart of the dashboard's
+  `components/ui.tsx` kit) replaces the `<h1>` markup every edge screen hand-rolled; it takes a `size`
+  prop so the KDS and expo screens keep their deliberately larger two-metre titles while the
+  operator screens keep theirs — a faithful consolidation, no rendered change (the built CSS is
+  byte-identical). The design tokens and the WCAG contrast gate are duplicated verbatim across the
+  two separate front-end build roots (`ui/` and `dashboard/`), which cannot share a module; a new
+  `cargo xtask mirrored-files` check — in `just preflight` and CI — fails the build the moment a
+  mirrored pair diverges, so a token darkened in one root but not the other can no longer silently
+  leave one theme failing AA. **Scope:** the deeper visual pass over both surfaces stays human-gated
+  (it needs rendered-screen review, like the WCAG *visual* and hardware checks); this lands the
+  mechanical, verifiable half.
+- **A config publish that carries an unparseable menu is now rejected, not silently dropped**
+  (ops hardening, WS-D / #103). The cloud's `CapabilityValidator` — the gate every publish passes,
+  including the generic `PUT /admin/stores/{id}/config/{level}` route — now round-trips a `menu` or
+  `layout` node through the *exact* path the edge reads them (`to_string` → `from_str`), and rejects a
+  publish the store could not consume. Before, a malformed delivery node validated, published, and was
+  silently ignored by the edge's forgiving `session_from_config`, leaving a store on its old menu with
+  no error anywhere — a "successful" publish that never reached the counter. A `docs/security-review-ws-d.md`
+  records the finding (low severity — the route is super-admin-only) and the surrounding review of the
+  QR, relay, config and metrics surfaces. Forward-only; no migration, no protocol change.
+- **The optional monitoring profile is now wired into `pos_cloud`** (observability, WS-D / #103,
+  ADR-0031). A new `[metrics]` config section constructs the `metrics-vm` sink and spawns a sparse
+  liveness heartbeat (`pos.cloud.up`) off the sales path, alongside the other background tasks. It is
+  **off by default**: per `docs/capacity-and-reliability.md` the monitoring profile stays off below
+  ~50 stores in favour of sparse sampling, so a pilot cell leaves `[metrics]` unset and emits nothing.
+  The heartbeat carries no labels and no PII, and the sink's bounded queue drops under pressure — a
+  metrics backend can never become a trading outage. **Upgrade note:** a new optional `[metrics]`
+  config key; absent means the profile is off, so existing deployments are unaffected.
+- **A durable KDS bump survives a restart** (WS-D / #103). Projection-rebuild-on-load already replays
+  the log on boot (`pos_edge`'s `rebuild`); a regression test now proves the `kitchen.ticket.bumped`
+  event folds back on rebuild, so a kitchen screen coming up after a restart does not re-show a ticket
+  the kitchen already made.
+- **A kitchen-display bump is now durable and agreed across every screen** (P6 residual / #44). A bump
+  used to be UI-local — each KDS held its own "done" set, so a second screen or one that reconnected
+  never agreed a ticket was made. `POST /api/kds/bump` now records the durable `kitchen.ticket.bumped`
+  event and fans it out, and the edge marks a projection set (`Edge::bumped_line_ids`) so the prepared
+  lines survive a rebuild. A bump is orthogonal to a line's order state (a made line is still
+  `Fired`), so it is written as an event and folded, not as a state-machine transition. The kitchen
+  and expo screens fold the same event, so the bumped line drops off every connected screen at once;
+  "All away" on the pass bumps a whole table's lines through the one path. A domain test proves the
+  event is written, the projection reflects it, and it reaches the fan-out. **Scope:** connected
+  screens agree live; seeding a *late-joining* KDS with the already-bumped set on connect rides on the
+  same projection-rebuild-on-resync follow-up the rest of the client's live projection waits for
+  (`ui/src/App.tsx`). Forward-only and additive; no migration, no protocol change (the event was
+  already in the catalogue).
+- **A menu published from the dashboard now reaches a trading store's counter without a restart**
+  (ADR-0004 cloud-owned config, ADR-0039 config delivery, WS-B / #101). The edge's `EdgeSession` — the
+  price book, tax table, capabilities and locale a command reads — is now held behind an
+  `RwLock<Arc<…>>` so it can be swapped live: a reader takes a cheap coherent `Arc` snapshot for the
+  whole of its command, and `Edge::apply_session` installs a rebuilt one for the next. A new config-pull
+  client long-polls the store's effective config from the cloud, rebuilds the session with the pure,
+  forgiving `session_from_config` (it reads the compiled `menu` node the catalog publish writes, and an
+  absent or malformed node leaves the price book unchanged — a bad publish never blanks a trading
+  store), and hot-swaps it into the running edge. The HTTP is a seam (`ConfigTransport`), so the loop is
+  tested with no socket, and an integration test proves a live edge that booted with an empty menu
+  picks up a published one on the next pull. The whole 60-test edge domain suite still passes over the
+  new session cell, unchanged. **Scope:** this rebuilds and hot-swaps the live session; persisting the
+  pulled document to the edge's local `ConfigStore` (so a restart keeps the last menu without a
+  round-trip), applying the delta form of an update, and reading tax/capability nodes as they gain a
+  published shape, layer on this seam. Forward-only and additive; no migration, no protocol change.
+- **The store can now pull its order queue from the cloud and report each outcome back** (ADR-0061,
+  P11a-2, edge half). A new `pos-edge` relay client long-polls the cloud's per-store queue, feeds each
+  pulled order through the store's own `EdgeOrderIn` (which reprices, opens it in the local log, and
+  dedupes on the caller's reference — so a redelivery converges on one order in the kitchen), and acks
+  the outcome — an `Accepted` record or a typed refusal — back to the cloud. A malformed payload is
+  acked as `invalid_argument` rather than dropped, so the cloud stops re-parking it. The HTTP is a
+  seam (`RelayTransport`), so the pull→make→ack loop is tested with no socket against the real
+  `EdgeOrderIn`; the wire shapes are re-declared to mirror `pos_cloud::relay` (the edge must not depend
+  on the cloud crate) and pinned to the cloud's JSON by a round-trip test. The client and its
+  background `run` loop are library-ready; wiring the production TLS transport and spawning the loop in
+  `serve()` land with the edge config-pull integration (WS-B) that shares the same plumbing.
+  Forward-only and additive; no migration, no protocol change.
+- **Guests can order from a table QR code, and the public order API is now in the OpenAPI document**
+  (ADR-0057/ADR-0012 QR ordering; ADR-0019/ADR-0056 for the doc; P11a-2). A new guest-facing
+  `POST /v1/qr/orders` takes an HMAC-signed table token as its only credential — a guest carries no
+  API key — verifies it, weighs the store's QR guardrails (offline, business hours, a per-table rate
+  limit, staff-confirmation **on by default**) with the existing pure decision, and on acceptance
+  forwards the order into the very same relay `POST /v1/orders` uses, on the QR channel for the token's
+  table. The guardrail settings come from the store's `qr` config node (all forgiving defaults); the
+  per-table rate limit is an in-process sliding window (the cloud is one VPS, ADR-0003). The endpoint
+  is off until a `table_token_secret` is configured, the same way `/admin/setup` is gated — a guest
+  order to a cloud with no secret is unverifiable, so there is nothing to serve. Separately, the
+  public `POST`/`GET /v1/orders` handlers are now annotated for OpenAPI, so `docs/openapi.json`
+  registers them (with the `OrderRequest`/`OrderResponse` schemas) alongside the daily-rollups path —
+  the generated document, regenerated in this change, is once again the whole external `/v1` contract.
+  `FakeIntake`-tested (a signed token is accepted and awaits staff confirmation; a token signed with
+  another secret is refused `403` before intake) plus unit tests for the business-hours window and the
+  rate limiter. **Upgrade note:** set `table_token_secret` in the cloud config to turn on QR ordering;
+  leaving it unset keeps the endpoint off. Forward-only and additive; no migration.
 - **A menu can now be organised into sections** (ADR-0066 entity 7, Phase 2a). A `MenuSection`
   (tenant-scoped, per-menu, archived-not-deleted) carries a name and a sort order, behind
   `/admin/catalog/menus/{menu_id}/sections` (list/create/`PATCH`); a placement names the section it

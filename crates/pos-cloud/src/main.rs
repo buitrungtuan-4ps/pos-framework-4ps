@@ -12,8 +12,11 @@ use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 use link_nats::{ConsumerConfig, NatsConsumer};
+use metrics_vm::VmMetrics;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
+use pos_cloud::qr::TableTokenSecret;
+use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
@@ -43,9 +46,10 @@ async fn main() -> ExitCode {
 /// bound and served until shutdown.
 #[expect(
     clippy::too_many_lines,
-    reason = "the boot sequence wires the store, four background tasks (cursor, projector, \
-              retention, webhook dispatch), the merged router, and their shared shutdown in one \
-              linear flow; splitting it would scatter the handles the shutdown join needs"
+    reason = "the boot sequence wires the store, five background tasks (cursor, projector, \
+              retention, webhook dispatch, metrics heartbeat), the merged router, and their shared \
+              shutdown in one linear flow; splitting it would scatter the handles the shutdown join \
+              needs"
 )]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("POS_CLOUD_CONFIG")
@@ -153,6 +157,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal(),
     ));
 
+    // The optional monitoring profile (metrics-vm → VictoriaMetrics, ADR-0031): a sparse liveness
+    // heartbeat off the sales path, gated by [metrics] and off by default. Per
+    // `docs/capacity-and-reliability.md` the profile is off below ~50 stores in favour of sparse
+    // sampling, so a pilot cell leaves it unset. The sink's own bounded queue drops under pressure,
+    // so a slow or dead backend never touches trading.
+    let metrics_task = if let Some(metrics) = config.metrics.as_ref() {
+        match VmMetrics::connect(&metrics.url) {
+            Ok(sink) => {
+                let interval = Duration::from_secs(metrics.sample_interval_secs);
+                tracing::info!(
+                    url = %metrics.url,
+                    interval_secs = metrics.sample_interval_secs,
+                    "metrics heartbeat started (monitoring profile on)"
+                );
+                Some(tokio::spawn(pos_cloud::metrics::run(
+                    sink,
+                    SystemClock,
+                    interval,
+                    shutdown_signal(),
+                )))
+            }
+            Err(error) => {
+                tracing::error!(%error, "metrics url is not usable; the monitoring heartbeat is off");
+                None
+            }
+        }
+    } else {
+        tracing::info!(
+            "no [metrics] configured; the monitoring profile is off (sparse-sampling posture \
+             below ~50 stores)"
+        );
+        None
+    };
+
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
@@ -220,11 +258,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.order_queue(),
             store.api_keys(),
             SystemClock,
+        ));
+
+    // Guest QR ordering (ADR-0057), only when a signing secret is configured: the guest carries no
+    // API key, so the HMAC-signed table token is the only credential and an absent secret leaves the
+    // endpoint off (any token would be unverifiable). It forwards accepted orders into the same relay
+    // `POST /v1/orders` uses, guardrailed by the store's `qr` config.
+    let service = if let Some(secret) = config.table_token_secret.clone() {
+        tracing::info!("QR ordering enabled (POST /v1/qr/orders)");
+        service.merge(qr_http::qr_router(
+            TableTokenSecret::new(secret),
+            OrderRelay::new(
+                store.store_directory(),
+                store.config_trees(),
+                store.order_queue(),
+                SystemClock,
+            ),
+            store.config_trees(),
+            SystemClock,
         ))
-        // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
-        // first, and everything else — `/`, client-routed paths, the built static assets — is served
-        // the single-page app, with an unknown path returning index.html for client-side routing.
-        .fallback(assets::serve);
+    } else {
+        tracing::warn!("no table_token_secret configured; the QR ordering endpoint is off");
+        service
+    };
+
+    // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
+    // first, and everything else — `/`, client-routed paths, the built static assets — is served
+    // the single-page app, with an unknown path returning index.html for client-side routing.
+    let service = service.fallback(assets::serve);
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -243,6 +304,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     webhook_task.abort();
     let _ = webhook_task.await;
+    if let Some(task) = metrics_task {
+        task.abort();
+        let _ = task.await;
+    }
     Ok(())
 }
 

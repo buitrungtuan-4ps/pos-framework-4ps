@@ -17,6 +17,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::cloud::DailyRollup;
+use crate::orders::{MoneyDto, OrderLineRequest, OrderRequest, OrderResponse};
 
 /// The public `/v1` API document.
 #[derive(OpenApi)]
@@ -27,10 +28,17 @@ use crate::cloud::DailyRollup;
         description = "The public read API for the Pizza 4P's cloud. Generated from the handlers; \
                        see ADR-0019."
     ),
-    paths(crate::http::daily_rollups),
-    components(schemas(DailyRollup)),
+    paths(
+        crate::http::daily_rollups,
+        crate::orders::submit_order,
+        crate::orders::look_up_order,
+    ),
+    components(schemas(DailyRollup, OrderRequest, OrderResponse, OrderLineRequest, MoneyDto)),
     modifiers(&BearerSecurity),
-    tags((name = "rollups", description = "Per-store, per-trading-day activity rollups."))
+    tags(
+        (name = "rollups", description = "Per-store, per-trading-day activity rollups."),
+        (name = "orders", description = "Public order intake and idempotent look-up (ADR-0056)."),
+    )
 )]
 pub(crate) struct ApiDoc;
 

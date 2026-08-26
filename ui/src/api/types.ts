@@ -32,6 +32,18 @@ export interface FireRequest {
   station_id: string;
 }
 
+export interface BumpRequest {
+  order_id: string;
+  station_id: string;
+  order_line_ids: string[];
+}
+
+export interface BumpResponse {
+  order_id: string;
+  station_id: string;
+  order_line_ids: string[];
+}
+
 export interface PaymentRequest {
   method: string;
   tendered: Money;

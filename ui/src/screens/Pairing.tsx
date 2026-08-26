@@ -2,6 +2,7 @@ import { Show, createSignal } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
+import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 
 // Pairing a device: the operator reads a six-digit code off the edge and enters it here (or opens
@@ -27,7 +28,7 @@ export function Pairing() {
 
   return (
     <section class="mx-auto max-w-sm p-4">
-      <h1 class="mb-4 text-lg font-semibold">{t("pair.title")}</h1>
+      <PageHeader title={t("pair.title")} />
 
       <Show
         when={!paired()}

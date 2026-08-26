@@ -110,7 +110,7 @@ pub(crate) struct OrderResponse {
 /// The collaborators the intake route composes: the [`OrderIn`] it relays to, the [`ApiKeyStore`] and
 /// [`ClockSource`] that authenticate the bearer key, and the [`StoreDirectory`] that binds the store
 /// to a tenant.
-struct OrdersState<X, K, C, D> {
+pub(crate) struct OrdersState<X, K, C, D> {
     intake: X,
     keys: K,
     clock: C,
@@ -153,7 +153,24 @@ where
 }
 
 /// `POST /v1/orders` — authenticate, bind the store to the caller's tenant, and submit.
-async fn submit_order<X, K, C, D>(
+#[utoipa::path(
+    post,
+    path = "/v1/orders",
+    request_body = OrderRequest,
+    security(("api_key" = [])),
+    responses(
+        (status = 201, description = "The order was created", body = OrderResponse),
+        (status = 200, description = "An idempotent repeat of an already-submitted order", body = OrderResponse),
+        (status = 400, description = "A field is malformed"),
+        (status = 401, description = "The API key is missing, malformed, or invalid"),
+        (status = 403, description = "The API key lacks the place_orders scope"),
+        (status = 404, description = "No such store within the caller's tenant"),
+        (status = 409, description = "The store rejected the order (a precondition failed)"),
+        (status = 503, description = "The store did not confirm in time; retry the look-up"),
+    ),
+    tag = "orders",
+)]
+pub(crate) async fn submit_order<X, K, C, D>(
     State(state): State<OrdersState<X, K, C, D>>,
     headers: HeaderMap,
     Json(request): Json<OrderRequest>,
@@ -241,7 +258,7 @@ fn to_inbound_order(request: &OrderRequest) -> Result<InboundOrder, &'static str
 }
 
 /// Maps one wire line to an [`InboundOrderLine`], or the reason it is a `400`.
-fn to_inbound_line(line: &OrderLineRequest) -> Result<InboundOrderLine, &'static str> {
+pub(crate) fn to_inbound_line(line: &OrderLineRequest) -> Result<InboundOrderLine, &'static str> {
     let menu_item_id = line
         .menu_item_id
         .parse::<MenuItemId>()
@@ -279,7 +296,7 @@ fn to_money(money: &MoneyDto) -> Result<Money, &'static str> {
 }
 
 /// The wire body of an [`OrderAcceptance`].
-fn order_body(acceptance: &OrderAcceptance) -> OrderResponse {
+pub(crate) fn order_body(acceptance: &OrderAcceptance) -> OrderResponse {
     OrderResponse {
         order_id: acceptance.order_id.to_string(),
         created: acceptance.created,
@@ -295,7 +312,7 @@ fn order_body(acceptance: &OrderAcceptance) -> OrderResponse {
 
 /// Renders an [`OrderAcceptance`] from `submit`: `201` when this call created the order, `200` for an
 /// idempotent repeat.
-fn order_response(acceptance: &OrderAcceptance) -> Response {
+pub(crate) fn order_response(acceptance: &OrderAcceptance) -> Response {
     let status = if acceptance.created {
         StatusCode::CREATED
     } else {
@@ -308,7 +325,26 @@ fn order_response(acceptance: &OrderAcceptance) -> Response {
 /// whose `submit` timed out ([ADR-0061](../../../docs/adr/0061-order-relay.md)): look up what a
 /// reference produced rather than resubmit. Same tenant binding as `submit`; `404` while the store
 /// has not yet confirmed, or for an unknown reference.
-async fn look_up_order<X, K, C, D>(
+#[utoipa::path(
+    get,
+    path = "/v1/orders",
+    params(
+        ("store_id" = String, Query, description = "The store's 26-character ULID"),
+        ("sales_channel" = String, Query, description = "The channel wire token, e.g. SALES_CHANNEL_QR"),
+        ("external_reference" = String, Query, description = "The caller's idempotency reference"),
+    ),
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "The order as the store confirmed it", body = OrderResponse),
+        (status = 400, description = "A query parameter is missing or malformed"),
+        (status = 401, description = "The API key is missing, malformed, or invalid"),
+        (status = 403, description = "The API key lacks the place_orders scope"),
+        (status = 404, description = "No such store, or the store has not confirmed the order yet"),
+        (status = 503, description = "The intake is unreachable"),
+    ),
+    tag = "orders",
+)]
+pub(crate) async fn look_up_order<X, K, C, D>(
     State(state): State<OrdersState<X, K, C, D>>,
     headers: HeaderMap,
     Query(query): Query<LookUpQuery>,
@@ -353,7 +389,7 @@ where
 }
 
 /// Maps a submission [`PortError`] to the status the endpoint answers with.
-fn intake_error(error: &PortError) -> Response {
+pub(crate) fn intake_error(error: &PortError) -> Response {
     let status = match error.status() {
         ErrorStatus::InvalidArgument => StatusCode::BAD_REQUEST,
         ErrorStatus::FailedPrecondition | ErrorStatus::AlreadyExists => StatusCode::CONFLICT,

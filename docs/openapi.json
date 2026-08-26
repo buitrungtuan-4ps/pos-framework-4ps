@@ -10,6 +10,138 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/orders": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /v1/orders?store_id=&sales_channel=&external_reference=` — the resolution path for a caller\nwhose `submit` timed out ([ADR-0061](../../../docs/adr/0061-order-relay.md)): look up what a\nreference produced rather than resubmit. Same tenant binding as `submit`; `404` while the store\nhas not yet confirmed, or for an unknown reference.",
+        "operationId": "look_up_order",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sales_channel",
+            "in": "query",
+            "description": "The channel wire token, e.g. SALES_CHANNEL_QR",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_reference",
+            "in": "query",
+            "description": "The caller's idempotency reference",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order as the store confirmed it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is missing or malformed"
+          },
+          "401": {
+            "description": "The API key is missing, malformed, or invalid"
+          },
+          "403": {
+            "description": "The API key lacks the place_orders scope"
+          },
+          "404": {
+            "description": "No such store, or the store has not confirmed the order yet"
+          },
+          "503": {
+            "description": "The intake is unreachable"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /v1/orders` — authenticate, bind the store to the caller's tenant, and submit.",
+        "operationId": "submit_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "An idempotent repeat of an already-submitted order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The order was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is malformed"
+          },
+          "401": {
+            "description": "The API key is missing, malformed, or invalid"
+          },
+          "403": {
+            "description": "The API key lacks the place_orders scope"
+          },
+          "404": {
+            "description": "No such store within the caller's tenant"
+          },
+          "409": {
+            "description": "The store rejected the order (a precondition failed)"
+          },
+          "503": {
+            "description": "The store did not confirm in time; retry the look-up"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/stores/{store_id}/rollups/daily": {
       "get": {
         "tags": [
@@ -98,6 +230,136 @@
             "minimum": 0
           }
         }
+      },
+      "MoneyDto": {
+        "type": "object",
+        "description": "An amount of money on the wire: `{\"currency_code\": \"VND\", \"amount_minor\": 150000}`.",
+        "required": [
+          "currency_code",
+          "amount_minor"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "currency_code": {
+            "type": "string"
+          }
+        }
+      },
+      "OrderLineRequest": {
+        "type": "object",
+        "description": "One requested line.",
+        "required": [
+          "menu_item_id",
+          "quantity_milli"
+        ],
+        "properties": {
+          "menu_item_id": {
+            "type": "string"
+          },
+          "modifier_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "quoted_unit_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MoneyDto"
+              }
+            ]
+          }
+        }
+      },
+      "OrderRequest": {
+        "type": "object",
+        "description": "An order arriving through the public API.",
+        "required": [
+          "external_reference",
+          "sales_channel",
+          "store_id",
+          "lines",
+          "placed_at_ms"
+        ],
+        "properties": {
+          "external_reference": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLineRequest"
+            }
+          },
+          "placed_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sales_channel": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "table_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OrderResponse": {
+        "type": "object",
+        "description": "What became of a submitted order.",
+        "required": [
+          "order_id",
+          "created",
+          "total",
+          "repriced",
+          "awaiting_staff_confirmation"
+        ],
+        "properties": {
+          "awaiting_staff_confirmation": {
+            "type": "boolean"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "queue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "repriced": {
+            "type": "boolean"
+          },
+          "total": {
+            "$ref": "#/components/schemas/MoneyDto"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -112,6 +374,10 @@
     {
       "name": "rollups",
       "description": "Per-store, per-trading-day activity rollups."
+    },
+    {
+      "name": "orders",
+      "description": "Public order intake and idempotent look-up (ADR-0056)."
     }
   ]
 }
