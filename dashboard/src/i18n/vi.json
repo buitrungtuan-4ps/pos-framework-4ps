@@ -39,6 +39,8 @@
   "context.newTenantLabel": "Tên tenant mới",
   "context.noStores": "Tenant này chưa có cửa hàng nào.",
   "context.loadFailed": "Không tải được danh sách — thử lại.",
+  "context.search": "Tìm…",
+  "context.noMatch": "Không có kết quả.",
 
   "nav.reports": "Báo cáo",
   "nav.stores": "Cửa hàng",
@@ -60,6 +62,13 @@
   "nav.scopeNeedsStore": "Cần chọn cửa hàng",
   "shell.breadcrumb": "Đường dẫn",
   "shell.version": "Phiên bản {version}",
+  "toast.dismiss": "Đóng",
+  "notifications.open": "Thông báo",
+  "notifications.empty": "Chưa có thông báo.",
+  "notifications.clear": "Xóa tất cả",
+  "palette.open": "Tìm và chuyển",
+  "palette.placeholder": "Chuyển đến màn hình…",
+  "palette.empty": "Không có màn hình khớp.",
 
   "auth.login.title": "Đăng nhập",
   "auth.login.failed": "Mật khẩu hoặc mã không đúng.",

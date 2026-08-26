@@ -11,7 +11,9 @@ import { LOCALES, type Locale, type MessageKey, locale, localeName, setLocale, t
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
 import { setAuthed, storeName, tenantName } from "../state/session";
+import { CommandPalette, openPalette } from "./CommandPalette";
 import { ContextPicker } from "./ContextPicker";
+import { NotificationBell, ToastHost } from "./Toast";
 
 type NavItem = { href: string; key: MessageKey; scope: Scope };
 type NavGroup = { key: MessageKey; items: readonly NavItem[] };
@@ -104,6 +106,16 @@ export function Shell(props: ParentProps) {
         <div class="flex flex-1 flex-wrap items-center gap-2">
           <ContextPicker />
         </div>
+        <button
+          type="button"
+          aria-label={t("palette.open")}
+          title={t("palette.open")}
+          onClick={openPalette}
+          class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+        >
+          <span aria-hidden="true">🔎</span>
+        </button>
+        <NotificationBell />
         <label class="text-sm text-ink-muted">
           <span class="sr-only">{t("locale.label")}</span>
           <select
@@ -185,6 +197,8 @@ export function Shell(props: ParentProps) {
           </footer>
         </div>
       </div>
+      <ToastHost />
+      <CommandPalette />
     </div>
   );
 }

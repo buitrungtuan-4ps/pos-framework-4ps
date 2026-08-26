@@ -56,6 +56,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The admin console gains a framework-standard shell: grouped scope-aware nav, breadcrumbs, a
+  command palette, toasts, a notification center, org-switcher search, and locale persistence**
+  (roadmap v2, Track F1). The flat ten-item nav is now five labelled groups, each item carrying a dot
+  that fills once its working context (tenant, or tenant and store) is set; a breadcrumb strip shows
+  tenant › store › page; Cmd/Ctrl-K (and a top-bar button) opens a command palette that jumps to any
+  screen by name; a shared toast primitive (`toast.ok`/`toast.error`) surfaces outcomes and keeps a
+  short history behind a notification bell; the org switcher filters tenants and stores by name and
+  caches the loaded lists across opens; the chosen language is remembered per browser and restored on
+  load (falling back to the browser preference, then the `en` floor), the switcher shows each
+  language's own name, and the document title and `<html lang>` track the active locale; and a
+  version footer names the running build (`VITE_APP_VERSION`). Frontend only; routing unchanged.
+  **Deferred within F1** (flagged follow-up): URL-encoded working context (`/t/:tenant/s/:store/…`),
+  entity search in the palette (needs the F2 data layer), and in-app links to the shipped operator
+  guides (not yet web-served).
 - **The context picker can create a tenant, auto-disabled webhook endpoints can be re-enabled, and
   hashed dashboard assets are cached immutably** (Track F, F0). A fresh install's empty registry was a
   dead end — the picker read "No tenants yet." with nowhere to go — so it now carries an inline field

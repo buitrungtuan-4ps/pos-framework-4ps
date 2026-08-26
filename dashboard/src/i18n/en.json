@@ -39,6 +39,8 @@
   "context.newTenantLabel": "New tenant name",
   "context.noStores": "No stores in this tenant yet.",
   "context.loadFailed": "Couldn't load the list — try again.",
+  "context.search": "Search…",
+  "context.noMatch": "No match.",
 
   "nav.reports": "Reports",
   "nav.stores": "Stores",
@@ -60,6 +62,13 @@
   "nav.scopeNeedsStore": "Needs a store",
   "shell.breadcrumb": "Breadcrumb",
   "shell.version": "Version {version}",
+  "toast.dismiss": "Dismiss",
+  "notifications.open": "Notifications",
+  "notifications.empty": "No notifications yet.",
+  "notifications.clear": "Clear all",
+  "palette.open": "Search and jump",
+  "palette.placeholder": "Jump to a screen…",
+  "palette.empty": "No matching screen.",
 
   "auth.login.title": "Sign in",
   "auth.login.failed": "The password or code was not accepted.",

@@ -19,6 +19,8 @@ export function ContextPicker() {
   const [busy, setBusy] = createSignal(false);
   const [failed, setFailed] = createSignal(false);
   const [newTenant, setNewTenant] = createSignal("");
+  const [tenantSearch, setTenantSearch] = createSignal("");
+  const [storeSearch, setStoreSearch] = createSignal("");
 
   const loadTenants = async () => {
     setFailed(false);
@@ -49,8 +51,12 @@ export function ContextPicker() {
     const next = !open();
     setOpen(next);
     if (next) {
-      void loadTenants();
-      if (tenantId()) {
+      // Cache across opens: fetch only what has not loaded yet. Choosing a tenant reloads its stores
+      // and creating one refreshes the tenant list, so the cache never goes stale unnoticed.
+      if (tenants() === null) {
+        void loadTenants();
+      }
+      if (tenantId() && stores() === null) {
         void loadStores(tenantId());
       }
     }
@@ -89,6 +95,14 @@ export function ContextPicker() {
       setBusy(false);
     }
   };
+
+  // The org switcher's search: filter each list by name as the operator types.
+  const matchesSearch = (name: string, needle: string) =>
+    name.toLowerCase().includes(needle.trim().toLowerCase());
+  const shownTenants = (all: Tenant[]) =>
+    tenantSearch().trim() ? all.filter((tenant) => matchesSearch(tenant.name, tenantSearch())) : all;
+  const shownStores = (all: Store[]) =>
+    storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
 
   return (
     <div class="relative">
@@ -138,8 +152,16 @@ export function ContextPicker() {
                     <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noTenants")}</p>
                   }
                 >
+                  <input
+                    type="text"
+                    aria-label={t("context.search")}
+                    placeholder={t("context.search")}
+                    value={tenantSearch()}
+                    onInput={(event) => setTenantSearch(event.currentTarget.value)}
+                    class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                  />
                   <ul>
-                    <For each={loaded()}>
+                    <For each={shownTenants(loaded())}>
                       {(tenant) => (
                         <li>
                           <button
@@ -156,6 +178,9 @@ export function ContextPicker() {
                       )}
                     </For>
                   </ul>
+                  <Show when={shownTenants(loaded()).length === 0}>
+                    <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
+                  </Show>
                 </Show>
               )}
             </Show>
@@ -202,8 +227,16 @@ export function ContextPicker() {
                       <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noStores")}</p>
                     }
                   >
+                    <input
+                      type="text"
+                      aria-label={t("context.search")}
+                      placeholder={t("context.search")}
+                      value={storeSearch()}
+                      onInput={(event) => setStoreSearch(event.currentTarget.value)}
+                      class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                    />
                     <ul>
-                      <For each={loaded()}>
+                      <For each={shownStores(loaded())}>
                         {(store) => (
                           <li>
                             <button
@@ -220,6 +253,9 @@ export function ContextPicker() {
                         )}
                       </For>
                     </ul>
+                    <Show when={shownStores(loaded()).length === 0}>
+                      <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
+                    </Show>
                   </Show>
                 )}
               </Show>
