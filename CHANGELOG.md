@@ -17,6 +17,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Fixed
+- **The admin console no longer surfaces `tenant_id … is not a ULID`, and every scoped screen loads
+  its data on open** (Track F, F0). The `/admin` screens guarded the working context inconsistently —
+  several fired their first request with an empty tenant/store id and surfaced the raw backend
+  `… is not a ULID` `400`, and every screen sat blank behind a manual "Load" button. A shared context
+  contract (`dashboard/src/lib/scoped.tsx`) replaces both: `RequireContext` renders a screen — and
+  lets it fetch — only once its tenant, or tenant *and* store, is chosen, showing a "pick it in the
+  top bar" panel otherwise; `onScopedContext` loads on mount and again whenever the context changes,
+  but never with an empty id. Every scoped screen (Reports, Stores, Catalog, Layout, Config, API keys,
+  Devices, Webhooks, Translations, Activation) now uses it, and the manual Load button became a
+  Refresh. A `401` from any call now drops the client's authed flag so the shell returns the operator
+  to the login screen instead of stranding them on a view that can no longer load, and the guided
+  new-store wizard mints its store exactly once even if the operator steps back and forward.
+  **Upgrade note:** none — operator-UI behaviour only; no schema, protocol, or permission change.
 - **The "success" green now clears WCAG-AA contrast as text in the light theme** (P6 exit criterion,
   #44). A numeric audit of the design-token palettes (`docs/wcag-contrast-audit.md`) measured every
   colour pair the interface renders, in both themes, and found the light-theme `--ok` token at 3.72:1
@@ -43,6 +56,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The context picker can create a tenant, auto-disabled webhook endpoints can be re-enabled, and
+  hashed dashboard assets are cached immutably** (Track F, F0). A fresh install's empty registry was a
+  dead end — the picker read "No tenants yet." with nowhere to go — so it now carries an inline field
+  that mints a tenant, selects it, and loads its (empty) store list, flowing straight on to the first
+  store. A webhook endpoint the delivery task auto-disabled after a day of failures can now be
+  re-enabled from the Webhooks screen (`POST /admin/webhooks/{id}/enable`, super-admin only,
+  tenant-scoped like deletion); delivery resumes from the endpoint's stored cursor, so nothing that
+  queued while it was down is skipped. And the embedded dashboard now sets `Cache-Control` — the
+  content-hashed bundles under `assets/` as `immutable` for a year, and the `index.html` entry
+  document as `no-cache`, so a new deploy is picked up on the next load rather than served stale.
 - **The operator UI gains a shared component kit, and the design tokens are drift-guarded** (UX
   polish, WS-E / #104). A `PageHeader` component (the edge counterpart of the dashboard's
   `components/ui.tsx` kit) replaces the `<h1>` markup every edge screen hand-rolled; it takes a `size`

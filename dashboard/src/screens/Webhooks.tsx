@@ -8,6 +8,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { WebhookSummary } from "../api/types";
 import { t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -29,6 +30,9 @@ export function Webhooks() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const register = async () => {
     setError("");
@@ -58,19 +62,31 @@ export function Webhooks() {
     }
   };
 
+  // Re-enable an endpoint the delivery task auto-disabled after a day of failures; delivery then
+  // resumes from the endpoint's stored cursor, so nothing in the backlog is skipped (ADR-0032).
+  const reenable = async (id: string) => {
+    setError("");
+    setBusy(true);
+    try {
+      await api.enableWebhook(tenantId(), id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <PageHeader title={t("webhooks.title")} description={t("webhooks.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <div class="grid gap-6 lg:grid-cols-2">
           <Card
             title={t("webhooks.list")}
             actions={
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
+                {t("action.refresh")}
               </Button>
             }
           >
@@ -90,13 +106,24 @@ export function Webhooks() {
                               {row.disabled ? t("webhooks.disabled") : t("webhooks.active")}
                             </p>
                           </div>
-                          <Button
-                            variant="danger"
-                            disabled={busy()}
-                            onClick={() => void remove(row.id)}
-                          >
-                            {t("action.delete")}
-                          </Button>
+                          <div class="flex shrink-0 gap-2">
+                            <Show when={row.disabled}>
+                              <Button
+                                variant="secondary"
+                                disabled={busy()}
+                                onClick={() => void reenable(row.id)}
+                              >
+                                {t("webhooks.reenable")}
+                              </Button>
+                            </Show>
+                            <Button
+                              variant="danger"
+                              disabled={busy()}
+                              onClick={() => void remove(row.id)}
+                            >
+                              {t("action.delete")}
+                            </Button>
+                          </div>
                         </li>
                       )}
                     </For>
@@ -139,7 +166,7 @@ export function Webhooks() {
             </Show>
           </Card>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

@@ -52,17 +52,39 @@ pub async fn serve(uri: Uri) -> Response {
         .into_response()
 }
 
-/// Builds a response with the right content type. The MIME comes from the extension via
-/// [`mime_for`], which returns a `&'static str`, so the header value is infallible.
+/// Builds a response with the right content type and cache policy. The MIME comes from the extension
+/// via [`mime_for`] and the caching from [`cache_control_for`]; both return a `&'static str`, so the
+/// header values are infallible.
 fn respond(path: &str, bytes: Vec<u8>) -> Response {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(mime_for(path)),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(mime_for(path)),
+            ),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static(cache_control_for(path)),
+            ),
+        ],
         bytes,
     )
         .into_response()
+}
+
+/// The `Cache-Control` for a dashboard asset, by path.
+///
+/// Vite fingerprints everything it emits under `assets/` with a content hash, so those bytes are
+/// immutable — a new build changes the filename, never the contents at a given name — and can be
+/// cached hard and effectively forever. Everything else, above all the `index.html` that the SPA and
+/// every client-routed path fall back to, must be revalidated, so a fresh deploy is picked up on the
+/// next load rather than served stale from a browser cache.
+fn cache_control_for(path: &str) -> &'static str {
+    if path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
 }
 
 /// The bytes of a dashboard asset, from the binary or (under `dev-ui`) from disk. `None` if absent.
@@ -100,7 +122,7 @@ fn mime_for(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::mime_for;
+    use super::{cache_control_for, mime_for};
 
     #[test]
     fn known_extensions_map_to_web_mime_types() {
@@ -114,5 +136,21 @@ mod tests {
     fn an_unknown_extension_is_a_safe_binary_default() {
         assert_eq!(mime_for("mystery.xyz"), "application/octet-stream");
         assert_eq!(mime_for("noextension"), "application/octet-stream");
+    }
+
+    #[test]
+    fn hashed_assets_cache_forever_and_the_entry_document_revalidates() {
+        // Fingerprinted bundles under `assets/` are immutable — cache them hard.
+        assert_eq!(
+            cache_control_for("assets/index-a1b2c3.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            cache_control_for("assets/index-d4e5f6.css"),
+            "public, max-age=31536000, immutable"
+        );
+        // The SPA entry document and root files must revalidate so a new deploy is seen at once.
+        assert_eq!(cache_control_for("index.html"), "no-cache");
+        assert_eq!(cache_control_for("favicon.ico"), "no-cache");
     }
 }

@@ -8,6 +8,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { TranslationGrid } from "../api/types";
 import { LOCALES, t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -32,6 +33,9 @@ export function Translations() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const setCell = (key: string, locale: string, value: string) => {
     const current = grid();
@@ -71,15 +75,12 @@ export function Translations() {
   return (
     <div>
       <PageHeader title={t("translations.title")} description={t("translations.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <Card
           title={t("translations.grid")}
           actions={
             <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.load")}
+              {t("action.refresh")}
             </Button>
           }
         >
@@ -144,7 +145,7 @@ export function Translations() {
             </div>
           </Show>
         </Card>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

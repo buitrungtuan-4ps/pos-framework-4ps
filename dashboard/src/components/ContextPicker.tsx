@@ -18,6 +18,7 @@ export function ContextPicker() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [failed, setFailed] = createSignal(false);
+  const [newTenant, setNewTenant] = createSignal("");
 
   const loadTenants = async () => {
     setFailed(false);
@@ -63,6 +64,30 @@ export function ContextPicker() {
   const chooseStore = (store: Store) => {
     selectStore(store.store_id, store.name);
     setOpen(false);
+  };
+
+  // Create a tenant right here (F0). Before this, an empty registry was a dead end: the picker read
+  // "No tenants yet." with nowhere to go, so a fresh install could not start provisioning at all. A
+  // newly created tenant is selected and its (empty) store list loaded, so the operator flows
+  // straight on to adding the first store.
+  const createTenant = async () => {
+    const name = newTenant().trim();
+    if (!name) {
+      return;
+    }
+    setFailed(false);
+    setBusy(true);
+    try {
+      const created = await api.createTenant(name);
+      setNewTenant("");
+      await loadTenants();
+      selectTenant(created.tenant_id, created.name);
+      void loadStores(created.tenant_id);
+    } catch (caught) {
+      setFailed(caught instanceof ApiError || caught instanceof Error);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -134,6 +159,29 @@ export function ContextPicker() {
                 </Show>
               )}
             </Show>
+
+            <div class="mt-2 flex gap-2">
+              <input
+                type="text"
+                aria-label={t("context.newTenantLabel")}
+                placeholder={t("context.newTenantLabel")}
+                value={newTenant()}
+                onInput={(event) => setNewTenant(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void createTenant();
+                  }
+                }}
+                class="min-h-touch min-w-0 flex-1 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+              />
+              <Button
+                variant="secondary"
+                disabled={busy() || !newTenant().trim()}
+                onClick={() => void createTenant()}
+              >
+                {t("action.create")}
+              </Button>
+            </div>
 
             <Show when={tenantId()}>
               <p class="mt-3 px-1 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted">

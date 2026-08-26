@@ -8,6 +8,7 @@ import { A } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import type { Brand, Store } from "../api/types";
 import { t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
@@ -43,6 +44,9 @@ export function Stores() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const createStore = async () => {
     const name = newStoreName().trim();
@@ -130,10 +134,7 @@ export function Stores() {
   return (
     <div>
       <PageHeader title={t("stores.title")} description={t("stores.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Card
             title={t("stores.list")}
@@ -146,7 +147,7 @@ export function Stores() {
                   {t("wizard.open")}
                 </A>
                 <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.load")}
+                  {t("action.refresh")}
                 </Button>
               </div>
             }
@@ -310,7 +311,7 @@ export function Stores() {
             </Card>
           </div>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

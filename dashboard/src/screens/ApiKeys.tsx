@@ -7,6 +7,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { ApiKeySummary } from "../api/types";
 import { type MessageKey, t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 
@@ -35,6 +36,9 @@ export function ApiKeys() {
       setBusy(false);
     }
   };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
 
   const toggle = (wire: string) => {
     const next = new Set(chosen());
@@ -77,16 +81,13 @@ export function ApiKeys() {
   return (
     <div>
       <PageHeader title={t("apiKeys.title")} description={t("apiKeys.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <div class="grid gap-6 lg:grid-cols-2">
           <Card
             title={t("apiKeys.list")}
             actions={
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.load")}
+                {t("action.refresh")}
               </Button>
             }
           >
@@ -171,7 +172,7 @@ export function ApiKeys() {
             </Button>
           </Card>
         </div>
-      </Show>
+      </RequireContext>
     </div>
   );
 }

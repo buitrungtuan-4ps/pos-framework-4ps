@@ -6,6 +6,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { DeviceProposalSummary, Store } from "../api/types";
 import { t } from "../i18n";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 
@@ -38,6 +39,9 @@ export function Devices() {
     }
   };
 
+  // Load on open and whenever the tenant changes — never with an empty context (F0).
+  onScopedContext("tenant", () => void load());
+
   const decide = async (id: string, approve: boolean) => {
     setBusy(true);
     try {
@@ -53,15 +57,12 @@ export function Devices() {
   return (
     <div>
       <PageHeader title={t("devices.title")} description={t("devices.description")} />
-      <Show
-        when={tenantId()}
-        fallback={<Banner tone="danger" message={t("context.tenantRequired")} />}
-      >
+      <RequireContext need="tenant">
         <Card
           title={t("devices.pending")}
           actions={
             <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.load")}
+              {t("action.refresh")}
             </Button>
           }
         >
@@ -116,7 +117,7 @@ export function Devices() {
             )}
           </Show>
         </Card>
-      </Show>
+      </RequireContext>
     </div>
   );
 }
