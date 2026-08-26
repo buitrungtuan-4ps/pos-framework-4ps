@@ -1,6 +1,6 @@
-// Stores & brands management (ADR-0065, WS-C). The operator's place to give the backfilled
-// placeholder stores (`Store 01J9…`) real names, create new stores and brands, assign a store to a
-// brand, and archive/restore — all by name, no ULID typed. Tenant-scoped to the picker's context.
+// Stores & brands management (ADR-0065, WS-C), on the F2 CRUD kit. The operator's place to give the
+// backfilled placeholder stores (`Store 01J9…`) real names, create new stores and brands, and
+// archive/restore — all by name, no ULID typed. Tenant-scoped to the picker's context.
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
@@ -11,6 +11,15 @@ import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import {
+  type Column,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  StatusBadge,
+  TechnicalDetails,
+} from "../components/kit";
+import { toast } from "../components/Toast";
 
 export function Stores() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
@@ -25,8 +34,14 @@ export function Stores() {
   const [editing, setEditing] = createSignal("");
   const [draftName, setDraftName] = createSignal("");
 
-  const fail = (caught: unknown) =>
-    setError(caught instanceof ApiError ? caught.message : String(caught));
+  const [pendingArchive, setPendingArchive] = createSignal<Store | null>(null);
+
+  // Errors surface on the page (Banner) and as a transient toast (F1).
+  const fail = (caught: unknown) => {
+    const message = caught instanceof ApiError ? caught.message : String(caught);
+    setError(message);
+    toast.error(message);
+  };
 
   const load = async () => {
     setError("");
@@ -60,6 +75,7 @@ export function Stores() {
       await api.createStore(tenantId(), name, newStoreBrand() || undefined);
       setNewStoreName("");
       setNewStoreBrand("");
+      toast.ok(t("stores.created"));
       await load();
     } catch (caught) {
       fail(caught);
@@ -79,6 +95,7 @@ export function Stores() {
     try {
       await api.createBrand(tenantId(), name);
       setNewBrandName("");
+      toast.ok(t("stores.brandCreated"));
       await load();
     } catch (caught) {
       fail(caught);
@@ -103,6 +120,7 @@ export function Stores() {
       });
       setEditing("");
       setDraftName("");
+      toast.ok(t("stores.renamed"));
       await load();
     } catch (caught) {
       fail(caught);
@@ -111,18 +129,21 @@ export function Stores() {
     }
   };
 
-  const setStoreFields = async (
-    store: Store,
-    fields: { name?: string; status?: Store["status"]; brandId?: string | null },
-  ) => {
+  const archive = async () => {
+    const store = pendingArchive();
+    if (!store) {
+      return;
+    }
     setError("");
     setBusy(true);
     try {
       await api.updateStore(store.store_id, tenantId(), {
-        name: fields.name ?? store.name,
-        status: fields.status ?? store.status,
-        brandId: fields.brandId === undefined ? store.brand_id : fields.brandId,
+        name: store.name,
+        status: "archived",
+        brandId: store.brand_id,
       });
+      setPendingArchive(null);
+      toast.ok(t("stores.archived"));
       await load();
     } catch (caught) {
       fail(caught);
@@ -130,6 +151,111 @@ export function Stores() {
       setBusy(false);
     }
   };
+
+  const restore = async (store: Store) => {
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateStore(store.store_id, tenantId(), {
+        name: store.name,
+        status: "active",
+        brandId: store.brand_id,
+      });
+      toast.ok(t("stores.restored"));
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Reassign a store to a different brand (or none) in place — the store's other fields are carried
+  // through unchanged, so this only moves the brand link.
+  const reassignBrand = async (store: Store, brandId: string) => {
+    setError("");
+    setBusy(true);
+    try {
+      await api.updateStore(store.store_id, tenantId(), {
+        name: store.name,
+        status: store.status,
+        brandId: brandId || null,
+      });
+      toast.ok(t("stores.brandChanged"));
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const columns = (): Column<Store>[] => [
+    {
+      key: "name",
+      header: t("stores.name"),
+      sortValue: (row) => row.name,
+      cell: (row) => (
+        <Show when={editing() === row.store_id} fallback={<span>{row.name}</span>}>
+          <div class="flex flex-wrap items-center gap-2">
+            <input
+              class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+              aria-label={t("stores.name")}
+              value={draftName()}
+              onInput={(event) => setDraftName(event.currentTarget.value)}
+            />
+            <Button disabled={busy()} onClick={() => void saveRename(row)}>
+              {t("action.save")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setEditing("");
+                setDraftName("");
+              }}
+            >
+              {t("action.cancel")}
+            </Button>
+          </div>
+        </Show>
+      ),
+    },
+    {
+      key: "brand",
+      header: t("stores.brand"),
+      cell: (row) => (
+        <select
+          class="min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink disabled:opacity-60"
+          aria-label={t("stores.brand")}
+          disabled={busy() || row.status === "archived"}
+          value={row.brand_id ?? ""}
+          onChange={(event) => void reassignBrand(row, event.currentTarget.value)}
+        >
+          <option value="">{t("stores.noBrand")}</option>
+          <For each={brands()}>
+            {(brand) => <option value={brand.brand_id}>{brand.name}</option>}
+          </For>
+        </select>
+      ),
+    },
+    {
+      key: "status",
+      header: t("stores.status"),
+      cell: (row) => (
+        <StatusBadge
+          tone={row.status === "archived" ? "archived" : "active"}
+          label={row.status === "archived" ? t("status.archived") : t("status.active")}
+        />
+      ),
+    },
+    {
+      key: "id",
+      header: t("common.technicalDetails"),
+      cell: (row) => (
+        <TechnicalDetails label={t("common.technicalDetails")}>{row.store_id}</TechnicalDetails>
+      ),
+    },
+  ];
 
   return (
     <div>
@@ -158,112 +284,46 @@ export function Stores() {
               fallback={<p class="text-sm text-ink-muted">{t("stores.loadHint")}</p>}
             >
               {(loaded) => (
-                <Show
-                  when={loaded().length > 0}
-                  fallback={<p class="text-sm text-ink-muted">{t("stores.empty")}</p>}
-                >
-                  <div class="overflow-x-auto">
-                    <table class="w-full text-left text-sm">
-                      <thead>
-                        <tr class="border-b border-line text-ink-muted">
-                          <th class="py-2 pr-4 font-medium">{t("stores.name")}</th>
-                          <th class="py-2 pr-4 font-medium">{t("stores.brand")}</th>
-                          <th class="py-2 pr-4 font-medium">{t("stores.status")}</th>
-                          <th class="py-2 font-medium">{t("stores.actions")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <For each={loaded()}>
-                          {(store) => (
-                            <tr class="border-b border-line align-top text-ink">
-                              <td class="py-2 pr-4">
-                                <Show
-                                  when={editing() === store.store_id}
-                                  fallback={
-                                    <div class="flex flex-col">
-                                      <span>{store.name}</span>
-                                      <span class="font-mono text-xs text-ink-muted">
-                                        {store.store_id}
-                                      </span>
-                                    </div>
-                                  }
-                                >
-                                  <div class="flex flex-wrap items-center gap-2">
-                                    <input
-                                      class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                                      aria-label={t("stores.name")}
-                                      value={draftName()}
-                                      onInput={(event) => setDraftName(event.currentTarget.value)}
-                                    />
-                                    <Button disabled={busy()} onClick={() => void saveRename(store)}>
-                                      {t("action.save")}
-                                    </Button>
-                                    <Button
-                                      variant="secondary"
-                                      onClick={() => {
-                                        setEditing("");
-                                        setDraftName("");
-                                      }}
-                                    >
-                                      {t("action.cancel")}
-                                    </Button>
-                                  </div>
-                                </Show>
-                              </td>
-                              <td class="py-2 pr-4">
-                                <select
-                                  class="min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                                  aria-label={t("stores.brand")}
-                                  value={store.brand_id ?? ""}
-                                  onChange={(event) =>
-                                    void setStoreFields(store, {
-                                      brandId: event.currentTarget.value || null,
-                                    })
-                                  }
-                                >
-                                  <option value="">{t("stores.noBrand")}</option>
-                                  <For each={brands()}>
-                                    {(brand) => <option value={brand.brand_id}>{brand.name}</option>}
-                                  </For>
-                                </select>
-                              </td>
-                              <td class="py-2 pr-4">
-                                {store.status === "archived"
-                                  ? t("stores.statusArchived")
-                                  : t("stores.statusActive")}
-                              </td>
-                              <td class="flex flex-wrap gap-2 py-2">
-                                <Button
-                                  variant="secondary"
-                                  disabled={busy()}
-                                  onClick={() => {
-                                    setEditing(store.store_id);
-                                    setDraftName(store.name);
-                                  }}
-                                >
-                                  {t("stores.rename")}
-                                </Button>
-                                <Button
-                                  variant={store.status === "archived" ? "secondary" : "danger"}
-                                  disabled={busy()}
-                                  onClick={() =>
-                                    void setStoreFields(store, {
-                                      status: store.status === "archived" ? "active" : "archived",
-                                    })
-                                  }
-                                >
-                                  {store.status === "archived"
-                                    ? t("stores.restore")
-                                    : t("stores.archive")}
-                                </Button>
-                              </td>
-                            </tr>
-                          )}
-                        </For>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
+                <DataTable
+                  columns={columns()}
+                  rows={loaded()}
+                  empty={<EmptyState title={t("stores.empty")} />}
+                  actionsHeader={t("common.actions")}
+                  actions={(row) => (
+                    <div class="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        disabled={busy()}
+                        onClick={() => {
+                          setEditing(row.store_id);
+                          setDraftName(row.name);
+                        }}
+                      >
+                        {t("stores.rename")}
+                      </Button>
+                      <Show
+                        when={row.status === "archived"}
+                        fallback={
+                          <Button
+                            variant="danger"
+                            disabled={busy()}
+                            onClick={() => setPendingArchive(row)}
+                          >
+                            {t("stores.archive")}
+                          </Button>
+                        }
+                      >
+                        <Button
+                          variant="secondary"
+                          disabled={busy()}
+                          onClick={() => void restore(row)}
+                        >
+                          {t("stores.restore")}
+                        </Button>
+                      </Show>
+                    </div>
+                  )}
+                />
               )}
             </Show>
           </Card>
@@ -311,6 +371,19 @@ export function Stores() {
             </Card>
           </div>
         </div>
+
+        <ConfirmDialog
+          open={pendingArchive() !== null}
+          title={t("stores.archiveTitle")}
+          message={t("stores.archiveMessage")}
+          confirmLabel={t("stores.archive")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          danger
+          busy={busy()}
+          onConfirm={() => void archive()}
+          onCancel={() => setPendingArchive(null)}
+        />
       </RequireContext>
     </div>
   );
