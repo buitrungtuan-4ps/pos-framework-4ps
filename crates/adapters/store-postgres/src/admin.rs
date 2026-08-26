@@ -172,4 +172,180 @@ impl PostgresAdmin {
             .map_err(unavailable)?;
         Ok(())
     }
+
+    // ---- Multi-admin surface ([ADR-0067]) ----
+
+    /// Inserts a console admin, first-writer-wins on the email: `ON CONFLICT (lower(email)) DO
+    /// NOTHING` matches the case-insensitive unique index, so a second insert for an existing address
+    /// writes nothing. Returns whether it inserted the row.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn insert_admin_user(
+        &self,
+        id: &str,
+        email: &str,
+        name: &str,
+        role: &str,
+        status: &str,
+        password_phc: &str,
+        totp_secret: &[u8],
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "INSERT INTO admin_users \
+                 (id, email, name, role, status, password_phc, totp_secret, last_used_totp_step) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL) \
+                 ON CONFLICT (lower(email)) DO NOTHING",
+                &[
+                    &id,
+                    &email,
+                    &name,
+                    &role,
+                    &status,
+                    &password_phc,
+                    &totp_secret,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
+    /// Lists every console admin — identity and role only, oldest first. No credential column is
+    /// selected, so nothing sensitive crosses the boundary.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_admin_users(&self) -> Result<Vec<AdminUserRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT id, email, name, role, status FROM admin_users ORDER BY created_at, id",
+                &[],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(row_to_admin_user).collect())
+    }
+
+    /// Fetches one console admin by id, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_admin_user(&self, id: &str) -> Result<Option<AdminUserRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT id, email, name, role, status FROM admin_users WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(row_to_admin_user))
+    }
+
+    /// Fetches one console admin by email, compared case-insensitively, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminUserRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT id, email, name, role, status FROM admin_users WHERE lower(email) = lower($1)",
+                &[&email],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(row_to_admin_user))
+    }
+
+    /// Sets an admin's role. Returns whether a row matched `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_admin_user_role(&self, id: &str, role: &str) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "UPDATE admin_users SET role = $2, updated_at = now() WHERE id = $1",
+                &[&id, &role],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
+    /// Sets an admin's status. Returns whether a row matched `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_admin_user_status(&self, id: &str, status: &str) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "UPDATE admin_users SET status = $2, updated_at = now() WHERE id = $1",
+                &[&id, &status],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
+    /// How many admins are both `owner` and `active`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn count_active_owners(&self) -> Result<i64, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_one(
+                "SELECT count(*) FROM admin_users WHERE role = 'owner' AND status = 'active'",
+                &[],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.get(0))
+    }
+}
+
+/// A console admin as listed — identity and role, no credential (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+///
+/// `pos-cloud` converts this into its `AdminUser`: `role` and `status` are the stored tokens
+/// (`owner`/`admin`/`ops`/`viewer`, `active`/`suspended`) it maps to its enums.
+#[derive(Clone, Debug)]
+pub struct AdminUserRow {
+    /// The admin's ULID id (a string).
+    pub id: String,
+    /// The login identity.
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The stored role token.
+    pub role: String,
+    /// The stored status token.
+    pub status: String,
+}
+
+/// Reads an `admin_users` row selected as `(id, email, name, role, status)`.
+fn row_to_admin_user(row: &tokio_postgres::Row) -> AdminUserRow {
+    AdminUserRow {
+        id: row.get(0),
+        email: row.get(1),
+        name: row.get(2),
+        role: row.get(3),
+        status: row.get(4),
+    }
 }

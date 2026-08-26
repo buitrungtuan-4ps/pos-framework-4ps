@@ -22,7 +22,9 @@ use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
 use pos_cloud::auth::SuperAdminCredential;
-use pos_cloud::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
+use pos_cloud::auth::admin::{
+    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, NewAdminUser,
+};
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
     issue,
@@ -225,6 +227,7 @@ struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
     last_used_totp_step: Arc<Mutex<Option<u64>>>,
     sessions: Arc<Mutex<HashMap<[u8; 32], Timestamp>>>,
+    admin_users: Arc<Mutex<Vec<AdminUser>>>,
 }
 
 impl FakeAdmin {
@@ -301,6 +304,92 @@ impl AdminStore for FakeAdmin {
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
         self.sessions.lock().expect("lock").remove(&token_hash);
         Ok(())
+    }
+
+    async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        if users
+            .iter()
+            .any(|existing| existing.email.eq_ignore_ascii_case(&user.email))
+        {
+            return Ok(false);
+        }
+        users.push(AdminUser {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            status: AdminStatus::Active,
+        });
+        Ok(true)
+    }
+
+    async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
+        Ok(self.admin_users.lock().expect("lock").clone())
+    }
+
+    async fn get_admin_user(&self, id: &str) -> Result<Option<AdminUser>, AdminStoreError> {
+        Ok(self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|user| user.id == id)
+            .cloned())
+    }
+
+    async fn find_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminUser>, AdminStoreError> {
+        Ok(self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|user| user.email.eq_ignore_ascii_case(email))
+            .cloned())
+    }
+
+    async fn set_admin_user_role(
+        &self,
+        id: &str,
+        role: AdminRole,
+    ) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        match users.iter_mut().find(|user| user.id == id) {
+            Some(user) => {
+                user.role = role;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn set_admin_user_status(
+        &self,
+        id: &str,
+        status: AdminStatus,
+    ) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        match users.iter_mut().find(|user| user.id == id) {
+            Some(user) => {
+                user.status = status;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn count_active_owners(&self) -> Result<u64, AdminStoreError> {
+        let count = self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|user| user.role == AdminRole::Owner && user.status == AdminStatus::Active)
+            .count();
+        Ok(u64::try_from(count).unwrap_or(u64::MAX))
     }
 }
 

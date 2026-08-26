@@ -23,10 +23,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
-    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    AdminUserRow, BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
+    CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
+    CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
+    PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
     PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
     TenantRow,
@@ -47,7 +47,9 @@ use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::auth::SuperAdminCredential;
-use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
+use crate::auth::admin::{
+    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, NewAdminUser,
+};
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
@@ -390,6 +392,91 @@ impl AdminStore for PostgresAdmin {
             .await
             .map_err(|error| AdminStoreError::new(error.to_string()))
     }
+
+    async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
+        self.insert_admin_user(
+            &user.id,
+            &user.email,
+            &user.name,
+            user.role.as_token(),
+            AdminStatus::Active.as_token(),
+            &user.password_phc,
+            &user.totp_secret,
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
+        let rows = PostgresAdmin::list_admin_users(self)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        rows.into_iter().map(admin_user_from_row).collect()
+    }
+
+    async fn get_admin_user(&self, id: &str) -> Result<Option<AdminUser>, AdminStoreError> {
+        let row = self
+            .fetch_admin_user(id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_user_from_row).transpose()
+    }
+
+    async fn find_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminUser>, AdminStoreError> {
+        let row = self
+            .fetch_admin_user_by_email(email)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_user_from_row).transpose()
+    }
+
+    async fn set_admin_user_role(
+        &self,
+        id: &str,
+        role: AdminRole,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::set_admin_user_role(self, id, role.as_token())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn set_admin_user_status(
+        &self,
+        id: &str,
+        status: AdminStatus,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::set_admin_user_status(self, id, status.as_token())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn count_active_owners(&self) -> Result<u64, AdminStoreError> {
+        let count = PostgresAdmin::count_active_owners(self)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+}
+
+/// Converts a stored `admin_users` row into the domain [`AdminUser`], failing loudly if the role or
+/// status token is unrecognised — the table's CHECK constraints keep them within the known
+/// vocabularies, so an unparseable value is store corruption, not an ordinary absence.
+fn admin_user_from_row(row: AdminUserRow) -> Result<AdminUser, AdminStoreError> {
+    let role = AdminRole::from_token(&row.role)
+        .ok_or_else(|| AdminStoreError::new(format!("unknown admin role token: {}", row.role)))?;
+    let status = AdminStatus::from_token(&row.status).ok_or_else(|| {
+        AdminStoreError::new(format!("unknown admin status token: {}", row.status))
+    })?;
+    Ok(AdminUser {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        role,
+        status,
+    })
 }
 
 impl ApiKeyAdminStore for PostgresApiKeys {

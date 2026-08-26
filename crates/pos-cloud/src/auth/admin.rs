@@ -29,7 +29,7 @@ use core::future::Future;
 use axum::http::header::COOKIE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use pos_proto::determinism::ClockSource;
@@ -63,9 +63,144 @@ impl fmt::Debug for AdminCredential {
     }
 }
 
+/// A console admin's role — the least-privilege tier its session is granted
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the
+/// schema and seam store; the role→permission templates (the compile-forced §9-style registry) land
+/// in a later G1 slice and are built on top of these variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminRole {
+    /// Everything, including managing other admins. There is always at least one active owner.
+    Owner,
+    /// All tenant data; cannot manage admins.
+    Admin,
+    /// Day-to-day operations: devices, activation, webhooks, config publish.
+    Ops,
+    /// Read-only.
+    Viewer,
+}
+
+impl AdminRole {
+    /// Every role, in privilege order — for enumeration and the console picker.
+    pub const ALL: &'static [Self] = &[Self::Owner, Self::Admin, Self::Ops, Self::Viewer];
+
+    /// The token stored in PostgreSQL and carried on the wire.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+            Self::Ops => "ops",
+            Self::Viewer => "viewer",
+        }
+    }
+
+    /// Parses a stored token, or `None` if it names no known role. An unrecognised value fails closed
+    /// (the caller treats it as no role) rather than being coerced to a privileged default.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|role| role.as_token() == token)
+    }
+}
+
+/// Whether an admin can sign in. `Suspended` keeps the row and its history but refuses new sessions —
+/// the off-boarding path that does not destroy the audit trail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminStatus {
+    /// In use — can sign in.
+    Active,
+    /// Retired — cannot sign in; kept for history.
+    Suspended,
+}
+
+impl AdminStatus {
+    /// The token stored in PostgreSQL and carried on the wire.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+        }
+    }
+
+    /// Parses a stored token, or `None` if it names no known status.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "active" => Some(Self::Active),
+            "suspended" => Some(Self::Suspended),
+            _ => None,
+        }
+    }
+}
+
+/// A console admin as listed — identity and role, never the credential. Safe to serialise to the
+/// console: it carries no password hash and no TOTP secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminUser {
+    /// The admin's ULID id (a string; minted at the HTTP edge).
+    pub id: String,
+    /// The login identity. Unique case-insensitively across admins.
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The role that decides the session's permissions.
+    pub role: AdminRole,
+    /// Whether the admin can sign in.
+    pub status: AdminStatus,
+}
+
+/// The input to provisioning a new console admin: identity, role, and the freshly-hashed credential
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). `password_phc` is the Argon2id PHC
+/// string and `totp_secret` the raw RFC 6238 secret, both minted at the HTTP edge exactly as
+/// first-boot enrolment does; a new admin starts `active`.
+///
+/// [`fmt::Debug`] redacts the password hash and the TOTP secret, so neither can reach a log through a
+/// derived `Debug`.
+#[derive(Clone)]
+pub struct NewAdminUser {
+    /// The admin's ULID id.
+    pub id: String,
+    /// The login identity — the caller passes it already normalised (trimmed, lower-case); uniqueness
+    /// is enforced case-insensitively regardless.
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The role to grant.
+    pub role: AdminRole,
+    /// The Argon2id PHC string — the hash, never the password.
+    pub password_phc: String,
+    /// The raw RFC 6238 TOTP shared secret.
+    pub totp_secret: Vec<u8>,
+}
+
+impl fmt::Debug for NewAdminUser {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewAdminUser")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("name", &self.name)
+            .field("role", &self.role)
+            .field("password_phc", &"<redacted>")
+            .field("totp_secret", &"<redacted>")
+            .finish()
+    }
+}
+
 /// The super-admin store: the one credential, and the server-side session table
 /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)). A table in `store-postgres`; a fake in
 /// tests.
+///
+/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) extends this seam with the
+/// multi-admin surface — provisioning, listing and role/status management of named
+/// [`AdminUser`]s over the `admin_users` table. The single-super-admin methods stay for now: the
+/// login flow and session guard migrate onto `admin_users` in a later slice, so through the
+/// transition both the legacy credential and the new user table are readable.
 ///
 /// Sessions are keyed by `SHA-256(token)`, never the token, so nothing this store holds can be
 /// replayed as a live session if the table leaks.
@@ -137,6 +272,84 @@ pub trait AdminStore {
         &self,
         token_hash: [u8; 32],
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    // ---- Multi-admin surface ([ADR-0067]) ----
+
+    /// Provisions a new console admin. Returns `Ok(false)` without writing when an admin with the
+    /// same email (compared case-insensitively) already exists, so a caller never silently replaces
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn create_admin_user(
+        &self,
+        user: NewAdminUser,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// Lists every console admin — identity and role only, never a credential.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn list_admin_users(
+        &self,
+    ) -> impl Future<Output = Result<Vec<AdminUser>, AdminStoreError>> + Send;
+
+    /// The admin with `id`, or `None` if there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn get_admin_user(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<AdminUser>, AdminStoreError>> + Send;
+
+    /// The admin whose email matches `email` case-insensitively, or `None` — the login-identity
+    /// lookup.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn find_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> impl Future<Output = Result<Option<AdminUser>, AdminStoreError>> + Send;
+
+    /// Sets an admin's role. Returns `Ok(false)` if no admin has `id`.
+    ///
+    /// The last-owner invariant is the caller's to uphold (via [`count_active_owners`](Self::count_active_owners));
+    /// this method is the mechanism, not the policy.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn set_admin_user_role(
+        &self,
+        id: &str,
+        role: AdminRole,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// Sets an admin's status (active/suspended). Returns `Ok(false)` if no admin has `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn set_admin_user_status(
+        &self,
+        id: &str,
+        status: AdminStatus,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// How many admins are both `owner` and `active`. Callers check this before a demotion or a
+    /// suspension to keep the "always at least one active owner" invariant
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn count_active_owners(&self) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
 }
 
 /// A failure of the admin store itself — the database is unreachable — as distinct from a wrong
@@ -376,8 +589,9 @@ mod tests {
     use pos_proto::time::Timestamp;
 
     use super::{
-        AdminCredential, AdminStore, AdminStoreError, LoginDenied, LoginRequest, SessionDenied,
-        authenticate_session, hash_token, login, logout,
+        AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
+        LoginDenied, LoginRequest, NewAdminUser, SessionDenied, authenticate_session, hash_token,
+        login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -426,12 +640,14 @@ mod tests {
         headers
     }
 
-    /// An in-memory admin store: at most one credential, a session table, and a down switch.
+    /// An in-memory admin store: at most one legacy credential, the multi-admin `admin_users`
+    /// table, a session table, and a down switch.
     #[derive(Default)]
     struct FakeAdmin {
         credential: Mutex<Option<SuperAdminCredential>>,
         last_used_totp_step: Mutex<Option<u64>>,
         sessions: Mutex<HashMap<[u8; 32], Timestamp>>,
+        admin_users: Mutex<Vec<AdminUser>>,
         down: bool,
     }
 
@@ -539,6 +755,114 @@ mod tests {
             }
             self.sessions.lock().expect("lock").remove(&token_hash);
             Ok(())
+        }
+
+        async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut users = self.admin_users.lock().expect("lock");
+            // Case-insensitive uniqueness, exactly as the `lower(email)` unique index enforces.
+            if users
+                .iter()
+                .any(|existing| existing.email.eq_ignore_ascii_case(&user.email))
+            {
+                return Ok(false);
+            }
+            users.push(AdminUser {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                status: AdminStatus::Active,
+            });
+            Ok(true)
+        }
+
+        async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self.admin_users.lock().expect("lock").clone())
+        }
+
+        async fn get_admin_user(&self, id: &str) -> Result<Option<AdminUser>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self
+                .admin_users
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|user| user.id == id)
+                .cloned())
+        }
+
+        async fn find_admin_user_by_email(
+            &self,
+            email: &str,
+        ) -> Result<Option<AdminUser>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self
+                .admin_users
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|user| user.email.eq_ignore_ascii_case(email))
+                .cloned())
+        }
+
+        async fn set_admin_user_role(
+            &self,
+            id: &str,
+            role: AdminRole,
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut users = self.admin_users.lock().expect("lock");
+            match users.iter_mut().find(|user| user.id == id) {
+                Some(user) => {
+                    user.role = role;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn set_admin_user_status(
+            &self,
+            id: &str,
+            status: AdminStatus,
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut users = self.admin_users.lock().expect("lock");
+            match users.iter_mut().find(|user| user.id == id) {
+                Some(user) => {
+                    user.status = status;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn count_active_owners(&self) -> Result<u64, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let count = self
+                .admin_users
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|user| user.role == AdminRole::Owner && user.status == AdminStatus::Active)
+                .count();
+            Ok(u64::try_from(count).unwrap_or(u64::MAX))
         }
     }
 
@@ -755,5 +1079,244 @@ mod tests {
             hash_token("session-token-abd"),
             "a different token hashes differently"
         );
+    }
+
+    // ---- Multi-admin surface ([ADR-0067]) ----
+
+    /// A new-admin input with obviously-fake credential material — never real key bytes.
+    fn new_admin(id: &str, email: &str, name: &str, role: AdminRole) -> NewAdminUser {
+        NewAdminUser {
+            id: id.to_owned(),
+            email: email.to_owned(),
+            name: name.to_owned(),
+            role,
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_users_are_created_listed_and_fetched() {
+        let store = FakeAdmin::default();
+        assert!(
+            store
+                .create_admin_user(new_admin(
+                    "id-owner",
+                    "owner@example.test",
+                    "Owner",
+                    AdminRole::Owner
+                ))
+                .await
+                .expect("store up")
+        );
+        assert!(
+            store
+                .create_admin_user(new_admin(
+                    "id-ops",
+                    "ops@example.test",
+                    "Ops",
+                    AdminRole::Ops
+                ))
+                .await
+                .expect("store up")
+        );
+
+        assert_eq!(store.list_admin_users().await.expect("list").len(), 2);
+
+        let fetched = store
+            .get_admin_user("id-ops")
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(fetched.email, "ops@example.test");
+        assert_eq!(fetched.role, AdminRole::Ops);
+        assert_eq!(
+            fetched.status,
+            AdminStatus::Active,
+            "a freshly created admin starts active"
+        );
+        assert!(
+            store
+                .get_admin_user("id-nobody")
+                .await
+                .expect("get")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_email_is_refused_case_insensitively() {
+        let store = FakeAdmin::default();
+        assert!(
+            store
+                .create_admin_user(new_admin(
+                    "id-1",
+                    "Person@Example.test",
+                    "P",
+                    AdminRole::Admin
+                ))
+                .await
+                .expect("store up")
+        );
+        assert!(
+            !store
+                .create_admin_user(new_admin(
+                    "id-2",
+                    "person@example.test",
+                    "P2",
+                    AdminRole::Viewer
+                ))
+                .await
+                .expect("store up"),
+            "the same address in a different case is the same identity"
+        );
+        assert_eq!(store.list_admin_users().await.expect("list").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_by_email_is_case_insensitive() {
+        let store = FakeAdmin::default();
+        store
+            .create_admin_user(new_admin(
+                "id-1",
+                "boss@example.test",
+                "Boss",
+                AdminRole::Owner,
+            ))
+            .await
+            .expect("store up");
+        let found = store
+            .find_admin_user_by_email("BOSS@EXAMPLE.TEST")
+            .await
+            .expect("find")
+            .expect("present");
+        assert_eq!(found.id, "id-1");
+        assert!(
+            store
+                .find_admin_user_by_email("nobody@example.test")
+                .await
+                .expect("find")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn role_and_status_updates_apply_and_a_missing_id_is_false() {
+        let store = FakeAdmin::default();
+        store
+            .create_admin_user(new_admin("id-1", "a@example.test", "A", AdminRole::Viewer))
+            .await
+            .expect("store up");
+        assert!(
+            store
+                .set_admin_user_role("id-1", AdminRole::Admin)
+                .await
+                .expect("store up")
+        );
+        assert!(
+            store
+                .set_admin_user_status("id-1", AdminStatus::Suspended)
+                .await
+                .expect("store up")
+        );
+        let user = store
+            .get_admin_user("id-1")
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(user.role, AdminRole::Admin);
+        assert_eq!(user.status, AdminStatus::Suspended);
+
+        assert!(
+            !store
+                .set_admin_user_role("id-nobody", AdminRole::Ops)
+                .await
+                .expect("store up"),
+            "updating a role for a missing id changes nothing"
+        );
+        assert!(
+            !store
+                .set_admin_user_status("id-nobody", AdminStatus::Active)
+                .await
+                .expect("store up")
+        );
+    }
+
+    #[tokio::test]
+    async fn count_active_owners_tracks_role_and_status() {
+        let store = FakeAdmin::default();
+        assert_eq!(store.count_active_owners().await.expect("count"), 0);
+        for (id, email, role) in [
+            ("id-1", "o1@example.test", AdminRole::Owner),
+            ("id-2", "o2@example.test", AdminRole::Owner),
+            ("id-3", "a@example.test", AdminRole::Admin),
+        ] {
+            store
+                .create_admin_user(new_admin(id, email, "N", role))
+                .await
+                .expect("store up");
+        }
+        assert_eq!(store.count_active_owners().await.expect("count"), 2);
+
+        // Suspending one owner and demoting the other would leave zero active owners — the count is
+        // what a caller consults to refuse that last step.
+        store
+            .set_admin_user_status("id-1", AdminStatus::Suspended)
+            .await
+            .expect("store up");
+        assert_eq!(store.count_active_owners().await.expect("count"), 1);
+        store
+            .set_admin_user_role("id-2", AdminRole::Admin)
+            .await
+            .expect("store up");
+        assert_eq!(store.count_active_owners().await.expect("count"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_store_outage_surfaces_on_the_multi_admin_methods() {
+        let store = FakeAdmin::unavailable();
+        assert!(store.list_admin_users().await.is_err());
+        assert!(
+            store
+                .create_admin_user(new_admin("id-1", "a@example.test", "A", AdminRole::Ops))
+                .await
+                .is_err()
+        );
+        assert!(store.count_active_owners().await.is_err());
+    }
+
+    #[test]
+    fn role_and_status_tokens_round_trip() {
+        for role in AdminRole::ALL {
+            assert_eq!(AdminRole::from_token(role.as_token()), Some(*role));
+        }
+        assert_eq!(
+            AdminRole::from_token("root"),
+            None,
+            "an unknown role fails closed"
+        );
+
+        assert_eq!(
+            AdminStatus::from_token(AdminStatus::Active.as_token()),
+            Some(AdminStatus::Active)
+        );
+        assert_eq!(
+            AdminStatus::from_token(AdminStatus::Suspended.as_token()),
+            Some(AdminStatus::Suspended)
+        );
+        assert_eq!(AdminStatus::from_token("nope"), None);
+    }
+
+    #[test]
+    fn new_admin_user_debug_redacts_the_credential() {
+        let rendered = format!(
+            "{:?}",
+            new_admin("id-1", "a@example.test", "A", AdminRole::Owner)
+        );
+        assert!(
+            !rendered.contains("argon2id") && !rendered.contains("not-a-real-totp-secret"),
+            "a secret leaked into Debug: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
     }
 }

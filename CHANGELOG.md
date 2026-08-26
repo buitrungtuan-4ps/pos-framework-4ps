@@ -17,6 +17,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Fixed
+- **The cloud catalog tables are now actually created on deployment** (Track G groundwork). Migrations
+  `0013`–`0017` (catalog tax classes, item taxonomy, display/layout, modifier groups, menu sections)
+  were added to the `store-postgres` migrations directory during Phase 2a but never embedded into the
+  boot-time runner, which stopped at `0012` — so on a real PostgreSQL deployment the catalog tables
+  were never created. The runner now applies `0013`–`0018` idempotently after `0012`. All are
+  forward-only, additive `CREATE TABLE IF NOT EXISTS` migrations, so an installation that somehow
+  already had the tables is unaffected. The gap was hidden because the `store-postgres` integration
+  tests run only on merge (behind the `integration` feature) and the migration drift-gate watches only
+  the edge (`store-sqlite`) migrations. **Upgrade note:** additive migrations only; no rollback risk.
 - **The admin console no longer surfaces `tenant_id … is not a ULID`, and every scoped screen loads
   its data on open** (Track F, F0). The `/admin` screens guarded the working context inconsistently —
   several fired their first request with an empty tenant/store id and surfaced the raw backend
@@ -56,6 +65,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Multi-admin console identities — schema and storage foundation** (roadmap v2, Track G, G1 slice 1;
+  [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md), superseding ADR-0034). The cloud console is
+  moving from a single shared super-admin to multiple named admins with least-privilege roles. This
+  first slice lands the durable foundation and nothing else: migration `0018` adds `admin_users`
+  (per-user Argon2id password + TOTP secret, a unique case-insensitive email, a display name, a role
+  of `owner`/`admin`/`ops`/`viewer`, and an `active`/`suspended` status), `admin_invites` and
+  `admin_recovery_codes` (each storing only a `SHA-256` of its single-use token/code), and gives
+  `admin_sessions` nullable `admin_id`/`ip`/`user_agent` columns for per-admin accountability. The
+  existing `super_admin` row is migrated in place into the first `owner` (so an install upgrades
+  without losing its credential and there is always at least one owner). The `AdminStore` seam gains a
+  multi-admin surface — create/list/get/find-by-email, set-role, set-status, and count-active-owners —
+  implemented over `store-postgres` and an in-memory fake, unit-tested for case-insensitive email
+  uniqueness, the last-owner count, and credential redaction in `Debug`. **The login flow and session
+  guard are unchanged in this slice** (they still read `super_admin`); they migrate onto `admin_users`
+  in a later G1 slice, so this ships no behaviour change on its own. **Upgrade note:** one additive
+  migration (`0018`), rollback-safe; the migrated owner is seeded with a synthetic, non-routable
+  placeholder email (`owner@super-admin.invalid`) that the owner replaces from the console once the
+  multi-admin UI lands — the password hash and TOTP secret carry over unchanged, so sign-in is
+  unaffected. No `PROTOCOL_VERSION` change; no permission-identifier change yet.
 - **The operator console gains a reusable CRUD kit, and the master-data screens are rebuilt on it**
   (roadmap v2, Track F2). A new `dashboard/src/components/kit.tsx` adds `DataTable` (sortable columns,
   empty-state slot, row actions), `Modal`/`Drawer`, a `ConfirmDialog` with optional type-the-name
