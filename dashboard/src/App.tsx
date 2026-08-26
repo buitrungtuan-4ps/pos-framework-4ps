@@ -3,12 +3,12 @@
 // then either the authenticated area (inside the nav Shell) or the public login/setup screens. The
 // guard is reactive: logging in or out flips `authed` and the routes follow.
 
-import { createSignal, onMount, type ParentProps, Show } from "solid-js";
+import { createEffect, createSignal, onMount, type ParentProps, Show } from "solid-js";
 import { Navigate, Route, Router } from "@solidjs/router";
 
 import { api } from "./api/client";
 import { Shell } from "./components/Shell";
-import { t } from "./i18n";
+import { locale, t } from "./i18n";
 import { authed, setAuthed } from "./state/session";
 import { Activation } from "./screens/Activation";
 import { ApiKeys } from "./screens/ApiKeys";
@@ -35,6 +35,14 @@ function Guarded(props: ParentProps) {
 
 export function App() {
   const [ready, setReady] = createSignal(false);
+
+  // Keep the document title and `<html lang>` in step with the active locale — set on first render
+  // (not only on a later switch) so a deep-linked, freshly loaded tab is already correct (F1).
+  createEffect(() => {
+    document.title = t("app.title");
+    document.documentElement.lang = locale();
+  });
+
   onMount(() => {
     void api
       .session()
