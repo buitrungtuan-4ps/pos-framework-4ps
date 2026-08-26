@@ -56,6 +56,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The operator console gains a reusable CRUD kit, and the master-data screens are rebuilt on it**
+  (roadmap v2, Track F2). A new `dashboard/src/components/kit.tsx` adds `DataTable` (sortable columns,
+  empty-state slot, row actions), `Modal`/`Drawer`, a `ConfirmDialog` with optional type-the-name
+  gating for destructive actions, `StatusBadge`, `EmptyState`, `FormField`, `TechnicalDetails` (a
+  disclosure that keeps an entity's ULID present but out of the way), and a `ReorderList` primitive.
+  The five simplest screens now build on it — API keys, Webhooks, Devices, Stores, and (lightly)
+  Translations — so every list is a consistent sortable table, every destructive action (revoke,
+  delete, reject, archive) goes through a confirmation instead of a one-click button, ULIDs move
+  behind a "Technical details" disclosure, and write outcomes surface as toasts. Stores keeps inline
+  brand reassignment. **Still to come in F2** (flagged): the API foundation — list
+  pagination/filter/sort + read-one, AIP-193 errors on `/admin`, `ETag`/`If-Match` concurrency,
+  `/admin` in the OpenAPI drift-gate, and `(tenant_id, created_at)` indexes.
 - **The admin console gains a framework-standard shell: grouped scope-aware nav, breadcrumbs, a
   command palette, toasts, a notification center, org-switcher search, and locale persistence**
   (roadmap v2, Track F1). The flat ten-item nav is now five labelled groups, each item carrying a dot

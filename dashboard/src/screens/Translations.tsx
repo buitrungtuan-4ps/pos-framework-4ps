@@ -1,7 +1,9 @@
 // The translation grid (ADR-0043): edit a tenant's message catalogue, keyed by message id with one
 // column per locale. `en` is the enforced floor (ADR-0020) — the server rejects a save where any
 // key has an empty `en` — so it is validated here before sending, too. Add a key, edit any cell,
-// then save the whole grid.
+// then save the whole grid. The grid itself is a bespoke editor (a key × locale matrix, not a row
+// list), so it keeps its own table; it adopts the F2 kit only where it fits — the empty state and
+// toast feedback on save.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -11,24 +13,30 @@ import { LOCALES, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { EmptyState } from "../components/kit";
+import { toast } from "../components/Toast";
 
 export function Translations() {
   const [grid, setGrid] = createSignal<TranslationGrid>({});
   const [loaded, setLoaded] = createSignal(false);
   const [newKey, setNewKey] = createSignal("");
   const [error, setError] = createSignal("");
-  const [ok, setOk] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+
+  const fail = (caught: unknown) => {
+    const message = caught instanceof ApiError ? caught.message : String(caught);
+    setError(message);
+    toast.error(message);
+  };
 
   const load = async () => {
     setError("");
-    setOk("");
     setBusy(true);
     try {
       setGrid(await api.getTranslations(tenantId()));
       setLoaded(true);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      fail(caught);
     } finally {
       setBusy(false);
     }
@@ -53,7 +61,6 @@ export function Translations() {
 
   const save = async () => {
     setError("");
-    setOk("");
     const missing = Object.entries(grid()).filter(([, row]) => !(row.en ?? "").trim());
     if (missing.length > 0) {
       setError(t("translations.missingEn"));
@@ -62,9 +69,9 @@ export function Translations() {
     setBusy(true);
     try {
       await api.putTranslations(tenantId(), grid());
-      setOk(t("translations.saved"));
+      toast.ok(t("translations.saved"));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      fail(caught);
     } finally {
       setBusy(false);
     }
@@ -85,13 +92,9 @@ export function Translations() {
           }
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-          <Show when={ok()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
           <Show when={loaded()}>
             <div class="mb-4 overflow-x-auto">
-              <Show
-                when={keys().length > 0}
-                fallback={<p class="text-sm text-ink-muted">{t("translations.empty")}</p>}
-              >
+              <Show when={keys().length > 0} fallback={<EmptyState title={t("translations.empty")} />}>
                 <table class="w-full text-left text-sm">
                   <thead>
                     <tr class="border-b border-line text-ink-muted">
@@ -113,9 +116,7 @@ export function Translations() {
                                   class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
                                   aria-label={key}
                                   value={grid()[key]?.[code] ?? ""}
-                                  onInput={(event) =>
-                                    setCell(key, code, event.currentTarget.value)
-                                  }
+                                  onInput={(event) => setCell(key, code, event.currentTarget.value)}
                                 />
                               </td>
                             )}
