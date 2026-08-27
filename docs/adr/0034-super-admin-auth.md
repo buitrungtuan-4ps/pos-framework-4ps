@@ -1,6 +1,6 @@
 # ADR-0034 — Super-admin auth: Argon2id + mandatory TOTP, host-only sessions
 
-**Status** Accepted · **Owner** @maintainers-security · **Last reviewed** 2026-08-20
+**Status** Superseded by [ADR-0067](0067-multi-admin-console-rbac.md) · **Owner** @maintainers-security · **Last reviewed** 2026-08-26
 **Relates to** [ADR-0004](0004-cloud-owned-configuration.md) · [ADR-0030](0030-pairing-and-offline-auth.md) · [ADR-0031](0031-cloud-adapter-transports.md) · `docs/pos-spec.md` §10 · `docs/roadmap.md` P7
 
 **Context.** The super-admin is the most privileged identity in the cloud: it manages every tenant's

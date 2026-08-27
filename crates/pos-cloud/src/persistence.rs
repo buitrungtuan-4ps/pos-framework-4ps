@@ -23,13 +23,13 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
-    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
-    TenantRow,
+    AdminInviteRow, AdminSessionRow, AdminUserRow, BrandRow, CatalogItemRow,
+    CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, NewSessionRow,
+    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
+    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
+    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
+    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -47,7 +47,10 @@ use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::auth::SuperAdminCredential;
-use crate::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
+use crate::auth::admin::{
+    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
+    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
+};
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
@@ -365,14 +368,19 @@ impl AdminStore for PostgresAdmin {
             .map_err(|error| AdminStoreError::new(error.to_string()))
     }
 
-    async fn create_session(
-        &self,
-        token_hash: [u8; 32],
-        expires_at: Timestamp,
-    ) -> Result<(), AdminStoreError> {
-        self.insert_session(&token_hash, expires_at.as_milliseconds_since_epoch())
-            .await
-            .map_err(|error| AdminStoreError::new(error.to_string()))
+    async fn create_session(&self, session: NewAdminSession) -> Result<(), AdminStoreError> {
+        self.insert_session(NewSessionRow {
+            token_hash: &session.token_hash,
+            created_at_ms: session.created_at.as_milliseconds_since_epoch(),
+            expires_at_ms: session.expires_at.as_milliseconds_since_epoch(),
+            absolute_expires_at_ms: Some(session.absolute_expires_at.as_milliseconds_since_epoch()),
+            idle_ttl_ms: Some(session.idle_ttl_ms),
+            admin_id: session.admin_id.as_deref(),
+            ip: session.ip.as_deref(),
+            user_agent: session.user_agent.as_deref(),
+        })
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
     }
 
     async fn session_is_valid(
@@ -385,11 +393,270 @@ impl AdminStore for PostgresAdmin {
             .map_err(|error| AdminStoreError::new(error.to_string()))
     }
 
+    async fn session_admin(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<LiveSession>, AdminStoreError> {
+        let found = self
+            .fetch_session_admin(&token_hash, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(found.map(|admin_id| LiveSession { admin_id }))
+    }
+
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
         self.delete_session(&token_hash)
             .await
             .map_err(|error| AdminStoreError::new(error.to_string()))
     }
+
+    async fn list_admin_sessions(
+        &self,
+        admin_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<SessionSummary>, AdminStoreError> {
+        let rows =
+            PostgresAdmin::list_admin_sessions(self, admin_id, now.as_milliseconds_since_epoch())
+                .await
+                .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        rows.into_iter().map(session_summary_from_row).collect()
+    }
+
+    async fn revoke_admin_session(
+        &self,
+        admin_id: &str,
+        token_hash: [u8; 32],
+    ) -> Result<bool, AdminStoreError> {
+        self.delete_admin_session(admin_id, &token_hash)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn revoke_other_admin_sessions(
+        &self,
+        admin_id: &str,
+        except_token_hash: [u8; 32],
+    ) -> Result<u64, AdminStoreError> {
+        self.delete_other_admin_sessions(admin_id, &except_token_hash)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn rotate_totp_secret(&self, secret: Vec<u8>) -> Result<(), AdminStoreError> {
+        PostgresAdmin::rotate_totp_secret(self, &secret)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn store_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: Vec<NewRecoveryCode>,
+    ) -> Result<(), AdminStoreError> {
+        let codes: Vec<(String, Vec<u8>)> = codes
+            .into_iter()
+            .map(|code| (code.id, code.code_hash.to_vec()))
+            .collect();
+        self.replace_recovery_codes(admin_id, &codes)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::consume_recovery_code(
+            self,
+            admin_id,
+            &code_hash,
+            now.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn count_recovery_codes(&self, admin_id: &str) -> Result<u64, AdminStoreError> {
+        let count = PostgresAdmin::count_recovery_codes(self, admin_id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
+        self.insert_admin_user(
+            &user.id,
+            &user.email,
+            &user.name,
+            user.role.as_token(),
+            AdminStatus::Active.as_token(),
+            &user.password_phc,
+            &user.totp_secret,
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
+        let rows = PostgresAdmin::list_admin_users(self)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        rows.into_iter().map(admin_user_from_row).collect()
+    }
+
+    async fn get_admin_user(&self, id: &str) -> Result<Option<AdminUser>, AdminStoreError> {
+        let row = self
+            .fetch_admin_user(id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_user_from_row).transpose()
+    }
+
+    async fn find_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminUser>, AdminStoreError> {
+        let row = self
+            .fetch_admin_user_by_email(email)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_user_from_row).transpose()
+    }
+
+    async fn set_admin_user_role(
+        &self,
+        id: &str,
+        role: AdminRole,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::set_admin_user_role(self, id, role.as_token())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn set_admin_user_status(
+        &self,
+        id: &str,
+        status: AdminStatus,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::set_admin_user_status(self, id, status.as_token())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn count_active_owners(&self) -> Result<u64, AdminStoreError> {
+        let count = PostgresAdmin::count_active_owners(self)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    async fn create_invite(&self, invite: NewAdminInvite) -> Result<(), AdminStoreError> {
+        self.insert_invite(
+            &invite.id,
+            &invite.email,
+            &invite.name,
+            invite.role.as_token(),
+            &invite.token_hash,
+            &invite.invited_by,
+            invite.expires_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn find_pending_invite_by_token(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<AdminInvite>, AdminStoreError> {
+        let row = self
+            .fetch_pending_invite_by_token(&token_hash, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_invite_from_row).transpose()
+    }
+
+    async fn mark_invite_accepted(
+        &self,
+        id: &str,
+        accepted_at: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::mark_invite_accepted(self, id, accepted_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn list_pending_invites(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<AdminInvite>, AdminStoreError> {
+        let rows = PostgresAdmin::list_pending_invites(self, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        rows.into_iter().map(admin_invite_from_row).collect()
+    }
+
+    async fn revoke_invite(&self, id: &str) -> Result<bool, AdminStoreError> {
+        self.delete_pending_invite(id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+}
+
+/// Converts a stored `admin_users` row into the domain [`AdminUser`], failing loudly if the role or
+/// status token is unrecognised — the table's CHECK constraints keep them within the known
+/// vocabularies, so an unparseable value is store corruption, not an ordinary absence.
+fn admin_user_from_row(row: AdminUserRow) -> Result<AdminUser, AdminStoreError> {
+    let role = AdminRole::from_token(&row.role)
+        .ok_or_else(|| AdminStoreError::new(format!("unknown admin role token: {}", row.role)))?;
+    let status = AdminStatus::from_token(&row.status).ok_or_else(|| {
+        AdminStoreError::new(format!("unknown admin status token: {}", row.status))
+    })?;
+    Ok(AdminUser {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        role,
+        status,
+    })
+}
+
+/// Converts a stored `admin_sessions` row into the domain [`SessionSummary`], failing loudly if the
+/// stored token hash is not 32 bytes or a timestamp is out of range — either is store corruption, not
+/// an ordinary absence.
+fn session_summary_from_row(row: AdminSessionRow) -> Result<SessionSummary, AdminStoreError> {
+    let token_hash: [u8; 32] = row.token_hash.try_into().map_err(|_ignored: Vec<u8>| {
+        AdminStoreError::new("a stored session token hash is not 32 bytes")
+    })?;
+    let created_at = Timestamp::from_milliseconds_since_epoch(row.created_at_ms)
+        .map_err(|_ignored| AdminStoreError::new("a session created_at is out of range"))?;
+    let expires_at = Timestamp::from_milliseconds_since_epoch(row.expires_at_ms)
+        .map_err(|_ignored| AdminStoreError::new("a session expires_at is out of range"))?;
+    Ok(SessionSummary {
+        token_hash,
+        ip: row.ip,
+        user_agent: row.user_agent,
+        created_at,
+        expires_at,
+    })
+}
+
+/// Converts a stored `admin_invites` row into the domain [`AdminInvite`], failing loudly on an
+/// unrecognised role token (the table's CHECK keeps it within the vocabulary).
+fn admin_invite_from_row(row: AdminInviteRow) -> Result<AdminInvite, AdminStoreError> {
+    let role = AdminRole::from_token(&row.role)
+        .ok_or_else(|| AdminStoreError::new(format!("unknown admin role token: {}", row.role)))?;
+    Ok(AdminInvite {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        role,
+        invited_by: row.invited_by,
+        accepted: row.accepted,
+    })
 }
 
 impl ApiKeyAdminStore for PostgresApiKeys {

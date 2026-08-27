@@ -26,8 +26,10 @@
 pub mod admin;
 pub mod apikey;
 pub mod bearer;
+pub mod console_rbac;
 pub mod enrol;
 pub mod password;
+pub mod rate_limit;
 pub mod session;
 pub mod totp;
 
@@ -82,6 +84,28 @@ impl SuperAdminCredential {
     pub fn new(password_phc: impl Into<String>, totp: TotpSecret) -> Self {
         Self {
             password_phc: password_phc.into(),
+            totp,
+        }
+    }
+
+    /// Whether `password` verifies against the stored Argon2id hash — the knowledge factor on its own.
+    ///
+    /// Used where the second factor is not a TOTP code: the recovery-code sign-in
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6) pairs this with a
+    /// single-use recovery code, and TOTP re-enrolment pairs it with a fresh secret. The two-factor
+    /// [`authenticate`](Self::authenticate) remains the only password+TOTP path.
+    #[must_use]
+    pub fn password_matches(&self, password: &str) -> bool {
+        verify_password(&self.password_phc, password)
+    }
+
+    /// The same credential with its TOTP secret replaced (the knowledge factor unchanged) — a TOTP
+    /// re-enrolment rotating the possession factor
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
+    #[must_use]
+    pub fn with_totp(&self, totp: TotpSecret) -> Self {
+        Self {
+            password_phc: self.password_phc.clone(),
             totp,
         }
     }

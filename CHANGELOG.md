@@ -16,7 +16,52 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+- **A console admin can re-enrol their authenticator and hold one-time recovery codes** (roadmap v2,
+  Track G, G1 slice 6; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `POST /admin/totp`
+  rotates the TOTP secret the sign-in verifies — after re-confirming the current password, so a
+  session-only attacker (holding the cookie but not the password) cannot lock the owner out — and
+  returns a fresh one-time enrolment (provisioning QR + base32 secret); existing sessions stay valid
+  and the next sign-in uses the new authenticator. `POST /admin/recovery-codes` (re)generates ten
+  one-time codes, shown once and stored only as their `SHA-256`, and `GET /admin/recovery-codes`
+  reports how many are left (never the codes). `/admin/login` now accepts a `recovery_code` in place
+  of the TOTP code when the authenticator is lost: the password is verified first (a wrong password
+  never burns a code), the code is consumed atomically single-use, and every failure collapses to the
+  same generic `401` — the recovery path is no more of an oracle than the TOTP one. Both management
+  routes are self-service (any authenticated admin, no role permission). Because sign-in is still the
+  single super-admin credential (per-admin email login is a later slice), re-enrolment and recovery
+  act on that credential and the codes belong to the owner. **Upgrade note:** the `admin_recovery_codes`
+  table already exists (migration `0018`); no new migration, protocol, or permission change; the
+  `LoginRequest` gains an optional `recovery_code` field (absent for an ordinary sign-in).
+- **The admin sign-in is rate-limited, and the console now ships defence-in-depth response headers**
+  (roadmap v2, Track G, G1 slice 5; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
+  `/admin/login` throttles attempts in a sliding window — by default 10 per 5 minutes per client
+  (`admin_login_max_attempts`, `admin_login_window_secs`), keyed by client IP today and ready for a
+  per-email key when email login lands — refusing the excess with `429 Too Many Requests` and a
+  `Retry-After`. The check runs **before** the Argon2id verify, so an online guesser costs a cheap
+  refusal rather than a hashing storm, and because it precedes the credential check it can never
+  become an oracle for whether a password was right; a refused attempt is not recorded, so it does
+  not push a legitimate admin's next try further out. Every console response now carries
+  `Content-Security-Policy` (scripts locked to `'self'` — the built SPA has no inline script — with a
+  bounded `'unsafe-inline'` for styles only), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY` (plus the CSP's `frame-ancestors 'none'`) against clickjacking, and
+  `Referrer-Policy: no-referrer`. **Upgrade note:** no schema, protocol, or permission change; two new
+  optional config values with safe defaults. The rate-limit state is in-process (the cloud is a
+  single box) and ephemeral — a restart clears it, failing open rather than locking anyone out. The
+  CSP is deliberately strict on scripts; if a future console feature needs a new subresource origin,
+  widen `CONTENT_SECURITY_POLICY_VALUE` in `crates/pos-cloud/src/http.rs` rather than loosening
+  `script-src`.
+
 ### Fixed
+- **The cloud catalog tables are now actually created on deployment** (Track G groundwork). Migrations
+  `0013`–`0017` (catalog tax classes, item taxonomy, display/layout, modifier groups, menu sections)
+  were added to the `store-postgres` migrations directory during Phase 2a but never embedded into the
+  boot-time runner, which stopped at `0012` — so on a real PostgreSQL deployment the catalog tables
+  were never created. The runner now applies `0013`–`0018` idempotently after `0012`. All are
+  forward-only, additive `CREATE TABLE IF NOT EXISTS` migrations, so an installation that somehow
+  already had the tables is unaffected. The gap was hidden because the `store-postgres` integration
+  tests run only on merge (behind the `integration` feature) and the migration drift-gate watches only
+  the edge (`store-sqlite`) migrations. **Upgrade note:** additive migrations only; no rollback risk.
 - **The admin console no longer surfaces `tenant_id … is not a ULID`, and every scoped screen loads
   its data on open** (Track F, F0). The `/admin` screens guarded the working context inconsistently —
   several fired their first request with an empty tenant/store id and surfaced the raw backend
@@ -56,6 +101,92 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The back office now has screens for admins, invitations, sessions, and account security**
+  (roadmap v2, Track G, G1 slice 7 — the last G1 slice; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
+  Three console screens put the multi-admin surface built in slices 3–6 in front of an operator, on
+  the F2 CRUD kit: **Admins** (owner/admin) lists the roster, invites by email and role — showing the
+  single-use copy-invite-link once — lists and revokes pending invites, and (owner only) changes a
+  role or suspends/reactivates an admin, with the last-active-owner and no-self-management guardrails
+  reflected in the UI; **My sessions** (every admin) lists the caller's own live sessions with the
+  current one flagged and protected, revokes one, or signs out everywhere else; **My security** (every
+  admin) re-enrols the authenticator after re-confirming the password and (re)generates the one-time
+  recovery codes, each shown once. A new **`GET /admin/whoami`** returns the acting admin's own
+  identity (id, email, name, role, status — never a credential) so the nav gates the roster to
+  owner/admin; the gating is a convenience only, as the server re-checks every route's permission. A
+  public **`/invite`** page lets an invitee redeem their link and self-enrol (choose a password, add
+  the returned TOTP secret) with no prior session, mirroring first-boot `/setup`. **Upgrade note:**
+  none — one additive read-only endpoint (`/admin/whoami`) and console UI only; no schema, protocol,
+  or permission-identifier change.
+- **A console admin can now see and revoke their own sign-ins, and idle sessions time out** (roadmap
+  v2, Track G, G1 slice 4; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `GET
+  /admin/sessions` lists the acting admin's live sessions — each with the client IP and user-agent it
+  was minted for, when it was signed in, and which one is the current request — `DELETE
+  /admin/sessions/{handle}` revokes one, and `POST /admin/sessions/revoke-others` signs out every
+  other device ("sign out everywhere else"). These are self-service: any authenticated admin manages
+  their **own** sessions regardless of role, and every operation is scoped to the caller, so no admin
+  can list or revoke another's session. The session handle is the hash of the token (never the token,
+  and not reversible to it), so listing it grants no capability. Sessions now carry a **sliding idle
+  TTL**: a real request extends the session by the idle window (default 30 minutes,
+  `admin_session_idle_ttl_secs`), up to an **absolute cap** (the existing `admin_session_ttl_secs`,
+  default 8 hours — now the hard ceiling, unchanged in value). A session left idle past the window
+  expires even with the console tab open, because the lightweight "am I signed in?" poll deliberately
+  does not slide it; only genuine actions do. **Upgrade note:** additive migration
+  `0019_admin_session_sliding.sql` adds two nullable columns to `admin_sessions`; sessions minted
+  before it keep their original fixed expiry (they do not slide). A new default value,
+  `admin_session_idle_ttl_secs` = 1800s; `admin_session_ttl_secs` keeps its 8-hour default but is now
+  interpreted as the absolute cap. No protocol or permission-identifier change.
+- **Console admins can now be invited, self-enrol, and be managed** (roadmap v2, Track G, G1 slice 3;
+  [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). An owner or admin invites by email and role
+  (`POST /admin/invites`); the server mints a single-use, TTL-bounded token and returns it once as a
+  **copy-invite-link** the inviter hands over out-of-band — no email is sent, and only the token's
+  `SHA-256` is stored. The invitee self-enrols (`POST /admin/invites/accept`, token-authenticated, no
+  session): they choose their own password and receive a one-time TOTP enrolment, exactly as first-boot
+  does, so no one else ever learns their credential. Pending invites list and revoke
+  (`GET`/`DELETE /admin/invites`); the admin roster lists (`GET /admin/admins`) and an owner changes a
+  role or suspends/reactivates an admin (`PATCH /admin/admins/{id}/role|status`). Guardrails: only an
+  owner may invite or create another owner (an admin cannot escalate); the **last active owner** can
+  never be demoted or suspended; an address that is already an admin cannot be re-invited; an invite is
+  single-use and cannot be replayed. Invite acceptance is invite-token-gated, not session-gated. New
+  config `admin_invite_ttl_secs` (default 3 days). **PDPD note:** an admin's email is personal data —
+  it is stored and handled **internally only** (no external send under the copy-link model); confirm
+  the lawful basis (employment/legitimate interest) and retention for admin records. **Upgrade note:**
+  additive — no schema migration (the `admin_invites` table shipped in `0018`); no `PROTOCOL_VERSION`
+  change; a new optional config key with a safe default.
+- **Console role-based access control is now enforced on every `/admin` route** (roadmap v2, Track G,
+  G1 slice 2; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). A fixed console permission
+  catalogue and the four role templates (`owner`/`admin`/`ops`/`viewer`) are declared with the same
+  compile-forced registry pattern `pos-core` uses for store permissions (`docs/pos-spec.md` §9): a
+  permission cannot be added without deciding which roles receive it, and the default is deny. The
+  `/admin` session guard is now **role-aware** — it resolves the admin a session belongs to and each
+  route declares the permission it requires, so a signed-in but under-privileged admin gets a `403`
+  (distinct from the `401` an unauthenticated caller gets). Login stays password + TOTP for now and
+  binds the session to the sole `owner`; a session minted before this change (or on a not-yet-seeded
+  install) resolves to the owner, so no one is locked out across the upgrade. First-boot enrolment
+  now also mirrors the super-admin into `admin_users` as that owner. Owner and admin retain full
+  reach (owner alone manages admins); `ops` gets the day-to-day surface (devices, webhooks, config
+  publish) but not API keys, org/store creation, catalog authoring, or translations; `viewer` is
+  read-only. **Upgrade note:** no visible change yet for a single-owner install (the owner holds every
+  permission); the role distinctions take effect once additional admins are invited (a later G1
+  slice). Per-admin email-based login also arrives with invitations. No `PROTOCOL_VERSION` change.
+- **Multi-admin console identities — schema and storage foundation** (roadmap v2, Track G, G1 slice 1;
+  [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md), superseding ADR-0034). The cloud console is
+  moving from a single shared super-admin to multiple named admins with least-privilege roles. This
+  first slice lands the durable foundation and nothing else: migration `0018` adds `admin_users`
+  (per-user Argon2id password + TOTP secret, a unique case-insensitive email, a display name, a role
+  of `owner`/`admin`/`ops`/`viewer`, and an `active`/`suspended` status), `admin_invites` and
+  `admin_recovery_codes` (each storing only a `SHA-256` of its single-use token/code), and gives
+  `admin_sessions` nullable `admin_id`/`ip`/`user_agent` columns for per-admin accountability. The
+  existing `super_admin` row is migrated in place into the first `owner` (so an install upgrades
+  without losing its credential and there is always at least one owner). The `AdminStore` seam gains a
+  multi-admin surface — create/list/get/find-by-email, set-role, set-status, and count-active-owners —
+  implemented over `store-postgres` and an in-memory fake, unit-tested for case-insensitive email
+  uniqueness, the last-owner count, and credential redaction in `Debug`. **The login flow and session
+  guard are unchanged in this slice** (they still read `super_admin`); they migrate onto `admin_users`
+  in a later G1 slice, so this ships no behaviour change on its own. **Upgrade note:** one additive
+  migration (`0018`), rollback-safe; the migrated owner is seeded with a synthetic, non-routable
+  placeholder email (`owner@super-admin.invalid`) that the owner replaces from the console once the
+  multi-admin UI lands — the password hash and TOTP secret carry over unchanged, so sign-in is
+  unaffected. No `PROTOCOL_VERSION` change; no permission-identifier change yet.
 - **The operator console gains a reusable CRUD kit, and the master-data screens are rebuilt on it**
   (roadmap v2, Track F2). A new `dashboard/src/components/kit.tsx` adds `DataTable` (sortable columns,
   empty-state slot, row actions), `Modal`/`Drawer`, a `ConfirmDialog` with optional type-the-name

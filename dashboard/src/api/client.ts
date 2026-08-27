@@ -6,6 +6,11 @@
 
 import type {
   ActivationCode,
+  AdminIdentity,
+  AdminInvite,
+  AdminRole,
+  AdminSessionView,
+  AdminStatus,
   ApiKeySummary,
   Brand,
   CatalogItem,
@@ -19,6 +24,7 @@ import type {
   DisplaySubcategory,
   EntityStatus,
   Enrolment,
+  InviteAdminResponse,
   ItemCategory,
   ItemSubcategory,
   Json,
@@ -27,6 +33,8 @@ import type {
   MenuPlacement,
   MenuSection,
   ModifierGroup,
+  RecoveryCodesResponse,
+  RecoveryCodesStatus,
   SalesChannel,
   PublishedConfig,
   RegisterWebhookResponse,
@@ -36,7 +44,7 @@ import type {
   TranslationGrid,
   WebhookSummary,
 } from "./types";
-import { setAuthed } from "../state/session";
+import { setActingAdmin, setAuthed } from "../state/session";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -64,6 +72,7 @@ async function failure(response: Response): Promise<ApiError> {
   // no longer load anything (F0).
   if (response.status === 401) {
     setAuthed(false);
+    setActingAdmin(null);
   }
   const text = await response.text().catch(() => "");
   const trimmed = text.trim();
@@ -130,6 +139,46 @@ export const api = {
       setup_token: setupToken,
       password,
     }),
+
+  // --- console identity & RBAC (ADR-0067, Track G1) ---
+  // The acting admin's own identity, so the console labels the operator and shows only the areas
+  // their role grants. Role gating in the UI is convenience only — the server re-checks every route.
+  whoami: () => requestJson<AdminIdentity>("GET", "/admin/whoami"),
+
+  // Admin roster + role/status management. Listing/inviting need owner or admin; role/status changes
+  // need owner (the server enforces this — the console only hides what a role cannot do).
+  listAdmins: () => requestJson<AdminIdentity[]>("GET", "/admin/admins"),
+  setAdminRole: (id: string, role: AdminRole) =>
+    requestVoid("PATCH", `/admin/admins/${encodeURIComponent(id)}/role`, { role }),
+  setAdminStatus: (id: string, status: AdminStatus) =>
+    requestVoid("PATCH", `/admin/admins/${encodeURIComponent(id)}/status`, { status }),
+
+  // Invitations: an owner/admin invites by email; the single-use token is returned once for the
+  // inviter to hand over out-of-band (the invitee self-enrols with it, never an admin-set password).
+  listInvites: () => requestJson<AdminInvite[]>("GET", "/admin/invites"),
+  inviteAdmin: (email: string, name: string, role: AdminRole) =>
+    requestJson<InviteAdminResponse>("POST", "/admin/invites", { email, name, role }),
+  revokeInvite: (id: string) =>
+    requestVoid("DELETE", `/admin/invites/${encodeURIComponent(id)}`),
+  // Pre-auth self-enrolment: the invitee exchanges the single-use token and a chosen password for
+  // their own credential; the server returns the one-time TOTP enrolment (never an admin-set password).
+  acceptInvite: (token: string, password: string) =>
+    requestJson<Enrolment>("POST", "/admin/invites/accept", { token, password }),
+
+  // Self-service sessions: every admin lists and revokes their own; the current session is protected
+  // from accidental self-revocation, and "sign out everywhere else" keeps only the current one.
+  listSessions: () => requestJson<AdminSessionView[]>("GET", "/admin/sessions"),
+  revokeSession: (id: string) =>
+    requestVoid("DELETE", `/admin/sessions/${encodeURIComponent(id)}`),
+  revokeOtherSessions: () => requestVoid("POST", "/admin/sessions/revoke-others"),
+
+  // Self-service account security: re-enrol TOTP (re-confirms the password) and (re)generate the
+  // one-time recovery codes (returned once, stored only as hashes).
+  reenrolTotp: (password: string) =>
+    requestJson<Enrolment>("POST", "/admin/totp", { password }),
+  generateRecoveryCodes: () =>
+    requestJson<RecoveryCodesResponse>("POST", "/admin/recovery-codes", {}),
+  recoveryCodesStatus: () => requestJson<RecoveryCodesStatus>("GET", "/admin/recovery-codes"),
 
   // --- API keys (ADR-0037) ---
   listApiKeys: (tenantId: string) =>

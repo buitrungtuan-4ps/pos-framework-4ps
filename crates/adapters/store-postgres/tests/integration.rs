@@ -134,7 +134,8 @@ impl EventStoreHarness for StoreHarness {
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 config_trees, subjects, webhook_endpoints, device_proposals, activation_codes, \
+                 admin_invites, admin_recovery_codes, admin_users, config_trees, subjects, \
+                 webhook_endpoints, device_proposals, activation_codes, \
                  device_credentials RESTART IDENTITY;",
             )
             .await
@@ -546,8 +547,18 @@ mod admin_store {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let sessions = store.admin();
             let hash = [7_u8; 32];
+            // A legacy fixed-TTL session (no absolute cap / idle window): it does not slide.
             sessions
-                .insert_session(&hash, 2000)
+                .insert_session(store_postgres::NewSessionRow {
+                    token_hash: &hash,
+                    created_at_ms: 1000,
+                    expires_at_ms: 2000,
+                    absolute_expires_at_ms: None,
+                    idle_ttl_ms: None,
+                    admin_id: None,
+                    ip: None,
+                    user_agent: None,
+                })
                 .await
                 .expect("insert the session");
 
@@ -574,6 +585,243 @@ mod admin_store {
             assert!(
                 !sessions.session_valid(&hash, 1999).await.expect("query"),
                 "a revoked session is gone even before its expiry"
+            );
+        });
+    }
+
+    /// A modern session slides its idle TTL forward on a real request, but never past its absolute
+    /// cap ([ADR-0067] slice 4).
+    #[test]
+    fn a_modern_session_slides_up_to_its_absolute_cap() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let sessions = store.admin();
+            sessions
+                .insert_admin_user(
+                    "adm-slide",
+                    "slide@x.test",
+                    "S",
+                    "owner",
+                    "active",
+                    "$phc",
+                    b"s",
+                )
+                .await
+                .expect("seed admin");
+            let hash = [11_u8; 32];
+            // Idle window 60_000 ms; absolute cap at 10_000_000.
+            sessions
+                .insert_session(store_postgres::NewSessionRow {
+                    token_hash: &hash,
+                    created_at_ms: 0,
+                    expires_at_ms: 60_000,
+                    absolute_expires_at_ms: Some(10_000_000),
+                    idle_ttl_ms: Some(60_000),
+                    admin_id: Some("adm-slide"),
+                    ip: None,
+                    user_agent: None,
+                })
+                .await
+                .expect("insert the session");
+
+            // A real request at 50_000 ms slides the expiry to 50_000 + 60_000 = 110_000.
+            assert_eq!(
+                sessions
+                    .fetch_session_admin(&hash, 50_000)
+                    .await
+                    .expect("query"),
+                Some(Some("adm-slide".to_owned())),
+            );
+            assert!(
+                sessions.session_valid(&hash, 100_000).await.expect("query"),
+                "the slid session outlives its original 60_000 ms boundary"
+            );
+
+            // Sliding right before the cap cannot push the expiry past it.
+            sessions
+                .fetch_session_admin(&hash, 9_995_000)
+                .await
+                .expect("query");
+            assert!(
+                !sessions
+                    .session_valid(&hash, 10_000_001)
+                    .await
+                    .expect("query"),
+                "no amount of sliding lets a session outlive its absolute cap"
+            );
+        });
+    }
+
+    /// An admin lists and revokes only their own sessions; "revoke others" keeps the current one.
+    #[test]
+    fn admin_sessions_list_and_revoke_are_scoped_to_the_owner() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let sessions = store.admin();
+            for (id, email) in [("own-1", "o1@x.test"), ("own-2", "o2@x.test")] {
+                sessions
+                    .insert_admin_user(id, email, "N", "admin", "active", "$phc", b"s")
+                    .await
+                    .expect("seed admin");
+            }
+            let insert = |token: &'static [u8; 32], created: i64, admin: &'static str| {
+                let sessions = &sessions;
+                async move {
+                    sessions
+                        .insert_session(store_postgres::NewSessionRow {
+                            token_hash: token,
+                            created_at_ms: created,
+                            expires_at_ms: 1_000_000,
+                            absolute_expires_at_ms: Some(9_000_000),
+                            idle_ttl_ms: Some(1_000_000),
+                            admin_id: Some(admin),
+                            ip: None,
+                            user_agent: None,
+                        })
+                        .await
+                        .expect("insert session");
+                }
+            };
+            let (current, other, theirs) = (&[21_u8; 32], &[22_u8; 32], &[23_u8; 32]);
+            insert(current, 10, "own-1").await;
+            insert(other, 20, "own-1").await;
+            insert(theirs, 30, "own-2").await;
+
+            // Listing is scoped and newest-first, and created_at round-trips to ms.
+            let mine = sessions
+                .list_admin_sessions("own-1", 100)
+                .await
+                .expect("list");
+            assert_eq!(mine.len(), 2, "own-1 sees only their own sessions");
+            assert_eq!(
+                mine.first().expect("a first session").created_at_ms,
+                20,
+                "newest first"
+            );
+            assert_eq!(mine.get(1).expect("a second session").created_at_ms, 10);
+
+            // Revocation is scoped: own-1 cannot revoke own-2's session.
+            assert!(
+                !sessions
+                    .delete_admin_session("own-1", theirs)
+                    .await
+                    .expect("revoke"),
+                "an admin cannot revoke another's session"
+            );
+            // "Revoke others" keeps the current session and drops own-1's other one.
+            assert_eq!(
+                sessions
+                    .delete_other_admin_sessions("own-1", current)
+                    .await
+                    .expect("revoke others"),
+                1,
+            );
+            let remaining = sessions
+                .list_admin_sessions("own-1", 100)
+                .await
+                .expect("list");
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(
+                remaining.first().expect("one remaining").token_hash,
+                current.to_vec(),
+                "the current session survives"
+            );
+            assert_eq!(
+                sessions
+                    .list_admin_sessions("own-2", 100)
+                    .await
+                    .expect("list")
+                    .len(),
+                1,
+                "the other admin's session is untouched"
+            );
+        });
+    }
+
+    /// TOTP re-enrolment replaces the secret and resets the last-used step ([ADR-0067] slice 6).
+    #[test]
+    fn totp_re_enrolment_replaces_the_secret_and_resets_the_step() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            admin
+                .insert_credential("$argon2id$phc", b"old-secret-value")
+                .await
+                .expect("provision");
+            admin.advance_totp_step(42).await.expect("advance the step");
+
+            admin
+                .rotate_totp_secret(b"a-freshly-enrolled-secret")
+                .await
+                .expect("rotate");
+            let row = admin
+                .fetch_credential()
+                .await
+                .expect("fetch")
+                .expect("a credential is present");
+            assert_eq!(row.totp_secret, b"a-freshly-enrolled-secret".to_vec());
+            assert_eq!(
+                row.last_used_totp_step, None,
+                "a fresh secret resets the last-used step"
+            );
+        });
+    }
+
+    /// Recovery codes store, count, burn single-use, and regenerate — scoped to the admin
+    /// ([ADR-0067] slice 6).
+    #[test]
+    fn recovery_codes_store_consume_count_and_regenerate() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            admin
+                .insert_admin_user("rec-1", "rec@x.test", "R", "owner", "active", "$phc", b"s")
+                .await
+                .expect("seed admin");
+            let (h1, h2, h3) = (vec![1_u8; 32], vec![2_u8; 32], vec![3_u8; 32]);
+            admin
+                .replace_recovery_codes(
+                    "rec-1",
+                    &[("c1".to_owned(), h1.clone()), ("c2".to_owned(), h2.clone())],
+                )
+                .await
+                .expect("store");
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 2);
+
+            // Single-use: the first match spends the code, a replay matches nothing.
+            assert!(
+                admin
+                    .consume_recovery_code("rec-1", &h1, 1000)
+                    .await
+                    .expect("consume")
+            );
+            assert!(
+                !admin
+                    .consume_recovery_code("rec-1", &h1, 1000)
+                    .await
+                    .expect("consume"),
+                "a spent code cannot be reused"
+            );
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 1);
+
+            // Regenerating replaces the set: the previous unused code is gone, the new one works.
+            admin
+                .replace_recovery_codes("rec-1", &[("c3".to_owned(), h3.clone())])
+                .await
+                .expect("regenerate");
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 1);
+            assert!(
+                !admin
+                    .consume_recovery_code("rec-1", &h2, 1000)
+                    .await
+                    .expect("consume"),
+                "a code from the replaced set no longer matches"
+            );
+            assert!(
+                admin
+                    .consume_recovery_code("rec-1", &h3, 1000)
+                    .await
+                    .expect("consume")
             );
         });
     }

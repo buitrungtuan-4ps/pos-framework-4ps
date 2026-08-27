@@ -10,13 +10,17 @@ import { api } from "./api/client";
 import { Shell } from "./components/Shell";
 import { locale, t } from "./i18n";
 import { authed, setAuthed } from "./state/session";
+import { AcceptInvite } from "./screens/AcceptInvite";
 import { Activation } from "./screens/Activation";
+import { Admins } from "./screens/Admins";
 import { ApiKeys } from "./screens/ApiKeys";
 import { Catalog } from "./screens/Catalog";
 import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
 import { Login } from "./screens/Login";
+import { MySecurity } from "./screens/MySecurity";
+import { MySessions } from "./screens/MySessions";
 import { NewStore } from "./screens/NewStore";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
@@ -59,6 +63,7 @@ export function App() {
       <Router>
         <Route path="/login" component={Login} />
         <Route path="/setup" component={Setup} />
+        <Route path="/invite" component={AcceptInvite} />
         <Route path="/" component={Guarded}>
           <Route path="/" component={Reports} />
           <Route path="/stores" component={Stores} />
@@ -71,6 +76,9 @@ export function App() {
           <Route path="/webhooks" component={Webhooks} />
           <Route path="/translations" component={Translations} />
           <Route path="/activation" component={Activation} />
+          <Route path="/admins" component={Admins} />
+          <Route path="/my-sessions" component={MySessions} />
+          <Route path="/my-security" component={MySecurity} />
         </Route>
       </Router>
     </Show>

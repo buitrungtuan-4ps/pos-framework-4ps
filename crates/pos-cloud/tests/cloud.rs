@@ -22,7 +22,11 @@ use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
 use pos_cloud::auth::SuperAdminCredential;
-use pos_cloud::auth::admin::{AdminCredential, AdminStore, AdminStoreError};
+use pos_cloud::auth::admin::{
+    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
+    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
+    hash_session_token,
+};
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
     issue,
@@ -220,11 +224,50 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
 }
 
 /// The super-admin store the `/admin` login and session guard consult, keyed to the one super-admin.
+/// A stored session row, keyed in the table by `SHA-256(token)`: its sliding expiry, the absolute cap
+/// and idle window that drive the slide, the id of the admin it belongs to (`None` for a legacy
+/// session), and the client details captured for the admin's own session list.
+#[derive(Clone)]
+struct SessionRow {
+    created_at: Timestamp,
+    expires_at: Timestamp,
+    absolute_expires_at: Option<Timestamp>,
+    idle_ttl_ms: Option<i64>,
+    admin_id: Option<String>,
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+type SessionRows = HashMap<[u8; 32], SessionRow>;
+
+/// A stored invitation row in the integration fake, keyed for acceptance by its token hash.
+#[derive(Clone)]
+struct StoredInvite {
+    id: String,
+    email: String,
+    name: String,
+    role: AdminRole,
+    invited_by: String,
+    token_hash: [u8; 32],
+    expires_at: Timestamp,
+    accepted: bool,
+}
+
+/// A stored recovery code in the integration fake: its hash and whether it has been spent.
+#[derive(Clone)]
+struct StoredRecoveryCode {
+    code_hash: [u8; 32],
+    used: bool,
+}
+
 #[derive(Clone, Default)]
 struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
     last_used_totp_step: Arc<Mutex<Option<u64>>>,
-    sessions: Arc<Mutex<HashMap<[u8; 32], Timestamp>>>,
+    sessions: Arc<Mutex<SessionRows>>,
+    admin_users: Arc<Mutex<Vec<AdminUser>>>,
+    invites: Arc<Mutex<Vec<StoredInvite>>>,
+    recovery_codes: Arc<Mutex<HashMap<String, Vec<StoredRecoveryCode>>>>,
 }
 
 impl FakeAdmin {
@@ -265,6 +308,64 @@ impl AdminStore for FakeAdmin {
         Ok(true)
     }
 
+    async fn rotate_totp_secret(&self, secret: Vec<u8>) -> Result<(), AdminStoreError> {
+        let mut slot = self.credential.lock().expect("lock");
+        if let Some(credential) = slot.take() {
+            *slot = Some(credential.with_totp(TotpSecret::new(secret)));
+        }
+        *self.last_used_totp_step.lock().expect("lock") = None;
+        Ok(())
+    }
+
+    async fn store_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: Vec<NewRecoveryCode>,
+    ) -> Result<(), AdminStoreError> {
+        let rows = codes
+            .into_iter()
+            .map(|code| StoredRecoveryCode {
+                code_hash: code.code_hash,
+                used: false,
+            })
+            .collect();
+        self.recovery_codes
+            .lock()
+            .expect("lock")
+            .insert(admin_id.to_owned(), rows);
+        Ok(())
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: [u8; 32],
+        _now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        let mut map = self.recovery_codes.lock().expect("lock");
+        let Some(rows) = map.get_mut(admin_id) else {
+            return Ok(false);
+        };
+        match rows
+            .iter_mut()
+            .find(|row| !row.used && row.code_hash == code_hash)
+        {
+            Some(row) => {
+                row.used = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn count_recovery_codes(&self, admin_id: &str) -> Result<u64, AdminStoreError> {
+        let map = self.recovery_codes.lock().expect("lock");
+        let unused = map
+            .get(admin_id)
+            .map_or(0, |rows| rows.iter().filter(|row| !row.used).count());
+        Ok(u64::try_from(unused).unwrap_or(u64::MAX))
+    }
+
     async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
         let mut last = self.last_used_totp_step.lock().expect("lock");
         if last.is_none_or(|current| step > current) {
@@ -273,15 +374,19 @@ impl AdminStore for FakeAdmin {
         Ok(())
     }
 
-    async fn create_session(
-        &self,
-        token_hash: [u8; 32],
-        expires_at: Timestamp,
-    ) -> Result<(), AdminStoreError> {
-        self.sessions
-            .lock()
-            .expect("lock")
-            .insert(token_hash, expires_at);
+    async fn create_session(&self, session: NewAdminSession) -> Result<(), AdminStoreError> {
+        self.sessions.lock().expect("lock").insert(
+            session.token_hash,
+            SessionRow {
+                created_at: session.created_at,
+                expires_at: session.expires_at,
+                absolute_expires_at: Some(session.absolute_expires_at),
+                idle_ttl_ms: Some(session.idle_ttl_ms),
+                admin_id: session.admin_id,
+                ip: session.ip,
+                user_agent: session.user_agent,
+            },
+        );
         Ok(())
     }
 
@@ -290,17 +395,268 @@ impl AdminStore for FakeAdmin {
         token_hash: [u8; 32],
         now: Timestamp,
     ) -> Result<bool, AdminStoreError> {
+        // A pure read — no sliding, as the poll's SQL is.
         Ok(self
             .sessions
             .lock()
             .expect("lock")
             .get(&token_hash)
-            .is_some_and(|expires_at| *expires_at > now))
+            .is_some_and(|row| row.expires_at > now))
+    }
+
+    async fn session_admin(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<LiveSession>, AdminStoreError> {
+        let mut sessions = self.sessions.lock().expect("lock");
+        let Some(row) = sessions
+            .get_mut(&token_hash)
+            .filter(|row| row.expires_at > now)
+        else {
+            return Ok(None);
+        };
+        // Slide the idle TTL up to the absolute cap, as the guard's SQL does; a legacy row is left as
+        // it is.
+        if let (Some(cap), Some(idle_ms)) = (row.absolute_expires_at, row.idle_ttl_ms) {
+            let slid = Timestamp::from_milliseconds_since_epoch(
+                now.as_milliseconds_since_epoch().saturating_add(idle_ms),
+            )
+            .unwrap_or(now);
+            row.expires_at = if slid <= cap { slid } else { cap };
+        }
+        Ok(Some(LiveSession {
+            admin_id: row.admin_id.clone(),
+        }))
     }
 
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
         self.sessions.lock().expect("lock").remove(&token_hash);
         Ok(())
+    }
+
+    async fn list_admin_sessions(
+        &self,
+        admin_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<SessionSummary>, AdminStoreError> {
+        let mut summaries: Vec<SessionSummary> = self
+            .sessions
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(_, row)| row.admin_id.as_deref() == Some(admin_id) && row.expires_at > now)
+            .map(|(token_hash, row)| SessionSummary {
+                token_hash: *token_hash,
+                ip: row.ip.clone(),
+                user_agent: row.user_agent.clone(),
+                created_at: row.created_at,
+                expires_at: row.expires_at,
+            })
+            .collect();
+        summaries.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.token_hash.cmp(&b.token_hash))
+        });
+        Ok(summaries)
+    }
+
+    async fn revoke_admin_session(
+        &self,
+        admin_id: &str,
+        token_hash: [u8; 32],
+    ) -> Result<bool, AdminStoreError> {
+        let mut sessions = self.sessions.lock().expect("lock");
+        if sessions
+            .get(&token_hash)
+            .is_some_and(|row| row.admin_id.as_deref() == Some(admin_id))
+        {
+            sessions.remove(&token_hash);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn revoke_other_admin_sessions(
+        &self,
+        admin_id: &str,
+        except_token_hash: [u8; 32],
+    ) -> Result<u64, AdminStoreError> {
+        let mut sessions = self.sessions.lock().expect("lock");
+        let before = sessions.len();
+        sessions.retain(|token_hash, row| {
+            row.admin_id.as_deref() != Some(admin_id) || *token_hash == except_token_hash
+        });
+        Ok(u64::try_from(before - sessions.len()).unwrap_or(u64::MAX))
+    }
+
+    async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        if users
+            .iter()
+            .any(|existing| existing.email.eq_ignore_ascii_case(&user.email))
+        {
+            return Ok(false);
+        }
+        users.push(AdminUser {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            status: AdminStatus::Active,
+        });
+        Ok(true)
+    }
+
+    async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
+        Ok(self.admin_users.lock().expect("lock").clone())
+    }
+
+    async fn get_admin_user(&self, id: &str) -> Result<Option<AdminUser>, AdminStoreError> {
+        Ok(self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|user| user.id == id)
+            .cloned())
+    }
+
+    async fn find_admin_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminUser>, AdminStoreError> {
+        Ok(self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|user| user.email.eq_ignore_ascii_case(email))
+            .cloned())
+    }
+
+    async fn set_admin_user_role(
+        &self,
+        id: &str,
+        role: AdminRole,
+    ) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        match users.iter_mut().find(|user| user.id == id) {
+            Some(user) => {
+                user.role = role;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn set_admin_user_status(
+        &self,
+        id: &str,
+        status: AdminStatus,
+    ) -> Result<bool, AdminStoreError> {
+        let mut users = self.admin_users.lock().expect("lock");
+        match users.iter_mut().find(|user| user.id == id) {
+            Some(user) => {
+                user.status = status;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn count_active_owners(&self) -> Result<u64, AdminStoreError> {
+        let count = self
+            .admin_users
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|user| user.role == AdminRole::Owner && user.status == AdminStatus::Active)
+            .count();
+        Ok(u64::try_from(count).unwrap_or(u64::MAX))
+    }
+
+    async fn create_invite(&self, invite: NewAdminInvite) -> Result<(), AdminStoreError> {
+        self.invites.lock().expect("lock").push(StoredInvite {
+            id: invite.id,
+            email: invite.email,
+            name: invite.name,
+            role: invite.role,
+            invited_by: invite.invited_by,
+            token_hash: invite.token_hash,
+            expires_at: invite.expires_at,
+            accepted: false,
+        });
+        Ok(())
+    }
+
+    async fn find_pending_invite_by_token(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<AdminInvite>, AdminStoreError> {
+        Ok(self
+            .invites
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|invite| {
+                invite.token_hash == token_hash && !invite.accepted && invite.expires_at > now
+            })
+            .map(fake_invite_to_domain))
+    }
+
+    async fn mark_invite_accepted(
+        &self,
+        id: &str,
+        _accepted_at: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        let mut invites = self.invites.lock().expect("lock");
+        match invites
+            .iter_mut()
+            .find(|invite| invite.id == id && !invite.accepted)
+        {
+            Some(invite) => {
+                invite.accepted = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn list_pending_invites(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<AdminInvite>, AdminStoreError> {
+        Ok(self
+            .invites
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|invite| !invite.accepted && invite.expires_at > now)
+            .map(fake_invite_to_domain)
+            .collect())
+    }
+
+    async fn revoke_invite(&self, id: &str) -> Result<bool, AdminStoreError> {
+        let mut invites = self.invites.lock().expect("lock");
+        let before = invites.len();
+        invites.retain(|invite| invite.id != id || invite.accepted);
+        Ok(invites.len() != before)
+    }
+}
+
+/// Projects a stored fake invite into the domain [`AdminInvite`] (no token crosses the boundary).
+fn fake_invite_to_domain(invite: &StoredInvite) -> AdminInvite {
+    AdminInvite {
+        id: invite.id.clone(),
+        email: invite.email.clone(),
+        name: invite.name.clone(),
+        role: invite.role,
+        invited_by: invite.invited_by.clone(),
+        accepted: invite.accepted,
     }
 }
 
@@ -3174,6 +3530,761 @@ async fn registry_is_behind_the_session_guard() {
         .await
         .expect("route unauthenticated");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Seeds a console admin of `role` and a live session bound to it, returning the `name=value` cookie
+/// that names that session — the way a specific-role caller is simulated end-to-end (ADR-0067).
+async fn role_session_cookie(admin: &FakeAdmin, role: AdminRole, token: &str) -> String {
+    let id = format!("id-{}", role.as_token());
+    admin
+        .create_admin_user(NewAdminUser {
+            id: id.clone(),
+            email: format!("{}@example.test", role.as_token()),
+            name: "N".to_owned(),
+            role,
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        })
+        .await
+        .expect("seed admin");
+    let expiry = Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid");
+    admin
+        .create_session(NewAdminSession {
+            token_hash: hash_session_token(token),
+            created_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+            expires_at: expiry,
+            absolute_expires_at: expiry,
+            idle_ttl_ms: 3_600_000,
+            admin_id: Some(id.clone()),
+            ip: None,
+            user_agent: None,
+        })
+        .await
+        .expect("seed session");
+    format!("__Host-pos_admin_session={token}")
+}
+
+#[tokio::test]
+async fn a_viewer_may_read_the_registry_but_not_create() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    // `console.data.read` is granted to every role, so a viewer's listing succeeds.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/tenants", &cookie))
+        .await
+        .expect("route list");
+    assert_eq!(
+        listed.status(),
+        StatusCode::OK,
+        "a viewer may read the registry"
+    );
+
+    // Creating a tenant needs `console.orgs.manage`, which a viewer lacks — a 403, distinct from the
+    // 401 an unauthenticated caller gets: the viewer is signed in, only under-privileged.
+    let denied = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "X" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "a viewer cannot create a tenant"
+    );
+}
+
+#[tokio::test]
+async fn an_ops_admin_cannot_create_in_the_registry() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let denied = router
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "X" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "ops has no tenant/brand creation"
+    );
+}
+
+#[tokio::test]
+async fn an_owner_session_may_create_in_the_registry() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let created = router
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        created.status(),
+        StatusCode::CREATED,
+        "an owner may create a tenant"
+    );
+}
+
+// --- Self-service sessions (G1 slice 4, ADR-0067) -----------------------------------------------
+
+/// Seeds an extra live session bound to `admin_id` (a second signed-in device), for the session-list
+/// tests. The idle window equals the cap, so the seeded session neither slides nor idles out during
+/// a test.
+async fn seed_extra_session(admin: &FakeAdmin, token: &str, admin_id: &str, ip: Option<&str>) {
+    let expiry = Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid");
+    admin
+        .create_session(NewAdminSession {
+            token_hash: hash_session_token(token),
+            created_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+            expires_at: expiry,
+            absolute_expires_at: expiry,
+            idle_ttl_ms: 3_600_000,
+            admin_id: Some(admin_id.to_owned()),
+            ip: ip.map(str::to_owned),
+            user_agent: None,
+        })
+        .await
+        .expect("seed extra session");
+}
+
+#[tokio::test]
+async fn listing_sessions_requires_a_session() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let denied = router
+        .oneshot(get("/admin/sessions", None))
+        .await
+        .expect("route unauthenticated");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_admin_lists_and_revokes_their_own_sessions() {
+    let admin = provisioned_admin();
+    // Even a viewer — least privilege — manages their own sessions: it is self-service, not
+    // role-gated.
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "current-token").await;
+    seed_extra_session(&admin, "phone-token", "id-viewer", Some("203.0.113.4")).await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let sessions = listed.as_array().expect("array");
+    assert_eq!(sessions.len(), 2, "both of the admin's sessions are listed");
+    // Exactly one is flagged as the session making this request.
+    let current: Vec<&serde_json::Value> =
+        sessions.iter().filter(|s| s["current"] == true).collect();
+    assert_eq!(current.len(), 1, "exactly one session is the current one");
+    let other = sessions
+        .iter()
+        .find(|s| s["current"] == false)
+        .expect("a non-current session");
+    let other_id = other["id"].as_str().expect("a handle").to_owned();
+
+    // Revoke the other device by its opaque handle.
+    let revoked = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/sessions/{other_id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke");
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+
+    let after = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let remaining = after.as_array().expect("array");
+    assert_eq!(remaining.len(), 1, "only the current session remains");
+    assert_eq!(remaining[0]["current"], true);
+}
+
+#[tokio::test]
+async fn revoking_a_bad_handle_or_a_missing_session() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    // A non-hex handle is a 400.
+    let bad = router
+        .clone()
+        .oneshot(delete_with_cookie("/admin/sessions/not-a-handle", &cookie))
+        .await
+        .expect("route revoke");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A well-formed handle that names no session of theirs is a 404.
+    let absent_handle = "0".repeat(64);
+    let absent = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/sessions/{absent_handle}"),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke");
+    assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn revoke_others_signs_out_every_session_but_the_current_one() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "keep-token").await;
+    seed_extra_session(&admin, "device-a", "id-owner", None).await;
+    seed_extra_session(&admin, "device-b", "id-owner", None).await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    let before = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    assert_eq!(before.as_array().expect("array").len(), 3);
+
+    let signed_out = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/sessions/revoke-others",
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke others");
+    assert_eq!(signed_out.status(), StatusCode::NO_CONTENT);
+
+    let after = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let remaining = after.as_array().expect("array");
+    assert_eq!(remaining.len(), 1, "only the current session survives");
+    assert_eq!(remaining[0]["current"], true);
+}
+
+// --- Login rate-limit + security headers (G1 slice 5, ADR-0067) ---------------------------------
+
+/// The main router with a specific `/admin/login` rate limit, for the throttle test.
+fn login_rate_limited_router(max_attempts: usize, window_secs: u64) -> axum::Router {
+    let app = CloudApp::new(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        clock(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    )
+    .with_login_rate_limit(max_attempts, window_secs);
+    http::router(app)
+}
+
+#[tokio::test]
+async fn login_is_rate_limited_after_too_many_attempts() {
+    let router = login_rate_limited_router(3, 60);
+    // Bogus credentials: each attempt reaches the credential check and is refused, and is recorded by
+    // the limiter. The limiter runs before the credential check, so it can never leak whether the
+    // credential was right.
+    let bogus = serde_json::json!({ "password": "wrong-passphrase", "totp_code": "000000" });
+    for _ in 0..3 {
+        let refused = router
+            .clone()
+            .oneshot(post_json("/admin/login", &bogus))
+            .await
+            .expect("route login");
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNAUTHORIZED,
+            "an attempt within the limit reaches the credential check"
+        );
+    }
+    // The fourth attempt trips the limiter first: a 429 carrying a Retry-After.
+    let throttled = router
+        .clone()
+        .oneshot(post_json("/admin/login", &bogus))
+        .await
+        .expect("route login");
+    assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        throttled.headers().get("retry-after").is_some(),
+        "a rate-limited login carries a Retry-After for the client"
+    );
+}
+
+#[tokio::test]
+async fn every_response_carries_the_admin_security_headers() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    // The layer wraps every response, so even an unauthenticated probe carries the headers.
+    let response = router
+        .oneshot(get("/admin/session", None))
+        .await
+        .expect("route session probe");
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get("x-content-type-options")
+            .expect("nosniff header")
+            .to_str()
+            .expect("ascii"),
+        "nosniff"
+    );
+    assert_eq!(
+        headers
+            .get("x-frame-options")
+            .expect("frame-options header")
+            .to_str()
+            .expect("ascii"),
+        "DENY"
+    );
+    assert_eq!(
+        headers
+            .get("referrer-policy")
+            .expect("referrer-policy header")
+            .to_str()
+            .expect("ascii"),
+        "no-referrer"
+    );
+    let csp = headers
+        .get("content-security-policy")
+        .expect("a CSP header")
+        .to_str()
+        .expect("ascii");
+    assert!(
+        csp.contains("default-src 'self'"),
+        "CSP pins the default origin"
+    );
+    assert!(
+        csp.contains("script-src 'self'"),
+        "CSP locks scripts to self"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP backs up X-Frame-Options against clickjacking"
+    );
+}
+
+// --- Self-service security: TOTP re-enrol + recovery codes (G1 slice 6, ADR-0067) --------------
+
+/// A router over a provisioned super-admin with a seeded active owner, so a real sign-in binds the
+/// session to an `admin_users` id — the shape the recovery-code and re-enrol tests need.
+async fn security_router() -> axum::Router {
+    let admin = provisioned_admin();
+    admin
+        .create_admin_user(NewAdminUser {
+            id: "id-owner".to_owned(),
+            email: "owner@example.test".to_owned(),
+            name: "Owner".to_owned(),
+            role: AdminRole::Owner,
+            // The login uses the super-admin credential, not this row's — these are placeholders.
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        })
+        .await
+        .expect("seed owner");
+    registry_app(admin, FakeRegistry::default())
+}
+
+#[tokio::test]
+async fn recovery_codes_generate_once_and_sign_in_in_place_of_totp() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+
+    // Generate the codes — returned once, with the count.
+    let generated = json_body(
+        router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/recovery-codes",
+                &serde_json::json!({}),
+                &cookie,
+            ))
+            .await
+            .expect("route generate"),
+    )
+    .await;
+    let codes = generated["codes"].as_array().expect("codes array");
+    assert_eq!(codes.len(), 10);
+    assert_eq!(generated["remaining"], 10);
+    let code = codes[0].as_str().expect("a code").to_owned();
+
+    // The status endpoint reports the count, never the codes.
+    let status = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/recovery-codes", &cookie))
+            .await
+            .expect("route status"),
+    )
+    .await;
+    assert_eq!(status["remaining"], 10);
+
+    // A recovery code signs in in place of the TOTP code.
+    let signed_in = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/login",
+            &serde_json::json!({ "password": ADMIN_PASSWORD, "recovery_code": code }),
+        ))
+        .await
+        .expect("route recovery login");
+    assert_eq!(signed_in.status(), StatusCode::NO_CONTENT);
+
+    // Single-use: the same code cannot sign in again.
+    let replay = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/login",
+            &serde_json::json!({ "password": ADMIN_PASSWORD, "recovery_code": code }),
+        ))
+        .await
+        .expect("route recovery login");
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+    // One code spent leaves nine.
+    let status = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/recovery-codes", &cookie))
+            .await
+            .expect("route status"),
+    )
+    .await;
+    assert_eq!(status["remaining"], 9);
+}
+
+#[tokio::test]
+async fn totp_reenrol_needs_the_current_password() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+
+    // Signed in but wrong password: a distinct 403, the knowledge factor not re-proved.
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/totp",
+            &serde_json::json!({ "password": "wrong-password" }),
+            &cookie,
+        ))
+        .await
+        .expect("route reenrol");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+    // Correct password: a fresh one-time enrolment (QR + base32 secret).
+    let enrolled = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/totp",
+            &serde_json::json!({ "password": ADMIN_PASSWORD }),
+            &cookie,
+        ))
+        .await
+        .expect("route reenrol");
+    assert_eq!(enrolled.status(), StatusCode::OK);
+    let body = json_body(enrolled).await;
+    assert!(
+        body["otpauth_uri"]
+            .as_str()
+            .expect("an otpauth uri")
+            .contains("otpauth://totp/"),
+    );
+    assert!(body["secret_base32"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn the_self_service_security_routes_require_a_session() {
+    let router = security_router().await;
+    for request in [
+        post_json("/admin/totp", &serde_json::json!({ "password": "x" })),
+        post_json("/admin/recovery-codes", &serde_json::json!({})),
+        get("/admin/recovery-codes", None),
+    ] {
+        let denied = router.clone().oneshot(request).await.expect("route");
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+// --- Console identity: whoami (G1 slice 7, ADR-0067) --------------------------------------------
+
+#[tokio::test]
+async fn whoami_needs_a_session() {
+    let router = security_router().await;
+    let denied = router
+        .oneshot(get("/admin/whoami", None))
+        .await
+        .expect("route whoami");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn whoami_reports_the_acting_admins_identity_and_role() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+    let me = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/whoami", &cookie))
+            .await
+            .expect("route whoami"),
+    )
+    .await;
+    // The session bound to the one active owner, so whoami names that owner — role included, and
+    // never a credential (no password hash, no TOTP secret in the safe listing shape).
+    assert_eq!(me["id"], "id-owner");
+    assert_eq!(me["email"], "owner@example.test");
+    assert_eq!(me["role"], "owner");
+    assert_eq!(me["status"], "active");
+    assert!(me.get("password_phc").is_none());
+    assert!(me.get("totp_secret").is_none());
+}
+
+// --- Invitations and admin management (G1 slice 3, ADR-0067) ------------------------------------
+
+#[tokio::test]
+async fn owner_invites_and_the_invitee_self_enrols() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    // The owner invites an ops admin; the single-use token is returned once.
+    let invited = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/invites",
+            &serde_json::json!({ "email": "New.Ops@Example.test", "name": "New Ops", "role": "ops" }),
+            &cookie,
+        ))
+        .await
+        .expect("route invite");
+    assert_eq!(invited.status(), StatusCode::CREATED);
+    let body = json_body(invited).await;
+    let token = body["token"].as_str().expect("a token").to_owned();
+    assert!(body["invite_id"].as_str().is_some());
+
+    // It lists as pending, with the email normalised to lower-case.
+    let pending_invites = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/invites", &cookie))
+            .await
+            .expect("route list invites"),
+    )
+    .await;
+    assert_eq!(pending_invites.as_array().expect("array").len(), 1);
+    assert_eq!(pending_invites[0]["email"], "new.ops@example.test");
+    assert_eq!(pending_invites[0]["role"], "ops");
+
+    // The invitee self-enrols with the token — no session — and gets a one-time TOTP enrolment.
+    let accepted = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": token, "password": "a-strong-passphrase" }),
+        ))
+        .await
+        .expect("route accept");
+    assert_eq!(accepted.status(), StatusCode::CREATED);
+    let enrolment = json_body(accepted).await;
+    assert!(enrolment["otpauth_uri"].as_str().is_some());
+    assert!(enrolment["secret_base32"].as_str().is_some());
+
+    // The new admin is on the roster, the invite is no longer pending, and the token cannot be reused.
+    let admin_roster = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/admins", &cookie))
+            .await
+            .expect("route roster"),
+    )
+    .await;
+    let has_new = admin_roster
+        .as_array()
+        .expect("array")
+        .iter()
+        .any(|entry| entry["email"] == "new.ops@example.test" && entry["role"] == "ops");
+    assert!(has_new, "the accepted admin appears on the roster");
+
+    let remaining = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/invites", &cookie))
+            .await
+            .expect("route list invites"),
+    )
+    .await;
+    assert!(remaining.as_array().expect("array").is_empty());
+
+    let replay = router
+        .oneshot(post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": token, "password": "a-strong-passphrase" }),
+        ))
+        .await
+        .expect("route replay");
+    assert_eq!(
+        replay.status(),
+        StatusCode::UNAUTHORIZED,
+        "an accepted invite cannot be replayed"
+    );
+}
+
+#[tokio::test]
+async fn an_admin_cannot_invite_an_owner() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let denied = router
+        .oneshot(post_with_cookie(
+            "/admin/invites",
+            &serde_json::json!({ "email": "boss@example.test", "name": "Boss", "role": "owner" }),
+            &cookie,
+        ))
+        .await
+        .expect("route invite");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "an admin may not invite an owner"
+    );
+}
+
+#[tokio::test]
+async fn a_viewer_cannot_invite() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let denied = router
+        .oneshot(post_with_cookie(
+            "/admin/invites",
+            &serde_json::json!({ "email": "x@example.test", "name": "X", "role": "viewer" }),
+            &cookie,
+        ))
+        .await
+        .expect("route invite");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn accept_rejects_a_bad_token_and_a_short_password() {
+    let admin = provisioned_admin();
+    let router = registry_app(admin, FakeRegistry::default());
+    let bad_token = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": "not-a-real-token", "password": "a-strong-passphrase" }),
+        ))
+        .await
+        .expect("route accept");
+    assert_eq!(
+        bad_token.status(),
+        StatusCode::UNAUTHORIZED,
+        "an unknown token is a generic 401"
+    );
+    let short_password = router
+        .oneshot(post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": "not-a-real-token", "password": "short" }),
+        ))
+        .await
+        .expect("route accept");
+    assert_eq!(short_password.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn the_last_active_owner_cannot_be_demoted_or_suspended() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let demote = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            "/admin/admins/id-owner/role",
+            &serde_json::json!({ "role": "admin" }),
+            &cookie,
+        ))
+        .await
+        .expect("route demote");
+    assert_eq!(
+        demote.status(),
+        StatusCode::CONFLICT,
+        "the last active owner cannot be demoted"
+    );
+    let suspend = router
+        .oneshot(patch_with_cookie(
+            "/admin/admins/id-owner/status",
+            &serde_json::json!({ "status": "suspended" }),
+            &cookie,
+        ))
+        .await
+        .expect("route suspend");
+    assert_eq!(
+        suspend.status(),
+        StatusCode::CONFLICT,
+        "the last active owner cannot be suspended"
+    );
+}
+
+#[tokio::test]
+async fn an_owner_can_be_demoted_when_another_owner_remains() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    // A second active owner, so demoting the first no longer removes the last owner.
+    admin
+        .create_admin_user(NewAdminUser {
+            id: "id-owner-2".to_owned(),
+            email: "owner2@example.test".to_owned(),
+            name: "O2".to_owned(),
+            role: AdminRole::Owner,
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        })
+        .await
+        .expect("seed second owner");
+    let router = registry_app(admin, FakeRegistry::default());
+    let demote = router
+        .oneshot(patch_with_cookie(
+            "/admin/admins/id-owner-2/role",
+            &serde_json::json!({ "role": "admin" }),
+            &cookie,
+        ))
+        .await
+        .expect("route demote");
+    assert_eq!(
+        demote.status(),
+        StatusCode::NO_CONTENT,
+        "demotion is allowed while another owner remains"
+    );
 }
 
 // --- Catalog authoring admin routes (ADR-0066) --------------------------------------------------

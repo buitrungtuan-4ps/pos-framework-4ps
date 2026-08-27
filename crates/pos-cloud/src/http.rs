@@ -48,9 +48,13 @@ use core::fmt::Write as _;
 use std::collections::BTreeSet;
 
 use argon2::password_hash::SaltString;
-use axum::extract::{Path, Query, State};
-use axum::http::header::SET_COOKIE;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::header::{
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE, USER_AGENT,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -74,13 +78,20 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
-use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
+use crate::auth::admin::{
+    AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
+    LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
+    SessionSummary, authenticate_session, authenticated_admin, current_session_token_hash,
+    hash_recovery_code, hash_session_token, login, logout,
+};
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
 };
 use crate::auth::password::hash_password;
+use crate::auth::rate_limit::LoginRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
@@ -115,6 +126,49 @@ use utoipa::OpenApi as _;
 /// [`CloudApp::with_admin_session_ttl_secs`].
 const DEFAULT_ADMIN_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 
+/// How long a console-admin invitation stays acceptable when the binary does not override it — three
+/// days, long enough to hand the copy-invite-link over out-of-band without leaving a stale
+/// credential-granting token valid indefinitely ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+const DEFAULT_ADMIN_INVITE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
+
+/// How long a console-admin session may sit idle before it expires when the binary does not override
+/// it — thirty minutes, the sliding idle window bounded by the absolute session cap
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4). `main.rs` threads the
+/// configured value in via [`CloudApp::with_admin_session_idle_ttl_secs`].
+const DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS: u64 = 30 * 60;
+
+/// How many `/admin/login` attempts one client may make within the window before a `429`, when the
+/// binary does not override it ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+const DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS: usize = 10;
+
+/// The sliding `/admin/login` rate-limit window, in seconds, when the binary does not override it.
+const DEFAULT_ADMIN_LOGIN_WINDOW_SECS: u64 = 5 * 60;
+
+/// How many one-time recovery codes a generation issues at once
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6) — ten, the familiar
+/// batch, enough to survive several lost-authenticator events before regenerating.
+const RECOVERY_CODE_COUNT: usize = 10;
+
+/// The `Content-Security-Policy` for the admin console
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). The built SPA loads one
+/// external module script and one external stylesheet from its own origin (see
+/// `dashboard/dist/index.html`), so scripts are locked to `'self'` with no inline allowance — the
+/// strongest lever against injected script. `style-src` keeps `'unsafe-inline'` because the SolidJS
+/// components set inline styles at runtime; an injected *style* is a far weaker foothold than an
+/// injected *script*, so this is a deliberate, bounded relaxation. Images allow `data:`/`blob:` for
+/// the embedded catalog thumbnails; `frame-ancestors 'none'` backs up `X-Frame-Options: DENY` against
+/// clickjacking, and `base-uri`/`form-action`/`object-src` are pinned shut.
+const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; \
+     font-src 'self'; \
+     connect-src 'self'; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'self'; \
+     frame-ancestors 'none'";
+
 /// Everything a request handler needs, bundled so the router carries one state type: the event
 /// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
 /// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
@@ -132,7 +186,10 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     config_trees: T,
     webhooks: W,
     admin_session_ttl_secs: u64,
+    admin_session_idle_ttl_secs: u64,
+    admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
+    login_rate_limiter: LoginRateLimiter,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -163,15 +220,19 @@ where
             config_trees: self.config_trees.clone(),
             webhooks: self.webhooks.clone(),
             admin_session_ttl_secs: self.admin_session_ttl_secs,
+            admin_session_idle_ttl_secs: self.admin_session_idle_ttl_secs,
+            admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
+            login_rate_limiter: self.login_rate_limiter.clone(),
         }
     }
 }
 
 impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     /// Bundles the collaborators into one shareable application state, with the default super-admin
-    /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it).
-    pub const fn new(
+    /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it) and a default login
+    /// rate-limiter ([`CloudApp::with_login_rate_limit`] overrides it).
+    pub fn new(
         cloud: Cloud<S>,
         rollups: R,
         keys: K,
@@ -189,7 +250,13 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             config_trees,
             webhooks,
             admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
+            admin_session_idle_ttl_secs: DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS,
+            admin_invite_ttl_secs: DEFAULT_ADMIN_INVITE_TTL_SECS,
             admin_setup_token: None,
+            login_rate_limiter: LoginRateLimiter::new(
+                DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
+                DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
+            ),
         }
     }
 
@@ -198,6 +265,34 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_admin_session_ttl_secs(mut self, secs: u64) -> Self {
         self.admin_session_ttl_secs = secs;
+        self
+    }
+
+    /// Sets how long an admin session may sit idle before it expires, in seconds — the sliding idle
+    /// window bounded by [`Self::with_admin_session_ttl_secs`]; the binary threads the configured
+    /// value in ([`crate::config::CloudConfig::admin_session_idle_ttl_secs`]).
+    #[must_use]
+    pub const fn with_admin_session_idle_ttl_secs(mut self, secs: u64) -> Self {
+        self.admin_session_idle_ttl_secs = secs;
+        self
+    }
+
+    /// Sets the `/admin/login` rate limit — at most `max_attempts` sign-in attempts per client within
+    /// a `window_secs` sliding window ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)
+    /// slice 5); the binary threads the configured values in
+    /// ([`crate::config::CloudConfig::admin_login_max_attempts`],
+    /// [`crate::config::CloudConfig::admin_login_window_secs`]).
+    #[must_use]
+    pub fn with_login_rate_limit(mut self, max_attempts: usize, window_secs: u64) -> Self {
+        self.login_rate_limiter = LoginRateLimiter::new(max_attempts, window_secs);
+        self
+    }
+
+    /// Sets how long a console-admin invitation stays acceptable, in seconds — the binary threads the
+    /// configured value in ([`crate::config::CloudConfig::admin_invite_ttl_secs`]).
+    #[must_use]
+    pub const fn with_admin_invite_ttl_secs(mut self, secs: u64) -> Self {
+        self.admin_invite_ttl_secs = secs;
         self
     }
 
@@ -213,6 +308,11 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
 }
 
 /// Builds the cloud router over `app`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a flat registration of every cloud route in one place; splitting it would scatter the \
+              route table across helpers and obscure the surface, which is the opposite of clear"
+)]
 pub fn router<S, R, K, C, A, T, W>(app: CloudApp<S, R, K, C, A, T, W>) -> Router
 where
     S: EventStore + Clone + Send + Sync + 'static,
@@ -239,6 +339,28 @@ where
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
+        .route("/admin/whoami", get(admin_whoami::<S, R, K, C, A, T, W>))
+        .route(
+            "/admin/sessions",
+            get(admin_list_sessions::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/sessions/revoke-others",
+            post(admin_revoke_other_sessions::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/sessions/{id}",
+            delete(admin_revoke_session::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/totp",
+            post(admin_reenrol_totp::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/recovery-codes",
+            post(admin_generate_recovery_codes::<S, R, K, C, A, T, W>)
+                .get(admin_recovery_codes_status::<S, R, K, C, A, T, W>),
+        )
         .route("/admin/setup", post(admin_setup::<S, R, K, C, A, T, W>))
         .route(
             "/admin/api-keys",
@@ -248,6 +370,31 @@ where
         .route(
             "/admin/api-keys/{id}",
             delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins",
+            get(admin_list_admins::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins/{id}/role",
+            axum::routing::patch(admin_set_admin_role::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins/{id}/status",
+            axum::routing::patch(admin_set_admin_status::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites",
+            post(admin_invite_admin::<S, R, K, C, A, T, W>)
+                .get(admin_list_invites::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites/accept",
+            post(admin_accept_invite::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites/{id}",
+            delete(admin_revoke_invite::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/config",
@@ -279,6 +426,11 @@ where
             post(admin_enable_webhook::<S, R, K, C, A, T, W>),
         )
         .with_state(app)
+        // The admin-console security headers ([ADR-0067] slice 5) on every response this router
+        // serves. `main.rs` applies the same layer to the fully-composed service so the SPA fallback
+        // and the other merged routers are covered too; re-inserting the same header values there is
+        // idempotent.
+        .layer(axum::middleware::from_fn(security_headers))
 }
 
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
@@ -560,8 +712,15 @@ where
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -625,8 +784,15 @@ where
     A: AdminStore,
     C: ClockSource,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -818,8 +984,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     match state.registry.list_tenants().await {
         Ok(tenants) => (StatusCode::OK, Json::<Vec<TenantRecord>>(tenants)).into_response(),
@@ -838,8 +1011,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Some(tenant_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TenantId::new)
@@ -869,8 +1049,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "the tenant id is not a ULID").into_response();
@@ -901,8 +1088,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -924,8 +1118,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -959,8 +1160,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(brand_id), Ok(tenant_id)) = (
         brand_id.parse::<Ulid>().map(BrandId::new),
@@ -999,8 +1207,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1034,8 +1249,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1073,8 +1295,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(store_id), Ok(tenant_id)) = (
         store_id.parse::<Ulid>().map(StoreId::new),
@@ -1118,8 +1347,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1149,8 +1385,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1193,8 +1436,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1637,8 +1887,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1660,8 +1917,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(tax_class_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1715,8 +1979,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(menu_item_id), Ok(tenant_id), Ok(tax_class_id)) = (
         menu_item_id.parse::<Ulid>().map(MenuItemId::new),
@@ -1769,8 +2040,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1792,8 +2070,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1827,8 +2112,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tax_class_id), Ok(tenant_id)) = (
         tax_class_id.parse::<Ulid>().map(TaxClassId::new),
@@ -1867,8 +2159,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1890,8 +2189,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1925,8 +2231,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(item_category_id), Ok(tenant_id)) = (
         item_category_id.parse::<Ulid>().map(ItemCategoryId::new),
@@ -1965,8 +2278,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1988,8 +2308,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(item_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2034,8 +2361,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(item_subcategory_id), Ok(tenant_id), Ok(item_category_id)) = (
         item_subcategory_id
@@ -2081,8 +2415,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2104,8 +2445,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2139,8 +2487,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(display_category_id), Ok(tenant_id)) = (
         display_category_id
@@ -2181,8 +2536,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2204,8 +2566,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(display_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2250,8 +2619,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(display_subcategory_id), Ok(tenant_id), Ok(display_category_id)) = (
         display_subcategory_id
@@ -2297,8 +2673,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2322,8 +2705,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_item_id), Ok(display_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2381,8 +2771,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_item_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2420,8 +2817,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2443,8 +2847,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2492,8 +2903,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(modifier_group_id), Ok(tenant_id)) = (
         modifier_group_id.parse::<Ulid>().map(ModifierGroupId::new),
@@ -2546,8 +2964,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2569,8 +2994,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2607,8 +3039,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(menu_id), Ok(tenant_id)) = (
         menu_id.parse::<Ulid>().map(MenuId::new),
@@ -2652,8 +3091,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2683,8 +3129,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2727,8 +3180,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_section_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2771,8 +3231,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2802,8 +3269,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2846,8 +3320,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2951,8 +3432,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(menu_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3192,8 +3680,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3241,8 +3736,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3408,8 +3910,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3434,8 +3943,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageTranslations,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3648,6 +4164,7 @@ where
 /// `/v1` API.
 async fn admin_login<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Response
 where
@@ -3660,6 +4177,18 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
+    // Throttle sign-in attempts before any expensive work ([ADR-0067] slice 5): an online guesser
+    // meets a cheap `429` rather than an Argon2id hashing storm, and a refused attempt is not even
+    // recorded, so a legitimate admin's next try is not pushed further out. Keyed by client IP today;
+    // the per-email key lights up when email login lands.
+    let ip = client_ip(&headers);
+    let rate_keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
+    if let Err(retry_after_secs) = app
+        .login_rate_limiter
+        .check_and_record(&rate_keys, app.clock.now())
+    {
+        return too_many_login_attempts(retry_after_secs);
+    }
     let Some(token) = mint_session_token() else {
         // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
         // closed with a retryable status rather than issue a guessable session.
@@ -3670,21 +4199,83 @@ where
         )
             .into_response();
     };
-    match login(
-        &app.admin,
-        &app.clock,
-        &request,
-        &token,
-        app.admin_session_ttl_secs,
-    )
-    .await
-    {
+    // Capture the client IP and user-agent so the admin can recognise this session in their own
+    // session list ([ADR-0067] slice 4). Behind the P8 reverse proxy the real client IP arrives in
+    // `X-Forwarded-For`, not the socket peer (which is the proxy); the user-agent is a plain header.
+    let mint = SessionMint {
+        token: &token,
+        idle_ttl_secs: app.admin_session_idle_ttl_secs,
+        absolute_ttl_secs: app.admin_session_ttl_secs,
+        ip,
+        user_agent: header_str(&headers, USER_AGENT.as_str()),
+    };
+    match login(&app.admin, &app.clock, &request, &mint).await {
+        // The cookie's `Max-Age` is the absolute cap: the browser keeps presenting the token for the
+        // whole possible session life, while the server enforces the sliding idle timeout by expiring
+        // the row.
         Ok(()) => set_cookie_response(
             StatusCode::NO_CONTENT,
             &set_cookie(&token, app.admin_session_ttl_secs),
         ),
         Err(denied) => denied.into_response(),
     }
+}
+
+/// The client IP for an admin request, read from the reverse proxy's forwarding headers. Prefers the
+/// first hop of `X-Forwarded-For` (the original client, before the proxy chain), then `X-Real-IP`;
+/// `None` if neither is present. Behind the P8 Caddy proxy these are set by the proxy, so they name
+/// the real client rather than the proxy's own address; the value is only ever shown back to the
+/// admin whose session it is, never trusted for authorization.
+fn client_ip(headers: &HeaderMap) -> Option<&str> {
+    header_str(headers, "x-forwarded-for")
+        .map(|value| value.split(',').next().unwrap_or(value).trim())
+        .filter(|ip| !ip.is_empty())
+        .or_else(|| header_str(headers, "x-real-ip"))
+}
+
+/// A header's value as a trimmed `&str`, or `None` when it is absent or not valid UTF-8.
+fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// A `429 Too Many Requests` for a rate-limited sign-in, with a `Retry-After` in seconds
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). Generic — it says
+/// nothing about whether the credential was right, and the throttle runs before the credential check,
+/// so it cannot become an oracle.
+fn too_many_login_attempts(retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many sign-in attempts; try again later",
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
+}
+
+/// Adds the admin-console security headers to every response
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). Applied as a router layer
+/// so it covers the console SPA, its assets, and the `/admin` API alike: `Content-Security-Policy`
+/// (see [`CONTENT_SECURITY_POLICY_VALUE`]), `X-Content-Type-Options: nosniff` (no MIME sniffing),
+/// `X-Frame-Options: DENY` + the CSP's `frame-ancestors 'none'` (clickjacking), and
+/// `Referrer-Policy: no-referrer` (a console URL never leaks off-site). Harmless on the JSON `/v1`
+/// responses it also covers — those are never framed or rendered as documents.
+pub async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY_VALUE),
+    );
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    response
 }
 
 /// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
@@ -3729,8 +4320,34 @@ where
         )
             .into_response();
     };
-    match app.admin.provision_credential(phc, secret.to_vec()).await {
-        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+    match app
+        .admin
+        .provision_credential(phc.clone(), secret.to_vec())
+        .await
+    {
+        Ok(true) => {
+            // Mirror the freshly-enrolled super-admin into `admin_users` as the first `owner`
+            // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)) — the same identity the
+            // migration seeds on an upgraded install. Best-effort: the session guard falls back to an
+            // implicit owner when this row is absent, so a store blip here never locks the operator
+            // out; it only means the owner is missing from the admins list until reconciled.
+            let owner = NewAdminUser {
+                id: IMPLICIT_OWNER_ID.to_owned(),
+                email: IMPLICIT_OWNER_EMAIL.to_owned(),
+                name: "Owner".to_owned(),
+                role: AdminRole::Owner,
+                password_phc: phc,
+                totp_secret: secret.to_vec(),
+            };
+            if let Err(error) = app.admin.create_admin_user(owner).await {
+                tracing::warn!(
+                    %error,
+                    "super-admin enrolled but mirroring it into admin_users failed; the guard's \
+                     implicit-owner fallback keeps sign-in working"
+                );
+            }
+            (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response()
+        }
         Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3787,6 +4404,60 @@ where
     }
 }
 
+/// `GET /admin/whoami` — the acting admin's own identity (id, email, name, role, status), so the
+/// console can label the signed-in operator and show only the areas their role grants
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available
+/// to any authenticated admin regardless of role, so it is gated by the plain session guard rather
+/// than a [`ConsolePermission`]. It returns the same credential-free [`AdminUser`] shape the roster
+/// lists — never a password hash or a TOTP secret — and role gating in the console is only a UX
+/// convenience; the server re-checks every route's required permission regardless.
+async fn admin_whoami<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => (StatusCode::OK, Json(context.admin)).into_response(),
+        Err(denied) => denied.into_response(),
+    }
+}
+
+/// The role-aware `/admin` guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)):
+/// authenticates the session, resolves the acting admin, and checks that their role grants
+/// `permission`. Every permission-gated `/admin` route calls this in place of the bare session check.
+///
+/// On success the acting [`AdminContext`] is returned (routes that only gate can ignore it). On
+/// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
+/// session, or the store down), or a `403` when the session is valid but the role lacks the
+/// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
+async fn require_permission<A, C>(
+    admin_store: &A,
+    clock: &C,
+    headers: &HeaderMap,
+    permission: ConsolePermission,
+) -> Result<AdminContext, Response>
+where
+    A: AdminStore,
+    C: ClockSource,
+{
+    let context = authenticated_admin(admin_store, clock, headers)
+        .await
+        .map_err(|denied: SessionDenied| denied.into_response())?;
+    if role_grants(context.admin.role, permission) {
+        Ok(context)
+    } else {
+        Err((StatusCode::FORBIDDEN, "insufficient permissions").into_response())
+    }
+}
+
 /// A super-admin request to provision a new API key for a tenant.
 #[derive(Debug, Clone, Deserialize)]
 struct CreateApiKeyRequest {
@@ -3835,8 +4506,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageApiKeys,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3901,8 +4579,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3936,8 +4616,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageApiKeys,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(id) = id.parse::<Ulid>().map(ApiKeyId::new) else {
         return (StatusCode::BAD_REQUEST, "the key id is not a ULID").into_response();
@@ -3951,6 +4638,879 @@ where
                 "the provisioning service is unavailable",
             )
                 .into_response()
+        }
+    }
+}
+
+// --- Console self-service sessions ([ADR-0067] slice 4) -----------------------------------------
+
+/// One of the acting admin's live sessions, as the console lists it. `id` is the opaque revocation
+/// handle (hex of `SHA-256(token)` — never the token, and not reversible to it); `current` marks the
+/// session making this very request, which the console protects from accidental self-revocation.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AdminSessionView {
+    /// The opaque handle the console revokes this session by.
+    id: String,
+    /// The client IP the session was minted for, if it was known.
+    ip: Option<String>,
+    /// The client user-agent the session was minted for, if it was known.
+    user_agent: Option<String>,
+    /// When the session was minted (Unix ms).
+    created_at_ms: i64,
+    /// When the session currently expires (Unix ms), after any sliding.
+    expires_at_ms: i64,
+    /// Whether this is the session making the current request.
+    current: bool,
+}
+
+/// `GET /admin/sessions` — the acting admin's own live sessions, newest first, with the current one
+/// flagged. Self-service: available to any authenticated admin regardless of role (an admin always
+/// manages their own sessions), so it is gated by the plain session guard, not a
+/// [`ConsolePermission`].
+async fn admin_list_sessions<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    match app
+        .admin
+        .list_admin_sessions(&context.admin.id, app.clock.now())
+        .await
+    {
+        Ok(sessions) => {
+            let current = current_session_token_hash(&headers);
+            let views: Vec<AdminSessionView> = sessions
+                .into_iter()
+                .map(|session: SessionSummary| AdminSessionView {
+                    current: current == Some(session.token_hash),
+                    id: hex_encode(&session.token_hash),
+                    ip: session.ip,
+                    user_agent: session.user_agent,
+                    created_at_ms: session.created_at.as_milliseconds_since_epoch(),
+                    expires_at_ms: session.expires_at.as_milliseconds_since_epoch(),
+                })
+                .collect();
+            (StatusCode::OK, Json(views)).into_response()
+        }
+        Err(_) => admin_service_unavailable(),
+    }
+}
+
+/// `DELETE /admin/sessions/{id}` — revoke one of the acting admin's own sessions by its handle.
+/// Scoped to the caller, so an admin can only revoke a session that is theirs: an unknown or
+/// other-owned handle is a `404`, never a cross-admin revocation.
+async fn admin_revoke_session<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    let Some(token_hash) = hex_decode_32(&id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the session id is not a valid handle",
+        )
+            .into_response();
+    };
+    match app
+        .admin
+        .revoke_admin_session(&context.admin.id, token_hash)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such session").into_response(),
+        Err(_) => admin_service_unavailable(),
+    }
+}
+
+/// `POST /admin/sessions/revoke-others` — revoke every one of the acting admin's sessions except the
+/// one making this request ("sign out everywhere else").
+async fn admin_revoke_other_sessions<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    // The guard succeeded, so a live session cookie is present and this resolves to the current
+    // session. If it somehow does not, a never-matching handle revokes every session — a full
+    // sign-out, which fails safe (the admin simply signs in again) rather than leaving one behind.
+    let except = current_session_token_hash(&headers).unwrap_or([0_u8; 32]);
+    match app
+        .admin
+        .revoke_other_admin_sessions(&context.admin.id, except)
+        .await
+    {
+        Ok(_revoked) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => admin_service_unavailable(),
+    }
+}
+
+/// Lower-case hex of a 32-byte hash — the opaque session handle the console sees. Not reversible to
+/// the token, and revocation is admin-scoped, so exposing it grants no capability.
+fn hex_encode(bytes: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for &byte in bytes {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    out
+}
+
+/// Parses a 64-character lower/upper-case hex handle back into the 32-byte hash, or `None` if it is
+/// not exactly 64 hex digits.
+fn hex_decode_32(text: &str) -> Option<[u8; 32]> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (slot, pair) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+        *slot = (hex_value(pair[0])? << 4) | hex_value(pair[1])?;
+    }
+    Some(out)
+}
+
+/// One hex digit's value, or `None` if the byte is not a hex digit.
+fn hex_value(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
+}
+
+// --- Console self-service security: TOTP re-enrol + recovery codes ([ADR-0067] slice 6) ---------
+
+/// A request to re-enrol TOTP: the current password, re-confirming the knowledge factor before the
+/// possession factor is rotated. [`fmt::Debug`] redacts it.
+#[derive(Clone, Deserialize)]
+struct ReenrolTotpRequest {
+    /// The current super-admin password.
+    password: String,
+}
+
+impl fmt::Debug for ReenrolTotpRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReenrolTotpRequest")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The freshly-generated recovery codes, returned exactly once. [`fmt::Debug`] redacts the codes so
+/// they cannot reach a log — they exist in the response body and nowhere else.
+#[derive(Clone, serde::Serialize)]
+struct RecoveryCodesResponse {
+    /// The plaintext codes, shown this once; only their hashes are stored.
+    codes: Vec<String>,
+    /// How many codes are now available (the count just generated).
+    remaining: usize,
+}
+
+impl fmt::Debug for RecoveryCodesResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveryCodesResponse")
+            .field("codes", &"<redacted>")
+            .field("remaining", &self.remaining)
+            .finish()
+    }
+}
+
+/// How many unused recovery codes the acting admin has left — the codes themselves are never listed.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RecoveryCodesStatus {
+    /// The number of unused recovery codes.
+    remaining: u64,
+}
+
+/// `POST /admin/totp` — a signed-in admin re-enrols their authenticator
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Re-confirms the current
+/// password (the knowledge factor) before rotating the TOTP secret (the possession factor), so a
+/// session-only attacker — one holding the cookie but not the password — cannot lock the owner out by
+/// re-enrolling. On success the new one-time enrolment (QR + base32 secret) is returned once; existing
+/// sessions stay valid, and the next sign-in uses the new authenticator.
+async fn admin_reenrol_totp<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<ReenrolTotpRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = authenticated_admin(&app.admin, &app.clock, &headers).await {
+        return denied.into_response();
+    }
+    let credential = match app.admin.load_credential().await {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return (StatusCode::CONFLICT, "no administrator is enrolled").into_response(),
+        Err(error) => {
+            tracing::error!(%error, "loading the credential for TOTP re-enrolment failed");
+            return admin_service_unavailable();
+        }
+    };
+    if !credential.credential.password_matches(&request.password) {
+        // A distinct 403: the caller is signed in but has not re-proved the knowledge factor.
+        return (StatusCode::FORBIDDEN, "the password is incorrect").into_response();
+    }
+    let Some(secret) = mint_totp_secret() else {
+        tracing::error!("could not read OS entropy to mint a TOTP secret");
+        return admin_service_unavailable();
+    };
+    match app.admin.rotate_totp_secret(secret.to_vec()).await {
+        Ok(()) => (StatusCode::OK, Json(build_enrolment(&secret))).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "rotating the TOTP secret failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// `POST /admin/recovery-codes` — (re)generate the acting admin's one-time recovery codes
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Self-service, so it is
+/// gated by the session guard, not a role permission. Mints [`RECOVERY_CODE_COUNT`] codes at the
+/// edge, stores only their hashes (replacing any previous set), and returns the plaintext once.
+async fn admin_generate_recovery_codes<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    let now = app.clock.now();
+    let mut plaintext = Vec::with_capacity(RECOVERY_CODE_COUNT);
+    let mut to_store = Vec::with_capacity(RECOVERY_CODE_COUNT);
+    for _ in 0..RECOVERY_CODE_COUNT {
+        let (Some(code), Some(id)) = (
+            mint_recovery_code(),
+            mint_ulid(now.as_milliseconds_since_epoch()),
+        ) else {
+            tracing::error!("could not read OS entropy to mint a recovery code");
+            return admin_service_unavailable();
+        };
+        to_store.push(NewRecoveryCode {
+            id: id.to_string(),
+            code_hash: hash_recovery_code(&code),
+        });
+        plaintext.push(code);
+    }
+    match app
+        .admin
+        .store_recovery_codes(&context.admin.id, to_store)
+        .await
+    {
+        Ok(()) => {
+            let remaining = plaintext.len();
+            (
+                StatusCode::OK,
+                Json(RecoveryCodesResponse {
+                    codes: plaintext,
+                    remaining,
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "storing recovery codes failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// `GET /admin/recovery-codes` — how many unused recovery codes the acting admin has left (never the
+/// codes themselves), so the console can prompt a regeneration when the supply runs low.
+async fn admin_recovery_codes_status<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    match app.admin.count_recovery_codes(&context.admin.id).await {
+        Ok(remaining) => (StatusCode::OK, Json(RecoveryCodesStatus { remaining })).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "counting recovery codes failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Mints a fresh TOTP shared secret from OS entropy, or `None` if the entropy source is unavailable —
+/// the caller then fails closed rather than install a weak secret.
+fn mint_totp_secret() -> Option<[u8; TOTP_SECRET_BYTES]> {
+    let mut secret = [0_u8; TOTP_SECRET_BYTES];
+    getrandom::fill(&mut secret).ok()?;
+    Some(secret)
+}
+
+/// Mints a human-typeable one-time recovery code: 64 CSPRNG bits as lowercase hex in four
+/// dash-separated groups (`"1a2b-3c4d-5e6f-7a8b"`), or `None` if the entropy source is unavailable.
+/// The dashes and case are cosmetic — the code is normalised before hashing, so the admin may type it
+/// either way.
+fn mint_recovery_code() -> Option<String> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).ok()?;
+    let mut code = String::with_capacity(19);
+    for (index, byte) in bytes.iter().enumerate() {
+        if index != 0 && index.is_multiple_of(2) {
+            code.push('-');
+        }
+        // Writing to a String is infallible; the result is ignored deliberately.
+        let _ = write!(code, "{byte:02x}");
+    }
+    Some(code)
+}
+
+// --- Console admin management and invitations ([ADR-0067]) --------------------------------------
+
+/// A `503` when the admin store is unreachable — the transient, retryable failure for the admin
+/// surface, with the detail kept to the server's log rather than the client.
+fn admin_service_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the admin service is unavailable",
+    )
+        .into_response()
+}
+
+/// Refuses a change that would remove the **last active owner** — a demotion or a suspension of the
+/// sole remaining `owner` ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). `removes_owner`
+/// is true when the pending change would stop the target being an active owner; otherwise the guard
+/// is a no-op. An absent target passes through, so the caller's own update returns the `404`.
+async fn guard_last_owner_change<A>(
+    admin: &A,
+    id: &str,
+    removes_owner: bool,
+) -> Result<(), Response>
+where
+    A: AdminStore,
+{
+    if !removes_owner {
+        return Ok(());
+    }
+    let target = match admin.get_admin_user(id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            tracing::error!(%error, "reading an admin failed");
+            return Err(admin_service_unavailable());
+        }
+    };
+    if target.role == AdminRole::Owner && target.status == AdminStatus::Active {
+        let owners = admin.count_active_owners().await.map_err(|error| {
+            tracing::error!(%error, "counting owners failed");
+            admin_service_unavailable()
+        })?;
+        if owners <= 1 {
+            return Err(
+                (StatusCode::CONFLICT, "cannot remove the last active owner").into_response(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A request to invite a new console admin.
+#[derive(Debug, Clone, Deserialize)]
+struct InviteAdminRequest {
+    /// The invitee's email — the address they will sign in with (normalised server-side).
+    email: String,
+    /// The invitee's display name.
+    name: String,
+    /// The role to grant on acceptance: `owner`/`admin`/`ops`/`viewer`.
+    role: String,
+}
+
+/// The one-time response to an invitation: the id, the single-use token (shown once) the inviter
+/// copies into the invite link, and the expiry. Only the token's hash is stored.
+#[derive(Debug, Clone, serde::Serialize)]
+struct InviteAdminResponse {
+    /// The invite's id (a ULID).
+    invite_id: String,
+    /// The single-use invite token. **Shown once** — only its hash is stored, so it cannot be
+    /// recovered later; the inviter hands the link carrying it to the invitee out-of-band.
+    token: String,
+    /// When the invite stops being acceptable (Unix milliseconds).
+    expires_at_ms: i64,
+}
+
+/// Invites a new console admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Needs
+/// `console.admins.invite` (owner or admin); only an owner may invite another owner, so an admin
+/// cannot escalate. Refuses an address that is already an admin. Returns the single-use token once.
+async fn admin_invite_admin<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<InviteAdminRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Some(role) = AdminRole::from_token(&request.role) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "role must be owner, admin, ops, or viewer",
+        )
+            .into_response();
+    };
+    // No privilege escalation: only an owner may mint another owner.
+    if role == AdminRole::Owner && context.admin.role != AdminRole::Owner {
+        return (StatusCode::FORBIDDEN, "only an owner may invite an owner").into_response();
+    }
+    let email = request.email.trim().to_ascii_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return (StatusCode::BAD_REQUEST, "a valid email is required").into_response();
+    }
+    match app.admin.find_admin_user_by_email(&email).await {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                "an admin with that email already exists",
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(%error, "checking for an existing admin failed");
+            return admin_service_unavailable();
+        }
+    }
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(token)) = (mint_ulid(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint an invite");
+        return admin_service_unavailable();
+    };
+    let ttl_ms = i64::try_from(app.admin_invite_ttl_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
+    let Ok(expires_at) =
+        pos_proto::time::Timestamp::from_milliseconds_since_epoch(now_ms.saturating_add(ttl_ms))
+    else {
+        return admin_service_unavailable();
+    };
+    let invite = NewAdminInvite {
+        id: id.to_string(),
+        email,
+        name: request.name,
+        role,
+        token_hash: hash_session_token(&token),
+        invited_by: context.admin.id,
+        expires_at,
+    };
+    match app.admin.create_invite(invite).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(InviteAdminResponse {
+                invite_id: id.to_string(),
+                token,
+                expires_at_ms: expires_at.as_milliseconds_since_epoch(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "creating an invite failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Lists the pending (not accepted, not expired) invitations. Needs `console.admins.invite`.
+async fn admin_list_invites<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.list_pending_invites(app.clock.now()).await {
+        Ok(invites) => (StatusCode::OK, Json(invites)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing invites failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Revokes a pending invitation by id. `204` whether or not one was pending — revoking is idempotent.
+/// Needs `console.admins.invite`.
+async fn admin_revoke_invite<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.revoke_invite(&id).await {
+        Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "revoking an invite failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A self-enrolment request: the single-use invite token and the password the invitee chooses.
+///
+/// [`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.
+#[derive(Clone, Deserialize)]
+struct AcceptInviteRequest {
+    /// The single-use invite token from the invite link.
+    token: String,
+    /// The password the invitee is choosing.
+    password: String,
+}
+
+impl fmt::Debug for AcceptInviteRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcceptInviteRequest")
+            .field("token", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Accepts an invitation and self-enrols the new admin — **pre-auth**: the invite token is the
+/// authorisation, so there is no session guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// Mints the admin's own Argon2id password hash and TOTP secret exactly as first-boot enrolment does,
+/// claims the invite single-use, creates the admin, and returns the one-time TOTP enrolment. A bad or
+/// expired token is a generic `401`.
+async fn admin_accept_invite<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(request): Json<AcceptInviteRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if request.password.len() < MIN_PASSWORD_LEN {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the password is too short",
+        )
+            .into_response();
+    }
+    let now = app.clock.now();
+    let invite = match app
+        .admin
+        .find_pending_invite_by_token(hash_session_token(&request.token), now)
+        .await
+    {
+        Ok(Some(invite)) => invite,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "the invite is invalid or has expired",
+            )
+                .into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "looking up an invite failed");
+            return admin_service_unavailable();
+        }
+    };
+    let Some((secret, phc)) = mint_credential(&request.password) else {
+        tracing::error!("could not mint a credential for invite acceptance");
+        return admin_service_unavailable();
+    };
+    // Claim the invite before creating the admin, so a replayed acceptance cannot enrol twice.
+    match app.admin.mark_invite_accepted(&invite.id, now).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "the invite is invalid or has expired",
+            )
+                .into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "claiming an invite failed");
+            return admin_service_unavailable();
+        }
+    }
+    let Some(admin_id) = mint_ulid(now.as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint an admin id");
+        return admin_service_unavailable();
+    };
+    let user = NewAdminUser {
+        id: admin_id.to_string(),
+        email: invite.email,
+        name: invite.name,
+        role: invite.role,
+        password_phc: phc,
+        totp_secret: secret.to_vec(),
+    };
+    match app.admin.create_admin_user(user).await {
+        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            "an admin with that email already exists",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "creating the admin failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Lists the console admins — identity and role only, never a credential. Needs
+/// `console.admins.invite` (owner or admin may view the roster).
+async fn admin_list_admins<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.list_admin_users().await {
+        Ok(admins) => (StatusCode::OK, Json(admins)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing admins failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A request to change an admin's role.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAdminRoleRequest {
+    /// The new role: `owner`/`admin`/`ops`/`viewer`.
+    role: String,
+}
+
+/// Changes an admin's role. Needs `console.admins.manage` (owner). Refuses demoting the last active
+/// owner. `404` if there is no admin with that id.
+async fn admin_set_admin_role<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateAdminRoleRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Some(role) = AdminRole::from_token(&request.role) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "role must be owner, admin, ops, or viewer",
+        )
+            .into_response();
+    };
+    if let Err(response) = guard_last_owner_change(&app.admin, &id, role != AdminRole::Owner).await
+    {
+        return response;
+    }
+    match app.admin.set_admin_user_role(&id, role).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Err(error) => {
+            tracing::error!(%error, "setting an admin role failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A request to change an admin's status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAdminStatusRequest {
+    /// The new status: `active` or `suspended`.
+    status: String,
+}
+
+/// Suspends or reactivates an admin. Needs `console.admins.manage` (owner). Refuses suspending the
+/// last active owner. `404` if there is no admin with that id.
+async fn admin_set_admin_status<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateAdminStatusRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Some(status) = AdminStatus::from_token(&request.status) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "status must be active or suspended",
+        )
+            .into_response();
+    };
+    if let Err(response) =
+        guard_last_owner_change(&app.admin, &id, status == AdminStatus::Suspended).await
+    {
+        return response;
+    }
+    match app.admin.set_admin_user_status(&id, status).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Err(error) => {
+            tracing::error!(%error, "setting an admin status failed");
+            admin_service_unavailable()
         }
     }
 }
@@ -4000,8 +5560,15 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4077,8 +5644,10 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4132,8 +5701,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4173,8 +5744,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4252,8 +5830,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4346,8 +5931,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -4383,8 +5970,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4433,8 +6027,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(endpoint_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
