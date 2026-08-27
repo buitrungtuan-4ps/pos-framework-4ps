@@ -69,7 +69,7 @@ use pos_ports::PortError;
 use pos_proto::BusinessDate;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
+use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -679,10 +679,27 @@ fn admin_totp_code() -> String {
     )
 }
 
-/// The config-tree store, keyed by `(tenant, store)` exactly as the real table.
+/// A recorded liveness contact: the version the store reported holding (or `None`) and the contact
+/// instant in Unix ms — mirroring the `store_liveness` row's `(config_version_held, last_seen_at)`.
+type RecordedSeen = (Option<ConfigVersionId>, i64);
+
+/// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
+/// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
 struct FakeConfigTrees {
     rows: Arc<Mutex<HashMap<(TenantId, StoreId), ConfigTreeState>>>,
+    seen: Arc<Mutex<HashMap<(TenantId, StoreId), RecordedSeen>>>,
+}
+
+impl FakeConfigTrees {
+    /// The `(held_version, seen_at_ms)` last recorded for a store, or `None` if it never checked in.
+    fn recorded_seen(&self, tenant: TenantId, store: StoreId) -> Option<RecordedSeen> {
+        self.seen
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .copied()
+    }
 }
 
 impl ConfigTreeStore for FakeConfigTrees {
@@ -709,6 +726,20 @@ impl ConfigTreeStore for FakeConfigTrees {
             .lock()
             .expect("lock")
             .insert((tenant, store), state.clone());
+        Ok(())
+    }
+
+    async fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        self.seen.lock().expect("lock").insert(
+            (tenant, store),
+            (held_version, seen_at.as_milliseconds_since_epoch()),
+        );
         Ok(())
     }
 }
@@ -1915,6 +1946,87 @@ async fn config_sync_serves_an_update_then_reports_up_to_date() {
 }
 
 #[tokio::test]
+async fn config_sync_records_store_liveness() {
+    // The config pull is the fleet-liveness signal (ADR-0068): each pull records the store's contact
+    // and the version it reported holding, without altering the sync response.
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
+            &doc,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    // Nothing is recorded until the store actually pulls.
+    assert!(
+        config_trees.recorded_seen(tenant(), store_id()).is_none(),
+        "no liveness before any pull"
+    );
+
+    // A pull holding nothing records the contact at the clock's instant, with a null held version.
+    let fresh = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(fresh.status(), StatusCode::OK);
+    let (held, seen_at) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("the pull recorded liveness");
+    assert_eq!(
+        held, None,
+        "a store holding nothing records a null held version"
+    );
+    assert_eq!(
+        seen_at, NOW_MS,
+        "the contact instant is the server clock's now"
+    );
+
+    // A pull holding the current version records exactly that version.
+    let current = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config?held_version={version}"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(current.status(), StatusCode::OK);
+    let (held, _) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("liveness recorded");
+    assert_eq!(
+        held.map(|version| version.to_string()),
+        Some(version),
+        "the held version the edge reported is recorded verbatim"
+    );
+}
+
+#[tokio::test]
 async fn config_sync_is_closed_without_the_read_config_scope() {
     let keys = FakeKeys::default();
     let (router, config_token, store_ulid, _version) = published_config(&keys).await;
@@ -3011,6 +3123,16 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _tenant: TenantId,
         _store: StoreId,
         _state: &ConfigTreeState,
+    ) -> Result<(), ConfigStoreError> {
+        Ok(())
+    }
+
+    async fn record_store_seen(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+        _held_version: Option<ConfigVersionId>,
+        _seen_at: Timestamp,
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }

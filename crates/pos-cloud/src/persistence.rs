@@ -36,8 +36,8 @@ use pos_ports::PortError;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId, StoreId, SubjectId,
-    TaxClassId, TenantId,
+    ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId,
+    StoreId, SubjectId, TaxClassId, TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -329,6 +329,24 @@ impl ConfigTreeStore for PostgresConfigTrees {
         self.save_state(tenant, store, &json)
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
+    async fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        let held = held_version.map(|version| version.to_string());
+        self.record_seen(
+            tenant,
+            store,
+            held.as_deref(),
+            seen_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 }
 

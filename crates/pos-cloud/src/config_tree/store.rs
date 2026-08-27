@@ -12,7 +12,8 @@
 
 use core::future::Future;
 
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
+use pos_proto::time::Timestamp;
 
 use super::ConfigTreeState;
 
@@ -40,6 +41,24 @@ pub trait ConfigTreeStore {
         tenant: TenantId,
         store: StoreId,
         state: &ConfigTreeState,
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
+
+    /// Records that a store contacted the cloud on its config pull
+    /// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)): the contact instant `seen_at` and the
+    /// config version it reported holding (`None` if it holds nothing yet). This is the fleet-liveness
+    /// read model's only write; the config pull is the liveness signal, so the seam that owns
+    /// config-pull persistence records it. Callers treat it as best-effort telemetry and must not fail
+    /// the pull the store needs if this write fails.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 }
 

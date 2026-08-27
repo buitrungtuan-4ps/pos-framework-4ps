@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The cloud now records when each store was last seen and which config version it holds** (roadmap
+  v2, Track O, O1 slice 1; [ADR-0068](docs/adr/0068-fleet-liveness.md)). An edge pulls its
+  configuration on a loop (`GET /sync/stores/{id}/config`), carrying the version it currently holds;
+  the handler used that only to decide up-to-date-vs-deliver and then discarded it, so the cloud never
+  knew whether a store was actually there. Each pull now upserts a `store_liveness` row — the contact
+  instant, the version the edge reported holding, and the pull instant — the smallest durable record
+  the forthcoming fleet overview reads to show which stores are online and on the current config. The
+  write is **best-effort**: a liveness-store failure is logged and swallowed, never failing the config
+  pull the store needs. It is captured through the `ConfigTreeStore` seam (the one the pull path
+  already holds) into a table kept deliberately separate from `config_trees`, so a store with no
+  published config — and, in a later slice, one that only heartbeats — still registers as seen.
+  Online/offline is derived at read time, not stored. **Upgrade note:** additive migration
+  `0020_store_liveness` (RLS-isolated by tenant like `config_trees`); no `PROTOCOL_VERSION` change
+  (the edge already sends the held version), no permission-identifier change.
 - **The back office now has screens for admins, invitations, sessions, and account security**
   (roadmap v2, Track G, G1 slice 7 — the last G1 slice; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
   Three console screens put the multi-admin surface built in slices 3–6 in front of an operator, on

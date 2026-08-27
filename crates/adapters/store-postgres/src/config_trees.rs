@@ -79,4 +79,41 @@ impl PostgresConfigTrees {
             .map_err(unavailable)?;
         Ok(())
     }
+
+    /// Upserts a store's liveness row from a config pull ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)):
+    /// records the contact instant, the config version the edge reported holding, and that this
+    /// contact was a config pull. `held_version` is the raw ULID string the edge sent, or `None` if it
+    /// holds nothing yet. `seen_at_ms` is Unix milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_seen(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        held_version: Option<&str>,
+        seen_at_ms: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO store_liveness \
+                 (tenant_id, store_id, last_seen_at, config_version_held, last_config_pull_at) \
+                 VALUES ($1, $2, $3, $4, $3) \
+                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
+                 last_seen_at = EXCLUDED.last_seen_at, \
+                 config_version_held = EXCLUDED.config_version_held, \
+                 last_config_pull_at = EXCLUDED.last_config_pull_at",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &seen_at_ms,
+                    &held_version,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
 }

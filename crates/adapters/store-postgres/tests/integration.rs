@@ -134,8 +134,8 @@ impl EventStoreHarness for StoreHarness {
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 admin_invites, admin_recovery_codes, admin_users, config_trees, subjects, \
-                 webhook_endpoints, device_proposals, activation_codes, \
+                 admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
+                 subjects, webhook_endpoints, device_proposals, activation_codes, \
                  device_credentials RESTART IDENTITY;",
             )
             .await
@@ -178,8 +178,8 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, subjects, webhook_endpoints, device_proposals, activation_codes, \
-             device_credentials RESTART IDENTITY",
+             config_trees, store_liveness, subjects, webhook_endpoints, device_proposals, \
+             activation_codes, device_credentials RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1077,6 +1077,78 @@ mod config_tree_store {
                     .expect("load")
                     .is_none(),
                 "the load is scoped to the tenant"
+            );
+        });
+    }
+
+    /// A config pull records the store's liveness (contact instant, held version, pull instant), and a
+    /// second pull upserts that row in place rather than duplicating ([ADR-0068]).
+    #[test]
+    fn records_store_liveness_on_a_pull() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE));
+            let store_id = StoreId::new(Ulid::from_u128(0x57));
+            let held = "0000000000CONFIGVERSION0AA";
+
+            // First pull: holds a version, seen at t=1000ms.
+            trees
+                .record_seen(tenant, store_id, Some(held), 1000)
+                .await
+                .expect("record seen");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("the pull recorded a liveness row");
+            assert_eq!(
+                row.get::<_, i64>(0),
+                1000,
+                "last_seen_at is the contact instant"
+            );
+            assert_eq!(
+                row.get::<_, Option<String>>(1).as_deref(),
+                Some(held),
+                "the held version is recorded verbatim"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(1000),
+                "a config pull stamps last_config_pull_at too"
+            );
+
+            // Second pull at t=2000ms holding nothing: upserts in place — one row, advanced instant,
+            // held version cleared.
+            trees
+                .record_seen(tenant, store_id, None, 2000)
+                .await
+                .expect("record seen again");
+            let count: i64 = admin
+                .query_one(
+                    "SELECT count(*) FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("count")
+                .get(0);
+            assert_eq!(count, 1, "the second pull upserts rather than duplicating");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held FROM store_liveness \
+                     WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, i64>(0), 2000, "the instant advanced");
+            assert_eq!(
+                row.get::<_, Option<String>>(1),
+                None,
+                "holding nothing clears the recorded held version"
             );
         });
     }

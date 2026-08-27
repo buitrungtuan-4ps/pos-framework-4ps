@@ -4134,6 +4134,16 @@ where
             }
         },
     };
+    // Record the store's contact and the version it reported holding, for the fleet view
+    // ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)). Best-effort telemetry: a liveness-write
+    // failure is logged and swallowed, never failing the config pull the store actually needs.
+    if let Err(error) = app
+        .config_trees
+        .record_store_seen(grant.tenant(), store_id, held, app.clock.now())
+        .await
+    {
+        tracing::warn!(%error, "recording store liveness on a config pull failed");
+    }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's trees.
     match app.config_trees.load(grant.tenant(), store_id).await {
         Ok(Some(state)) => {
