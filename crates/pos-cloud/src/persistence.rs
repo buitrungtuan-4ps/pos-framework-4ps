@@ -348,6 +348,17 @@ impl ConfigTreeStore for PostgresConfigTrees {
         .await
         .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
+
+    async fn record_store_heartbeat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
 }
 
 impl AdminStore for PostgresAdmin {

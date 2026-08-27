@@ -116,4 +116,31 @@ impl PostgresConfigTrees {
             .map_err(unavailable)?;
         Ok(())
     }
+
+    /// Advances a store's `last_seen_at` from a heartbeat ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)),
+    /// leaving `config_version_held` and `last_config_pull_at` untouched on an existing row (a fresh
+    /// row gets them `NULL`, since a heartbeat carries no config-pull facts). `seen_at_ms` is Unix
+    /// milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_heartbeat(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        seen_at_ms: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO store_liveness (tenant_id, store_id, last_seen_at) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at",
+                &[&tenant.to_string(), &store_id.to_string(), &seen_at_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
 }

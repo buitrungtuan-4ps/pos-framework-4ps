@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A store can send a lightweight liveness heartbeat** (roadmap v2, Track O, O1 slice 2;
+  [ADR-0068](docs/adr/0068-fleet-liveness.md)). `POST /sync/stores/{id}/heartbeat` — authenticated
+  with the same scoped `read_config` API key the config pull uses — advances the store's
+  `last_seen_at` and nothing else, so a store that is up but not currently pulling config (a parked
+  long-poll, a quiet spell between publishes) still reads as online. It preserves the version and
+  config-pull instant a prior pull recorded; a heartbeat-only store's row carries those `NULL`. Unlike
+  the config-pull capture, recording is the request's whole purpose, so a store-write failure answers
+  `503` for the edge to retry rather than being swallowed. The edge gains a thin, seam-tested
+  heartbeat loop (`heartbeat_client`) that pings on a fixed interval, mirroring the config-pull loop;
+  its real HTTPS sender wires in alongside the config-transport handoff. **Upgrade note:** none —
+  additive route on the existing `store_liveness` table; no migration, `PROTOCOL_VERSION`, or
+  permission-identifier change.
 - **The cloud now records when each store was last seen and which config version it holds** (roadmap
   v2, Track O, O1 slice 1; [ADR-0068](docs/adr/0068-fleet-liveness.md)). An edge pulls its
   configuration on a loop (`GET /sync/stores/{id}/config`), carrying the version it currently holds;

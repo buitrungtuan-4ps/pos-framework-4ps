@@ -742,6 +742,22 @@ impl ConfigTreeStore for FakeConfigTrees {
         );
         Ok(())
     }
+
+    async fn record_store_heartbeat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
+        self.seen
+            .lock()
+            .expect("lock")
+            .entry((tenant, store))
+            .and_modify(|entry| entry.1 = seen_at.as_milliseconds_since_epoch())
+            .or_insert((None, seen_at.as_milliseconds_since_epoch()));
+        Ok(())
+    }
 }
 
 /// The webhook-endpoint store, a flat list exactly as `fetch_enabled`/`list_for_tenant` read the
@@ -2027,6 +2043,59 @@ async fn config_sync_records_store_liveness() {
 }
 
 #[tokio::test]
+async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
+    // A lightweight heartbeat (ADR-0068 slice 2) records the store's contact without a config pull,
+    // gated by the same read_config scope, and preserves any version a prior pull recorded.
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/heartbeat");
+
+    // No bearer → 401; a key scoped elsewhere → 403 (closed, not merely empty).
+    let anon = router
+        .clone()
+        .oneshot(post_json(&uri, &serde_json::json!({})))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let rollups_only = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let wrong_scope = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({}),
+            &rollups_only,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
+
+    // A read_config key records the contact and answers 204.
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let beat = router
+        .oneshot(post_json_bearer(&uri, &serde_json::json!({}), &token))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    let (held, seen_at) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("the heartbeat recorded liveness");
+    assert_eq!(held, None, "a heartbeat carries no held version");
+    assert_eq!(
+        seen_at, NOW_MS,
+        "the contact instant is the server clock's now"
+    );
+}
+
+#[tokio::test]
 async fn config_sync_is_closed_without_the_read_config_scope() {
     let keys = FakeKeys::default();
     let (router, config_token, store_ulid, _version) = published_config(&keys).await;
@@ -3132,6 +3201,15 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _tenant: TenantId,
         _store: StoreId,
         _held_version: Option<ConfigVersionId>,
+        _seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        Ok(())
+    }
+
+    async fn record_store_heartbeat(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
         _seen_at: Timestamp,
     ) -> Result<(), ConfigStoreError> {
         Ok(())

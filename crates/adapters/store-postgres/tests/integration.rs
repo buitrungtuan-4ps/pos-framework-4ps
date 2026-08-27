@@ -1152,6 +1152,79 @@ mod config_tree_store {
             );
         });
     }
+
+    /// A heartbeat advances only `last_seen_at`, preserving the held version and last-config-pull
+    /// instant a prior pull recorded; a heartbeat before any pull creates the row with those NULL
+    /// ([ADR-0068] slice 2).
+    #[test]
+    fn heartbeat_advances_last_seen_only() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE2));
+            let store_id = StoreId::new(Ulid::from_u128(0x58));
+
+            // A config pull first, then a later heartbeat: the heartbeat bumps last_seen and leaves the
+            // held version and the config-pull instant as the pull recorded them.
+            trees
+                .record_seen(tenant, store_id, Some("0000000000HELDVERSION00AAA"), 1000)
+                .await
+                .expect("record seen");
+            trees
+                .record_heartbeat(tenant, store_id, 5000)
+                .await
+                .expect("record heartbeat");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(
+                row.get::<_, i64>(0),
+                5000,
+                "the heartbeat advanced last_seen"
+            );
+            assert_eq!(
+                row.get::<_, Option<String>>(1).as_deref(),
+                Some("0000000000HELDVERSION00AAA"),
+                "the held version a prior pull recorded is preserved"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(1000),
+                "the last-config-pull instant is preserved"
+            );
+
+            // A heartbeat for a store that has never pulled creates the row with those two NULL.
+            let fresh = StoreId::new(Ulid::from_u128(0x59));
+            trees
+                .record_heartbeat(tenant, fresh, 2000)
+                .await
+                .expect("record heartbeat for a fresh store");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &fresh.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, i64>(0), 2000);
+            assert_eq!(
+                row.get::<_, Option<String>>(1),
+                None,
+                "a heartbeat-only store holds no recorded version"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                None,
+                "a heartbeat-only store has no config-pull instant"
+            );
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

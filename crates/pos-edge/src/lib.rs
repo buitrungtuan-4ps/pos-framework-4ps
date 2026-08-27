@@ -42,6 +42,7 @@ pub mod countries;
 pub mod discovery;
 pub mod error;
 pub mod fanout;
+pub mod heartbeat_client;
 pub mod http;
 pub mod idgen;
 pub mod order_in;

@@ -336,6 +336,10 @@ where
             "/sync/stores/{store_id}/config",
             get(edge_config_sync::<S, R, K, C, A, T, W>),
         )
+        .route(
+            "/sync/stores/{store_id}/heartbeat",
+            post(edge_heartbeat::<S, R, K, C, A, T, W>),
+        )
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
@@ -4159,6 +4163,48 @@ where
             "the store has no published configuration",
         )
             .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// `POST /sync/stores/{store_id}/heartbeat` — a store's lightweight liveness ping
+/// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped
+/// API key the config pull uses (`read_config`), it advances the store's `last_seen_at` and nothing
+/// else, so a store that is up but not currently pulling config (a parked long-poll, a quiet period
+/// between publishes) still registers as online. `204` on success; unlike the config-pull capture,
+/// recording is this request's whole purpose, so a store-write failure is a `503` the edge retries,
+/// not a swallowed best-effort write.
+async fn edge_heartbeat<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
+    match app
+        .config_trees
+        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
 }
