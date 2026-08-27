@@ -7207,3 +7207,403 @@ async fn assignment_store_binds_person_to_store_and_removes_scoped_by_tenant() {
         "the assignment is gone"
     );
 }
+
+/// The three people seams as one type — what a router that carries a single `people` state needs (the
+/// binary's `PostgresPeople` implements all three). Delegates to the per-seam fakes above.
+#[derive(Clone, Default)]
+struct FakePeople {
+    employees: FakeEmployees,
+    roles: FakeRoleTemplates,
+    assignments: FakeAssignments,
+}
+
+impl EmployeeStore for FakePeople {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        self.employees.create(employee).await
+    }
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        self.employees.list(tenant).await
+    }
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        self.employees.get(tenant, employee_id).await
+    }
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        self.employees.update(employee).await
+    }
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        self.employees.set_pin(tenant, employee_id, pin_phc).await
+    }
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        self.employees.pin_phc(tenant, employee_id).await
+    }
+}
+
+impl RoleTemplateStore for FakePeople {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+        self.roles.create(template).await
+    }
+    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+        self.roles.list(tenant).await
+    }
+    async fn get(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+        self.roles.get(tenant, role_template_id).await
+    }
+    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+        self.roles.update(template).await
+    }
+}
+
+impl AssignmentStore for FakePeople {
+    async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
+        self.assignments.assign(assignment).await
+    }
+    async fn list_for_store(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        self.assignments.list_for_store(tenant, store_id).await
+    }
+    async fn list_for_employee(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        self.assignments
+            .list_for_employee(tenant, employee_id)
+            .await
+    }
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<bool, AssignmentStoreError> {
+        self.assignments.remove(tenant, assignment_id).await
+    }
+}
+
+/// The main app merged with the people router, wired to a caller-supplied audit recorder so a test can
+/// assert the audit trail (ADR-0070).
+fn people_app_with_audit(
+    admin: FakeAdmin,
+    people: FakePeople,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::people_router(people, admin, clock(), audit))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end lifecycle over the people routes — create/read/set-PIN/update an \
+              employee, create a role and reject an unknown permission, assign/list/remove, and the \
+              audit + no-PII-in-the-trail assertions — kept together so the invariant is checked \
+              against the same data the whole flow produced"
+)]
+async fn people_routes_crud_lifecycle_audited_without_pii() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(admin, people, Arc::new(AuditSink::new(audit.clone())));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Create an employee (identity only).
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create employee");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    // The roster read shows the employee, with no PIN yet.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list employees");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let employees = json_body(listed).await;
+    assert_eq!(employees.as_array().expect("array").len(), 1);
+    assert_eq!(employees[0]["has_pin"], serde_json::json!(false));
+
+    // Set a PIN: non-digits are rejected, four digits accepted.
+    let bad_pin = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/employees/{employee_id}/pin"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "pin": "abcd" }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad pin");
+    assert_eq!(bad_pin.status(), StatusCode::BAD_REQUEST);
+    let set_pin = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/employees/{employee_id}/pin"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "pin": "1234" }),
+            &cookie,
+        ))
+        .await
+        .expect("route set pin");
+    assert_eq!(set_pin.status(), StatusCode::NO_CONTENT);
+
+    // Now has_pin is true on a read-one.
+    let one = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees/{employee_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route get one");
+    assert_eq!(one.status(), StatusCode::OK);
+    assert_eq!(json_body(one).await["has_pin"], serde_json::json!(true));
+
+    // Rename + archive.
+    let updated = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route update");
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+
+    // The permission catalogue is offered for the role editor.
+    let catalogue = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/people/permissions", &cookie))
+        .await
+        .expect("route permissions");
+    assert_eq!(catalogue.status(), StatusCode::OK);
+    assert!(
+        !json_body(catalogue)
+            .await
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+
+    // A role naming an unknown permission is refused.
+    let bad_role = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Bogus", "permissions": ["not.a.real.permission"] }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad role");
+    assert_eq!(bad_role.status(), StatusCode::BAD_REQUEST);
+
+    // A valid role.
+    let role = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Cashier", "permissions": ["billing.discount.apply"] }),
+            &cookie,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(role.status(), StatusCode::CREATED);
+    let role_id = json_body(role).await["id"].as_str().expect("id").to_owned();
+
+    // Assign the employee to a store with that role.
+    let assign = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/assignments",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "employee_id": employee_id,
+                "store_id": store_ulid,
+                "role_template_id": role_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route assign");
+    assert_eq!(assign.status(), StatusCode::CREATED);
+    let assignment_id = json_body(assign).await["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    // Readable by store and by employee.
+    let by_store = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/assignments?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route by store");
+    assert_eq!(by_store.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(by_store).await.as_array().expect("array").len(),
+        1
+    );
+    let by_employee = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/assignments?tenant_id={tenant_ulid}&employee_id={employee_id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route by employee");
+    assert_eq!(by_employee.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(by_employee)
+            .await
+            .as_array()
+            .expect("array")
+            .len(),
+        1
+    );
+
+    // Remove (offboard).
+    let remove = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/assignments/{assignment_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove");
+    assert_eq!(remove.status(), StatusCode::NO_CONTENT);
+
+    // Every write was audited — and the trail never carries the employee's name, PIN, or PIN hash.
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let actions: Vec<&str> = recorded.iter().map(|entry| entry.action.as_str()).collect();
+    for expected in [
+        "employee.create",
+        "employee.set_pin",
+        "employee.update",
+        "role.create",
+        "assignment.create",
+        "assignment.remove",
+    ] {
+        assert!(actions.contains(&expected), "recorded {expected}");
+    }
+    let dump = serde_json::to_string(
+        &recorded
+            .iter()
+            .map(|entry| {
+                (
+                    entry.action.clone(),
+                    entry.before.clone(),
+                    entry.after.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .expect("serialize the trail");
+    assert!(
+        !dump.contains("Alice"),
+        "the employee's name never enters the audit trail"
+    );
+    assert!(
+        !dump.contains("1234"),
+        "the PIN never enters the audit trail"
+    );
+    assert!(
+        !dump.to_lowercase().contains("argon2"),
+        "the PIN hash never enters the audit trail"
+    );
+    // The employee.create entry does record the code (id/code/status), just not the name.
+    assert!(dump.contains("C01"), "the staff code is recorded");
+}
+
+#[tokio::test]
+async fn people_writes_require_manage_people_but_reads_need_only_read() {
+    let admin = provisioned_admin();
+    let router = people_app_with_audit(
+        admin.clone(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // A Viewer may read the roster…
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}"),
+            &viewer,
+        ))
+        .await
+        .expect("route read");
+    assert_eq!(
+        read.status(),
+        StatusCode::OK,
+        "read needs only console.data.read"
+    );
+
+    // …but not create an employee (that needs console.people.manage).
+    let forbidden = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &viewer,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    // Ops cannot manage people either.
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let ops_forbidden = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Cashier", "permissions": [] }),
+            &ops,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(ops_forbidden.status(), StatusCode::FORBIDDEN);
+}

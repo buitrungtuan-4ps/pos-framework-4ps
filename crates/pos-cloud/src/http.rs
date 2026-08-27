@@ -114,6 +114,11 @@ use crate::devices::{
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::openapi::ApiDoc;
+use crate::people::{
+    Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeStore, EmployeeUpdate,
+    NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate, RoleTemplateId,
+    RoleTemplateStore, RoleTemplateUpdate, is_known_permission, permission_catalogue,
+};
 use crate::reconcile::ReconcileStore;
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -955,6 +960,927 @@ where
             clock,
             audit,
         })
+}
+
+// --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------
+
+/// The collaborators the people routes need, stated independently of [`CloudApp`]: the people store
+/// (one type that is the employee, role-template, and assignment seam at once — the binary's
+/// `PostgresPeople` implements all three), plus the admin and clock every session guard uses, and the
+/// audit recorder every write emits to. Like [`RegistryState`], it carries its own state and is merged
+/// into the main router.
+#[derive(Clone)]
+struct PeopleState<P, A, C> {
+    people: P,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// The tenant a people read/write is scoped to (the super-admin is global, ADR-0060).
+#[derive(Debug, Clone, Deserialize)]
+struct PeopleTenantQuery {
+    /// The tenant to act within (a 26-character ULID).
+    tenant_id: String,
+}
+
+/// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
+/// store) or `employee_id` (every store a person works at).
+#[derive(Debug, Clone, Deserialize)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the field names are the query-string wire contract"
+)]
+struct AssignmentListQuery {
+    tenant_id: String,
+    #[serde(default)]
+    store_id: Option<String>,
+    #[serde(default)]
+    employee_id: Option<String>,
+}
+
+/// Create an employee — identity only; the PIN is set separately.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateEmployeeRequest {
+    tenant_id: String,
+    code: String,
+    name: String,
+}
+
+/// Rename an employee and/or set their status (`active`/`archived`).
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateEmployeeRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+/// Set or reset an employee's sign-in PIN. The digits are hashed here and never stored or logged in
+/// the clear (ADR-0070); the request body is the only place they appear, and it is never audited.
+#[derive(Debug, Clone, Deserialize)]
+struct SetPinRequest {
+    tenant_id: String,
+    pin: String,
+}
+
+/// Create a role template — a named subset of the `pos-core` permission catalogue (§9).
+#[derive(Debug, Clone, Deserialize)]
+struct CreateRoleRequest {
+    tenant_id: String,
+    name: String,
+    permissions: Vec<String>,
+}
+
+/// Update a role template's name, permission set, and status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateRoleRequest {
+    tenant_id: String,
+    name: String,
+    permissions: Vec<String>,
+    status: String,
+}
+
+/// Assign an employee to a store with a role.
+#[derive(Debug, Clone, Deserialize)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the field names are the JSON wire contract"
+)]
+struct CreateAssignmentRequest {
+    tenant_id: String,
+    employee_id: String,
+    store_id: String,
+    role_template_id: String,
+}
+
+/// A PIN must be 4–8 digits. Its defence is the Argon2id cost plus the edge's attempt rate-limit, not
+/// length (ADR-0030/0070); this only rejects the obviously-wrong (non-digits, too short/long).
+fn pin_is_well_formed(pin: &str) -> bool {
+    (4..=8).contains(&pin.len()) && pin.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Hashes a PIN with Argon2id under a fresh 16-byte CSPRNG salt — the same primitive and shape as
+/// [`mint_credential`]. `None` if OS entropy is unavailable or hashing fails, so the caller fails
+/// closed rather than store a weak or empty hash.
+fn hash_pin(pin: &str) -> Option<String> {
+    let mut salt_bytes = [0_u8; 16];
+    getrandom::fill(&mut salt_bytes).ok()?;
+    let salt = SaltString::encode_b64(&salt_bytes).ok()?;
+    hash_password(pin, &salt).ok()
+}
+
+/// Maps any people-store failure to a retryable `503`, logging the detail rather than leaking it.
+fn people_error_response(error: &impl std::fmt::Display) -> Response {
+    tracing::error!(%error, "a people & access store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the people service is unavailable",
+    )
+        .into_response()
+}
+
+/// `503` when OS entropy is unavailable to mint an id or hash a PIN — the request cannot proceed
+/// safely, and it is transient.
+fn people_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy for a people & access write");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the people service is unavailable",
+    )
+        .into_response()
+}
+
+/// Builds the people & access sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+///
+/// Reads are behind [`ConsolePermission::Read`] (every console role); every write is behind the new
+/// [`ConsolePermission::ManagePeople`] (Owner/Admin) and emits an audit entry that records the
+/// employee **id, code, status, and role — never the name, and never the PIN or its hash** (ADR-0070).
+/// The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request body on
+/// writes.
+pub fn people_router<P, A, C>(
+    people: P,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/people/permissions",
+            get(admin_list_permissions::<P, A, C>),
+        )
+        .route(
+            "/admin/employees",
+            get(admin_list_employees::<P, A, C>).post(admin_create_employee::<P, A, C>),
+        )
+        .route(
+            "/admin/employees/{employee_id}",
+            get(admin_get_employee::<P, A, C>).patch(admin_update_employee::<P, A, C>),
+        )
+        .route(
+            "/admin/employees/{employee_id}/pin",
+            axum::routing::put(admin_set_employee_pin::<P, A, C>),
+        )
+        .route(
+            "/admin/roles",
+            get(admin_list_roles::<P, A, C>).post(admin_create_role::<P, A, C>),
+        )
+        .route(
+            "/admin/roles/{role_id}",
+            get(admin_get_role::<P, A, C>).patch(admin_update_role::<P, A, C>),
+        )
+        .route(
+            "/admin/assignments",
+            get(admin_list_assignments::<P, A, C>).post(admin_create_assignment::<P, A, C>),
+        )
+        .route(
+            "/admin/assignments/{assignment_id}",
+            delete(admin_remove_assignment::<P, A, C>),
+        )
+        .with_state(PeopleState {
+            people,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The `pos-core` permission catalogue (§9), for the console's role editor to offer. Behind `Read` and
+/// tenant-independent — the catalogue is the same for every tenant.
+async fn admin_list_permissions<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    P: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    (
+        StatusCode::OK,
+        Json::<Vec<PermissionInfo>>(permission_catalogue()),
+    )
+        .into_response()
+}
+
+/// A super-admin lists a tenant's employees.
+async fn admin_list_employees<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<PeopleTenantQuery>,
+) -> Response
+where
+    P: EmployeeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.people.list(tenant_id).await {
+        Ok(employees) => (StatusCode::OK, Json::<Vec<Employee>>(employees)).into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin reads one employee within its tenant.
+async fn admin_get_employee<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(employee_id): Path<String>,
+    Query(query): Query<PeopleTenantQuery>,
+) -> Response
+where
+    P: EmployeeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(employee_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        employee_id.parse::<Ulid>().map(EmployeeId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the employee id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.people.get(tenant_id, employee_id).await {
+        Ok(Some(employee)) => (StatusCode::OK, Json(employee)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin creates an employee (no PIN yet). Audited `employee.create` with id/code/status —
+/// never the name.
+async fn admin_create_employee<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateEmployeeRequest>,
+) -> Response
+where
+    P: EmployeeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    if request.code.trim().is_empty() || request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "code and name are required").into_response();
+    }
+    let Some(employee_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(EmployeeId::new)
+    else {
+        return people_entropy_unavailable();
+    };
+    let new_employee = NewEmployee {
+        employee_id,
+        tenant_id,
+        code: request.code.clone(),
+        name: request.name,
+    };
+    match state.people.create(&new_employee).await {
+        Ok(()) => {
+            // The trail records id/code/status — never the name (ADR-0070).
+            let after = serde_json::json!({
+                "id": employee_id.to_string(),
+                "code": request.code,
+                "status": EntityStatus::Active.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "employee.create",
+                "employee",
+                &employee_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": employee_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin renames an employee and/or sets their status. Audited `employee.update` with
+/// before/after id/code/status — never the name.
+async fn admin_update_employee<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(employee_id): Path<String>,
+    Json(request): Json<UpdateEmployeeRequest>,
+) -> Response
+where
+    P: EmployeeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(employee_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        employee_id.parse::<Ulid>().map(EmployeeId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the employee id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    // Read the current row for the audit `before` (id/code/status, never the name) and to answer 404.
+    let existing = match state.people.get(tenant_id, employee_id).await {
+        Ok(Some(employee)) => employee,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Err(error) => return people_error_response(&error),
+    };
+    let update = EmployeeUpdate {
+        employee_id,
+        tenant_id,
+        name: request.name,
+        status,
+    };
+    match state.people.update(&update).await {
+        Ok(true) => {
+            let before = serde_json::json!({
+                "id": employee_id.to_string(),
+                "code": existing.code,
+                "status": existing.status.as_str(),
+            });
+            let after = serde_json::json!({
+                "id": employee_id.to_string(),
+                "code": existing.code,
+                "status": status.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "employee.update",
+                "employee",
+                &employee_id.to_string(),
+                Some(before),
+                Some(after),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
+/// returned, stored raw, or **audited** — the entry records only that a PIN was set, by whom
+/// (ADR-0070).
+async fn admin_set_employee_pin<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(employee_id): Path<String>,
+    Json(request): Json<SetPinRequest>,
+) -> Response
+where
+    P: EmployeeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(employee_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        employee_id.parse::<Ulid>().map(EmployeeId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the employee id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    if !pin_is_well_formed(&request.pin) {
+        return (StatusCode::BAD_REQUEST, "the PIN must be 4 to 8 digits").into_response();
+    }
+    let Some(pin_phc) = hash_pin(&request.pin) else {
+        return people_entropy_unavailable();
+    };
+    match state.people.set_pin(tenant_id, employee_id, &pin_phc).await {
+        Ok(true) => {
+            // No before/after: the trail records that a PIN was set for this employee, by whom — never
+            // the PIN or its hash (ADR-0070).
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "employee.set_pin",
+                "employee",
+                &employee_id.to_string(),
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's role templates.
+async fn admin_list_roles<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<PeopleTenantQuery>,
+) -> Response
+where
+    P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.people.list(tenant_id).await {
+        Ok(roles) => (StatusCode::OK, Json::<Vec<RoleTemplate>>(roles)).into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin reads one role template within its tenant.
+async fn admin_get_role<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(role_id): Path<String>,
+    Query(query): Query<PeopleTenantQuery>,
+) -> Response
+where
+    P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(role_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        role_id.parse::<Ulid>().map(RoleTemplateId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the role id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.people.get(tenant_id, role_id).await {
+        Ok(Some(role)) => (StatusCode::OK, Json(role)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such role").into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// Validates that every permission id is in the `pos-core` catalogue (§9); returns the first unknown.
+fn first_unknown_permission(permissions: &[String]) -> Option<&str> {
+    permissions
+        .iter()
+        .map(String::as_str)
+        .find(|id| !is_known_permission(id))
+}
+
+/// A super-admin creates a role template. The permission set is validated against the catalogue.
+/// Audited `role.create` with id/name/permissions (a role name is not PII).
+async fn admin_create_role<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateRoleRequest>,
+) -> Response
+where
+    P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    if let Some(unknown) = first_unknown_permission(&request.permissions) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown permission id: {unknown}"),
+        )
+            .into_response();
+    }
+    let Some(role_template_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoleTemplateId::new)
+    else {
+        return people_entropy_unavailable();
+    };
+    let new_role = NewRoleTemplate {
+        role_template_id,
+        tenant_id,
+        name: request.name.clone(),
+        permissions: request.permissions.clone(),
+    };
+    match state.people.create(&new_role).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": role_template_id.to_string(),
+                "name": request.name,
+                "permissions": request.permissions,
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "role.create",
+                "role",
+                &role_template_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": role_template_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin updates a role template's name, permissions, and status. Audited `role.update`.
+async fn admin_update_role<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(role_id): Path<String>,
+    Json(request): Json<UpdateRoleRequest>,
+) -> Response
+where
+    P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(role_template_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        role_id.parse::<Ulid>().map(RoleTemplateId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the role id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    if let Some(unknown) = first_unknown_permission(&request.permissions) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown permission id: {unknown}"),
+        )
+            .into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let update = RoleTemplateUpdate {
+        role_template_id,
+        tenant_id,
+        name: request.name.clone(),
+        permissions: request.permissions.clone(),
+        status,
+    };
+    match state.people.update(&update).await {
+        Ok(true) => {
+            let after = serde_json::json!({
+                "id": role_template_id.to_string(),
+                "name": request.name,
+                "permissions": request.permissions,
+                "status": status.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "role.update",
+                "role",
+                &role_template_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such role").into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin lists assignments — everyone at a store (`?store_id=`) or every store a person works
+/// at (`?employee_id=`), exactly one.
+async fn admin_list_assignments<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<AssignmentListQuery>,
+) -> Response
+where
+    P: AssignmentStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let result = match (query.store_id.as_deref(), query.employee_id.as_deref()) {
+        (Some(store), None) => {
+            let Ok(store_id) = store.parse::<Ulid>().map(StoreId::new) else {
+                return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response();
+            };
+            state.people.list_for_store(tenant_id, store_id).await
+        }
+        (None, Some(employee)) => {
+            let Ok(employee_id) = employee.parse::<Ulid>().map(EmployeeId::new) else {
+                return (StatusCode::BAD_REQUEST, "employee_id is not a ULID").into_response();
+            };
+            state.people.list_for_employee(tenant_id, employee_id).await
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "name exactly one of store_id or employee_id",
+            )
+                .into_response();
+        }
+    };
+    match result {
+        Ok(assignments) => (StatusCode::OK, Json::<Vec<Assignment>>(assignments)).into_response(),
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin assigns an employee to a store with a role. Audited `assignment.create` with the
+/// three ids.
+async fn admin_create_assignment<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAssignmentRequest>,
+) -> Response
+where
+    P: AssignmentStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(employee_id), Ok(store_id), Ok(role_template_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.employee_id.parse::<Ulid>().map(EmployeeId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request
+            .role_template_id
+            .parse::<Ulid>()
+            .map(RoleTemplateId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, employee_id, store_id, or role_template_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(assignment_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AssignmentId::new)
+    else {
+        return people_entropy_unavailable();
+    };
+    let new_assignment = NewAssignment {
+        assignment_id,
+        tenant_id,
+        employee_id,
+        store_id,
+        role_template_id,
+    };
+    match state.people.assign(&new_assignment).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": assignment_id.to_string(),
+                "employee_id": employee_id.to_string(),
+                "store_id": store_id.to_string(),
+                "role_template_id": role_template_id.to_string(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "assignment.create",
+                "assignment",
+                &assignment_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": assignment_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => people_error_response(&error),
+    }
+}
+
+/// A super-admin removes an assignment — offboarding a person from a store. Audited `assignment.remove`
+/// when a row was actually removed; a no-op removal records nothing.
+async fn admin_remove_assignment<P, A, C>(
+    State(state): State<PeopleState<P, A, C>>,
+    headers: HeaderMap,
+    Path(assignment_id): Path<String>,
+    Query(query): Query<PeopleTenantQuery>,
+) -> Response
+where
+    P: AssignmentStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManagePeople,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(assignment_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        assignment_id.parse::<Ulid>().map(AssignmentId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the assignment id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.people.remove(tenant_id, assignment_id).await {
+        Ok(true) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "assignment.remove",
+                "assignment",
+                &assignment_id.to_string(),
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such assignment").into_response(),
+        Err(error) => people_error_response(&error),
+    }
 }
 
 // --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------

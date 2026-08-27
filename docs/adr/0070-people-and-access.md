@@ -84,10 +84,13 @@ assert on their behalf.
    invariants). No routes yet — the store the later slices build on.
 2. **Role templates + per-store assignments:** the `role_templates` and `employee_store_assignments`
    tables + seam methods, over the `pos-core` permission catalogue.
-3. **Admin routes + audit:** `/admin` CRUD for employees, roles, and assignments, with PIN set/reset;
-   every write audited (id/code/role, never name/PIN).
+3. **Admin routes + audit:** `/admin` CRUD for employees, roles, and assignments, with PIN set/reset,
+   plus the permission catalogue the role editor offers; every write audited (id/code/role, never
+   name/PIN). Reads sit behind `console.data.read`; every write behind the new
+   `console.people.manage` (Owner/Admin) — the permission is introduced here, where the routes first
+   need it, and surfaced in the UI by slice 4.
 4. **Console screen:** a People screen on the F2 kit — roster, role editor, per-store assignment, PIN
-   reset — behind a new `console.people.manage` permission.
+   reset — gated by `console.people.manage`.
 5. **Publish `permissions` config node:** compile a store's people+roles+assignments into the
    edge-shaped document and publish it onto the config tree.
 6. **Edge applies:** `EdgeSession` authorises staff from the published `permissions` node.

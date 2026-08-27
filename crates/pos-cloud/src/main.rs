@@ -255,6 +255,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
+        // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
+        // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.
+        .merge(http::people_router(
+            store.people(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
         // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
         // only `record`), behind the same super-admin session guard as the other reads.

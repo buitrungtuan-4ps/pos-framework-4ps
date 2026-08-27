@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **`/admin` console API for employees, roles, and assignments — every write audited** (roadmap v2,
+  Track M1, slice 3; [ADR-0070](docs/adr/0070-people-and-access.md)). The write and read surface the
+  People console will use: `GET/POST /admin/employees`, `GET/PATCH /admin/employees/{id}`,
+  `PUT /admin/employees/{id}/pin` (set/reset — the PIN is Argon2id-hashed server-side and never
+  returned, stored raw, or logged), `GET/POST /admin/roles`, `GET/PATCH /admin/roles/{id}`,
+  `GET/POST /admin/assignments` (list by `?store_id=` or `?employee_id=`),
+  `DELETE /admin/assignments/{id}`, and `GET /admin/people/permissions` (the `pos-core` catalogue the
+  role editor offers, so the console never invents a permission string). A role's permission set is
+  validated against that catalogue before it is stored. A new **`console.people.manage`** permission
+  (Owner/Admin) gates every write; reads need only `console.data.read`. Every write emits an audit
+  entry ([ADR-0069](docs/adr/0069-audit-trail.md)) that records the employee **id, code, status, and
+  role — never the name, and never the PIN or its hash** (a test asserts the trail never contains the
+  name, the PIN, or an `argon2` hash). **Upgrade note:** additive routes only; no `PROTOCOL_VERSION`
+  change; one new console permission (`console.people.manage`).
 - **Role templates and per-store staff assignments (foundation)** (roadmap v2, Track M1, slice 2;
   [ADR-0070](docs/adr/0070-people-and-access.md)). Two new tenant-scoped, RLS-isolated tables
   (migration `0024`) that give a store's employees their *access*: `role_templates` — a tenant's
