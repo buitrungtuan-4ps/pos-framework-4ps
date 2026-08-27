@@ -96,7 +96,13 @@ assert on their behalf.
    and `POST /admin/people/publish` writes it onto the store's `permissions` config node, versioned
    through the config tree like catalog/layout. Behind `console.config.publish`; the audit records the
    config version and staff count, never a name or PIN.
-6. **Edge applies:** `EdgeSession` authorises staff from the published `permissions` node.
+6. **Edge applies (this):** the edge's config-pull rebuild reads the `permissions` node into a
+   `StaffRoster` on the `EdgeSession` (code → granted permission set + PIN hash), and
+   `EdgeSession::authorise_staff(code, pin)` verifies a sign-in against the published Argon2id hash
+   (ADR-0030), yielding the person's permission set. A permission id the running edge predates is
+   dropped, not fatal; an absent or malformed node leaves the roster unchanged, the same
+   safe-by-default rebuild as the menu. The store now authorises from the published set, not a local
+   roster.
 
 **Consequences.** The console becomes the source of truth for store staff and their access, auditable
 and PDPD-aware. Additive throughout: new tenant-scoped tables and a new config node; no

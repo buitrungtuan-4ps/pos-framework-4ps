@@ -111,6 +111,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The edge applies the published `permissions` node — staff sign in against the cloud's set**
+  (roadmap v2, Track M1, slice 6; [ADR-0070](docs/adr/0070-people-and-access.md)). The edge's
+  config-pull rebuild now reads the `permissions` node into a `StaffRoster` on the `EdgeSession` (each
+  badge `code` → the granted permission set + the Argon2id PIN hash), and
+  `EdgeSession::authorise_staff(code, pin)` verifies a sign-in against the published hash offline
+  ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)), returning the person's `PermissionSet` on
+  success — so the store authorises staff from the console's published set rather than a local roster.
+  A permission id the running edge predates is dropped (forward-compatible), and an absent or
+  malformed node leaves the roster unchanged — the same safe-by-default rebuild as the menu. This
+  completes Track M1 (people & access). **Upgrade note:** edge-only; no `PROTOCOL_VERSION` change (the
+  node rides the existing config tree).
 - **Publish a store's people to its `permissions` config node** (roadmap v2, Track M1, slice 5;
   [ADR-0070](docs/adr/0070-people-and-access.md)). A pure compiler turns a store's active assignments
   into the flat, edge-shaped `permissions` document — per staff member: `id`, `code`, `name`, the
