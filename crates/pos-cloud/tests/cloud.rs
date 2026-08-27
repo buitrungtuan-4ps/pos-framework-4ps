@@ -24,7 +24,7 @@ use pos_cloud::activation::{
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-    LiveSession, NewAdminInvite, NewAdminUser, hash_session_token,
+    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, SessionSummary, hash_session_token,
 };
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
@@ -223,9 +223,21 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
 }
 
 /// The super-admin store the `/admin` login and session guard consult, keyed to the one super-admin.
-/// A stored session row: its expiry and the id of the admin it belongs to (`None` for a legacy
-/// session), keyed in the table by `SHA-256(token)`.
-type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
+/// A stored session row, keyed in the table by `SHA-256(token)`: its sliding expiry, the absolute cap
+/// and idle window that drive the slide, the id of the admin it belongs to (`None` for a legacy
+/// session), and the client details captured for the admin's own session list.
+#[derive(Clone)]
+struct SessionRow {
+    created_at: Timestamp,
+    expires_at: Timestamp,
+    absolute_expires_at: Option<Timestamp>,
+    idle_ttl_ms: Option<i64>,
+    admin_id: Option<String>,
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+type SessionRows = HashMap<[u8; 32], SessionRow>;
 
 /// A stored invitation row in the integration fake, keyed for acceptance by its token hash.
 #[derive(Clone)]
@@ -295,16 +307,19 @@ impl AdminStore for FakeAdmin {
         Ok(())
     }
 
-    async fn create_session(
-        &self,
-        token_hash: [u8; 32],
-        expires_at: Timestamp,
-        admin_id: Option<&str>,
-    ) -> Result<(), AdminStoreError> {
-        self.sessions
-            .lock()
-            .expect("lock")
-            .insert(token_hash, (expires_at, admin_id.map(str::to_owned)));
+    async fn create_session(&self, session: NewAdminSession) -> Result<(), AdminStoreError> {
+        self.sessions.lock().expect("lock").insert(
+            session.token_hash,
+            SessionRow {
+                created_at: session.created_at,
+                expires_at: session.expires_at,
+                absolute_expires_at: Some(session.absolute_expires_at),
+                idle_ttl_ms: Some(session.idle_ttl_ms),
+                admin_id: session.admin_id,
+                ip: session.ip,
+                user_agent: session.user_agent,
+            },
+        );
         Ok(())
     }
 
@@ -313,12 +328,13 @@ impl AdminStore for FakeAdmin {
         token_hash: [u8; 32],
         now: Timestamp,
     ) -> Result<bool, AdminStoreError> {
+        // A pure read — no sliding, as the poll's SQL is.
         Ok(self
             .sessions
             .lock()
             .expect("lock")
             .get(&token_hash)
-            .is_some_and(|(expires_at, _)| *expires_at > now))
+            .is_some_and(|row| row.expires_at > now))
     }
 
     async fn session_admin(
@@ -326,20 +342,87 @@ impl AdminStore for FakeAdmin {
         token_hash: [u8; 32],
         now: Timestamp,
     ) -> Result<Option<LiveSession>, AdminStoreError> {
-        Ok(self
-            .sessions
-            .lock()
-            .expect("lock")
-            .get(&token_hash)
-            .filter(|(expires_at, _)| *expires_at > now)
-            .map(|(_, admin_id)| LiveSession {
-                admin_id: admin_id.clone(),
-            }))
+        let mut sessions = self.sessions.lock().expect("lock");
+        let Some(row) = sessions
+            .get_mut(&token_hash)
+            .filter(|row| row.expires_at > now)
+        else {
+            return Ok(None);
+        };
+        // Slide the idle TTL up to the absolute cap, as the guard's SQL does; a legacy row is left as
+        // it is.
+        if let (Some(cap), Some(idle_ms)) = (row.absolute_expires_at, row.idle_ttl_ms) {
+            let slid = Timestamp::from_milliseconds_since_epoch(
+                now.as_milliseconds_since_epoch().saturating_add(idle_ms),
+            )
+            .unwrap_or(now);
+            row.expires_at = if slid <= cap { slid } else { cap };
+        }
+        Ok(Some(LiveSession {
+            admin_id: row.admin_id.clone(),
+        }))
     }
 
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
         self.sessions.lock().expect("lock").remove(&token_hash);
         Ok(())
+    }
+
+    async fn list_admin_sessions(
+        &self,
+        admin_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<SessionSummary>, AdminStoreError> {
+        let mut summaries: Vec<SessionSummary> = self
+            .sessions
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(_, row)| row.admin_id.as_deref() == Some(admin_id) && row.expires_at > now)
+            .map(|(token_hash, row)| SessionSummary {
+                token_hash: *token_hash,
+                ip: row.ip.clone(),
+                user_agent: row.user_agent.clone(),
+                created_at: row.created_at,
+                expires_at: row.expires_at,
+            })
+            .collect();
+        summaries.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.token_hash.cmp(&b.token_hash))
+        });
+        Ok(summaries)
+    }
+
+    async fn revoke_admin_session(
+        &self,
+        admin_id: &str,
+        token_hash: [u8; 32],
+    ) -> Result<bool, AdminStoreError> {
+        let mut sessions = self.sessions.lock().expect("lock");
+        if sessions
+            .get(&token_hash)
+            .is_some_and(|row| row.admin_id.as_deref() == Some(admin_id))
+        {
+            sessions.remove(&token_hash);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn revoke_other_admin_sessions(
+        &self,
+        admin_id: &str,
+        except_token_hash: [u8; 32],
+    ) -> Result<u64, AdminStoreError> {
+        let mut sessions = self.sessions.lock().expect("lock");
+        let before = sessions.len();
+        sessions.retain(|token_hash, row| {
+            row.admin_id.as_deref() != Some(admin_id) || *token_hash == except_token_hash
+        });
+        Ok(u64::try_from(before - sessions.len()).unwrap_or(u64::MAX))
     }
 
     async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
@@ -3399,7 +3482,16 @@ async fn role_session_cookie(admin: &FakeAdmin, role: AdminRole, token: &str) ->
         .expect("seed admin");
     let expiry = Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid");
     admin
-        .create_session(hash_session_token(token), expiry, Some(&id))
+        .create_session(NewAdminSession {
+            token_hash: hash_session_token(token),
+            created_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+            expires_at: expiry,
+            absolute_expires_at: expiry,
+            idle_ttl_ms: 3_600_000,
+            admin_id: Some(id.clone()),
+            ip: None,
+            user_agent: None,
+        })
         .await
         .expect("seed session");
     format!("__Host-pos_admin_session={token}")
@@ -3479,6 +3571,160 @@ async fn an_owner_session_may_create_in_the_registry() {
         StatusCode::CREATED,
         "an owner may create a tenant"
     );
+}
+
+// --- Self-service sessions (G1 slice 4, ADR-0067) -----------------------------------------------
+
+/// Seeds an extra live session bound to `admin_id` (a second signed-in device), for the session-list
+/// tests. The idle window equals the cap, so the seeded session neither slides nor idles out during
+/// a test.
+async fn seed_extra_session(admin: &FakeAdmin, token: &str, admin_id: &str, ip: Option<&str>) {
+    let expiry = Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid");
+    admin
+        .create_session(NewAdminSession {
+            token_hash: hash_session_token(token),
+            created_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+            expires_at: expiry,
+            absolute_expires_at: expiry,
+            idle_ttl_ms: 3_600_000,
+            admin_id: Some(admin_id.to_owned()),
+            ip: ip.map(str::to_owned),
+            user_agent: None,
+        })
+        .await
+        .expect("seed extra session");
+}
+
+#[tokio::test]
+async fn listing_sessions_requires_a_session() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let denied = router
+        .oneshot(get("/admin/sessions", None))
+        .await
+        .expect("route unauthenticated");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_admin_lists_and_revokes_their_own_sessions() {
+    let admin = provisioned_admin();
+    // Even a viewer — least privilege — manages their own sessions: it is self-service, not
+    // role-gated.
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "current-token").await;
+    seed_extra_session(&admin, "phone-token", "id-viewer", Some("203.0.113.4")).await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let sessions = listed.as_array().expect("array");
+    assert_eq!(sessions.len(), 2, "both of the admin's sessions are listed");
+    // Exactly one is flagged as the session making this request.
+    let current: Vec<&serde_json::Value> =
+        sessions.iter().filter(|s| s["current"] == true).collect();
+    assert_eq!(current.len(), 1, "exactly one session is the current one");
+    let other = sessions
+        .iter()
+        .find(|s| s["current"] == false)
+        .expect("a non-current session");
+    let other_id = other["id"].as_str().expect("a handle").to_owned();
+
+    // Revoke the other device by its opaque handle.
+    let revoked = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/sessions/{other_id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke");
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+
+    let after = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let remaining = after.as_array().expect("array");
+    assert_eq!(remaining.len(), 1, "only the current session remains");
+    assert_eq!(remaining[0]["current"], true);
+}
+
+#[tokio::test]
+async fn revoking_a_bad_handle_or_a_missing_session() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    // A non-hex handle is a 400.
+    let bad = router
+        .clone()
+        .oneshot(delete_with_cookie("/admin/sessions/not-a-handle", &cookie))
+        .await
+        .expect("route revoke");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A well-formed handle that names no session of theirs is a 404.
+    let absent_handle = "0".repeat(64);
+    let absent = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/sessions/{absent_handle}"),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke");
+    assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn revoke_others_signs_out_every_session_but_the_current_one() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "keep-token").await;
+    seed_extra_session(&admin, "device-a", "id-owner", None).await;
+    seed_extra_session(&admin, "device-b", "id-owner", None).await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    let before = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    assert_eq!(before.as_array().expect("array").len(), 3);
+
+    let signed_out = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/sessions/revoke-others",
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route revoke others");
+    assert_eq!(signed_out.status(), StatusCode::NO_CONTENT);
+
+    let after = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/sessions", &cookie))
+            .await
+            .expect("route list"),
+    )
+    .await;
+    let remaining = after.as_array().expect("array");
+    assert_eq!(remaining.len(), 1, "only the current session survives");
+    assert_eq!(remaining[0]["current"], true);
 }
 
 // --- Invitations and admin management (G1 slice 3, ADR-0067) ------------------------------------

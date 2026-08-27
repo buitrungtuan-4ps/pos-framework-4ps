@@ -67,6 +67,9 @@ const MIGRATION_0017: &str = include_str!("../migrations/0017_catalog_menu_secti
 /// Multi-admin console identities with roles ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
 const MIGRATION_0018: &str = include_str!("../migrations/0018_cloud_admin_users.sql");
 
+/// Sliding idle TTL + absolute cap on admin sessions ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+const MIGRATION_0019: &str = include_str!("../migrations/0019_admin_session_sliding.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -192,6 +195,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0018)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0019)
             .await
             .map_err(unavailable)
     }

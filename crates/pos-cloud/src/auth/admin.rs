@@ -249,6 +249,50 @@ pub struct AdminContext {
     pub admin: AdminUser,
 }
 
+/// The columns of a session to mint, computed at the HTTP edge and handed to
+/// [`AdminStore::create_session`] ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)
+/// slice 4). `expires_at` is the first idle boundary (`now + idle_ttl`), `absolute_expires_at` the
+/// hard cap (`now + absolute_ttl`) the sliding TTL can never pass, and `idle_ttl_ms` the window a
+/// real request slides the session forward by. `ip`/`user_agent` are captured so the admin can
+/// recognise the session in their own session list; both are optional (a request may carry neither).
+#[derive(Debug, Clone)]
+pub struct NewAdminSession {
+    /// `SHA-256(token)` — what the store keys the row by; the token itself is never stored.
+    pub token_hash: [u8; 32],
+    /// When the session was minted, from the clock (Unix-ms `Timestamp`).
+    pub created_at: Timestamp,
+    /// When the session next expires if it is not slid before then.
+    pub expires_at: Timestamp,
+    /// The absolute ceiling the sliding TTL can never pass.
+    pub absolute_expires_at: Timestamp,
+    /// The idle window a real guarded request slides the session forward by, in milliseconds.
+    pub idle_ttl_ms: i64,
+    /// The `admin_users` id the session belongs to, or `None` for a legacy session.
+    pub admin_id: Option<String>,
+    /// The client IP the session was minted for, if known.
+    pub ip: Option<String>,
+    /// The client user-agent the session was minted for, if known.
+    pub user_agent: Option<String>,
+}
+
+/// One of an admin's own live sessions, as listed for the self-service "my sessions" view
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4). Carries the session's
+/// opaque revocation handle (`token_hash`, the `SHA-256` of the token — never reversible to it) and
+/// the accountability details, never the token itself, so it is safe to serialise to the console.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    /// `SHA-256(token)` — the opaque handle the console revokes this session by.
+    pub token_hash: [u8; 32],
+    /// The client IP the session was minted for, if it was known.
+    pub ip: Option<String>,
+    /// The client user-agent the session was minted for, if it was known.
+    pub user_agent: Option<String>,
+    /// When the session was minted.
+    pub created_at: Timestamp,
+    /// When the session currently expires, after any sliding.
+    pub expires_at: Timestamp,
+}
+
 /// The super-admin store: the one credential, and the server-side session table
 /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)). A table in `store-postgres`; a fake in
 /// tests.
@@ -298,7 +342,8 @@ pub trait AdminStore {
         step: u64,
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
 
-    /// Persists a session by `token_hash`, valid until `expires_at`, owned by `admin_id`.
+    /// Persists a session ([`NewAdminSession`]) — its token hash, its sliding/absolute expiries and
+    /// idle window, the owning admin, and the client IP/user-agent it was minted for.
     ///
     /// `admin_id` is the [`AdminUser`] the session belongs to, or `None` for a legacy session minted
     /// before multi-admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)); a
@@ -309,9 +354,7 @@ pub trait AdminStore {
     /// [`AdminStoreError`] if the store could not be written.
     fn create_session(
         &self,
-        token_hash: [u8; 32],
-        expires_at: Timestamp,
-        admin_id: Option<&str>,
+        session: NewAdminSession,
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
 
     /// Whether a session with `token_hash` exists and has not expired as of `now`.
@@ -348,6 +391,43 @@ pub trait AdminStore {
         &self,
         token_hash: [u8; 32],
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    /// Lists `admin_id`'s own live sessions (not expired as of `now`), newest first — the self-service
+    /// "my sessions" view ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+    /// Scoped to the one admin, so no admin sees another's sessions.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn list_admin_sessions(
+        &self,
+        admin_id: &str,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<SessionSummary>, AdminStoreError>> + Send;
+
+    /// Revokes one of `admin_id`'s own sessions by `token_hash`, scoped so an admin can only revoke a
+    /// session that is theirs. Returns `Ok(false)` if none matched (absent, or not owned by them).
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn revoke_admin_session(
+        &self,
+        admin_id: &str,
+        token_hash: [u8; 32],
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// Revokes all of `admin_id`'s sessions except `except_token_hash` (their current one) — "sign out
+    /// everywhere else". Returns how many were revoked.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn revoke_other_admin_sessions(
+        &self,
+        admin_id: &str,
+        except_token_hash: [u8; 32],
+    ) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
 
     // ---- Multi-admin surface ([ADR-0067]) ----
 
@@ -568,13 +648,37 @@ impl IntoResponse for SessionDenied {
     }
 }
 
-/// Authenticates a super-admin login and, on success, persists a session for `session_token`.
+/// Everything about the session a successful [`login`] mints, computed at the HTTP edge: the CSPRNG
+/// token, how long it may idle, its absolute ceiling, and the client details captured for the admin's
+/// own session list ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+///
+/// `idle_ttl_secs` is the sliding idle window and `absolute_ttl_secs` the hard cap it can never pass;
+/// a real guarded request slides the session forward by the idle window up to the cap
+/// ([`authenticated_admin`]).
+#[derive(Debug, Clone)]
+pub struct SessionMint<'a> {
+    /// The 256-bit CSPRNG session token, minted by the caller ([`crate::http`]); only its hash is
+    /// stored, and the same token goes into the [`session`](super::session) cookie.
+    pub token: &'a str,
+    /// The idle window, in seconds: a session left idle longer than this expires.
+    pub idle_ttl_secs: u64,
+    /// The absolute ceiling, in seconds: a session can never live past `now + absolute_ttl_secs`,
+    /// however active it is.
+    pub absolute_ttl_secs: u64,
+    /// The client IP the session is minted for, if known.
+    pub ip: Option<&'a str>,
+    /// The client user-agent the session is minted for, if known.
+    pub user_agent: Option<&'a str>,
+}
+
+/// Authenticates a super-admin login and, on success, persists a session for `mint.token`.
 ///
 /// Both factors are checked before any verdict ([`SuperAdminCredential::authenticate`]), the matched
 /// TOTP step is burned *before* the session is written, and the session is stored as
-/// `SHA-256(session_token)` — never the token itself. `session_token` is minted from a CSPRNG by the
+/// `SHA-256(mint.token)` — never the token itself. `mint.token` is minted from a CSPRNG by the
 /// caller ([`crate::http`]); the same token goes into the [`session`](super::session) cookie so the
-/// browser can present it, and its hash is what this stores.
+/// browser can present it, and its hash is what this stores. The session carries a sliding idle TTL
+/// (`mint.idle_ttl_secs`) bounded by an absolute cap (`mint.absolute_ttl_secs`).
 ///
 /// # Errors
 ///
@@ -584,8 +688,7 @@ pub async fn login<A, C>(
     store: &A,
     clock: &C,
     request: &LoginRequest,
-    session_token: &str,
-    ttl_secs: u64,
+    mint: &SessionMint<'_>,
 ) -> Result<(), LoginDenied>
 where
     A: AdminStore,
@@ -625,12 +728,21 @@ where
     // fakes, or a not-yet-seeded install) binds `None`, still a valid session. Email-based per-admin
     // login replaces this owner lookup in a later slice.
     let owner_id = acting_owner_id(store).await?;
+    let absolute_expires_at = expiry(now, mint.absolute_ttl_secs);
+    // The first idle boundary, never past the cap (which only matters under a misconfigured idle ≥
+    // absolute — normal config has idle well below the cap, so this is just `now + idle`).
+    let expires_at = min_timestamp(expiry(now, mint.idle_ttl_secs), absolute_expires_at);
     store
-        .create_session(
-            hash_token(session_token),
-            expiry(now, ttl_secs),
-            owner_id.as_deref(),
-        )
+        .create_session(NewAdminSession {
+            token_hash: hash_token(mint.token),
+            created_at: now,
+            expires_at,
+            absolute_expires_at,
+            idle_ttl_ms: millis_from_secs(mint.idle_ttl_secs),
+            admin_id: owner_id,
+            ip: mint.ip.map(str::to_owned),
+            user_agent: mint.user_agent.map(str::to_owned),
+        })
         .await
         .map_err(|_| LoginDenied::StoreUnavailable)?;
     Ok(())
@@ -819,6 +931,14 @@ pub fn hash_session_token(token: &str) -> [u8; 32] {
     hash_token(token)
 }
 
+/// The token hash of the session the request's own cookie names, or `None` if it carries none — so a
+/// handler can tell which of an admin's listed sessions is the current one, and exclude it from a
+/// "sign out everywhere else" ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+#[must_use]
+pub fn current_session_token_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
+    session_token_from_cookies(headers).map(hash_token)
+}
+
 /// The Unix-seconds value TOTP verification consumes, from a millisecond [`Timestamp`]. Clamped at the
 /// epoch — a pre-epoch clock is nonsensical here and would only ever fail to verify.
 fn unix_seconds(now: Timestamp) -> u64 {
@@ -829,9 +949,21 @@ fn unix_seconds(now: Timestamp) -> u64 {
 /// `now` — an already-expired session, which fails safe (the login just has to be retried) rather
 /// than minting one that never dies.
 fn expiry(now: Timestamp, ttl_secs: u64) -> Timestamp {
-    let ttl_ms = i64::try_from(ttl_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
-    let at = now.as_milliseconds_since_epoch().saturating_add(ttl_ms);
+    let at = now
+        .as_milliseconds_since_epoch()
+        .saturating_add(millis_from_secs(ttl_secs));
     Timestamp::from_milliseconds_since_epoch(at).unwrap_or(now)
+}
+
+/// `ttl_secs` as milliseconds, saturating at [`i64::MAX`] — the wire form the session's idle window
+/// and expiries are computed in.
+fn millis_from_secs(ttl_secs: u64) -> i64 {
+    i64::try_from(ttl_secs.saturating_mul(1000)).unwrap_or(i64::MAX)
+}
+
+/// The earlier of two instants — so the first idle boundary never lands past the absolute cap.
+fn min_timestamp(a: Timestamp, b: Timestamp) -> Timestamp {
+    if a <= b { a } else { b }
 }
 
 #[cfg(test)]
@@ -850,8 +982,9 @@ mod tests {
 
     use super::{
         AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError,
-        AdminUser, IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminInvite, NewAdminUser,
-        SessionDenied, authenticate_session, authenticated_admin, hash_token, login, logout,
+        AdminUser, IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminInvite, NewAdminSession,
+        NewAdminUser, SessionDenied, SessionMint, authenticate_session, authenticated_admin,
+        hash_token, login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -900,9 +1033,49 @@ mod tests {
         headers
     }
 
-    /// A stored session row: its expiry and the id of the admin it belongs to (`None` for a legacy
-    /// session), keyed in the table by `SHA-256(token)`.
-    type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
+    /// A session-mint with the idle window equal to the absolute cap (both `TTL`) and no client
+    /// details — the fixed-TTL shape the pre-slice-4 tests expect, so a session neither slides beyond
+    /// nor short of `TTL`.
+    fn mint(token: &str) -> SessionMint<'_> {
+        SessionMint {
+            token,
+            idle_ttl_secs: TTL,
+            absolute_ttl_secs: TTL,
+            ip: None,
+            user_agent: None,
+        }
+    }
+
+    /// Seeds a session row directly (bypassing login), for the guard tests: created at `NOW_MS`, with
+    /// an idle window of `TTL` and its absolute cap at `expires_at`, owned by `admin_id`.
+    fn seed_session(token: &str, expires_at: Timestamp, admin_id: Option<&str>) -> NewAdminSession {
+        NewAdminSession {
+            token_hash: hash_token(token),
+            created_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+            expires_at,
+            absolute_expires_at: expires_at,
+            idle_ttl_ms: i64::try_from(TTL * 1000).expect("fits an i64"),
+            admin_id: admin_id.map(str::to_owned),
+            ip: None,
+            user_agent: None,
+        }
+    }
+
+    /// A stored session row, keyed in the table by `SHA-256(token)`: its sliding expiry, the absolute
+    /// cap and idle window that drive the slide, the id of the admin it belongs to (`None` for a
+    /// legacy session), and the client details captured for the admin's own session list.
+    #[derive(Clone)]
+    struct SessionRow {
+        created_at: Timestamp,
+        expires_at: Timestamp,
+        absolute_expires_at: Option<Timestamp>,
+        idle_ttl_ms: Option<i64>,
+        admin_id: Option<String>,
+        ip: Option<String>,
+        user_agent: Option<String>,
+    }
+
+    type SessionRows = HashMap<[u8; 32], SessionRow>;
 
     /// A stored invitation row in the fake, keyed for acceptance by its token hash.
     #[derive(Clone)]
@@ -996,19 +1169,22 @@ mod tests {
             Ok(())
         }
 
-        async fn create_session(
-            &self,
-            token_hash: [u8; 32],
-            expires_at: Timestamp,
-            admin_id: Option<&str>,
-        ) -> Result<(), AdminStoreError> {
+        async fn create_session(&self, session: NewAdminSession) -> Result<(), AdminStoreError> {
             if self.down {
                 return Err(AdminStoreError::new("down"));
             }
-            self.sessions
-                .lock()
-                .expect("lock")
-                .insert(token_hash, (expires_at, admin_id.map(str::to_owned)));
+            self.sessions.lock().expect("lock").insert(
+                session.token_hash,
+                SessionRow {
+                    created_at: session.created_at,
+                    expires_at: session.expires_at,
+                    absolute_expires_at: Some(session.absolute_expires_at),
+                    idle_ttl_ms: Some(session.idle_ttl_ms),
+                    admin_id: session.admin_id,
+                    ip: session.ip,
+                    user_agent: session.user_agent,
+                },
+            );
             Ok(())
         }
 
@@ -1020,12 +1196,13 @@ mod tests {
             if self.down {
                 return Err(AdminStoreError::new("down"));
             }
+            // A pure read — no sliding, exactly as the SQL `SELECT EXISTS(...)` is.
             Ok(self
                 .sessions
                 .lock()
                 .expect("lock")
                 .get(&token_hash)
-                .is_some_and(|(expires_at, _)| *expires_at > now))
+                .is_some_and(|row| row.expires_at > now))
         }
 
         async fn session_admin(
@@ -1036,15 +1213,26 @@ mod tests {
             if self.down {
                 return Err(AdminStoreError::new("down"));
             }
-            Ok(self
-                .sessions
-                .lock()
-                .expect("lock")
-                .get(&token_hash)
-                .filter(|(expires_at, _)| *expires_at > now)
-                .map(|(_, admin_id)| super::LiveSession {
-                    admin_id: admin_id.clone(),
-                }))
+            let mut sessions = self.sessions.lock().expect("lock");
+            let Some(row) = sessions
+                .get_mut(&token_hash)
+                .filter(|row| row.expires_at > now)
+            else {
+                return Ok(None);
+            };
+            // Slide the idle TTL up to the absolute cap, exactly as the SQL `UPDATE ... SET expires_at
+            // = LEAST(now + idle_ttl_ms, absolute_expires_at)` does; a legacy row (either column
+            // `None`) is left untouched.
+            if let (Some(cap), Some(idle_ms)) = (row.absolute_expires_at, row.idle_ttl_ms) {
+                let slid = Timestamp::from_milliseconds_since_epoch(
+                    now.as_milliseconds_since_epoch().saturating_add(idle_ms),
+                )
+                .unwrap_or(now);
+                row.expires_at = super::min_timestamp(slid, cap);
+            }
+            Ok(Some(super::LiveSession {
+                admin_id: row.admin_id.clone(),
+            }))
         }
 
         async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
@@ -1053,6 +1241,77 @@ mod tests {
             }
             self.sessions.lock().expect("lock").remove(&token_hash);
             Ok(())
+        }
+
+        async fn list_admin_sessions(
+            &self,
+            admin_id: &str,
+            now: Timestamp,
+        ) -> Result<Vec<super::SessionSummary>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut summaries: Vec<super::SessionSummary> = self
+                .sessions
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|(_, row)| {
+                    row.admin_id.as_deref() == Some(admin_id) && row.expires_at > now
+                })
+                .map(|(token_hash, row)| super::SessionSummary {
+                    token_hash: *token_hash,
+                    ip: row.ip.clone(),
+                    user_agent: row.user_agent.clone(),
+                    created_at: row.created_at,
+                    expires_at: row.expires_at,
+                })
+                .collect();
+            // Newest first, then by handle — the same total order the SQL `ORDER BY created_at DESC,
+            // token_hash` gives.
+            summaries.sort_by(|a, b| {
+                b.created_at
+                    .cmp(&a.created_at)
+                    .then_with(|| a.token_hash.cmp(&b.token_hash))
+            });
+            Ok(summaries)
+        }
+
+        async fn revoke_admin_session(
+            &self,
+            admin_id: &str,
+            token_hash: [u8; 32],
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut sessions = self.sessions.lock().expect("lock");
+            // Scoped: only a session that both matches and is owned by this admin is removed.
+            if sessions
+                .get(&token_hash)
+                .is_some_and(|row| row.admin_id.as_deref() == Some(admin_id))
+            {
+                sessions.remove(&token_hash);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+
+        async fn revoke_other_admin_sessions(
+            &self,
+            admin_id: &str,
+            except_token_hash: [u8; 32],
+        ) -> Result<u64, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut sessions = self.sessions.lock().expect("lock");
+            let before = sessions.len();
+            sessions.retain(|token_hash, row| {
+                row.admin_id.as_deref() != Some(admin_id) || *token_hash == except_token_hash
+            });
+            Ok(u64::try_from(before - sessions.len()).unwrap_or(u64::MAX))
         }
 
         async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {
@@ -1269,8 +1528,7 @@ mod tests {
             &store,
             &clock,
             &request("a-strong-passphrase", &current_code()),
-            "session-token-abc",
-            TTL,
+            &mint("session-token-abc"),
         )
         .await
         .expect("both factors are correct");
@@ -1296,8 +1554,7 @@ mod tests {
                 &store,
                 &clock,
                 &request("wrong-passphrase", &current_code()),
-                "t1",
-                TTL
+                &mint("t1"),
             )
             .await,
             Err(LoginDenied::Invalid),
@@ -1308,8 +1565,7 @@ mod tests {
                 &store,
                 &clock,
                 &request("a-strong-passphrase", "000000"),
-                "t2",
-                TTL
+                &mint("t2"),
             )
             .await,
             Err(LoginDenied::Invalid),
@@ -1327,8 +1583,7 @@ mod tests {
             &store,
             &clock,
             &request("a-strong-passphrase", &code),
-            "first",
-            TTL,
+            &mint("first"),
         )
         .await
         .expect("first login");
@@ -1340,8 +1595,7 @@ mod tests {
                 &store,
                 &clock,
                 &request("a-strong-passphrase", &code),
-                "second",
-                TTL
+                &mint("second"),
             )
             .await,
             Err(LoginDenied::Invalid),
@@ -1363,8 +1617,7 @@ mod tests {
                 &store,
                 &clock,
                 &request("a-strong-passphrase", &current_code()),
-                "t",
-                TTL
+                &mint("t"),
             )
             .await,
             Err(LoginDenied::StoreUnavailable),
@@ -1381,8 +1634,7 @@ mod tests {
                 &store,
                 &clock,
                 &request("a-strong-passphrase", &current_code()),
-                "t",
-                TTL
+                &mint("t"),
             )
             .await,
             Err(LoginDenied::Invalid),
@@ -1398,8 +1650,7 @@ mod tests {
             &store,
             &clock,
             &request("a-strong-passphrase", &current_code()),
-            "expiring",
-            TTL,
+            &mint("expiring"),
         )
         .await
         .expect("login");
@@ -1422,8 +1673,7 @@ mod tests {
             &store,
             &clock,
             &request("a-strong-passphrase", &current_code()),
-            "live",
-            TTL,
+            &mint("live"),
         )
         .await
         .expect("login");
@@ -1740,7 +1990,7 @@ mod tests {
         )
         .await;
         store
-            .create_session(hash_token("tok-viewer"), live_expiry(), Some("id-viewer"))
+            .create_session(seed_session("tok-viewer", live_expiry(), Some("id-viewer")))
             .await
             .expect("seed session");
 
@@ -1760,7 +2010,7 @@ mod tests {
             .await
             .expect("suspend");
         store
-            .create_session(hash_token("tok"), live_expiry(), Some("id-1"))
+            .create_session(seed_session("tok", live_expiry(), Some("id-1")))
             .await
             .expect("seed session");
         assert_eq!(
@@ -1774,7 +2024,7 @@ mod tests {
     async fn a_session_for_a_missing_admin_is_refused() {
         let store = FakeAdmin::default();
         store
-            .create_session(hash_token("tok"), live_expiry(), Some("ghost"))
+            .create_session(seed_session("tok", live_expiry(), Some("ghost")))
             .await
             .expect("seed session");
         assert_eq!(
@@ -1789,7 +2039,7 @@ mod tests {
         seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
         // A legacy session carries no admin_id.
         store
-            .create_session(hash_token("legacy"), live_expiry(), None)
+            .create_session(seed_session("legacy", live_expiry(), None))
             .await
             .expect("seed session");
         let context = authenticated_admin(&store, &clock(), &cookie_header("legacy"))
@@ -1803,7 +2053,7 @@ mod tests {
     async fn a_legacy_session_on_a_pristine_store_resolves_to_the_implicit_owner() {
         let store = FakeAdmin::default(); // no admin_users rows at all
         store
-            .create_session(hash_token("legacy"), live_expiry(), None)
+            .create_session(seed_session("legacy", live_expiry(), None))
             .await
             .expect("seed session");
         let context = authenticated_admin(&store, &clock(), &cookie_header("legacy"))
@@ -1831,8 +2081,7 @@ mod tests {
             &store,
             &clock(),
             &request("a-strong-passphrase", &current_code()),
-            "fresh-token",
-            TTL,
+            &mint("fresh-token"),
         )
         .await
         .expect("login");
@@ -1842,6 +2091,220 @@ mod tests {
             .expect("the issued session authorises");
         assert_eq!(context.admin.id, "id-owner");
         assert_eq!(context.admin.role, AdminRole::Owner);
+    }
+
+    // ---- Sessions: sliding idle TTL, listing, revocation ([ADR-0067] slice 4) ----
+
+    /// A mint with a short idle window inside a longer absolute cap, and no client details.
+    fn sliding_mint(token: &str, idle_secs: u64, absolute_secs: u64) -> SessionMint<'_> {
+        SessionMint {
+            token,
+            idle_ttl_secs: idle_secs,
+            absolute_ttl_secs: absolute_secs,
+            ip: None,
+            user_agent: None,
+        }
+    }
+
+    /// An instant `ms` milliseconds past `NOW_MS`.
+    fn at(ms: i64) -> Timestamp {
+        Timestamp::from_milliseconds_since_epoch(NOW_MS + ms).expect("valid")
+    }
+
+    #[tokio::test]
+    async fn a_real_request_slides_the_idle_ttl_up_to_the_absolute_cap() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        let clock = clock();
+        // Idle window 60s, absolute cap 150s — close enough that continuous activity reaches the cap.
+        login(
+            &store,
+            &clock,
+            &request("a-strong-passphrase", &current_code()),
+            &sliding_mint("tok", 60, 150),
+        )
+        .await
+        .expect("login");
+
+        // A real guarded request 50s in (within the idle window) slides the expiry to now + 60s = 110s.
+        clock.set(at(50_000));
+        authenticated_admin(&store, &clock, &cookie_header("tok"))
+            .await
+            .expect("a live session resolves and slides");
+        // 100s in: past the original 60s boundary, but the slide moved it to 110s, so it is still live.
+        clock.set(at(100_000));
+        assert!(
+            store
+                .session_is_valid(hash_token("tok"), clock.now())
+                .await
+                .expect("read"),
+            "a slid session outlives its original idle boundary"
+        );
+
+        // Keep acting at 100s: a slide would reach 160s, but the absolute cap clamps it to 150s.
+        authenticated_admin(&store, &clock, &cookie_header("tok"))
+            .await
+            .expect("still live, slide clamped to the cap");
+        clock.set(at(149_000));
+        assert!(
+            store
+                .session_is_valid(hash_token("tok"), clock.now())
+                .await
+                .expect("read"),
+            "live just under the absolute cap"
+        );
+        clock.set(at(150_001));
+        assert!(
+            !store
+                .session_is_valid(hash_token("tok"), clock.now())
+                .await
+                .expect("read"),
+            "no amount of sliding lets a session outlive its absolute cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_times_out_and_the_poll_does_not_keep_it_alive() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request("a-strong-passphrase", &current_code()),
+            &sliding_mint("tok", 60, 3600),
+        )
+        .await
+        .expect("login");
+
+        // The liveness poll at 50s sees a live session but must not slide it.
+        clock.set(at(50_000));
+        authenticate_session(&store, &clock, &cookie_header("tok"))
+            .await
+            .expect("the poll sees a live session");
+
+        // 61s in — past the idle window, with no *real* request to slide it — the session is gone,
+        // proving the poll did not extend it.
+        clock.set(at(61_000));
+        assert_eq!(
+            authenticate_session(&store, &clock, &cookie_header("tok")).await,
+            Err(SessionDenied::Unauthorized),
+            "an idle session times out; the liveness poll does not keep it alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_admin_lists_and_revokes_only_their_own_sessions() {
+        let store = FakeAdmin::default();
+        // Two sessions for one admin, one for another — seeded directly (login is single-use per code).
+        store
+            .create_session(seed_session("mine-a", live_expiry(), Some("id-1")))
+            .await
+            .expect("seed");
+        store
+            .create_session(seed_session("mine-b", live_expiry(), Some("id-1")))
+            .await
+            .expect("seed");
+        store
+            .create_session(seed_session("theirs", live_expiry(), Some("id-2")))
+            .await
+            .expect("seed");
+
+        let now = clock().now();
+        let mine = store.list_admin_sessions("id-1", now).await.expect("list");
+        assert_eq!(mine.len(), 2, "an admin sees only their own sessions");
+
+        // Revoking one of mine is scoped and removes exactly that one.
+        assert!(
+            store
+                .revoke_admin_session("id-1", hash_token("mine-a"))
+                .await
+                .expect("revoke")
+        );
+        assert_eq!(
+            store
+                .list_admin_sessions("id-1", now)
+                .await
+                .expect("list")
+                .len(),
+            1
+        );
+
+        // I cannot revoke another admin's session: the handle is theirs, so it is a no-op for me.
+        assert!(
+            !store
+                .revoke_admin_session("id-1", hash_token("theirs"))
+                .await
+                .expect("revoke"),
+            "revocation is scoped to the caller's own sessions"
+        );
+        assert_eq!(
+            store
+                .list_admin_sessions("id-2", now)
+                .await
+                .expect("list")
+                .len(),
+            1,
+            "the other admin's session is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_others_keeps_the_current_session_only() {
+        let store = FakeAdmin::default();
+        for token in ["current", "phone", "laptop"] {
+            store
+                .create_session(seed_session(token, live_expiry(), Some("id-1")))
+                .await
+                .expect("seed");
+        }
+        // "Sign out everywhere else" leaves exactly the current session.
+        let revoked = store
+            .revoke_other_admin_sessions("id-1", hash_token("current"))
+            .await
+            .expect("revoke others");
+        assert_eq!(revoked, 2, "the two other sessions were revoked");
+
+        let now = clock().now();
+        let remaining = store.list_admin_sessions("id-1", now).await.expect("list");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].token_hash,
+            hash_token("current"),
+            "the current session survives sign-out-everywhere-else"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_records_the_client_ip_and_user_agent_for_the_session_list() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request("a-strong-passphrase", &current_code()),
+            &SessionMint {
+                token: "tok",
+                idle_ttl_secs: 60,
+                absolute_ttl_secs: 3600,
+                ip: Some("203.0.113.7"),
+                user_agent: Some("Mozilla/5.0 (console)"),
+            },
+        )
+        .await
+        .expect("login");
+
+        let sessions = store
+            .list_admin_sessions("id-owner", clock.now())
+            .await
+            .expect("list");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].ip.as_deref(), Some("203.0.113.7"));
+        assert_eq!(
+            sessions[0].user_agent.as_deref(),
+            Some("Mozilla/5.0 (console)")
+        );
     }
 
     // ---- Invitations ([ADR-0067]) ----

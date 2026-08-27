@@ -39,6 +39,18 @@ them, it does not revisit them).
   an admin can list their live sessions and revoke one or all-others; sessions keep a sliding TTL with
   an idle timeout. The `__Host-` host-only cookie, the SHA-256-only token storage, the two-factor
   check, the no-which-factor-failed oracle, and single-use TOTP from ADR-0034 are **unchanged**.
+  Concretely (slice 4): the former fixed session TTL (`admin_session_ttl_secs`, 8h) becomes the
+  **absolute cap** a session can never live past; a new `admin_session_idle_ttl_secs` (default 30 min)
+  is the **idle window**, and a real guarded request slides `expires_at = min(now + idle_ttl,
+  absolute_cap)` atomically as the guard reads the session. The lightweight liveness poll
+  (`/admin/session`) deliberately does **not** slide, so an admin who stops acting still times out even
+  with the console tab open. Session management is **self-service** — every authenticated admin manages
+  their own sessions regardless of role, and every listing/revocation is scoped to the caller — so it
+  is gated by the session guard, not a `console.*` permission. The revocation handle is the session's
+  token hash (never the token, not reversible to it), and behind the P8 reverse proxy the client IP is
+  read from `X-Forwarded-For`; the IP/user-agent are shown only to the admin whose session it is and
+  are never trusted for authorization. Sessions minted before the additive migration keep their
+  original fixed expiry (a `NULL` cap/window means "do not slide").
 
 - **Defence-in-depth ADR-0034 deferred:** a login rate-limit (per email and per IP, sliding window)
   and `/admin` security headers (`Content-Security-Policy`, `X-Content-Type-Options: nosniff`,

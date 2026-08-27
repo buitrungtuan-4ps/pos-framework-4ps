@@ -29,8 +29,19 @@ const fn default_projector_interval_secs() -> u64 {
 
 /// How long a super-admin session is valid, in seconds, when the config does not say — eight hours,
 /// a working day, after which the admin signs in again ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+/// Since [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4 this is the **absolute
+/// cap**: a session can never live past `login + this`, however active it is.
 const fn default_admin_session_ttl_secs() -> u64 {
     8 * 60 * 60
+}
+
+/// How long a console-admin session may sit idle before it expires, in seconds, when the config does
+/// not say — thirty minutes ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+/// A real request slides the session forward by this window (up to the absolute cap
+/// [`default_admin_session_ttl_secs`]); the lightweight liveness poll does not, so a genuinely idle
+/// session still times out. Kept well below the absolute cap so the idle timeout actually bites.
+const fn default_admin_session_idle_ttl_secs() -> u64 {
+    30 * 60
 }
 
 /// How long a console-admin invitation stays acceptable, in seconds, when the config does not say —
@@ -81,10 +92,16 @@ pub struct CloudConfig {
     /// How often the rollup projector sweeps the fleet to keep dashboards current, in seconds.
     #[serde(default = "default_projector_interval_secs")]
     pub projector_interval_secs: u64,
-    /// How long a super-admin session cookie stays valid, in seconds
-    /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+    /// How long a super-admin session cookie stays valid, in seconds — the **absolute cap** a session
+    /// can never live past ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md),
+    /// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
     #[serde(default = "default_admin_session_ttl_secs")]
     pub admin_session_ttl_secs: u64,
+    /// How long a console-admin session may sit idle before it expires, in seconds — the sliding idle
+    /// window, bounded by [`Self::admin_session_ttl_secs`]
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+    #[serde(default = "default_admin_session_idle_ttl_secs")]
+    pub admin_session_idle_ttl_secs: u64,
     /// How long a console-admin invitation stays acceptable, in seconds
     /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
     #[serde(default = "default_admin_invite_ttl_secs")]
@@ -194,7 +211,12 @@ mod tests {
         assert_eq!(
             config.admin_session_ttl_secs,
             8 * 60 * 60,
-            "the admin session TTL defaults to eight hours when unset"
+            "the admin session absolute cap defaults to eight hours when unset"
+        );
+        assert_eq!(
+            config.admin_session_idle_ttl_secs,
+            30 * 60,
+            "the admin session idle timeout defaults to thirty minutes when unset"
         );
         assert_eq!(
             config.retention_days, None,

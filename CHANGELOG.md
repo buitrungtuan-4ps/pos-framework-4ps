@@ -65,6 +65,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A console admin can now see and revoke their own sign-ins, and idle sessions time out** (roadmap
+  v2, Track G, G1 slice 4; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `GET
+  /admin/sessions` lists the acting admin's live sessions — each with the client IP and user-agent it
+  was minted for, when it was signed in, and which one is the current request — `DELETE
+  /admin/sessions/{handle}` revokes one, and `POST /admin/sessions/revoke-others` signs out every
+  other device ("sign out everywhere else"). These are self-service: any authenticated admin manages
+  their **own** sessions regardless of role, and every operation is scoped to the caller, so no admin
+  can list or revoke another's session. The session handle is the hash of the token (never the token,
+  and not reversible to it), so listing it grants no capability. Sessions now carry a **sliding idle
+  TTL**: a real request extends the session by the idle window (default 30 minutes,
+  `admin_session_idle_ttl_secs`), up to an **absolute cap** (the existing `admin_session_ttl_secs`,
+  default 8 hours — now the hard ceiling, unchanged in value). A session left idle past the window
+  expires even with the console tab open, because the lightweight "am I signed in?" poll deliberately
+  does not slide it; only genuine actions do. **Upgrade note:** additive migration
+  `0019_admin_session_sliding.sql` adds two nullable columns to `admin_sessions`; sessions minted
+  before it keep their original fixed expiry (they do not slide). A new default value,
+  `admin_session_idle_ttl_secs` = 1800s; `admin_session_ttl_secs` keeps its 8-hour default but is now
+  interpreted as the absolute cap. No protocol or permission-identifier change.
 - **Console admins can now be invited, self-enrol, and be managed** (roadmap v2, Track G, G1 slice 3;
   [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). An owner or admin invites by email and role
   (`POST /admin/invites`); the server mints a single-use, TTL-bounded token and returns it once as a
