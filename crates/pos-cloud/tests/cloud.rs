@@ -7758,3 +7758,150 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
         "no PIN hash in the audit trail"
     );
 }
+
+/// The main app merged with the capability-catalogue router.
+fn capabilities_app(admin: FakeAdmin) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::capabilities_router(admin, clock()))
+}
+
+#[tokio::test]
+async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
+    let admin = provisioned_admin();
+    let router = capabilities_app(admin.clone());
+
+    // Read is open to every console role — a Viewer may load the catalogue.
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/capabilities", &viewer))
+        .await
+        .expect("route the catalogue");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+
+    // Flags carry key/default/description; the well-known ones are present.
+    let flags = body["flags"].as_array().expect("flags array");
+    assert!(!flags.is_empty());
+    let keys: Vec<&str> = flags
+        .iter()
+        .map(|flag| flag["key"].as_str().expect("a key"))
+        .collect();
+    assert!(keys.contains(&"tables_enabled"));
+    assert!(keys.contains(&"pay_first_enabled"));
+    let tables = flags
+        .iter()
+        .find(|flag| flag["key"] == serde_json::json!("tables_enabled"))
+        .expect("the tables flag");
+    assert_eq!(tables["default_on"], serde_json::json!(true));
+    assert!(tables["description"].as_str().expect("a description").len() > 5);
+
+    // The three presets are offered, each as a set of keys.
+    let presets = body["presets"].as_array().expect("presets array");
+    let preset_ids: Vec<&str> = presets
+        .iter()
+        .map(|preset| preset["id"].as_str().expect("an id"))
+        .collect();
+    assert!(preset_ids.contains(&"full_service"));
+    assert!(preset_ids.contains(&"counter"));
+    assert!(preset_ids.contains(&"retail"));
+
+    // The inter-flag rules are served for the console's conflict preview.
+    let rules = body["rules"].as_array().expect("rules array");
+    let rule_ids: Vec<&str> = rules
+        .iter()
+        .map(|rule| rule["id"].as_str().expect("an id"))
+        .collect();
+    assert!(rule_ids.contains(&"pay_first.excludes.tables"));
+    assert!(rule_ids.contains(&"seats.requires.tables"));
+}
+
+/// The main app merged with the capability-publish router, sharing one config-tree fake so the test
+/// can read back the flags the publish merged onto the Store layer.
+fn config_capabilities_app(admin: FakeAdmin, config: FakeConfigTrees) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_capabilities_router(
+        config,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn publishing_capability_flags_merges_the_store_layer_and_rejects_conflicts() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = config_capabilities_app(admin, config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let publish = |flags: serde_json::Value| {
+        router.clone().oneshot(put_with_cookie(
+            "/admin/config/capabilities",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "flags": flags }),
+            &cookie,
+        ))
+    };
+
+    // First publish sets one flag.
+    let first = publish(serde_json::json!({ "tables_enabled": false }))
+        .await
+        .expect("route first publish");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    // Second publish names a different flag — the first must survive (a merge, not a replace).
+    let second = publish(serde_json::json!({ "kds_enabled": false }))
+        .await
+        .expect("route second publish");
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let state = config
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let store_layer = &state.layers[2];
+    assert_eq!(
+        store_layer["tables_enabled"],
+        serde_json::json!(false),
+        "the flag from the first publish survives the second (merge, not replace)"
+    );
+    assert_eq!(store_layer["kds_enabled"], serde_json::json!(false));
+
+    // An unknown flag key is refused.
+    let unknown = publish(serde_json::json!({ "not_a_flag": true }))
+        .await
+        .expect("route unknown");
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+
+    // A §10-invalid combination (pay-first with table service) is a 422, not a stored state.
+    let conflict =
+        publish(serde_json::json!({ "tables_enabled": true, "pay_first_enabled": true }))
+            .await
+            .expect("route conflict");
+    assert_eq!(conflict.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let violations = json_body(conflict).await;
+    assert!(
+        !violations["violations"]
+            .as_array()
+            .expect("violations")
+            .is_empty(),
+        "the inter-flag rule is reported"
+    );
+}

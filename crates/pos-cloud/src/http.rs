@@ -1884,6 +1884,313 @@ where
     }
 }
 
+// --- Capability catalogue (`/admin/capabilities`, ADR-0071) -------------------------------------
+
+/// One capability flag as the console's form editor reads it: its config key, default, and the
+/// one-line description (§10 catalogue). Mirrors `pos-core`'s `CapabilityMeta` so the console renders
+/// toggles from the framework's own source of truth rather than a hand-kept list.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityFlagView {
+    key: &'static str,
+    default_on: bool,
+    description: &'static str,
+}
+
+/// One capability preset (§10) — a named starting profile the console offers as a button, given as the
+/// set of flag keys it turns on.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityPresetView {
+    id: &'static str,
+    keys: Vec<&'static str>,
+}
+
+/// One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
+/// created rather than as a `422` on publish.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityRuleView {
+    id: &'static str,
+    description: &'static str,
+}
+
+/// The whole capability catalogue the form editor needs: the flags, the presets, and the inter-flag
+/// rules — all §10 data, tenant-independent.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityCatalogueView {
+    flags: Vec<CapabilityFlagView>,
+    presets: Vec<CapabilityPresetView>,
+    rules: Vec<CapabilityRuleView>,
+}
+
+/// The collaborators the capability-catalogue read needs: just the admin and clock its session guard
+/// uses. The catalogue itself is static `pos-core` data, so there is no store to carry.
+#[derive(Clone)]
+struct CapabilitiesState<A, C> {
+    admin: A,
+    clock: C,
+}
+
+/// The keys a preset turns on, in catalogue order.
+fn preset_keys(context: pos_core::capability::CapabilityContext) -> Vec<&'static str> {
+    pos_core::capability::Capability::ALL
+        .iter()
+        .copied()
+        .filter(|capability| context.enabled(*capability))
+        .map(|capability| capability.meta().key)
+        .collect()
+}
+
+/// Builds the capability-catalogue sub-router ([ADR-0071](../../../docs/adr/0071-config-without-json.md)).
+///
+/// One read, behind [`ConsolePermission::Read`] (every console role): the §10 capability flags, the
+/// presets, and the inter-flag rules, so the Config screen's form editor renders toggles and previews
+/// conflicts from the framework's own catalogue. Tenant-independent — the catalogue is the same for
+/// every store.
+pub fn capabilities_router<A, C>(admin: A, clock: C) -> Router
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/capabilities", get(admin_list_capabilities::<A, C>))
+        .with_state(CapabilitiesState { admin, clock })
+}
+
+/// Serves the §10 capability catalogue for the console's form editor.
+async fn admin_list_capabilities<A, C>(
+    State(state): State<CapabilitiesState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    use pos_core::capability::{Capability, CapabilityContext, RULES};
+
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let flags = Capability::ALL
+        .iter()
+        .copied()
+        .map(|capability| {
+            let meta = capability.meta();
+            CapabilityFlagView {
+                key: meta.key,
+                default_on: meta.default_on,
+                description: meta.description,
+            }
+        })
+        .collect();
+    let presets = vec![
+        CapabilityPresetView {
+            id: "full_service",
+            keys: preset_keys(CapabilityContext::full_service()),
+        },
+        CapabilityPresetView {
+            id: "counter",
+            keys: preset_keys(CapabilityContext::counter()),
+        },
+        CapabilityPresetView {
+            id: "retail",
+            keys: preset_keys(CapabilityContext::retail()),
+        },
+    ];
+    let rules = RULES
+        .iter()
+        .map(|rule| CapabilityRuleView {
+            id: rule.id,
+            description: rule.description,
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(CapabilityCatalogueView {
+            flags,
+            presets,
+            rules,
+        }),
+    )
+        .into_response()
+}
+
+// --- Capability publish (`/admin/config/capabilities`, ADR-0071) --------------------------------
+
+/// The collaborators the capability-publish route needs: the config-tree store the flags are merged
+/// onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigCapabilitiesState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin sets a store's capability flags from the form editor: the (tenant, store) and the flag
+/// values to write. Only the flags named are changed; the rest of the store's config is untouched.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishCapabilitiesRequest {
+    tenant_id: String,
+    store_id: String,
+    /// The capability flag values to set, keyed by each capability's config key (`tables_enabled`, …).
+    flags: std::collections::BTreeMap<String, bool>,
+}
+
+/// Builds the capability-publish sub-router ([ADR-0071](../../../docs/adr/0071-config-without-json.md)).
+///
+/// One route: merge a store's capability flag booleans into its Store config layer and version it
+/// through the config tree — the node-merge the catalog/people publishes use, so the other Store-level
+/// keys (`menu`, `layout`, `permissions`) survive. Behind [`ConsolePermission::PublishConfig`], and the
+/// config tree runs the §10 inter-flag rules, so an invalid combination is a `422`, never a stored
+/// state.
+pub fn config_capabilities_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/capabilities",
+            axum::routing::put(admin_publish_capabilities::<Cfg, A, C>),
+        )
+        .with_state(ConfigCapabilitiesState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Merges a store's capability flags into its Store config layer and versions it — the same
+/// load→merge→publish→version shape as the catalog publish, onto the top-level flag keys instead of a
+/// node. Rejects an unknown flag key (the form only sends catalogue keys). The §10 inter-flag rules run
+/// in the config tree, so an invalid combination returns `422` with the violated rules.
+async fn admin_publish_capabilities<Cfg, A, C>(
+    State(state): State<ConfigCapabilitiesState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishCapabilitiesRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    // Every key must be a known §10 capability flag — the form only sends catalogue keys, and this
+    // keeps a typo from writing a stray boolean into the config document.
+    for key in request.flags.keys() {
+        if !pos_core::capability::Capability::ALL
+            .iter()
+            .any(|capability| capability.meta().key == key)
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("unknown capability flag: {key}"),
+            )
+                .into_response();
+        }
+    }
+
+    // Load the store's tree, set the flag keys on its Store layer (index 2), and re-publish that layer,
+    // preserving the other Store-level keys (`menu`, `layout`, `permissions`).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        for (key, value) in &request.flags {
+            map.insert(key.clone(), serde_json::Value::Bool(*value));
+        }
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.capabilities.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(&request.flags).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
 // --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------
 
 /// A store is **online** if its most recent contact is within this window of now. Liveness is captured

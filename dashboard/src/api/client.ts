@@ -16,6 +16,7 @@ import type {
   AuditEntry,
   AuditFilter,
   Brand,
+  CapabilityCatalogue,
   CatalogItem,
   ChannelPrice,
   ConfigLevel,
@@ -230,6 +231,18 @@ export const api = {
       `/admin/stores/${encodeURIComponent(storeId)}/config/rollback?${tenantQuery(tenantId)}`,
       { version_id: versionId },
     ),
+
+  // --- capabilities (ADR-0071, Track M8): the §10 flag catalogue + a form-driven capability publish ---
+  // The catalogue is static §10 data behind console.data.read; publishing merges the flag booleans into
+  // the store's config layer (never clobbering the other keys) and needs console.config.publish. The
+  // server re-runs the §10 inter-flag rules, so an invalid combination is a 422, never a stored state.
+  capabilityCatalogue: () => requestJson<CapabilityCatalogue>("GET", "/admin/capabilities"),
+  publishCapabilities: (tenantId: string, storeId: string, flags: Record<string, boolean>) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/capabilities", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      flags,
+    }),
 
   // --- rollups (ADR-0060 admin read) ---
   dailyRollups: (tenantId: string, storeId: string) =>

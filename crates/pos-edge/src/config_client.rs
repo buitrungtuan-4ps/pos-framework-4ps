@@ -26,6 +26,7 @@ use core::future::Future;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
+use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::menu::MenuBook;
 
@@ -100,6 +101,22 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             );
         }
         session.staff = roster;
+    }
+    // The capability flags the config document carries (ADR-0071): top-level booleans keyed by each
+    // capability's key (`tables_enabled`, `pay_first_enabled`, …), read the same way the cloud
+    // validator does via the shared `CapabilityContext::from_flags` (§10). Applying them was a silent
+    // no-op before M8 — the store now turns table service, KDS, pay-first, etc. on or off from the
+    // published profile. Gate on the document carrying at least one known flag key, so a publish that
+    // names none leaves the base profile unchanged (the never-blank contract the branches above keep);
+    // once it names any, the profile is authoritative and an unnamed flag falls to its declared
+    // default.
+    if Capability::ALL
+        .iter()
+        .any(|capability| document.get(capability.meta().key).is_some())
+    {
+        session.capabilities = CapabilityContext::from_flags(|key| {
+            document.get(key).and_then(serde_json::Value::as_bool)
+        });
     }
     session
 }
@@ -392,5 +409,52 @@ mod tests {
             1,
             "a malformed node leaves the roster unchanged"
         );
+    }
+
+    #[test]
+    fn capability_flags_in_the_document_rebuild_the_session_profile() {
+        use pos_core::capability::Capability;
+
+        // The bootstrap is full-service: tables on, pay-first off, KDS on.
+        let base = EdgeSession::bootstrap();
+        assert!(base.capabilities.enabled(Capability::Tables));
+        assert!(!base.capabilities.enabled(Capability::PayFirst));
+
+        // A publish that flips the store to pay-first (no tables) takes effect — the no-op M8 fixes.
+        let rebuilt = session_from_config(
+            &base,
+            &serde_json::json!({ "tables_enabled": false, "pay_first_enabled": true }),
+        );
+        assert!(
+            !rebuilt.capabilities.enabled(Capability::Tables),
+            "table service turned off"
+        );
+        assert!(
+            rebuilt.capabilities.enabled(Capability::PayFirst),
+            "pay-first turned on"
+        );
+        // A flag the document does not name falls to its declared default (KDS defaults on).
+        assert!(
+            rebuilt.capabilities.enabled(Capability::Kds),
+            "an unnamed flag takes its default once the profile names any flag"
+        );
+    }
+
+    #[test]
+    fn a_document_naming_no_capability_flags_leaves_the_profile_unchanged() {
+        use pos_core::capability::{Capability, CapabilityContext};
+
+        // Seed a non-default profile (counter: pay-first + queue number + tips, no tables).
+        let base = EdgeSession::bootstrap().with_capabilities(CapabilityContext::counter());
+        assert!(base.capabilities.enabled(Capability::PayFirst));
+        assert!(!base.capabilities.enabled(Capability::Tables));
+
+        // A publish that carries no known flag key must not reset the profile to defaults.
+        let rebuilt = session_from_config(&base, &serde_json::json!({ "other": true }));
+        assert!(
+            rebuilt.capabilities.enabled(Capability::PayFirst),
+            "a publish naming no flags leaves the profile unchanged"
+        );
+        assert!(!rebuilt.capabilities.enabled(Capability::Tables));
     }
 }

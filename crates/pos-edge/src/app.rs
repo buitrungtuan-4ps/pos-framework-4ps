@@ -250,6 +250,15 @@ impl EdgeSession {
         self
     }
 
+    /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
+    /// arrives from the cloud config tree's flag keys ([ADR-0071](../../../docs/adr/0071-config-without-json.md));
+    /// this builder seeds one without a cloud.
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: CapabilityContext) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Installs a staff roster, for a test or the on-fakes example. The real store's roster arrives
     /// from the cloud's `permissions` config node (ADR-0070); this builder seeds one without a cloud.
     #[must_use]

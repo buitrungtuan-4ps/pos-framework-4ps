@@ -111,6 +111,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A form-driven capability editor on the Config screen** (roadmap v2, Track M8, slice 3;
+  [ADR-0071](docs/adr/0071-config-without-json.md)). The Config screen now offers the §10 capability
+  catalogue as labelled toggles seeded from the store's current effective profile, the three presets
+  (full-service / counter / retail) as one-click buttons, an **inline conflict preview** of the §10
+  inter-flag rules (a violation shows the instant a toggle creates it, not as a `422` on publish), and a
+  **diff of the flags that will change** before publishing. Publishing goes through a new
+  `PUT /admin/config/capabilities` that **merges only the named flag booleans into the store's Store
+  config layer** — the node-merge the catalog/people publishes use, so the store's other config
+  (`menu`, `layout`, `permissions`) survives — and versions it through the config tree, which re-runs
+  the §10 rules so an invalid combination is a `422`, never a stored state. The publish button is
+  disabled while a conflict stands; the write is behind `console.config.publish` and is audited
+  (`config.capabilities.publish`; flags are not PII). Raw-JSON publish stays for everything a form does
+  not yet cover. **Upgrade note:** additive route + console UI; no schema or `PROTOCOL_VERSION` change.
+- **The console can read the capability catalogue** (roadmap v2, Track M8, slice 2;
+  [ADR-0071](docs/adr/0071-config-without-json.md)). A new `GET /admin/capabilities` serves the §10
+  capability flags (key, default, one-line description), the three presets (full-service / counter /
+  retail, each as its set of enabled flag keys), and the inter-flag rules (id + description) — all from
+  `pos-core`'s own catalogue, behind `console.data.read`. This is what the Config screen's form editor
+  (slice 3) renders toggles and previews conflicts from, so the console never hard-codes a flag list or
+  a rule. **Upgrade note:** additive read-only route; no schema or `PROTOCOL_VERSION` change.
+- **The edge now applies published capability flags (a fixed silent no-op)** (roadmap v2, Track M8,
+  slice 1; [ADR-0071](docs/adr/0071-config-without-json.md)). Publishing a store's capability profile
+  (§10 — `tables_enabled`, `pay_first_enabled`, `kds_enabled`, …) from the console had no effect on the
+  running store: the edge's config-pull rebuild reconstructed only the `menu` and `permissions` nodes
+  and never read the flag keys, so turning off table service or switching a store to pay-first was a
+  no-op. Now `session_from_config` rebuilds the store's `CapabilityContext` from the pulled document's
+  flag keys — via a new shared `CapabilityContext::from_flags` reader in `pos-core` that the cloud
+  validator and the edge both use, so the two cannot disagree on what a profile means. A publish that
+  names at least one flag is authoritative (an unnamed flag takes its declared default); a publish that
+  names none leaves the store's profile unchanged (the same never-blank contract the menu/permissions
+  branches keep). **Upgrade note:** edge-only correctness fix; no schema, config-node, or
+  `PROTOCOL_VERSION` change — the flags were already in the effective document; the edge simply starts
+  reading them.
 - **The edge applies the published `permissions` node — staff sign in against the cloud's set**
   (roadmap v2, Track M1, slice 6; [ADR-0070](docs/adr/0070-people-and-access.md)). The edge's
   config-pull rebuild now reads the `permissions` node into a `StaffRoster` on the `EdgeSession` (each
