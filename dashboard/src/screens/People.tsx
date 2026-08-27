@@ -259,6 +259,22 @@ export function People() {
     }
   };
 
+  const publish = async () => {
+    if (!storeId()) {
+      setError(t("people.assignNeedsStore"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.publishPermissions(tenantId(), storeId());
+      toast.ok(t("people.published"));
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const removeAssignment = async () => {
     const assignment = pendingRemove();
     if (!assignment) {
@@ -493,12 +509,22 @@ export function People() {
             />
           </Card>
 
-          <Card title={t("people.assignments")}>
+          <Card
+            title={t("people.assignments")}
+            actions={
+              <Show when={canManage() && storeId()}>
+                <Button disabled={busy()} onClick={() => void publish()}>
+                  {t("people.publish")}
+                </Button>
+              </Show>
+            }
+          >
             <Show
               when={storeId()}
               fallback={<p class="text-sm text-ink-muted">{t("people.assignNeedsStore")}</p>}
             >
               <div class="flex flex-col gap-4">
+                <p class="text-sm text-ink-muted">{t("people.publishHint")}</p>
                 <Show when={canManage()}>
                   <div class="flex flex-wrap items-end gap-3">
                     <label class="block">

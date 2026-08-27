@@ -264,6 +264,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // People publish (ADR-0070 slice 5): compile a store's people + roles + assignments into the
+        // edge-shaped `permissions` document and write it onto the store's `permissions` config node,
+        // so it rides the config tree to the store like every other config change.
+        .merge(http::people_publish_router(
+            store.people(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
         // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
         // only `record`), behind the same super-admin session guard as the other reads.

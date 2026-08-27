@@ -111,6 +111,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Publish a store's people to its `permissions` config node** (roadmap v2, Track M1, slice 5;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). A pure compiler turns a store's active assignments
+  into the flat, edge-shaped `permissions` document — per staff member: `id`, `code`, `name`, the
+  granted permission set (the assignment's role flattened to its `pos-core` ids, deduped and sorted),
+  and the **Argon2id PIN hash** the edge verifies against offline ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md))
+  — archived employees dropped, staff sorted by code so the output is byte-stable. `POST
+  /admin/people/publish` writes it onto the store's `permissions` config node and versions it through
+  the config tree, so it rides to the store like every other config change ([ADR-0033](docs/adr/0033-config-tree.md))
+  — no new channel. Behind `console.config.publish`; the audit records the config version and staff
+  count, never a name or PIN. The People screen gains a **Publish to store** action. **Upgrade note:**
+  additive route + config node; no `PROTOCOL_VERSION` change (the node rides the existing config tree).
 - **A People console screen — manage employees, roles, PINs, and store assignments** (roadmap v2,
   Track M1, slice 4; [ADR-0070](docs/adr/0070-people-and-access.md)). A new tenant-scoped `/people`
   screen on the F2 CRUD kit: an employee roster (with create, archive/restore, and a set/reset-PIN

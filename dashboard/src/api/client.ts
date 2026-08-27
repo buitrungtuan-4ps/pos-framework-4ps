@@ -348,6 +348,14 @@ export const api = {
   // permission string — it presents these and stores a chosen subset.
   permissionCatalogue: () => requestJson<PermissionInfo[]>("GET", "/admin/people/permissions"),
 
+  // Compile a store's people + roles + assignments into its `permissions` config node and version it
+  // through the config tree, so the edge applies the published set. Needs console.people.manage.
+  publishPermissions: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/people/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
   createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),

@@ -91,8 +91,11 @@ assert on their behalf.
    need it, and surfaced in the UI by slice 4.
 4. **Console screen:** a People screen on the F2 kit — roster, role editor, per-store assignment, PIN
    reset — gated by `console.people.manage`.
-5. **Publish `permissions` config node:** compile a store's people+roles+assignments into the
-   edge-shaped document and publish it onto the config tree.
+5. **Publish `permissions` config node:** a pure compiler turns a store's active assignments into the
+   edge-shaped document (per staff: id, code, name, the flattened permission set, and the PIN hash),
+   and `POST /admin/people/publish` writes it onto the store's `permissions` config node, versioned
+   through the config tree like catalog/layout. Behind `console.config.publish`; the audit records the
+   config version and staff count, never a name or PIN.
 6. **Edge applies:** `EdgeSession` authorises staff from the published `permissions` node.
 
 **Consequences.** The console becomes the source of truth for store staff and their access, auditable

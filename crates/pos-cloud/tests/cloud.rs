@@ -7607,3 +7607,154 @@ async fn people_writes_require_manage_people_but_reads_need_only_read() {
         .expect("route create role");
     assert_eq!(ops_forbidden.status(), StatusCode::FORBIDDEN);
 }
+
+/// The main app merged with the people-publish router, sharing one config-tree fake so the test can
+/// read back the node the publish wrote.
+fn people_publish_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::people_publish_router(
+        people,
+        config,
+        admin,
+        clock(),
+        audit,
+    ))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end publish scenario: seed an employee+PIN+role+assignment through the seam, \
+              publish, then assert the compiled node landed on the config tree with the flattened \
+              permission and PIN hash and that the audit carries no name or PIN — kept together so the \
+              invariant is checked against the same state the publish produced"
+)]
+async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let mine = tenant();
+    let store = store_id();
+    let alice = EmployeeId::new(Ulid::from_u128(0xA11));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(0xCA5));
+
+    // Seed a store's people directly through the seam: an employee with a PIN, a role, an assignment.
+    EmployeeStore::create(
+        &people,
+        &NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "C01".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
+        .await
+        .expect("set pin");
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec!["billing.discount.apply".to_owned()],
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: store,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign");
+
+    let router = people_publish_app(
+        admin,
+        people.clone(),
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({
+                "tenant_id": mine.as_ulid().to_string(),
+                "store_id": store.as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    assert!(!version.is_empty());
+
+    // The compiled node landed on the store layer, flattening the role and carrying the PIN hash.
+    let state = config
+        .load(mine, store)
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.layers[2]["permissions"];
+    assert_eq!(
+        node["store_id"],
+        serde_json::json!(store.as_ulid().to_string())
+    );
+    let staff = node["staff"].as_array().expect("staff array");
+    assert_eq!(staff.len(), 1);
+    assert_eq!(staff[0]["code"], serde_json::json!("C01"));
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!(["billing.discount.apply"])
+    );
+    assert_eq!(
+        staff[0]["pin_phc"],
+        serde_json::json!("argon2id$phc$alice"),
+        "the PIN hash rides to the store for offline verification"
+    );
+
+    // The audit records the publish — the config version and staff count, never a name or PIN.
+    let recorded = audit.list(None, 10).await.expect("list audit");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.action == "permissions.publish")
+        .expect("the publish was recorded");
+    let dump = serde_json::to_string(&entry.after).expect("serialize");
+    assert!(dump.contains("staff_count"), "the staff count is recorded");
+    assert!(
+        !dump.contains("Alice"),
+        "no employee name in the audit trail"
+    );
+    assert!(
+        !dump.to_lowercase().contains("argon2"),
+        "no PIN hash in the audit trail"
+    );
+}

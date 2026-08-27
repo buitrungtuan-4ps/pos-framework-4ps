@@ -119,6 +119,7 @@ use crate::people::{
     NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate, RoleTemplateId,
     RoleTemplateStore, RoleTemplateUpdate, is_known_permission, permission_catalogue,
 };
+use crate::people_compiler::compile_permissions;
 use crate::reconcile::ReconcileStore;
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -5394,6 +5395,218 @@ where
                 Some(serde_json::json!({
                     "menu_id": menu_id.to_string(),
                     "config_version_id": id.to_string(),
+                })),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- People publish (`/admin/people/publish`, ADR-0070 slice 5) ---------------------------------
+
+/// The collaborators the people-publish route needs: the people store (the employee, role, and
+/// assignment seams plus the trusted PIN-hash read), the config-tree store the compiled node is written
+/// onto, and the admin/clock/audit every write carries. Separate from [`PeopleState`] because
+/// publishing also needs the config-tree seam, exactly as catalog publish ([`CatalogPublishState`]) is
+/// separate from catalog authoring.
+#[derive(Clone)]
+struct PeoplePublishState<P, Cfg, A, C> {
+    people: P,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the people-publish sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md) slice 5).
+///
+/// One route: compile a store's people + roles + assignments into the edge-shaped `permissions`
+/// document and write it onto the store's `permissions` config node, versioned through the config tree
+/// like every other publish. Behind [`ConsolePermission::PublishConfig`], the same gate as catalog and
+/// config publish.
+pub fn people_publish_router<P, Cfg, A, C>(
+    people: P,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/people/publish",
+            post(admin_publish_permissions::<P, Cfg, A, C>),
+        )
+        .with_state(PeoplePublishState {
+            people,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin selects the (tenant, store) whose `permissions` node to compile and publish.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishPermissionsRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Compiles a store's people into its `permissions` config node and versions it through the config
+/// tree — the same load→compile→write→version shape as [`admin_publish_menu`], onto the `permissions`
+/// key instead of `menu`/`layout`. The PIN hash rides in the node (the edge verifies against it,
+/// ADR-0030); the audit records only the config version and staff count, never a name or PIN.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish is a single linear transaction — load assignments/employees/roles + each \
+              assigned employee's PIN hash, compile the document, set the `permissions` node on the \
+              Store layer and version it; splitting the load-compile-write flow would scatter the \
+              config-tree state the final publish needs"
+)]
+async fn admin_publish_permissions<P, Cfg, A, C>(
+    State(state): State<PeoplePublishState<P, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPermissionsRequest>,
+) -> Response
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Load the domain the compiler needs. `list` is on two of P's traits, so the calls are
+    // fully-qualified to say which seam each one is.
+    let assignments =
+        match AssignmentStore::list_for_store(&state.people, tenant_id, store_id).await {
+            Ok(assignments) => assignments,
+            Err(error) => return people_error_response(&error),
+        };
+    let employees = match EmployeeStore::list(&state.people, tenant_id).await {
+        Ok(employees) => employees,
+        Err(error) => return people_error_response(&error),
+    };
+    let roles = match RoleTemplateStore::list(&state.people, tenant_id).await {
+        Ok(roles) => roles,
+        Err(error) => return people_error_response(&error),
+    };
+    // The stored PIN hash for each assigned employee, read only here (the trusted publish path) and
+    // never returned over the API. Deduplicated: a store assigns a person at most once, but reading
+    // by a set keeps it robust.
+    let mut pins = std::collections::BTreeMap::new();
+    for assignment in &assignments {
+        if pins.contains_key(&assignment.employee_id.to_string()) {
+            continue;
+        }
+        let hash =
+            match EmployeeStore::pin_phc(&state.people, tenant_id, assignment.employee_id).await {
+                Ok(hash) => hash,
+                Err(error) => return people_error_response(&error),
+            };
+        pins.insert(assignment.employee_id.to_string(), hash);
+    }
+
+    let document = compile_permissions(store_id, &employees, &roles, &assignments, &pins);
+    let staff_count = document.staff.len();
+    let Ok(document_value) = serde_json::to_value(&document) else {
+        tracing::error!("could not serialise a compiled permissions document");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the people service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `permissions` key on the store's Store layer (index 2 in Tenant→Brand→Store→Device) and
+    // re-publish that layer, preserving any other Store-level keys (`menu`, `layout`, …).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("permissions".to_owned(), document_value);
+    } else {
+        store_layer = serde_json::json!({ "permissions": document_value });
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            // The trail records the config version and how many staff the node carries — never a name
+            // or a PIN (ADR-0070).
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "permissions.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "config_version_id": id.to_string(),
+                    "staff_count": staff_count,
                 })),
             )
             .await;
