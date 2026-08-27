@@ -11,7 +11,7 @@
 
 use serde_json::Value;
 
-use pos_core::capability::{Capability, CapabilityContext, conflicts};
+use pos_core::capability::{CapabilityContext, conflicts};
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_proto::display::LayoutBook;
 use pos_proto::menu::MenuBook;
@@ -142,19 +142,11 @@ fn parses_as<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
 }
 
 /// Reads the capability flags out of an effective document, defaulting each to its declared default
-/// when the document does not set it — so validation sees the same context a store would.
+/// when the document does not set it — so validation sees the same context a store would. Uses the
+/// shared [`CapabilityContext::from_flags`] reader (§10) so the cloud and the edge read a published
+/// profile the same way; the closure is this crate's JSON lookup.
 fn capability_context(document: &Value) -> CapabilityContext {
-    Capability::ALL
-        .iter()
-        .copied()
-        .filter(|capability| {
-            let meta = capability.meta();
-            document
-                .get(meta.key)
-                .and_then(Value::as_bool)
-                .unwrap_or(meta.default_on)
-        })
-        .collect()
+    CapabilityContext::from_flags(|key| document.get(key).and_then(Value::as_bool))
 }
 
 #[cfg(test)]

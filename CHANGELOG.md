@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The edge now applies published capability flags (a fixed silent no-op)** (roadmap v2, Track M8,
+  slice 1; [ADR-0071](docs/adr/0071-config-without-json.md)). Publishing a store's capability profile
+  (§10 — `tables_enabled`, `pay_first_enabled`, `kds_enabled`, …) from the console had no effect on the
+  running store: the edge's config-pull rebuild reconstructed only the `menu` and `permissions` nodes
+  and never read the flag keys, so turning off table service or switching a store to pay-first was a
+  no-op. Now `session_from_config` rebuilds the store's `CapabilityContext` from the pulled document's
+  flag keys — via a new shared `CapabilityContext::from_flags` reader in `pos-core` that the cloud
+  validator and the edge both use, so the two cannot disagree on what a profile means. A publish that
+  names at least one flag is authoritative (an unnamed flag takes its declared default); a publish that
+  names none leaves the store's profile unchanged (the same never-blank contract the menu/permissions
+  branches keep). **Upgrade note:** edge-only correctness fix; no schema, config-node, or
+  `PROTOCOL_VERSION` change — the flags were already in the effective document; the edge simply starts
+  reading them.
 - **The edge applies the published `permissions` node — staff sign in against the cloud's set**
   (roadmap v2, Track M1, slice 6; [ADR-0070](docs/adr/0070-people-and-access.md)). The edge's
   config-pull rebuild now reads the `permissions` node into a `StaffRoster` on the `EdgeSession` (each

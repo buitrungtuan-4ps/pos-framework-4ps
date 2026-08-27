@@ -244,6 +244,26 @@ impl CapabilityContext {
     pub fn retail() -> Self {
         Self::NONE.with(Capability::Barcode)
     }
+
+    /// Rebuilds a context from a source of flag values: `is_on(key)` answers whether the capability
+    /// with that `key` is set (`Some(true)`/`Some(false)`), or `None` when the source does not mention
+    /// it — in which case the flag falls back to its declared [`default_on`](CapabilityMeta::default_on).
+    ///
+    /// This is the **one** place the flag keys of a config document become a capability set, kept in
+    /// `pos-core` (serde-free — the caller supplies the lookup) so the cloud validator and the edge
+    /// runtime cannot disagree on how a published profile is read (§10). The cloud passes a closure over
+    /// its JSON `Value`; the edge passes the same over the document it pulled.
+    #[must_use]
+    pub fn from_flags(is_on: impl Fn(&str) -> Option<bool>) -> Self {
+        Capability::ALL
+            .iter()
+            .copied()
+            .filter(|capability| {
+                let meta = capability.meta();
+                is_on(meta.key).unwrap_or(meta.default_on)
+            })
+            .collect()
+    }
 }
 
 impl FromIterator<Capability> for CapabilityContext {
