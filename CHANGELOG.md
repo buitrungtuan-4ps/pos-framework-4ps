@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Floor & kitchen master-data types** (roadmap v2, Track M2, slice 1;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Foundations for a store's floor plan and kitchen
+  routing: a new `AreaId` (a named region of the floor), and two shared `pos-proto` config shapes the
+  cloud authors and the edge reads through one type — `FloorPlan` (areas, each with its tables: a
+  label, seat count, and optional grid position) and `StationPlan` (kitchen stations, each with an
+  optional backup station, plus item→station routing rules and a default station). `pos-core::floor`
+  adds the pure referential validation (`floor_violations`/`station_violations` — table ids unique
+  across the floor, a routing rule names a known station and matches exactly one of an item or a
+  course, a backup names a known different station) the cloud will run before publishing, and
+  `route_station`, the resolver that turns a fired line into its station (item rule → course rule →
+  default). Types and logic only in this slice; the schema, publish, edge read, and console land in
+  the following M2 slices. **Upgrade note:** additive proto types; no schema or `PROTOCOL_VERSION`
+  change.
 - **A form-driven capability editor on the Config screen** (roadmap v2, Track M8, slice 3;
   [ADR-0071](docs/adr/0071-config-without-json.md)). The Config screen now offers the §10 capability
   catalogue as labelled toggles seeded from the store's current effective profile, the three presets

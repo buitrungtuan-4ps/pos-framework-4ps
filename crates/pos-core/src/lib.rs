@@ -39,6 +39,7 @@ pub mod campaign;
 pub mod capability;
 pub mod decision;
 pub mod error;
+pub mod floor;
 pub mod inventory;
 pub mod lease;
 pub mod machines;
@@ -56,6 +57,7 @@ pub use decision::{
     decide_table,
 };
 pub use error::DomainError;
+pub use floor::{floor_violations, route_station, station_violations};
 pub use inventory::{Availability, Recipe, RecipeBook, StockProjection};
 pub use permission::{Grant, Permission, PermissionSet, Role, require};
 pub use state_machine::{StateMachine, TransitionError};
