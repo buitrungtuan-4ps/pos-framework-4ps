@@ -35,7 +35,7 @@ mod translations;
 mod webhooks;
 
 pub use activation::{ActivationCodeRow, PostgresActivationCodes};
-pub use admin::{AdminCredentialRow, AdminUserRow, PostgresAdmin};
+pub use admin::{AdminCredentialRow, AdminInviteRow, AdminUserRow, PostgresAdmin};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use catalog::{
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,

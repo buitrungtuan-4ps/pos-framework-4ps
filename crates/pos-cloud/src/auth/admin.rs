@@ -192,6 +192,46 @@ impl fmt::Debug for NewAdminUser {
     }
 }
 
+/// A pending or accepted invitation, as listed ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// Carries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminInvite {
+    /// The invite's ULID id.
+    pub id: String,
+    /// The address the invitee will sign in with once they accept.
+    pub email: String,
+    /// The display name the accepted admin will carry.
+    pub name: String,
+    /// The role the accepted admin will be granted.
+    pub role: AdminRole,
+    /// The id of the admin who issued the invite.
+    pub invited_by: String,
+    /// Whether the invite has been accepted (its self-enrolment completed).
+    pub accepted: bool,
+}
+
+/// The input to minting an invitation: identity, role, the inviter, the single-use token's hash, and
+/// the expiry ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Only
+/// `SHA-256(token)` is stored; the raw token reaches the invitee once (the copy-invite-link the
+/// inviter hands over out-of-band) and is never persisted — the same posture as the session token.
+#[derive(Debug, Clone)]
+pub struct NewAdminInvite {
+    /// The invite's ULID id.
+    pub id: String,
+    /// The invitee's email (normalised — trimmed, lower-case; unique case-insensitively enforced).
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The role to grant on acceptance.
+    pub role: AdminRole,
+    /// `SHA-256` of the single-use invite token.
+    pub token_hash: [u8; 32],
+    /// The id of the admin issuing the invite.
+    pub invited_by: String,
+    /// When the invite stops being acceptable (Unix milliseconds).
+    pub expires_at: Timestamp,
+}
+
 /// A live admin session, as the role-aware guard reads it: the id of the admin it belongs to, or
 /// `None` for a legacy session minted before multi-admin
 /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
@@ -386,6 +426,62 @@ pub trait AdminStore {
     ///
     /// [`AdminStoreError`] if the store could not be read.
     fn count_active_owners(&self) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
+
+    // ---- Invitations ([ADR-0067]) ----
+
+    /// Records a pending invitation, keyed for acceptance by its token hash.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn create_invite(
+        &self,
+        invite: NewAdminInvite,
+    ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    /// The still-acceptable invitation whose token hashes to `token_hash` as of `now` — pending
+    /// (not yet accepted) and not expired — or `None`. The self-enrolment lookup.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn find_pending_invite_by_token(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Option<AdminInvite>, AdminStoreError>> + Send;
+
+    /// Marks the invite `id` accepted at `accepted_at`, atomically and single-use: returns `Ok(true)`
+    /// only if this call is the one that claimed a still-pending invite, `Ok(false)` if it was
+    /// already accepted (or absent), so a replayed acceptance cannot enrol twice.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn mark_invite_accepted(
+        &self,
+        id: &str,
+        accepted_at: Timestamp,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// Lists the invitations still pending (not accepted and not expired as of `now`), for the
+    /// console's pending-invites view.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn list_pending_invites(
+        &self,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<AdminInvite>, AdminStoreError>> + Send;
+
+    /// Revokes (deletes) a pending invitation by id. Returns `Ok(false)` if none matched. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn revoke_invite(&self, id: &str)
+    -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
 }
 
 /// A failure of the admin store itself — the database is unreachable — as distinct from a wrong
@@ -749,12 +845,13 @@ mod tests {
     use axum::response::IntoResponse as _;
 
     use pos_fakes::FakeClock;
+    use pos_proto::determinism::ClockSource as _;
     use pos_proto::time::Timestamp;
 
     use super::{
-        AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-        IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminUser, SessionDenied,
-        authenticate_session, authenticated_admin, hash_token, login, logout,
+        AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError,
+        AdminUser, IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminInvite, NewAdminUser,
+        SessionDenied, authenticate_session, authenticated_admin, hash_token, login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -807,14 +904,28 @@ mod tests {
     /// session), keyed in the table by `SHA-256(token)`.
     type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
 
+    /// A stored invitation row in the fake, keyed for acceptance by its token hash.
+    #[derive(Clone)]
+    struct StoredInvite {
+        id: String,
+        email: String,
+        name: String,
+        role: AdminRole,
+        invited_by: String,
+        token_hash: [u8; 32],
+        expires_at: Timestamp,
+        accepted: bool,
+    }
+
     /// An in-memory admin store: at most one legacy credential, the multi-admin `admin_users`
-    /// table, a session table, and a down switch.
+    /// table, an invitations table, a session table, and a down switch.
     #[derive(Default)]
     struct FakeAdmin {
         credential: Mutex<Option<SuperAdminCredential>>,
         last_used_totp_step: Mutex<Option<u64>>,
         sessions: Mutex<SessionRows>,
         admin_users: Mutex<Vec<AdminUser>>,
+        invites: Mutex<Vec<StoredInvite>>,
         down: bool,
     }
 
@@ -1050,6 +1161,102 @@ mod tests {
                 .filter(|user| user.role == AdminRole::Owner && user.status == AdminStatus::Active)
                 .count();
             Ok(u64::try_from(count).unwrap_or(u64::MAX))
+        }
+
+        async fn create_invite(&self, invite: NewAdminInvite) -> Result<(), AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            self.invites.lock().expect("lock").push(StoredInvite {
+                id: invite.id,
+                email: invite.email,
+                name: invite.name,
+                role: invite.role,
+                invited_by: invite.invited_by,
+                token_hash: invite.token_hash,
+                expires_at: invite.expires_at,
+                accepted: false,
+            });
+            Ok(())
+        }
+
+        async fn find_pending_invite_by_token(
+            &self,
+            token_hash: [u8; 32],
+            now: Timestamp,
+        ) -> Result<Option<AdminInvite>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self
+                .invites
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|invite| {
+                    invite.token_hash == token_hash && !invite.accepted && invite.expires_at > now
+                })
+                .map(stored_invite_to_domain))
+        }
+
+        async fn mark_invite_accepted(
+            &self,
+            id: &str,
+            _accepted_at: Timestamp,
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut invites = self.invites.lock().expect("lock");
+            match invites
+                .iter_mut()
+                .find(|invite| invite.id == id && !invite.accepted)
+            {
+                Some(invite) => {
+                    invite.accepted = true;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn list_pending_invites(
+            &self,
+            now: Timestamp,
+        ) -> Result<Vec<AdminInvite>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self
+                .invites
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|invite| !invite.accepted && invite.expires_at > now)
+                .map(stored_invite_to_domain)
+                .collect())
+        }
+
+        async fn revoke_invite(&self, id: &str) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut invites = self.invites.lock().expect("lock");
+            let before = invites.len();
+            invites.retain(|invite| invite.id != id || invite.accepted);
+            Ok(invites.len() != before)
+        }
+    }
+
+    /// Projects a stored fake invite into the domain [`AdminInvite`] (no token crosses the boundary).
+    fn stored_invite_to_domain(invite: &StoredInvite) -> AdminInvite {
+        AdminInvite {
+            id: invite.id.clone(),
+            email: invite.email.clone(),
+            name: invite.name.clone(),
+            role: invite.role,
+            invited_by: invite.invited_by.clone(),
+            accepted: invite.accepted,
         }
     }
 
@@ -1635,5 +1842,171 @@ mod tests {
             .expect("the issued session authorises");
         assert_eq!(context.admin.id, "id-owner");
         assert_eq!(context.admin.role, AdminRole::Owner);
+    }
+
+    // ---- Invitations ([ADR-0067]) ----
+
+    fn new_invite(
+        id: &str,
+        email: &str,
+        role: AdminRole,
+        token: &str,
+        expires_at: Timestamp,
+    ) -> NewAdminInvite {
+        NewAdminInvite {
+            id: id.to_owned(),
+            email: email.to_owned(),
+            name: "N".to_owned(),
+            role,
+            token_hash: hash_token(token),
+            invited_by: "id-owner".to_owned(),
+            expires_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pending_invite_is_found_by_its_token_and_accepted_once() {
+        let store = FakeAdmin::default();
+        store
+            .create_invite(new_invite(
+                "inv-1",
+                "new@example.test",
+                AdminRole::Ops,
+                "tok-a",
+                live_expiry(),
+            ))
+            .await
+            .expect("create invite");
+
+        let found = store
+            .find_pending_invite_by_token(hash_token("tok-a"), clock().now())
+            .await
+            .expect("find")
+            .expect("present");
+        assert_eq!(found.id, "inv-1");
+        assert_eq!(found.email, "new@example.test");
+        assert_eq!(found.role, AdminRole::Ops);
+        assert!(!found.accepted);
+
+        // Claiming the invite is single-use: the first call wins, the second refuses, and it is no
+        // longer pending.
+        assert!(
+            store
+                .mark_invite_accepted("inv-1", clock().now())
+                .await
+                .expect("accept")
+        );
+        assert!(
+            !store
+                .mark_invite_accepted("inv-1", clock().now())
+                .await
+                .expect("second accept"),
+            "an invite cannot be accepted twice"
+        );
+        assert!(
+            store
+                .find_pending_invite_by_token(hash_token("tok-a"), clock().now())
+                .await
+                .expect("find")
+                .is_none(),
+            "an accepted invite is no longer pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_invite_is_neither_found_nor_listed() {
+        let store = FakeAdmin::default();
+        let past = Timestamp::from_milliseconds_since_epoch(NOW_MS - 1000).expect("valid");
+        store
+            .create_invite(new_invite(
+                "inv-1",
+                "x@example.test",
+                AdminRole::Viewer,
+                "tok",
+                past,
+            ))
+            .await
+            .expect("create invite");
+        assert!(
+            store
+                .find_pending_invite_by_token(hash_token("tok"), clock().now())
+                .await
+                .expect("find")
+                .is_none()
+        );
+        assert!(
+            store
+                .list_pending_invites(clock().now())
+                .await
+                .expect("list")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wrong_token_finds_no_invite() {
+        let store = FakeAdmin::default();
+        store
+            .create_invite(new_invite(
+                "inv-1",
+                "a@example.test",
+                AdminRole::Ops,
+                "right",
+                live_expiry(),
+            ))
+            .await
+            .expect("create invite");
+        assert!(
+            store
+                .find_pending_invite_by_token(hash_token("wrong"), clock().now())
+                .await
+                .expect("find")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_invites_list_and_revoke() {
+        let store = FakeAdmin::default();
+        store
+            .create_invite(new_invite(
+                "inv-1",
+                "a@example.test",
+                AdminRole::Admin,
+                "t1",
+                live_expiry(),
+            ))
+            .await
+            .expect("create invite");
+        store
+            .create_invite(new_invite(
+                "inv-2",
+                "b@example.test",
+                AdminRole::Ops,
+                "t2",
+                live_expiry(),
+            ))
+            .await
+            .expect("create invite");
+        assert_eq!(
+            store
+                .list_pending_invites(clock().now())
+                .await
+                .expect("list")
+                .len(),
+            2
+        );
+
+        assert!(store.revoke_invite("inv-1").await.expect("revoke"));
+        let pending = store
+            .list_pending_invites(clock().now())
+            .await
+            .expect("list");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "inv-2");
+        assert!(
+            !store.revoke_invite("inv-nope").await.expect("revoke"),
+            "revoking an absent invite is a no-op"
+        );
     }
 }

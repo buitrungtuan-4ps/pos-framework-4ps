@@ -23,8 +23,8 @@ use pos_cloud::activation::{
 };
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
-    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, LiveSession,
-    NewAdminUser, hash_session_token,
+    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
+    LiveSession, NewAdminInvite, NewAdminUser, hash_session_token,
 };
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
@@ -227,12 +227,26 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
 /// session), keyed in the table by `SHA-256(token)`.
 type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
 
+/// A stored invitation row in the integration fake, keyed for acceptance by its token hash.
+#[derive(Clone)]
+struct StoredInvite {
+    id: String,
+    email: String,
+    name: String,
+    role: AdminRole,
+    invited_by: String,
+    token_hash: [u8; 32],
+    expires_at: Timestamp,
+    accepted: bool,
+}
+
 #[derive(Clone, Default)]
 struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
     last_used_totp_step: Arc<Mutex<Option<u64>>>,
     sessions: Arc<Mutex<SessionRows>>,
     admin_users: Arc<Mutex<Vec<AdminUser>>>,
+    invites: Arc<Mutex<Vec<StoredInvite>>>,
 }
 
 impl FakeAdmin {
@@ -412,6 +426,87 @@ impl AdminStore for FakeAdmin {
             .filter(|user| user.role == AdminRole::Owner && user.status == AdminStatus::Active)
             .count();
         Ok(u64::try_from(count).unwrap_or(u64::MAX))
+    }
+
+    async fn create_invite(&self, invite: NewAdminInvite) -> Result<(), AdminStoreError> {
+        self.invites.lock().expect("lock").push(StoredInvite {
+            id: invite.id,
+            email: invite.email,
+            name: invite.name,
+            role: invite.role,
+            invited_by: invite.invited_by,
+            token_hash: invite.token_hash,
+            expires_at: invite.expires_at,
+            accepted: false,
+        });
+        Ok(())
+    }
+
+    async fn find_pending_invite_by_token(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<AdminInvite>, AdminStoreError> {
+        Ok(self
+            .invites
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|invite| {
+                invite.token_hash == token_hash && !invite.accepted && invite.expires_at > now
+            })
+            .map(fake_invite_to_domain))
+    }
+
+    async fn mark_invite_accepted(
+        &self,
+        id: &str,
+        _accepted_at: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        let mut invites = self.invites.lock().expect("lock");
+        match invites
+            .iter_mut()
+            .find(|invite| invite.id == id && !invite.accepted)
+        {
+            Some(invite) => {
+                invite.accepted = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn list_pending_invites(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<AdminInvite>, AdminStoreError> {
+        Ok(self
+            .invites
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|invite| !invite.accepted && invite.expires_at > now)
+            .map(fake_invite_to_domain)
+            .collect())
+    }
+
+    async fn revoke_invite(&self, id: &str) -> Result<bool, AdminStoreError> {
+        let mut invites = self.invites.lock().expect("lock");
+        let before = invites.len();
+        invites.retain(|invite| invite.id != id || invite.accepted);
+        Ok(invites.len() != before)
+    }
+}
+
+/// Projects a stored fake invite into the domain [`AdminInvite`] (no token crosses the boundary).
+fn fake_invite_to_domain(invite: &StoredInvite) -> AdminInvite {
+    AdminInvite {
+        id: invite.id.clone(),
+        email: invite.email.clone(),
+        name: invite.name.clone(),
+        role: invite.role,
+        invited_by: invite.invited_by.clone(),
+        accepted: invite.accepted,
     }
 }
 

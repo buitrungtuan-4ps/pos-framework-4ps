@@ -346,6 +346,131 @@ impl PostgresAdmin {
             .map_err(unavailable)?;
         Ok(row.get(0))
     }
+
+    // ---- Invitations ([ADR-0067]) ----
+
+    /// Inserts a pending invitation. Only `SHA-256(token)` is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn insert_invite(
+        &self,
+        id: &str,
+        email: &str,
+        name: &str,
+        role: &str,
+        token_hash: &[u8],
+        invited_by: &str,
+        expires_at_ms: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO admin_invites \
+                 (id, email, name, role, token_hash, invited_by, expires_at, accepted_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
+                &[
+                    &id,
+                    &email,
+                    &name,
+                    &role,
+                    &token_hash,
+                    &invited_by,
+                    &expires_at_ms,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// The still-acceptable invitation for `token_hash` as of `now_ms` — not accepted, not expired —
+    /// or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_pending_invite_by_token(
+        &self,
+        token_hash: &[u8],
+        now_ms: i64,
+    ) -> Result<Option<AdminInviteRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT id, email, name, role, invited_by, (accepted_at IS NOT NULL) \
+                 FROM admin_invites \
+                 WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2",
+                &[&token_hash, &now_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(row_to_admin_invite))
+    }
+
+    /// Marks the invite `id` accepted at `accepted_at_ms`, single-use: the `WHERE accepted_at IS NULL`
+    /// guard makes it claim the invite exactly once, so a concurrent or replayed acceptance that does
+    /// not match writes nothing. Returns whether this call claimed it.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn mark_invite_accepted(
+        &self,
+        id: &str,
+        accepted_at_ms: i64,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "UPDATE admin_invites SET accepted_at = $2 WHERE id = $1 AND accepted_at IS NULL",
+                &[&id, &accepted_at_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
+    /// Lists invitations still pending as of `now_ms` — not accepted, not expired — oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_pending_invites(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<AdminInviteRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT id, email, name, role, invited_by, (accepted_at IS NOT NULL) \
+                 FROM admin_invites \
+                 WHERE accepted_at IS NULL AND expires_at > $1 ORDER BY created_at, id",
+                &[&now_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(row_to_admin_invite).collect())
+    }
+
+    /// Deletes a pending invitation by id (an accepted one is left as the record of enrolment).
+    /// Returns whether a row was removed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn delete_pending_invite(&self, id: &str) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "DELETE FROM admin_invites WHERE id = $1 AND accepted_at IS NULL",
+                &[&id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
 }
 
 /// A console admin as listed — identity and role, no credential (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
@@ -374,5 +499,37 @@ fn row_to_admin_user(row: &tokio_postgres::Row) -> AdminUserRow {
         name: row.get(2),
         role: row.get(3),
         status: row.get(4),
+    }
+}
+
+/// An invitation as listed — no token (only its hash is stored) (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+///
+/// `pos-cloud` converts this into its `AdminInvite`: `role` is the stored token, `accepted` reflects
+/// whether `accepted_at` is set.
+#[derive(Clone, Debug)]
+pub struct AdminInviteRow {
+    /// The invite's ULID id.
+    pub id: String,
+    /// The invitee's email.
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The stored role token.
+    pub role: String,
+    /// The id of the inviting admin.
+    pub invited_by: String,
+    /// Whether the invite has been accepted.
+    pub accepted: bool,
+}
+
+/// Reads an `admin_invites` row selected as `(id, email, name, role, invited_by, accepted)`.
+fn row_to_admin_invite(row: &tokio_postgres::Row) -> AdminInviteRow {
+    AdminInviteRow {
+        id: row.get(0),
+        email: row.get(1),
+        name: row.get(2),
+        role: row.get(3),
+        invited_by: row.get(4),
+        accepted: row.get(5),
     }
 }

@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminUserRow, BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
+    AdminInviteRow, AdminUserRow, BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
     CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
     CatalogTaxonomyRow, DeviceRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
     PostgresAdmin, PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
@@ -48,8 +48,8 @@ use pos_core::activation::CodeStatus;
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
-    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, LiveSession,
-    NewAdminUser,
+    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
+    LiveSession, NewAdminInvite, NewAdminUser,
 };
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
@@ -477,6 +477,58 @@ impl AdminStore for PostgresAdmin {
             .map_err(|error| AdminStoreError::new(error.to_string()))?;
         Ok(u64::try_from(count).unwrap_or(0))
     }
+
+    async fn create_invite(&self, invite: NewAdminInvite) -> Result<(), AdminStoreError> {
+        self.insert_invite(
+            &invite.id,
+            &invite.email,
+            &invite.name,
+            invite.role.as_token(),
+            &invite.token_hash,
+            &invite.invited_by,
+            invite.expires_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn find_pending_invite_by_token(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<AdminInvite>, AdminStoreError> {
+        let row = self
+            .fetch_pending_invite_by_token(&token_hash, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_invite_from_row).transpose()
+    }
+
+    async fn mark_invite_accepted(
+        &self,
+        id: &str,
+        accepted_at: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::mark_invite_accepted(self, id, accepted_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn list_pending_invites(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<AdminInvite>, AdminStoreError> {
+        let rows = PostgresAdmin::list_pending_invites(self, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        rows.into_iter().map(admin_invite_from_row).collect()
+    }
+
+    async fn revoke_invite(&self, id: &str) -> Result<bool, AdminStoreError> {
+        self.delete_pending_invite(id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
 }
 
 /// Converts a stored `admin_users` row into the domain [`AdminUser`], failing loudly if the role or
@@ -494,6 +546,21 @@ fn admin_user_from_row(row: AdminUserRow) -> Result<AdminUser, AdminStoreError> 
         name: row.name,
         role,
         status,
+    })
+}
+
+/// Converts a stored `admin_invites` row into the domain [`AdminInvite`], failing loudly on an
+/// unrecognised role token (the table's CHECK keeps it within the vocabulary).
+fn admin_invite_from_row(row: AdminInviteRow) -> Result<AdminInvite, AdminStoreError> {
+    let role = AdminRole::from_token(&row.role)
+        .ok_or_else(|| AdminStoreError::new(format!("unknown admin role token: {}", row.role)))?;
+    Ok(AdminInvite {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        role,
+        invited_by: row.invited_by,
+        accepted: row.accepted,
     })
 }
 

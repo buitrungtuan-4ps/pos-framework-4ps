@@ -73,11 +73,17 @@ macro_rules! console_permissions {
 }
 
 console_permissions! {
-    /// Invite, list, suspend, and set the role of other console admins.
+    /// Invite a new console admin, and view/revoke pending invitations and the admin roster.
+    InviteAdmins {
+        id: "console.admins.invite",
+        roles: [Owner, Admin],
+        description: "Invite console admins and view the roster and pending invitations",
+    },
+    /// Change an existing admin's role, and suspend or reactivate them.
     ManageAdmins {
         id: "console.admins.manage",
         roles: [Owner],
-        description: "Manage console admins: invite, list, suspend, and change roles",
+        description: "Change an admin's role, and suspend or reactivate an admin",
     },
     /// Create and edit tenants and brands (the top of the org tree).
     ManageOrgs {
@@ -191,13 +197,15 @@ mod tests {
                 permission.meta().id
             );
         }
-        // Denied: API keys, org/brand and store creation, catalog authoring, translations, admins.
+        // Denied: API keys, org/brand and store creation, catalog authoring, translations, and both
+        // admin-management capabilities (inviting and managing).
         for permission in [
             ConsolePermission::ManageApiKeys,
             ConsolePermission::ManageOrgs,
             ConsolePermission::ManageStores,
             ConsolePermission::ManageCatalog,
             ConsolePermission::ManageTranslations,
+            ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
         ] {
             assert!(
