@@ -1,7 +1,7 @@
 # ADR-0068 — Fleet liveness: last-seen + config-version-held from the store pull
 
 **Status** Accepted · **Owner** @maintainers-observability · **Last reviewed** 2026-08-27
-**Relates to** [ADR-0033](0033-config-tree.md) (config tree + edge pull) · [ADR-0058](0058-outbound-pull-relay.md) (relay backlog) · [ADR-0065](0065-cloud-org-registry.md) (the `stores` registry) · `docs/cloud-admin-ux-plan.md` (Track O1)
+**Relates to** [ADR-0033](0033-config-tree.md) (config tree + edge pull) · [ADR-0061](0061-order-relay.md) (relay backlog) · [ADR-0065](0065-cloud-org-registry.md) (the `stores` registry) · `docs/cloud-admin-ux-plan.md` (Track O1)
 
 **Context.** The cloud has never recorded whether a store is actually *there*. An edge pulls its
 configuration on a loop ([ADR-0033](0033-config-tree.md), WS-B) — `GET /sync/stores/{id}/config`,
