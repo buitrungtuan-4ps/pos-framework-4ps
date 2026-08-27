@@ -8112,6 +8112,81 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
 }
 
 #[tokio::test]
+async fn table_qr_mints_a_signed_token_per_active_table() {
+    let admin = provisioned_admin();
+    let floor = FakeFloor::default();
+    let mine = tenant();
+    let store = store_id();
+    let area = AreaId::new(Ulid::from_u128(1));
+    let active = TableId::new(Ulid::from_u128(0xA1));
+    let archived = TableId::new(Ulid::from_u128(0xA2));
+    for (table_id, label) in [(active, "T1"), (archived, "T2")] {
+        TableStore::create(
+            &floor,
+            &NewTable {
+                table_id,
+                tenant_id: mine,
+                store_id: store,
+                area_id: area,
+                label: label.to_owned(),
+                seats: 4,
+                position: None,
+            },
+        )
+        .await
+        .expect("seed table");
+    }
+    // Archive T2 — an archived table is not printed on the QR sheet.
+    TableStore::update(
+        &floor,
+        &TableUpdate {
+            table_id: archived,
+            tenant_id: mine,
+            area_id: area,
+            label: "T2".to_owned(),
+            seats: 4,
+            position: None,
+            status: EntityStatus::Archived,
+        },
+    )
+    .await
+    .expect("archive T2");
+
+    let secret = TableTokenSecret::new("a-test-secret");
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::table_qr_router(floor, admin, clock(), secret.clone()));
+    let cookie = admin_cookie(&router).await;
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/floor/qr?tenant_id={}&store_id={}",
+                mine.as_ulid(),
+                store.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route table qr");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let tokens = body["tokens"].as_array().expect("tokens array");
+    assert_eq!(tokens.len(), 1, "only the active table is printed");
+    let token = tokens[0]["token"].as_str().expect("a token");
+    // The minted token verifies and names the active table — the same value the guest QR carries.
+    let table_ref = pos_cloud::qr::verify_table_token(&secret, token).expect("verifies");
+    assert_eq!(table_ref.table_id, active);
+    assert_eq!(table_ref.store_id, store);
+}
+
+#[tokio::test]
 #[expect(
     clippy::too_many_lines,
     reason = "one end-to-end lifecycle over the people routes — create/read/set-PIN/update an \

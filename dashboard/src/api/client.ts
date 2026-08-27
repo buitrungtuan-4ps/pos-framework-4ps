@@ -22,6 +22,7 @@ import type {
   FloorTable,
   RoutingRule,
   Station,
+  TableQrSheet,
   ChannelPrice,
   ConfigLevel,
   ConfigVersion,
@@ -513,6 +514,13 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+  // Mint the signed QR token for each of a store's active tables, for a printable sheet (ADR-0072).
+  // Only available when the cloud has a table-token secret configured (else the route is absent).
+  tableQrTokens: (tenantId: string, storeId: string) =>
+    requestJson<TableQrSheet>(
+      "GET",
+      `/admin/floor/qr?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),

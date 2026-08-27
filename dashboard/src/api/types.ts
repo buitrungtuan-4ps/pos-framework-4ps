@@ -492,6 +492,21 @@ export interface RoutingRule {
   readonly sort: number;
 }
 
+/** One table's printable QR from `GET /admin/floor/qr` (ADR-0072/ADR-0057): the label and the signed
+ *  token the guest's QR carries. The token binds tenant/store/table — no PII — and is the public value
+ *  printed on the code. */
+export interface TableQrToken {
+  readonly table_id: string;
+  readonly label: string;
+  readonly token: string;
+}
+
+/** A store's table QR tokens, for the console's printable sheet. */
+export interface TableQrSheet {
+  readonly store_id: string;
+  readonly tokens: readonly TableQrToken[];
+}
+
 // --- Capabilities (ADR-0071, Track M8): the §10 flag catalogue the Config screen's form editor reads ---
 
 /**

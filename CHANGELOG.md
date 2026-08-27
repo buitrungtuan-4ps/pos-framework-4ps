@@ -111,6 +111,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Table QR-token minting** (roadmap v2, Track M2, slice 6;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md), [ADR-0057](docs/adr/0057-qr-ordering.md)). Wires the
+  previously-orphaned `mint_table_token`: `GET /admin/floor/qr` mints the signed QR token for each of a
+  store's active tables so the console can print a QR sheet. The token binds `(tenant, store, table)`
+  — no PII — and is the same value `verify_table_token` already checks on a guest order, so QR ordering
+  now closes end-to-end. Behind `console.data.read` and wired only when a table-token secret is
+  configured (the same gate as the guest `POST /v1/qr/orders`). The typed client gains `tableQrTokens`.
+  The printable QR sheet UI lands with the Floor screen (slice 7). **Upgrade note:** additive read
+  route; no schema or protocol change.
 - **The edge applies the `floor` & `stations` nodes** (roadmap v2, Track M2, slice 5;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `EdgeSession` gains `floor`/`stations` fields (with
   `with_floor`/`with_stations` builders), and `session_from_config` rebuilds them from the pulled

@@ -377,17 +377,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // `POST /v1/orders` uses, guardrailed by the store's `qr` config.
     let service = if let Some(secret) = config.table_token_secret.clone() {
         tracing::info!("QR ordering enabled (POST /v1/qr/orders)");
-        service.merge(qr_http::qr_router(
-            TableTokenSecret::new(secret),
-            OrderRelay::new(
-                store.store_directory(),
+        service
+            .merge(qr_http::qr_router(
+                TableTokenSecret::new(secret.clone()),
+                OrderRelay::new(
+                    store.store_directory(),
+                    store.config_trees(),
+                    store.order_queue(),
+                    SystemClock,
+                ),
                 store.config_trees(),
-                store.order_queue(),
                 SystemClock,
-            ),
-            store.config_trees(),
-            SystemClock,
-        ))
+            ))
+            // Table QR minting (ADR-0072): the console reads each table's signed token here to print a
+            // QR sheet. Wired only with a secret, the same gate as the guest endpoint above.
+            .merge(http::table_qr_router(
+                store.floor(),
+                store.admin(),
+                SystemClock,
+                TableTokenSecret::new(secret),
+            ))
     } else {
         tracing::warn!("no table_token_secret configured; the QR ordering endpoint is off");
         service
