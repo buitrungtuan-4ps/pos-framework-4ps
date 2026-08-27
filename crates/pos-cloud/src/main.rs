@@ -294,6 +294,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // screen's form editor renders toggles and conflict previews from — static framework data
         // behind the session guard.
         .merge(http::capabilities_router(store.admin(), SystemClock))
+        // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
+        // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned
+        // through the config tree, which runs the §10 inter-flag rules.
+        .merge(http::config_capabilities_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Background-task health (ADR-0068 slice 4): the read-only console view of whether the
         // off-request loops are alive and keeping up. `expected_tasks` names the loops this
         // deployment actually turned on, so a loop dead since boot reads as unhealthy, not missing.

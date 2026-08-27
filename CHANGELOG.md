@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A form-driven capability editor on the Config screen** (roadmap v2, Track M8, slice 3;
+  [ADR-0071](docs/adr/0071-config-without-json.md)). The Config screen now offers the §10 capability
+  catalogue as labelled toggles seeded from the store's current effective profile, the three presets
+  (full-service / counter / retail) as one-click buttons, an **inline conflict preview** of the §10
+  inter-flag rules (a violation shows the instant a toggle creates it, not as a `422` on publish), and a
+  **diff of the flags that will change** before publishing. Publishing goes through a new
+  `PUT /admin/config/capabilities` that **merges only the named flag booleans into the store's Store
+  config layer** — the node-merge the catalog/people publishes use, so the store's other config
+  (`menu`, `layout`, `permissions`) survives — and versions it through the config tree, which re-runs
+  the §10 rules so an invalid combination is a `422`, never a stored state. The publish button is
+  disabled while a conflict stands; the write is behind `console.config.publish` and is audited
+  (`config.capabilities.publish`; flags are not PII). Raw-JSON publish stays for everything a form does
+  not yet cover. **Upgrade note:** additive route + console UI; no schema or `PROTOCOL_VERSION` change.
 - **The console can read the capability catalogue** (roadmap v2, Track M8, slice 2;
   [ADR-0071](docs/adr/0071-config-without-json.md)). A new `GET /admin/capabilities` serves the §10
   capability flags (key, default, one-line description), the three presets (full-service / counter /

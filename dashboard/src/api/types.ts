@@ -443,3 +443,39 @@ export interface PermissionInfo {
 export interface CreatedId {
   readonly id: string;
 }
+
+// --- Capabilities (ADR-0071, Track M8): the §10 flag catalogue the Config screen's form editor reads ---
+
+/**
+ * One capability flag from `GET /admin/capabilities` (§10): its config key, default, and one-line
+ * description. The console renders a labelled toggle per flag from this — never a hand-kept list, so
+ * the framework's own catalogue stays the single source of truth (ADR-0071).
+ */
+export interface CapabilityFlag {
+  readonly key: string;
+  readonly default_on: boolean;
+  readonly description: string;
+}
+
+/** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */
+export interface CapabilityPreset {
+  readonly id: string;
+  readonly keys: readonly string[];
+}
+
+/**
+ * One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
+ * created rather than as a `422` on publish. The console mirrors only the boolean check; this
+ * description is the framework's own wording, and the server re-runs the real rules on publish.
+ */
+export interface CapabilityRule {
+  readonly id: string;
+  readonly description: string;
+}
+
+/** The whole capability catalogue `GET /admin/capabilities` serves for the form editor. */
+export interface CapabilityCatalogue {
+  readonly flags: readonly CapabilityFlag[];
+  readonly presets: readonly CapabilityPreset[];
+  readonly rules: readonly CapabilityRule[];
+}

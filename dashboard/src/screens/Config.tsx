@@ -7,7 +7,14 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import { CONFIG_LEVELS, type ConfigLevel, type ConfigVersion, type Json } from "../api/types";
+import {
+  CONFIG_LEVELS,
+  type CapabilityCatalogue,
+  type CapabilityPreset,
+  type ConfigLevel,
+  type ConfigVersion,
+  type Json,
+} from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 
 // The level names are user-visible, so each maps to a static i18n key (a template-literal key would
@@ -24,6 +31,24 @@ import { Banner, Button, Card, PageHeader, TextArea } from "../components/ui";
 import { ConfirmDialog, EmptyState, StatusBadge } from "../components/kit";
 import { toast } from "../components/Toast";
 
+// The three §10 presets the catalogue serves, each to a static i18n label (a template-literal key
+// would not be a MessageKey). An id the map does not cover falls back to its raw server id.
+const PRESET_KEY: Record<string, MessageKey> = {
+  full_service: "config.capabilities.preset.full_service",
+  counter: "config.capabilities.preset.counter",
+  retail: "config.capabilities.preset.retail",
+};
+
+// A client-side mirror of the §10 inter-flag rules (`pos-core`'s `RULES`), keyed by rule id, so the
+// editor can preview a conflict the instant a toggle creates it. This is a UX convenience only — the
+// server re-runs the real `conflicts` on publish and returns a 422, so it stays authoritative. A rule
+// the server serves but this map does not know is treated as satisfied here (never a false block) and
+// is still enforced on publish.
+const CONFLICT_CHECKS: Record<string, (on: (key: string) => boolean) => boolean> = {
+  "pay_first.excludes.tables": (on) => !(on("pay_first_enabled") && on("tables_enabled")),
+  "seats.requires.tables": (on) => !on("seats_enabled") || on("tables_enabled"),
+};
+
 export function Config() {
   const [effective, setEffective] = createSignal<Json | null>(null);
   const [loaded, setLoaded] = createSignal(false);
@@ -37,6 +62,47 @@ export function Config() {
   const [viewingDoc, setViewingDoc] = createSignal<Json | null>(null);
   const [compare, setCompare] = createSignal(false);
   const [rollbackTo, setRollbackTo] = createSignal<string | null>(null);
+  const [catalogue, setCatalogue] = createSignal<CapabilityCatalogue | null>(null);
+  const [flags, setFlags] = createSignal<Record<string, boolean>>({});
+  const [capError, setCapError] = createSignal("");
+  const [capOk, setCapOk] = createSignal("");
+
+  // Read a top-level boolean flag from the current effective (composed) config, falling to the flag's
+  // declared default when the document does not name it — the same "unnamed falls to default" contract
+  // the edge's `from_flags` reader keeps (ADR-0071).
+  const flagInEffective = (key: string, defaultOn: boolean): boolean => {
+    const doc = effective();
+    if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) {
+      const value = (doc as { [key: string]: Json })[key];
+      if (typeof value === "boolean") {
+        return value;
+      }
+    }
+    return defaultOn;
+  };
+
+  // Fetch the static §10 catalogue once, then seed the toggle state from the store's current effective
+  // profile. Re-seeding on every load (store change / after a publish) keeps the toggles showing the
+  // live baseline. A catalogue read failure leaves the editor unseeded rather than erroring the whole
+  // screen — the JSON publish still works.
+  const loadCapabilities = async () => {
+    try {
+      let cat = catalogue();
+      if (cat === null) {
+        cat = await api.capabilityCatalogue();
+        setCatalogue(cat);
+      }
+      const seeded: Record<string, boolean> = {};
+      for (const flag of cat.flags) {
+        seeded[flag.key] = flagInEffective(flag.key, flag.default_on);
+      }
+      setFlags(seeded);
+      setCapError("");
+      setCapOk("");
+    } catch {
+      // The catalogue is static data; a read failure is non-fatal to the rest of the screen.
+    }
+  };
 
   const loadVersions = async () => {
     try {
@@ -56,6 +122,7 @@ export function Config() {
     try {
       setEffective(await api.effectiveConfig(tenantId(), storeId()));
       setLoaded(true);
+      await loadCapabilities();
       await loadVersions();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : String(caught));
@@ -110,6 +177,65 @@ export function Config() {
   // Load on open and whenever the tenant/store changes — never with an empty context (F0).
   onScopedContext("store", () => void load());
 
+  const toggleFlag = (key: string, value: boolean) => {
+    setFlags((prev) => ({ ...prev, [key]: value }));
+    setCapOk("");
+    setCapError("");
+  };
+
+  // A preset sets every flag: on for the keys it names, off for the rest.
+  const applyPreset = (preset: CapabilityPreset) => {
+    const on = new Set(preset.keys);
+    const next: Record<string, boolean> = {};
+    for (const flag of catalogue()?.flags ?? []) {
+      next[flag.key] = on.has(flag.key);
+    }
+    setFlags(next);
+    setCapOk("");
+    setCapError("");
+  };
+
+  // The §10 rules the working toggle state violates — the inline preview. Server-served descriptions,
+  // client-mirrored checks (see CONFLICT_CHECKS).
+  const violatedRules = () => {
+    const current = flags();
+    const isOn = (key: string) => current[key] ?? false;
+    return (catalogue()?.rules ?? []).filter((rule) => {
+      const check = CONFLICT_CHECKS[rule.id];
+      return check ? !check(isOn) : false;
+    });
+  };
+
+  // The flags whose working value differs from the store's current effective profile — the
+  // diff-before-publish, so the operator sees exactly what a publish will change.
+  const flagChanges = () =>
+    (catalogue()?.flags ?? [])
+      .map((flag) => {
+        const before = flagInEffective(flag.key, flag.default_on);
+        const after = flags()[flag.key] ?? flag.default_on;
+        return { key: flag.key, before, after };
+      })
+      .filter((row) => row.before !== row.after);
+
+  const publishCapabilities = async () => {
+    setCapError("");
+    setCapOk("");
+    setBusy(true);
+    try {
+      const result = await api.publishCapabilities(tenantId(), storeId(), flags());
+      const message = t("config.capabilities.published", { version: result.config_version_id });
+      setCapOk(message);
+      toast.ok(message);
+      await load();
+    } catch (caught) {
+      const message = caught instanceof ApiError ? caught.message : String(caught);
+      setCapError(message);
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const publish = async () => {
     setError("");
     setOk("");
@@ -136,6 +262,116 @@ export function Config() {
     <div>
       <PageHeader title={t("config.title")} description={t("config.description")} />
       <RequireContext need="store">
+        <Show when={catalogue()}>
+          {(cat) => (
+            <div class="mb-6">
+              <Card
+                title={t("config.capabilities.title")}
+                actions={
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-sm text-ink-muted">{t("config.capabilities.presets")}</span>
+                    <For each={cat().presets}>
+                      {(preset) => {
+                        const key = PRESET_KEY[preset.id];
+                        return (
+                          <Button
+                            variant="secondary"
+                            disabled={busy()}
+                            onClick={() => applyPreset(preset)}
+                          >
+                            {key ? t(key) : preset.id}
+                          </Button>
+                        );
+                      }}
+                    </For>
+                  </div>
+                }
+              >
+                <div class="flex flex-col gap-4">
+                  <p class="text-sm text-ink-muted">{t("config.capabilities.hint")}</p>
+                  <div class="grid gap-3 sm:grid-cols-2">
+                    <For each={cat().flags}>
+                      {(flag) => (
+                        <label class="flex items-start gap-3 rounded-token border border-line px-3 py-2">
+                          <input
+                            type="checkbox"
+                            class="mt-1"
+                            checked={flags()[flag.key] ?? flag.default_on}
+                            onChange={(event) => toggleFlag(flag.key, event.currentTarget.checked)}
+                          />
+                          <span class="flex flex-col gap-1">
+                            <span class="flex flex-wrap items-center gap-2">
+                              <code class="text-sm font-medium text-ink">{flag.key}</code>
+                              <Show when={flag.default_on}>
+                                <StatusBadge tone="active" label={t("config.capabilities.default")} />
+                              </Show>
+                            </span>
+                            <span class="text-xs text-ink-muted">{flag.description}</span>
+                          </span>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+
+                  <Show when={violatedRules().length > 0}>
+                    <Banner
+                      tone="danger"
+                      message={t("config.capabilities.conflicts")}
+                    />
+                    <ul class="ml-4 list-disc text-sm text-danger">
+                      <For each={violatedRules()}>{(rule) => <li>{rule.description}</li>}</For>
+                    </ul>
+                  </Show>
+
+                  <div>
+                    <span class="mb-1 block text-sm font-medium text-ink">
+                      {t("config.capabilities.changes")}
+                    </span>
+                    <Show
+                      when={flagChanges().length > 0}
+                      fallback={
+                        <p class="text-sm text-ink-muted">{t("config.capabilities.noChanges")}</p>
+                      }
+                    >
+                      <ul class="flex flex-col gap-1">
+                        <For each={flagChanges()}>
+                          {(change) => (
+                            <li class="flex flex-wrap items-center gap-2 text-sm text-ink">
+                              <code class="text-ink">{change.key}</code>
+                              <span class="text-ink-muted">
+                                {change.before
+                                  ? t("config.capabilities.on")
+                                  : t("config.capabilities.off")}
+                                {" → "}
+                                {change.after
+                                  ? t("config.capabilities.on")
+                                  : t("config.capabilities.off")}
+                              </span>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </Show>
+                  </div>
+
+                  <Show when={capError()}>
+                    {(message) => <Banner tone="danger" message={message()} />}
+                  </Show>
+                  <Show when={capOk()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
+                  <div>
+                    <Button
+                      disabled={busy() || violatedRules().length > 0}
+                      onClick={() => void publishCapabilities()}
+                    >
+                      {t("config.capabilities.publish")}
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+        </Show>
+
         <div class="grid gap-6 lg:grid-cols-2">
           <Card
             title={t("config.effective")}
