@@ -50,7 +50,9 @@ use pos_cloud::devices::{
 };
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
 use pos_cloud::floorplan::{
-    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewTable, Table, TableStore, TableUpdate,
+    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
+    RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
+    TableStore, TableUpdate,
 };
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
@@ -87,7 +89,8 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId,
+    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
+    TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -6921,6 +6924,8 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
 struct FakeFloor {
     areas: Arc<Mutex<Vec<Area>>>,
     tables: Arc<Mutex<Vec<Table>>>,
+    stations: Arc<Mutex<Vec<Station>>>,
+    rules: Arc<Mutex<Vec<RoutingRule>>>,
 }
 
 impl AreaStore for FakeFloor {
@@ -7168,6 +7173,226 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
             .await
             .expect("get")
             .is_none()
+    );
+}
+
+impl StationStore for FakeFloor {
+    async fn create(&self, station: &NewStation) -> Result<(), FloorStoreError> {
+        self.stations.lock().expect("lock").push(Station {
+            station_id: station.station_id,
+            tenant_id: station.tenant_id,
+            store_id: station.store_id,
+            name: station.name.clone(),
+            backup_station_id: station.backup_station_id,
+            is_default: station.is_default,
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Station>, FloorStoreError> {
+        let mut rows: Vec<Station> = self
+            .stations
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|station| station.tenant_id == tenant && station.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        station_id: StationId,
+    ) -> Result<Option<Station>, FloorStoreError> {
+        Ok(self
+            .stations
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|station| station.tenant_id == tenant && station.station_id == station_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &StationUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.stations.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|station| {
+            station.tenant_id == update.tenant_id && station.station_id == update.station_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&update.name);
+        row.backup_station_id = update.backup_station_id;
+        row.is_default = update.is_default;
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+impl RoutingRuleStore for FakeFloor {
+    async fn create(&self, rule: &NewRoutingRule) -> Result<(), FloorStoreError> {
+        self.rules.lock().expect("lock").push(RoutingRule {
+            rule_id: rule.rule_id,
+            tenant_id: rule.tenant_id,
+            store_id: rule.store_id,
+            station_id: rule.station_id,
+            menu_item_id: rule.menu_item_id,
+            course_id: rule.course_id,
+            sort: rule.sort,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<RoutingRule>, FloorStoreError> {
+        let mut rows: Vec<RoutingRule> = self
+            .rules
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|rule| rule.tenant_id == tenant && rule.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|rule| rule.sort); // the seam reads rules in `sort` order.
+        Ok(rows)
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        rule_id: RoutingRuleId,
+    ) -> Result<bool, FloorStoreError> {
+        let mut rows = self.rules.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|rule| !(rule.tenant_id == tenant && rule.rule_id == rule_id));
+        Ok(rows.len() != before)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end exercise of both kitchen seams (station CRUD + routing-rule create/list/\
+              remove, item and course rules) reads better as a single narrative than split fixtures"
+)]
+async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
+    let store = FakeFloor::default();
+    let mine = tenant();
+    let front = StoreId::new(Ulid::from_u128(0x5701));
+    let oven = StationId::new(Ulid::from_u128(1));
+    let bar = StationId::new(Ulid::from_u128(2));
+
+    StationStore::create(
+        &store,
+        &NewStation {
+            station_id: oven,
+            tenant_id: mine,
+            store_id: front,
+            name: "Oven".to_owned(),
+            backup_station_id: Some(bar),
+            is_default: true,
+        },
+    )
+    .await
+    .expect("create oven");
+    assert_eq!(
+        StationStore::list(&store, mine, front)
+            .await
+            .expect("list")
+            .len(),
+        1
+    );
+
+    // Update: drop the backup, keep default off now.
+    assert!(
+        StationStore::update(
+            &store,
+            &StationUpdate {
+                station_id: oven,
+                tenant_id: mine,
+                name: "Pizza oven".to_owned(),
+                backup_station_id: None,
+                is_default: false,
+                status: EntityStatus::Active,
+            },
+        )
+        .await
+        .expect("update")
+    );
+    let oven_view = StationStore::get(&store, mine, oven)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(oven_view.name, "Pizza oven");
+    assert_eq!(oven_view.backup_station_id, None);
+    assert!(!oven_view.is_default);
+
+    // Two routing rules — one by item, one by course — then remove one (returns false the 2nd time).
+    let item_rule = RoutingRuleId::new(Ulid::from_u128(50));
+    let course_rule = RoutingRuleId::new(Ulid::from_u128(51));
+    RoutingRuleStore::create(
+        &store,
+        &NewRoutingRule {
+            rule_id: item_rule,
+            tenant_id: mine,
+            store_id: front,
+            station_id: oven,
+            menu_item_id: Some(MenuItemId::new(Ulid::from_u128(100))),
+            course_id: None,
+            sort: 0,
+        },
+    )
+    .await
+    .expect("create item rule");
+    RoutingRuleStore::create(
+        &store,
+        &NewRoutingRule {
+            rule_id: course_rule,
+            tenant_id: mine,
+            store_id: front,
+            station_id: bar,
+            menu_item_id: None,
+            course_id: Some(CourseId::new(Ulid::from_u128(200))),
+            sort: 1,
+        },
+    )
+    .await
+    .expect("create course rule");
+    assert_eq!(
+        RoutingRuleStore::list(&store, mine, front)
+            .await
+            .expect("list rules")
+            .len(),
+        2
+    );
+    assert!(
+        RoutingRuleStore::remove(&store, mine, item_rule)
+            .await
+            .expect("remove")
+    );
+    assert!(
+        !RoutingRuleStore::remove(&store, mine, item_rule)
+            .await
+            .expect("remove again"),
+        "a rule already removed reports no change"
+    );
+    assert_eq!(
+        RoutingRuleStore::list(&store, mine, front)
+            .await
+            .expect("list rules")
+            .len(),
+        1,
+        "the course rule remains"
     );
 }
 

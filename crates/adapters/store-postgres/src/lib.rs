@@ -53,7 +53,7 @@ pub use catalog::{
 pub use config_trees::PostgresConfigTrees;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fleet::{FleetStoreRow, PostgresFleet};
-pub use floor::{AreaRow, PostgresFloor, TableRow};
+pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
 pub use order_queue::{OrderQueueRow, PendingOrderRow, PostgresOrderQueue, PostgresStoreDirectory};
 pub use people::{AssignmentRow, EmployeeRow, PostgresPeople, RoleTemplateRow};
 pub use reconcile::PostgresReconcile;

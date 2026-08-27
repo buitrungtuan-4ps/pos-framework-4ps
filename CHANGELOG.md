@@ -111,6 +111,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Kitchen master-data store: stations & routing rules** (roadmap v2, Track M2, slice 2b;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Migration `0026_kitchen_stations_and_routing.sql`
+  adds the per-store `kitchen_stations` (name, optional backup station for printer failover, an
+  `is_default` catch-all flag) and `station_routing_rules` (a fired line matched by item or course →
+  a station, in author-controlled `sort` order) tables, RLS-isolated like the floor. Stations are
+  archived-never-deleted; a routing rule is a mapping that is *removed* (like an assignment). New
+  `StationStore` / `RoutingRuleStore` seams + `store-postgres` adapter methods + an in-memory fake and
+  seam test. Not PII. **Upgrade note:** additive migration `0026` (rollback-safe); no protocol change.
 - **Floor master-data store: areas & tables** (roadmap v2, Track M2, slice 2a;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). A store's floor is now persisted master data:
   migration `0025_floor_areas_and_tables.sql` adds the `floor_areas` and `floor_tables` tables —

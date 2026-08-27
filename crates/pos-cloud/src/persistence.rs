@@ -31,15 +31,16 @@ use store_postgres::{
     PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresOrderQueue,
     PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
-    PostgresWebhooks, RoleTemplateRow, StoreRow, TableRow, TaskHealthRow, TenantRow,
+    PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow, TableRow,
+    TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
-    MenuItemId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
+    MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -73,7 +74,9 @@ use crate::devices::{
 };
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::floorplan::{
-    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewTable, Table, TableStore, TableUpdate,
+    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
+    RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
+    TableStore, TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
@@ -1932,6 +1935,141 @@ impl TableStore for PostgresFloor {
         )
         .await
         .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+}
+
+/// Reads one queried row into a [`Station`].
+fn station_record(row: &StationRow) -> Result<Station, FloorStoreError> {
+    let backup_station_id = row
+        .backup_station_id
+        .as_deref()
+        .map(|text| parse_floor_ulid(text, "backup station").map(StationId::new))
+        .transpose()?;
+    Ok(Station {
+        station_id: StationId::new(parse_floor_ulid(&row.id, "station")?),
+        tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
+        store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
+        name: row.name.clone(),
+        backup_station_id,
+        is_default: row.is_default,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+/// Reads one queried row into a [`RoutingRule`].
+fn routing_rule_record(row: &RoutingRuleRow) -> Result<RoutingRule, FloorStoreError> {
+    let menu_item_id = row
+        .menu_item_id
+        .as_deref()
+        .map(|text| parse_floor_ulid(text, "menu item").map(MenuItemId::new))
+        .transpose()?;
+    let course_id = row
+        .course_id
+        .as_deref()
+        .map(|text| parse_floor_ulid(text, "course").map(CourseId::new))
+        .transpose()?;
+    Ok(RoutingRule {
+        rule_id: RoutingRuleId::new(parse_floor_ulid(&row.id, "routing rule")?),
+        tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
+        store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
+        station_id: StationId::new(parse_floor_ulid(&row.station_id, "station")?),
+        menu_item_id,
+        course_id,
+        sort: u16::try_from(row.sort).unwrap_or(0),
+    })
+}
+
+impl StationStore for PostgresFloor {
+    async fn create(&self, station: &NewStation) -> Result<(), FloorStoreError> {
+        let backup = station.backup_station_id.map(|id| id.to_string());
+        self.insert_station(
+            &station.station_id.to_string(),
+            &station.tenant_id.to_string(),
+            &station.store_id.to_string(),
+            &station.name,
+            backup.as_deref(),
+            station.is_default,
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Station>, FloorStoreError> {
+        let rows = self
+            .fetch_stations(&tenant.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        rows.iter().map(station_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        station_id: StationId,
+    ) -> Result<Option<Station>, FloorStoreError> {
+        let row = self
+            .fetch_station(&tenant.to_string(), &station_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        row.as_ref().map(station_record).transpose()
+    }
+
+    async fn update(&self, station: &StationUpdate) -> Result<bool, FloorStoreError> {
+        let backup = station.backup_station_id.map(|id| id.to_string());
+        self.set_station(
+            &station.tenant_id.to_string(),
+            &station.station_id.to_string(),
+            &station.name,
+            backup.as_deref(),
+            station.is_default,
+            station.status.as_str(),
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+}
+
+impl RoutingRuleStore for PostgresFloor {
+    async fn create(&self, rule: &NewRoutingRule) -> Result<(), FloorStoreError> {
+        let menu_item = rule.menu_item_id.map(|id| id.to_string());
+        let course = rule.course_id.map(|id| id.to_string());
+        self.insert_rule(
+            &rule.rule_id.to_string(),
+            &rule.tenant_id.to_string(),
+            &rule.store_id.to_string(),
+            &rule.station_id.to_string(),
+            menu_item.as_deref(),
+            course.as_deref(),
+            i32::from(rule.sort),
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<RoutingRule>, FloorStoreError> {
+        let rows = self
+            .fetch_rules(&tenant.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        rows.iter().map(routing_rule_record).collect()
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        rule_id: RoutingRuleId,
+    ) -> Result<bool, FloorStoreError> {
+        self.delete_rule(&tenant.to_string(), &rule_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 }
 

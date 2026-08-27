@@ -88,6 +88,9 @@ const MIGRATION_0024: &str = include_str!("../migrations/0024_role_templates_and
 /// Floor master data — `floor_areas` + `floor_tables` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
 const MIGRATION_0025: &str = include_str!("../migrations/0025_floor_areas_and_tables.sql");
 
+/// Kitchen master data — `kitchen_stations` + `station_routing_rules` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+const MIGRATION_0026: &str = include_str!("../migrations/0026_kitchen_stations_and_routing.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -246,6 +249,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0025)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0026)
             .await
             .map_err(unavailable)
     }

@@ -325,3 +325,270 @@ fn table_row(row: &tokio_postgres::Row) -> TableRow {
         status: row.get(8),
     }
 }
+
+/// A kitchen station as listed — identity, its store, name, optional backup, default flag, and status.
+#[derive(Clone, Debug)]
+pub struct StationRow {
+    /// The station id (a ULID string).
+    pub id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The store this station belongs to.
+    pub store_id: String,
+    /// The station name ("Oven").
+    pub name: String,
+    /// The failover target, or `None` if the station has no backup.
+    pub backup_station_id: Option<String>,
+    /// Whether this is the store's catch-all station.
+    pub is_default: bool,
+    /// `active` or `archived`.
+    pub status: String,
+}
+
+/// The station columns a read returns, in a stable order matching [`station_row`].
+const STATION_COLUMNS: &str =
+    "id, tenant_id, store_id, name, backup_station_id, is_default, status";
+
+/// A routing rule as listed — identity, its store and target station, the item/course it matches, sort.
+#[derive(Clone, Debug)]
+pub struct RoutingRuleRow {
+    /// The rule id (a ULID string).
+    pub id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The store this rule belongs to.
+    pub store_id: String,
+    /// The station a matching line routes to.
+    pub station_id: String,
+    /// The item this rule matches, or `None`.
+    pub menu_item_id: Option<String>,
+    /// The course this rule matches, or `None`.
+    pub course_id: Option<String>,
+    /// The author-controlled order within its tier.
+    pub sort: i32,
+}
+
+/// The routing-rule columns a read returns, in a stable order matching [`routing_rule_row`].
+const ROUTING_RULE_COLUMNS: &str =
+    "id, tenant_id, store_id, station_id, menu_item_id, course_id, sort";
+
+impl PostgresFloor {
+    /// Inserts a kitchen station.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_station(
+        &self,
+        id: &str,
+        tenant_id: &str,
+        store_id: &str,
+        name: &str,
+        backup_station_id: Option<&str>,
+        is_default: bool,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO kitchen_stations \
+                 (id, tenant_id, store_id, name, backup_station_id, is_default) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &id,
+                    &tenant_id,
+                    &store_id,
+                    &name,
+                    &backup_station_id,
+                    &is_default,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a store's stations, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_stations(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+    ) -> Result<Vec<StationRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {STATION_COLUMNS} FROM kitchen_stations \
+                     WHERE tenant_id = $1 AND store_id = $2 ORDER BY created_at DESC"
+                ),
+                &[&tenant_id, &store_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(station_row).collect())
+    }
+
+    /// Reads one station within its tenant, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_station(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<StationRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                &format!(
+                    "SELECT {STATION_COLUMNS} FROM kitchen_stations WHERE tenant_id = $1 AND id = $2"
+                ),
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(station_row))
+    }
+
+    /// Updates a station's name, backup, default flag, and status. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_station(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        name: &str,
+        backup_station_id: Option<&str>,
+        is_default: bool,
+        status: &str,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let changed = connection
+            .execute(
+                "UPDATE kitchen_stations \
+                 SET name = $3, backup_station_id = $4, is_default = $5, status = $6, \
+                     updated_at = now() \
+                 WHERE tenant_id = $1 AND id = $2",
+                &[
+                    &tenant_id,
+                    &id,
+                    &name,
+                    &backup_station_id,
+                    &is_default,
+                    &status,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(changed == 1)
+    }
+
+    /// Inserts a routing rule.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn insert_rule(
+        &self,
+        id: &str,
+        tenant_id: &str,
+        store_id: &str,
+        station_id: &str,
+        menu_item_id: Option<&str>,
+        course_id: Option<&str>,
+        sort: i32,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO station_routing_rules \
+                 (id, tenant_id, store_id, station_id, menu_item_id, course_id, sort) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[
+                    &id,
+                    &tenant_id,
+                    &store_id,
+                    &station_id,
+                    &menu_item_id,
+                    &course_id,
+                    &sort,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Lists a store's routing rules, in `sort` then insertion order.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_rules(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+    ) -> Result<Vec<RoutingRuleRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {ROUTING_RULE_COLUMNS} FROM station_routing_rules \
+                     WHERE tenant_id = $1 AND store_id = $2 ORDER BY sort, created_at"
+                ),
+                &[&tenant_id, &store_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(routing_rule_row).collect())
+    }
+
+    /// Removes a routing rule within its tenant. Returns whether a row was removed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn delete_rule(&self, tenant_id: &str, id: &str) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let removed = connection
+            .execute(
+                "DELETE FROM station_routing_rules WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(removed == 1)
+    }
+}
+
+/// Reads one queried row into a [`StationRow`]. The column order matches [`STATION_COLUMNS`].
+fn station_row(row: &tokio_postgres::Row) -> StationRow {
+    StationRow {
+        id: row.get(0),
+        tenant_id: row.get(1),
+        store_id: row.get(2),
+        name: row.get(3),
+        backup_station_id: row.get(4),
+        is_default: row.get(5),
+        status: row.get(6),
+    }
+}
+
+/// Reads one queried row into a [`RoutingRuleRow`]. The column order matches [`ROUTING_RULE_COLUMNS`].
+fn routing_rule_row(row: &tokio_postgres::Row) -> RoutingRuleRow {
+    RoutingRuleRow {
+        id: row.get(0),
+        tenant_id: row.get(1),
+        store_id: row.get(2),
+        station_id: row.get(3),
+        menu_item_id: row.get(4),
+        course_id: row.get(5),
+        sort: row.get(6),
+    }
+}

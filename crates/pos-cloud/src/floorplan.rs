@@ -17,10 +17,12 @@
 //! `pos-proto` types, not cloud-local ones, because they cross the wire: the compiled `floor` config
 //! node the edge reads names its tables by the very ids authored here.
 
+use core::fmt;
 use core::future::Future;
 
 use pos_proto::display::GridPosition;
-use pos_proto::ids::{AreaId, StoreId, TableId, TenantId};
+use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, TenantId};
+use pos_proto::ulid::Ulid;
 
 use crate::registry::EntityStatus;
 
@@ -206,6 +208,208 @@ pub trait TableStore {
     fn update(
         &self,
         table: &TableUpdate,
+    ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
+}
+
+// --- kitchen: stations and item→station routing rules (ADR-0072) ---
+
+/// A kitchen station as the console reads it: a station on one store's line, with an optional backup
+/// (the printer failover) and a catch-all `is_default` flag.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Station {
+    /// The station's id.
+    pub station_id: StationId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The store this station belongs to.
+    pub store_id: StoreId,
+    /// The name to show ("Oven").
+    pub name: String,
+    /// The failover target when this station's printer is down, or `None` for no backup.
+    pub backup_station_id: Option<StationId>,
+    /// Whether this is the store's catch-all station (a fired line with no matching rule).
+    pub is_default: bool,
+    /// Active or archived.
+    pub status: EntityStatus,
+}
+
+/// A new station to create.
+#[derive(Debug, Clone)]
+pub struct NewStation {
+    /// The minted id.
+    pub station_id: StationId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The store.
+    pub store_id: StoreId,
+    /// The name.
+    pub name: String,
+    /// The backup station, or `None`.
+    pub backup_station_id: Option<StationId>,
+    /// Whether it is the catch-all.
+    pub is_default: bool,
+}
+
+/// An update to a station's name, backup, default flag, and/or status.
+#[derive(Debug, Clone)]
+pub struct StationUpdate {
+    /// The station to change.
+    pub station_id: StationId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The new name.
+    pub name: String,
+    /// The new backup, or `None`.
+    pub backup_station_id: Option<StationId>,
+    /// Whether it is now the catch-all.
+    pub is_default: bool,
+    /// The new status (archiving retires the station without deleting it).
+    pub status: EntityStatus,
+}
+
+/// A routing rule's identifier — a ULID minted at creation. Cloud-local (like
+/// [`EmployeeId`](crate::people::EmployeeId)): a rule is authoring-only and compiles into the
+/// `stations` node's flat routing list, which carries no rule id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub struct RoutingRuleId(Ulid);
+
+impl RoutingRuleId {
+    /// Wraps a ULID as a routing-rule id.
+    #[must_use]
+    pub const fn new(ulid: Ulid) -> Self {
+        Self(ulid)
+    }
+
+    /// The underlying ULID.
+    #[must_use]
+    pub const fn as_ulid(self) -> Ulid {
+        self.0
+    }
+}
+
+impl fmt::Display for RoutingRuleId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// An item→station routing rule as the console reads it. Matches a specific item or any line on a
+/// course (the route layer enforces exactly one); `sort` orders rules within their tier.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoutingRule {
+    /// The rule's id.
+    pub rule_id: RoutingRuleId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The store this rule belongs to.
+    pub store_id: StoreId,
+    /// The station a matching line routes to.
+    pub station_id: StationId,
+    /// The item this rule matches, if any.
+    pub menu_item_id: Option<MenuItemId>,
+    /// The course this rule matches, if any.
+    pub course_id: Option<CourseId>,
+    /// The author-controlled order within its tier.
+    pub sort: u16,
+}
+
+/// A new routing rule to create.
+#[derive(Debug, Clone)]
+pub struct NewRoutingRule {
+    /// The minted id.
+    pub rule_id: RoutingRuleId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The store.
+    pub store_id: StoreId,
+    /// The target station.
+    pub station_id: StationId,
+    /// The item to match, if any.
+    pub menu_item_id: Option<MenuItemId>,
+    /// The course to match, if any.
+    pub course_id: Option<CourseId>,
+    /// The order within its tier.
+    pub sort: u16,
+}
+
+/// Persists and reads a store's kitchen stations. Archived, never deleted.
+pub trait StationStore {
+    /// Inserts a station.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the write fails.
+    fn create(
+        &self,
+        station: &NewStation,
+    ) -> impl Future<Output = Result<(), FloorStoreError>> + Send;
+
+    /// Lists a store's stations, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the read fails.
+    fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> impl Future<Output = Result<Vec<Station>, FloorStoreError>> + Send;
+
+    /// Reads one station within its tenant, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the read fails.
+    fn get(
+        &self,
+        tenant: TenantId,
+        station_id: StationId,
+    ) -> impl Future<Output = Result<Option<Station>, FloorStoreError>> + Send;
+
+    /// Updates a station's name, backup, default flag, and status. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the write fails.
+    fn update(
+        &self,
+        station: &StationUpdate,
+    ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
+}
+
+/// Persists and reads a store's item→station routing rules. Unlike stations, a rule is a mapping that
+/// is **removed** (not archived).
+pub trait RoutingRuleStore {
+    /// Inserts a routing rule.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the write fails.
+    fn create(
+        &self,
+        rule: &NewRoutingRule,
+    ) -> impl Future<Output = Result<(), FloorStoreError>> + Send;
+
+    /// Lists a store's routing rules, in `sort` then insertion order.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the read fails.
+    fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> impl Future<Output = Result<Vec<RoutingRule>, FloorStoreError>> + Send;
+
+    /// Removes a routing rule. Returns whether a row was removed.
+    ///
+    /// # Errors
+    ///
+    /// [`FloorStoreError`] if the write fails.
+    fn remove(
+        &self,
+        tenant: TenantId,
+        rule_id: RoutingRuleId,
     ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
 }
 
