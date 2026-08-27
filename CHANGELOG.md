@@ -53,6 +53,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `script-src`.
 
 ### Fixed
+- **Admin sign-in works on a real PostgreSQL deployment again** (Track G, G1 slice-4 regression
+  caught by the merge-time integration job). The rewritten `insert_session` wrote `created_at` with
+  `to_timestamp($2::double precision / 1000.0)`, which makes PostgreSQL infer the `$2` parameter as
+  `double precision`; the adapter binds it from a Rust `i64` (`bigint`), so the extended-protocol type
+  check rejected every session insert against real PostgreSQL — and since a successful login *creates*
+  a session, admin sign-in would have failed on any real deployment. The in-memory fake used by the
+  unit tests does not type-check parameters, so the pull-request suite stayed green; the
+  `store-postgres` integration job (real PostgreSQL, run on merge) is what surfaced it. The cast is now
+  `$2::bigint`, matching the bind, and the three admin-session integration tests pass against
+  PostgreSQL 16. **Upgrade note:** none — a one-line SQL fix; no schema, protocol, or permission change.
 - **The cloud catalog tables are now actually created on deployment** (Track G groundwork). Migrations
   `0013`–`0017` (catalog tax classes, item taxonomy, display/layout, modifier groups, menu sections)
   were added to the `store-postgres` migrations directory during Phase 2a but never embedded into the
