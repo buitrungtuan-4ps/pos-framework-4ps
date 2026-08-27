@@ -24,7 +24,8 @@ use pos_cloud::activation::{
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, SessionSummary, hash_session_token,
+    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
+    hash_session_token,
 };
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
@@ -252,6 +253,13 @@ struct StoredInvite {
     accepted: bool,
 }
 
+/// A stored recovery code in the integration fake: its hash and whether it has been spent.
+#[derive(Clone)]
+struct StoredRecoveryCode {
+    code_hash: [u8; 32],
+    used: bool,
+}
+
 #[derive(Clone, Default)]
 struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
@@ -259,6 +267,7 @@ struct FakeAdmin {
     sessions: Arc<Mutex<SessionRows>>,
     admin_users: Arc<Mutex<Vec<AdminUser>>>,
     invites: Arc<Mutex<Vec<StoredInvite>>>,
+    recovery_codes: Arc<Mutex<HashMap<String, Vec<StoredRecoveryCode>>>>,
 }
 
 impl FakeAdmin {
@@ -297,6 +306,64 @@ impl AdminStore for FakeAdmin {
             TotpSecret::new(totp_secret),
         ));
         Ok(true)
+    }
+
+    async fn rotate_totp_secret(&self, secret: Vec<u8>) -> Result<(), AdminStoreError> {
+        let mut slot = self.credential.lock().expect("lock");
+        if let Some(credential) = slot.take() {
+            *slot = Some(credential.with_totp(TotpSecret::new(secret)));
+        }
+        *self.last_used_totp_step.lock().expect("lock") = None;
+        Ok(())
+    }
+
+    async fn store_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: Vec<NewRecoveryCode>,
+    ) -> Result<(), AdminStoreError> {
+        let rows = codes
+            .into_iter()
+            .map(|code| StoredRecoveryCode {
+                code_hash: code.code_hash,
+                used: false,
+            })
+            .collect();
+        self.recovery_codes
+            .lock()
+            .expect("lock")
+            .insert(admin_id.to_owned(), rows);
+        Ok(())
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: [u8; 32],
+        _now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        let mut map = self.recovery_codes.lock().expect("lock");
+        let Some(rows) = map.get_mut(admin_id) else {
+            return Ok(false);
+        };
+        match rows
+            .iter_mut()
+            .find(|row| !row.used && row.code_hash == code_hash)
+        {
+            Some(row) => {
+                row.used = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn count_recovery_codes(&self, admin_id: &str) -> Result<u64, AdminStoreError> {
+        let map = self.recovery_codes.lock().expect("lock");
+        let unused = map
+            .get(admin_id)
+            .map_or(0, |rows| rows.iter().filter(|row| !row.used).count());
+        Ok(u64::try_from(unused).unwrap_or(u64::MAX))
     }
 
     async fn record_totp_step(&self, step: u64) -> Result<(), AdminStoreError> {
@@ -3826,6 +3893,146 @@ async fn every_response_carries_the_admin_security_headers() {
         csp.contains("frame-ancestors 'none'"),
         "CSP backs up X-Frame-Options against clickjacking"
     );
+}
+
+// --- Self-service security: TOTP re-enrol + recovery codes (G1 slice 6, ADR-0067) --------------
+
+/// A router over a provisioned super-admin with a seeded active owner, so a real sign-in binds the
+/// session to an `admin_users` id — the shape the recovery-code and re-enrol tests need.
+async fn security_router() -> axum::Router {
+    let admin = provisioned_admin();
+    admin
+        .create_admin_user(NewAdminUser {
+            id: "id-owner".to_owned(),
+            email: "owner@example.test".to_owned(),
+            name: "Owner".to_owned(),
+            role: AdminRole::Owner,
+            // The login uses the super-admin credential, not this row's — these are placeholders.
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        })
+        .await
+        .expect("seed owner");
+    registry_app(admin, FakeRegistry::default())
+}
+
+#[tokio::test]
+async fn recovery_codes_generate_once_and_sign_in_in_place_of_totp() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+
+    // Generate the codes — returned once, with the count.
+    let generated = json_body(
+        router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/recovery-codes",
+                &serde_json::json!({}),
+                &cookie,
+            ))
+            .await
+            .expect("route generate"),
+    )
+    .await;
+    let codes = generated["codes"].as_array().expect("codes array");
+    assert_eq!(codes.len(), 10);
+    assert_eq!(generated["remaining"], 10);
+    let code = codes[0].as_str().expect("a code").to_owned();
+
+    // The status endpoint reports the count, never the codes.
+    let status = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/recovery-codes", &cookie))
+            .await
+            .expect("route status"),
+    )
+    .await;
+    assert_eq!(status["remaining"], 10);
+
+    // A recovery code signs in in place of the TOTP code.
+    let signed_in = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/login",
+            &serde_json::json!({ "password": ADMIN_PASSWORD, "recovery_code": code }),
+        ))
+        .await
+        .expect("route recovery login");
+    assert_eq!(signed_in.status(), StatusCode::NO_CONTENT);
+
+    // Single-use: the same code cannot sign in again.
+    let replay = router
+        .clone()
+        .oneshot(post_json(
+            "/admin/login",
+            &serde_json::json!({ "password": ADMIN_PASSWORD, "recovery_code": code }),
+        ))
+        .await
+        .expect("route recovery login");
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+    // One code spent leaves nine.
+    let status = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/recovery-codes", &cookie))
+            .await
+            .expect("route status"),
+    )
+    .await;
+    assert_eq!(status["remaining"], 9);
+}
+
+#[tokio::test]
+async fn totp_reenrol_needs_the_current_password() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+
+    // Signed in but wrong password: a distinct 403, the knowledge factor not re-proved.
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/totp",
+            &serde_json::json!({ "password": "wrong-password" }),
+            &cookie,
+        ))
+        .await
+        .expect("route reenrol");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+    // Correct password: a fresh one-time enrolment (QR + base32 secret).
+    let enrolled = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/totp",
+            &serde_json::json!({ "password": ADMIN_PASSWORD }),
+            &cookie,
+        ))
+        .await
+        .expect("route reenrol");
+    assert_eq!(enrolled.status(), StatusCode::OK);
+    let body = json_body(enrolled).await;
+    assert!(
+        body["otpauth_uri"]
+            .as_str()
+            .expect("an otpauth uri")
+            .contains("otpauth://totp/"),
+    );
+    assert!(body["secret_base32"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn the_self_service_security_routes_require_a_session() {
+    let router = security_router().await;
+    for request in [
+        post_json("/admin/totp", &serde_json::json!({ "password": "x" })),
+        post_json("/admin/recovery-codes", &serde_json::json!({})),
+        get("/admin/recovery-codes", None),
+    ] {
+        let denied = router.clone().oneshot(request).await.expect("route");
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 // --- Invitations and admin management (G1 slice 3, ADR-0067) ------------------------------------

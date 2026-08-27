@@ -429,6 +429,57 @@ pub trait AdminStore {
         except_token_hash: [u8; 32],
     ) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
 
+    // ---- Credential recovery + rotation ([ADR-0067] slice 6) ----
+
+    /// Replaces the super-admin's TOTP secret with `secret` and resets the last-used step, so the
+    /// freshly-enrolled authenticator's codes verify from step zero. The credential login checks is
+    /// the super-admin one, so this is the secret a signed-in admin rotates when re-enrolling.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn rotate_totp_secret(
+        &self,
+        secret: Vec<u8>,
+    ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    /// Replaces `admin_id`'s recovery codes with `codes` — regenerating the set invalidates whatever
+    /// was there. Only the `SHA-256` of each code is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn store_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: Vec<NewRecoveryCode>,
+    ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    /// Consumes an unused recovery code for `admin_id` matching `code_hash`, single-use: the first
+    /// caller to match an unused code claims it (stamping `used_at = now`); a replay, or a code that
+    /// was never issued, matches nothing. Returns whether this call claimed a code.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: [u8; 32],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// How many of `admin_id`'s recovery codes are still unused — for the "N codes left" display,
+    /// never the codes themselves.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn count_recovery_codes(
+        &self,
+        admin_id: &str,
+    ) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
+
     // ---- Multi-admin surface ([ADR-0067]) ----
 
     /// Provisions a new console admin. Returns `Ok(false)` without writing when an admin with the
@@ -580,13 +631,19 @@ impl AdminStoreError {
 
 /// A super-admin sign-in request: the password and the current TOTP code.
 ///
-/// [`fmt::Debug`] redacts the password, so a logged request cannot leak it.
+/// [`fmt::Debug`] redacts the password and any recovery code, so a logged request cannot leak either.
 #[derive(Clone, Deserialize)]
 pub struct LoginRequest {
     /// The super-admin password.
     pub password: String,
-    /// The current 6-digit TOTP code.
+    /// The current 6-digit TOTP code. Ignored when a `recovery_code` is present.
+    #[serde(default)]
     pub totp_code: String,
+    /// A one-time recovery code, used in place of the TOTP second factor when the authenticator is
+    /// lost ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Absent for an
+    /// ordinary password + TOTP sign-in.
+    #[serde(default)]
+    pub recovery_code: Option<String>,
 }
 
 impl fmt::Debug for LoginRequest {
@@ -595,6 +652,10 @@ impl fmt::Debug for LoginRequest {
             .debug_struct("LoginRequest")
             .field("password", &"<redacted>")
             .field("totp_code", &self.totp_code)
+            .field(
+                "recovery_code",
+                &self.recovery_code.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -705,29 +766,54 @@ where
         // nothing to enumerate.
         return Err(LoginDenied::Invalid);
     };
-    // Both factors evaluated regardless of which is wrong, and every failure collapses to one
-    // Invalid — the no-oracle rule (ADR-0034).
-    let authenticated = admin
-        .credential
-        .authenticate(
-            &request.password,
-            &request.totp_code,
-            unix_seconds(now),
-            admin.last_used_totp_step,
-        )
-        .map_err(|_| LoginDenied::Invalid)?;
-    // Burn the step first: even if the session write below is retried after a crash, this code — and
-    // any earlier one — can never mint a second session.
-    store
-        .record_totp_step(authenticated.totp_step)
-        .await
-        .map_err(|_| LoginDenied::StoreUnavailable)?;
     // Bind the session to the acting admin. The single-super-admin credential maps to the one `owner`
     // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)), so during the transition the
     // session belongs to the first active owner; a store with no owner row yet (the pure-credential
     // fakes, or a not-yet-seeded install) binds `None`, still a valid session. Email-based per-admin
-    // login replaces this owner lookup in a later slice.
+    // login replaces this owner lookup in a later slice. Resolved before the factor check so the same
+    // store read happens whatever the outcome.
     let owner_id = acting_owner_id(store).await?;
+    // The second factor: a one-time recovery code stands in for TOTP when the authenticator is lost
+    // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Either way both factors
+    // are weighed before a single generic Invalid — the no-oracle rule (ADR-0034).
+    let presented_recovery = request
+        .recovery_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty());
+    if let Some(code) = presented_recovery {
+        // The password must verify before a code is consumed, so a wrong-password attempt can never
+        // burn a valid code (a denial of service on recovery); the consume is atomic and single-use.
+        // A missing owner row means no code could ever have been issued.
+        let password_ok = admin.credential.password_matches(&request.password);
+        let recovered = if let (true, Some(id)) = (password_ok, owner_id.as_deref()) {
+            store
+                .consume_recovery_code(id, hash_recovery_code(code), now)
+                .await
+                .map_err(|_| LoginDenied::StoreUnavailable)?
+        } else {
+            false
+        };
+        if !(password_ok && recovered) {
+            return Err(LoginDenied::Invalid);
+        }
+    } else {
+        // Password + TOTP, both evaluated inside `authenticate`. Burn the matched step before the
+        // session is written, so the same code — and any earlier one — can never mint a second.
+        let authenticated = admin
+            .credential
+            .authenticate(
+                &request.password,
+                &request.totp_code,
+                unix_seconds(now),
+                admin.last_used_totp_step,
+            )
+            .map_err(|_| LoginDenied::Invalid)?;
+        store
+            .record_totp_step(authenticated.totp_step)
+            .await
+            .map_err(|_| LoginDenied::StoreUnavailable)?;
+    }
     let absolute_expires_at = expiry(now, mint.absolute_ttl_secs);
     // The first idle boundary, never past the cap (which only matters under a misconfigured idle ≥
     // absolute — normal config has idle well below the cap, so this is just `now + idle`).
@@ -939,6 +1025,35 @@ pub fn current_session_token_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
     session_token_from_cookies(headers).map(hash_token)
 }
 
+/// The stored form of a recovery code — `SHA-256` of its *normalised* text
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Only the hash is ever
+/// stored; the code itself reaches the admin once, at generation. Normalisation
+/// ([`normalize_recovery_code`]) means the admin may type the code with or without its display
+/// dashes and in any case and still match.
+#[must_use]
+pub fn hash_recovery_code(code: &str) -> [u8; 32] {
+    hash_token(&normalize_recovery_code(code))
+}
+
+/// Canonicalises a recovery code for hashing: keep only ASCII alphanumerics, lower-cased. So the
+/// display form `"a1b2-c3d4-e5f6-a7b8"` and a typed `"A1B2 C3D4 E5F6 A7B8"` hash identically.
+fn normalize_recovery_code(code: &str) -> String {
+    code.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+/// A recovery code to store: its row id (a ULID minted at the edge) and `SHA-256` hash — never the
+/// code itself ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
+#[derive(Debug, Clone)]
+pub struct NewRecoveryCode {
+    /// The row's id (a ULID string).
+    pub id: String,
+    /// `SHA-256` of the normalised code.
+    pub code_hash: [u8; 32],
+}
+
 /// The Unix-seconds value TOTP verification consumes, from a millisecond [`Timestamp`]. Clamped at the
 /// epoch — a pre-epoch clock is nonsensical here and would only ever fail to verify.
 fn unix_seconds(now: Timestamp) -> u64 {
@@ -983,8 +1098,8 @@ mod tests {
     use super::{
         AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError,
         AdminUser, IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminInvite, NewAdminSession,
-        NewAdminUser, SessionDenied, SessionMint, authenticate_session, authenticated_admin,
-        hash_token, login, logout,
+        NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint, authenticate_session,
+        authenticated_admin, hash_recovery_code, hash_token, login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -1021,6 +1136,16 @@ mod tests {
         LoginRequest {
             password: password.to_owned(),
             totp_code: totp_code.to_owned(),
+            recovery_code: None,
+        }
+    }
+
+    /// A login request presenting a recovery code in place of a TOTP code.
+    fn recovery_request(password: &str, recovery_code: &str) -> LoginRequest {
+        LoginRequest {
+            password: password.to_owned(),
+            totp_code: String::new(),
+            recovery_code: Some(recovery_code.to_owned()),
         }
     }
 
@@ -1090,8 +1215,15 @@ mod tests {
         accepted: bool,
     }
 
+    /// A stored recovery code in the fake: its hash and whether it has been spent.
+    #[derive(Clone)]
+    struct StoredRecoveryCode {
+        code_hash: [u8; 32],
+        used: bool,
+    }
+
     /// An in-memory admin store: at most one legacy credential, the multi-admin `admin_users`
-    /// table, an invitations table, a session table, and a down switch.
+    /// table, an invitations table, a session table, per-admin recovery codes, and a down switch.
     #[derive(Default)]
     struct FakeAdmin {
         credential: Mutex<Option<SuperAdminCredential>>,
@@ -1099,6 +1231,7 @@ mod tests {
         sessions: Mutex<SessionRows>,
         admin_users: Mutex<Vec<AdminUser>>,
         invites: Mutex<Vec<StoredInvite>>,
+        recovery_codes: Mutex<HashMap<String, Vec<StoredRecoveryCode>>>,
         down: bool,
     }
 
@@ -1167,6 +1300,80 @@ mod tests {
                 *last = Some(step);
             }
             Ok(())
+        }
+
+        async fn rotate_totp_secret(&self, secret: Vec<u8>) -> Result<(), AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut slot = self.credential.lock().expect("lock");
+            if let Some(credential) = slot.take() {
+                *slot = Some(credential.with_totp(TotpSecret::new(secret)));
+            }
+            // A fresh secret starts unused, exactly as the SQL resets `last_used_totp_step = NULL`.
+            *self.last_used_totp_step.lock().expect("lock") = None;
+            Ok(())
+        }
+
+        async fn store_recovery_codes(
+            &self,
+            admin_id: &str,
+            codes: Vec<NewRecoveryCode>,
+        ) -> Result<(), AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let rows = codes
+                .into_iter()
+                .map(|code| StoredRecoveryCode {
+                    code_hash: code.code_hash,
+                    used: false,
+                })
+                .collect();
+            // Regenerating replaces the whole set, as the SQL delete-then-insert does.
+            self.recovery_codes
+                .lock()
+                .expect("lock")
+                .insert(admin_id.to_owned(), rows);
+            Ok(())
+        }
+
+        async fn consume_recovery_code(
+            &self,
+            admin_id: &str,
+            code_hash: [u8; 32],
+            _now: Timestamp,
+        ) -> Result<bool, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let mut map = self.recovery_codes.lock().expect("lock");
+            let Some(rows) = map.get_mut(admin_id) else {
+                return Ok(false);
+            };
+            // Single-use: the first unused code that matches is spent, as the SQL `WHERE used_at IS
+            // NULL` guard is.
+            match rows
+                .iter_mut()
+                .find(|row| !row.used && row.code_hash == code_hash)
+            {
+                Some(row) => {
+                    row.used = true;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn count_recovery_codes(&self, admin_id: &str) -> Result<u64, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let map = self.recovery_codes.lock().expect("lock");
+            let unused = map
+                .get(admin_id)
+                .map_or(0, |rows| rows.iter().filter(|row| !row.used).count());
+            Ok(u64::try_from(unused).unwrap_or(u64::MAX))
         }
 
         async fn create_session(&self, session: NewAdminSession) -> Result<(), AdminStoreError> {
@@ -2304,6 +2511,201 @@ mod tests {
         assert_eq!(
             sessions[0].user_agent.as_deref(),
             Some("Mozilla/5.0 (console)")
+        );
+    }
+
+    // ---- TOTP re-enrolment + recovery codes ([ADR-0067] slice 6) ----
+
+    /// A recovery code to store: a row id and the hash of `code`.
+    fn recovery(id: &str, code: &str) -> NewRecoveryCode {
+        NewRecoveryCode {
+            id: id.to_owned(),
+            code_hash: hash_recovery_code(code),
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_codes_store_count_and_burn_single_use() {
+        let store = FakeAdmin::default();
+        store
+            .store_recovery_codes(
+                "id-1",
+                vec![
+                    recovery("r1", "aaaa-bbbb"),
+                    recovery("r2", "cccc-dddd"),
+                    recovery("r3", "eeee-ffff"),
+                ],
+            )
+            .await
+            .expect("store");
+        assert_eq!(store.count_recovery_codes("id-1").await.expect("count"), 3);
+
+        // Consuming normalises the input, so typing it without dashes and upper-cased still matches.
+        assert!(
+            store
+                .consume_recovery_code("id-1", hash_recovery_code("AAAABBBB"), clock().now())
+                .await
+                .expect("consume")
+        );
+        assert_eq!(store.count_recovery_codes("id-1").await.expect("count"), 2);
+        // Single-use: the same code cannot be spent twice.
+        assert!(
+            !store
+                .consume_recovery_code("id-1", hash_recovery_code("aaaa-bbbb"), clock().now())
+                .await
+                .expect("consume"),
+            "a spent code cannot be reused"
+        );
+        // A code that was never issued matches nothing.
+        assert!(
+            !store
+                .consume_recovery_code("id-1", hash_recovery_code("0000-0000"), clock().now())
+                .await
+                .expect("consume")
+        );
+    }
+
+    #[tokio::test]
+    async fn regenerating_recovery_codes_replaces_the_set() {
+        let store = FakeAdmin::default();
+        store
+            .store_recovery_codes(
+                "id-1",
+                vec![recovery("r1", "old1-old1"), recovery("r2", "old2-old2")],
+            )
+            .await
+            .expect("store");
+        store
+            .store_recovery_codes(
+                "id-1",
+                vec![
+                    recovery("n1", "new1-new1"),
+                    recovery("n2", "new2-new2"),
+                    recovery("n3", "new3-new3"),
+                ],
+            )
+            .await
+            .expect("regenerate");
+        assert_eq!(store.count_recovery_codes("id-1").await.expect("count"), 3);
+        assert!(
+            !store
+                .consume_recovery_code("id-1", hash_recovery_code("old1-old1"), clock().now())
+                .await
+                .expect("consume"),
+            "regenerating invalidates the previous set"
+        );
+        assert!(
+            store
+                .consume_recovery_code("id-1", hash_recovery_code("new1-new1"), clock().now())
+                .await
+                .expect("consume")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recovery_code_signs_in_in_place_of_totp_and_is_burned() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        store
+            .store_recovery_codes("id-owner", vec![recovery("r1", "help-me-in")])
+            .await
+            .expect("store");
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &recovery_request("a-strong-passphrase", "help-me-in"),
+            &mint("recovered"),
+        )
+        .await
+        .expect("recovery sign-in");
+        // The session is live and bound to the owner, exactly as a TOTP sign-in would be.
+        let context = authenticated_admin(&store, &clock, &cookie_header("recovered"))
+            .await
+            .expect("the recovered session authorises");
+        assert_eq!(context.admin.id, "id-owner");
+        // Single-use: the same code cannot sign in a second time.
+        assert_eq!(
+            login(
+                &store,
+                &clock,
+                &recovery_request("a-strong-passphrase", "help-me-in"),
+                &mint("again"),
+            )
+            .await,
+            Err(LoginDenied::Invalid),
+            "a recovery code is spent after one use"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_never_burns_a_recovery_code() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        store
+            .store_recovery_codes("id-owner", vec![recovery("r1", "keep-me-safe")])
+            .await
+            .expect("store");
+        let clock = clock();
+        assert_eq!(
+            login(
+                &store,
+                &clock,
+                &recovery_request("wrong-passphrase", "keep-me-safe"),
+                &mint("nope"),
+            )
+            .await,
+            Err(LoginDenied::Invalid)
+        );
+        // The code survived, so a correct sign-in still spends it — a wrong password did not.
+        assert_eq!(
+            store.count_recovery_codes("id-owner").await.expect("count"),
+            1
+        );
+        login(
+            &store,
+            &clock,
+            &recovery_request("a-strong-passphrase", "keep-me-safe"),
+            &mint("yes"),
+        )
+        .await
+        .expect("a correct recovery sign-in still works");
+    }
+
+    #[tokio::test]
+    async fn rotating_the_totp_secret_resets_the_step_and_kills_old_codes() {
+        let store = FakeAdmin::provisioned();
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request("a-strong-passphrase", &current_code()),
+            &mint("first"),
+        )
+        .await
+        .expect("login");
+        assert!(store.recorded_step().is_some());
+
+        store
+            .rotate_totp_secret(b"a-brand-new-totp-secret-value".to_vec())
+            .await
+            .expect("rotate");
+        assert_eq!(
+            store.recorded_step(),
+            None,
+            "a freshly enrolled secret starts from an unused step"
+        );
+        // A code from the replaced authenticator no longer verifies against the new secret.
+        assert_eq!(
+            login(
+                &store,
+                &clock,
+                &request("a-strong-passphrase", &current_code()),
+                &mint("second"),
+            )
+            .await,
+            Err(LoginDenied::Invalid),
+            "codes from the old authenticator are dead after re-enrolment"
         );
     }
 

@@ -17,6 +17,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Security
+- **A console admin can re-enrol their authenticator and hold one-time recovery codes** (roadmap v2,
+  Track G, G1 slice 6; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `POST /admin/totp`
+  rotates the TOTP secret the sign-in verifies — after re-confirming the current password, so a
+  session-only attacker (holding the cookie but not the password) cannot lock the owner out — and
+  returns a fresh one-time enrolment (provisioning QR + base32 secret); existing sessions stay valid
+  and the next sign-in uses the new authenticator. `POST /admin/recovery-codes` (re)generates ten
+  one-time codes, shown once and stored only as their `SHA-256`, and `GET /admin/recovery-codes`
+  reports how many are left (never the codes). `/admin/login` now accepts a `recovery_code` in place
+  of the TOTP code when the authenticator is lost: the password is verified first (a wrong password
+  never burns a code), the code is consumed atomically single-use, and every failure collapses to the
+  same generic `401` — the recovery path is no more of an oracle than the TOTP one. Both management
+  routes are self-service (any authenticated admin, no role permission). Because sign-in is still the
+  single super-admin credential (per-admin email login is a later slice), re-enrolment and recovery
+  act on that credential and the codes belong to the owner. **Upgrade note:** the `admin_recovery_codes`
+  table already exists (migration `0018`); no new migration, protocol, or permission change; the
+  `LoginRequest` gains an optional `recovery_code` field (absent for an ordinary sign-in).
 - **The admin sign-in is rate-limited, and the console now ships defence-in-depth response headers**
   (roadmap v2, Track G, G1 slice 5; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
   `/admin/login` throttles attempts in a sliding window — by default 10 per 5 minutes per client

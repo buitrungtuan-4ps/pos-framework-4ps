@@ -596,6 +596,105 @@ impl PostgresAdmin {
             .map_err(unavailable)?;
         Ok(rows == 1)
     }
+
+    // ---- Credential recovery + rotation ([ADR-0067] slice 6) ----
+
+    /// Replaces the single super-admin's TOTP secret and resets its last-used step to `NULL`, so a
+    /// freshly-enrolled authenticator's codes verify from step zero — the store half of a TOTP
+    /// re-enrolment.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn rotate_totp_secret(&self, secret: &[u8]) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "UPDATE super_admin SET totp_secret = $1, last_used_totp_step = NULL, \
+                 updated_at = now() WHERE id",
+                &[&secret],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Replaces `admin_id`'s recovery codes with `codes` (each an `(id, SHA-256(code))` pair):
+    /// regenerating the set deletes whatever was there, then inserts the new codes on the same
+    /// connection. Only the hash is stored, never the code.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn replace_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: &[(String, Vec<u8>)],
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "DELETE FROM admin_recovery_codes WHERE admin_id = $1",
+                &[&admin_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        for (id, code_hash) in codes {
+            let id = id.as_str();
+            let code_hash = code_hash.as_slice();
+            connection
+                .execute(
+                    "INSERT INTO admin_recovery_codes (id, admin_id, code_hash, used_at) \
+                     VALUES ($1, $2, $3, NULL)",
+                    &[&id, &admin_id, &code_hash],
+                )
+                .await
+                .map_err(unavailable)?;
+        }
+        Ok(())
+    }
+
+    /// Consumes an unused recovery code for `admin_id` matching `code_hash`, stamping `used_at`
+    /// single-use: the `WHERE used_at IS NULL` guard means the first caller claims it and a replay
+    /// (or a never-issued code) matches nothing. Returns whether a row was claimed.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: &[u8],
+        used_at_ms: i64,
+    ) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .execute(
+                "UPDATE admin_recovery_codes SET used_at = $3 \
+                 WHERE admin_id = $1 AND code_hash = $2 AND used_at IS NULL",
+                &[&admin_id, &code_hash, &used_at_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows == 1)
+    }
+
+    /// How many of `admin_id`'s recovery codes are still unused.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn count_recovery_codes(&self, admin_id: &str) -> Result<i64, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_one(
+                "SELECT count(*) FROM admin_recovery_codes WHERE admin_id = $1 AND used_at IS NULL",
+                &[&admin_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.get(0))
+    }
 }
 
 /// A console admin as listed — identity and role, no credential (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).

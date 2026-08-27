@@ -49,7 +49,7 @@ use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredent
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, SessionSummary,
+    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
 };
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
@@ -441,6 +441,49 @@ impl AdminStore for PostgresAdmin {
         self.delete_other_admin_sessions(admin_id, &except_token_hash)
             .await
             .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn rotate_totp_secret(&self, secret: Vec<u8>) -> Result<(), AdminStoreError> {
+        PostgresAdmin::rotate_totp_secret(self, &secret)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn store_recovery_codes(
+        &self,
+        admin_id: &str,
+        codes: Vec<NewRecoveryCode>,
+    ) -> Result<(), AdminStoreError> {
+        let codes: Vec<(String, Vec<u8>)> = codes
+            .into_iter()
+            .map(|code| (code.id, code.code_hash.to_vec()))
+            .collect();
+        self.replace_recovery_codes(admin_id, &codes)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        admin_id: &str,
+        code_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, AdminStoreError> {
+        PostgresAdmin::consume_recovery_code(
+            self,
+            admin_id,
+            &code_hash,
+            now.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn count_recovery_codes(&self, admin_id: &str) -> Result<u64, AdminStoreError> {
+        let count = PostgresAdmin::count_recovery_codes(self, admin_id)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(u64::try_from(count).unwrap_or(0))
     }
 
     async fn create_admin_user(&self, user: NewAdminUser) -> Result<bool, AdminStoreError> {

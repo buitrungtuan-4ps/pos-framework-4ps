@@ -69,6 +69,18 @@ them, it does not revisit them).
   so the SPA served at the site root is protected too; the CSP locks `script-src` to `'self'` (the
   built SPA carries no inline script) and relaxes only `style-src` with `'unsafe-inline'`, a
   deliberately bounded concession for runtime inline styles.
+  Concretely (slice 6): because sign-in is still the single super-admin credential (slice 2b kept it
+  as-is; per-admin email login is a later slice), re-enrolment and recovery act on **that** credential
+  — the one login verifies — and the recovery codes belong to the owner. `POST /admin/totp` rotates
+  the TOTP secret only after re-confirming the current *password*, so a session-only attacker cannot
+  re-enrol; requiring the current TOTP would be self-defeating for a lost authenticator, so the
+  knowledge factor alone gates it. `POST /admin/recovery-codes` (re)generates ten codes, returned once
+  and stored only as `SHA-256`; `/admin/login` accepts a `recovery_code` in place of the TOTP code,
+  verifying the password first (a wrong password never burns a code) and consuming the code atomically
+  single-use, with every failure collapsing to the same generic refusal as the TOTP path. Both
+  management routes are self-service (session-gated, no `console.*` permission). This is complementary
+  to — not a replacement for — the ADR-0045 `reset_admin` break-glass, which stays the last resort
+  when both factors and all recovery codes are lost.
 
 - **Console-only identity (Fork E).** These identities authenticate the **console only**. Store staff
   keep the edge offline-PIN system ([ADR-0030](0030-pairing-and-offline-auth.md)); there is no unified

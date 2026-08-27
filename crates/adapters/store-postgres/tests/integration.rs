@@ -737,6 +737,94 @@ mod admin_store {
             );
         });
     }
+
+    /// TOTP re-enrolment replaces the secret and resets the last-used step ([ADR-0067] slice 6).
+    #[test]
+    fn totp_re_enrolment_replaces_the_secret_and_resets_the_step() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            admin
+                .insert_credential("$argon2id$phc", b"old-secret-value")
+                .await
+                .expect("provision");
+            admin.advance_totp_step(42).await.expect("advance the step");
+
+            admin
+                .rotate_totp_secret(b"a-freshly-enrolled-secret")
+                .await
+                .expect("rotate");
+            let row = admin
+                .fetch_credential()
+                .await
+                .expect("fetch")
+                .expect("a credential is present");
+            assert_eq!(row.totp_secret, b"a-freshly-enrolled-secret".to_vec());
+            assert_eq!(
+                row.last_used_totp_step, None,
+                "a fresh secret resets the last-used step"
+            );
+        });
+    }
+
+    /// Recovery codes store, count, burn single-use, and regenerate — scoped to the admin
+    /// ([ADR-0067] slice 6).
+    #[test]
+    fn recovery_codes_store_consume_count_and_regenerate() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            admin
+                .insert_admin_user("rec-1", "rec@x.test", "R", "owner", "active", "$phc", b"s")
+                .await
+                .expect("seed admin");
+            let (h1, h2, h3) = (vec![1_u8; 32], vec![2_u8; 32], vec![3_u8; 32]);
+            admin
+                .replace_recovery_codes(
+                    "rec-1",
+                    &[("c1".to_owned(), h1.clone()), ("c2".to_owned(), h2.clone())],
+                )
+                .await
+                .expect("store");
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 2);
+
+            // Single-use: the first match spends the code, a replay matches nothing.
+            assert!(
+                admin
+                    .consume_recovery_code("rec-1", &h1, 1000)
+                    .await
+                    .expect("consume")
+            );
+            assert!(
+                !admin
+                    .consume_recovery_code("rec-1", &h1, 1000)
+                    .await
+                    .expect("consume"),
+                "a spent code cannot be reused"
+            );
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 1);
+
+            // Regenerating replaces the set: the previous unused code is gone, the new one works.
+            admin
+                .replace_recovery_codes("rec-1", &[("c3".to_owned(), h3.clone())])
+                .await
+                .expect("regenerate");
+            assert_eq!(admin.count_recovery_codes("rec-1").await.expect("count"), 1);
+            assert!(
+                !admin
+                    .consume_recovery_code("rec-1", &h2, 1000)
+                    .await
+                    .expect("consume"),
+                "a code from the replaced set no longer matches"
+            );
+            assert!(
+                admin
+                    .consume_recovery_code("rec-1", &h3, 1000)
+                    .await
+                    .expect("consume")
+            );
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
