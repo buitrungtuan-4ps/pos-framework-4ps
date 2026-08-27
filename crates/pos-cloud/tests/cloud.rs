@@ -22,8 +22,8 @@ use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
 use pos_cloud::audit::{
-    AuditActor, AuditEntry, AuditId, AuditRecorder, AuditSink, AuditStore, AuditStoreError,
-    NoopAuditRecorder,
+    AuditActor, AuditEntry, AuditId, AuditQuery, AuditRecorder, AuditSink, AuditStore,
+    AuditStoreError, NoopAuditRecorder,
 };
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
@@ -4162,6 +4162,54 @@ impl AuditStore for FakeAudit {
         rows.truncate(limit as usize);
         Ok(rows)
     }
+
+    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows: Vec<AuditEntry> = self
+            .entries
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|entry| query.tenant.is_none() || entry.tenant_id == query.tenant)
+            .filter(|entry| {
+                query
+                    .entity_type
+                    .as_ref()
+                    .is_none_or(|value| &entry.entity_type == value)
+            })
+            .filter(|entry| {
+                query
+                    .entity_id
+                    .as_ref()
+                    .is_none_or(|value| &entry.entity_id == value)
+            })
+            .filter(|entry| {
+                query
+                    .action
+                    .as_ref()
+                    .is_none_or(|value| &entry.action == value)
+            })
+            .filter(|entry| {
+                query
+                    .actor_admin_id
+                    .as_ref()
+                    .is_none_or(|value| &entry.actor.admin_id == value)
+            })
+            .filter(|entry| {
+                query
+                    .since_ms
+                    .is_none_or(|since| entry.at.as_milliseconds_since_epoch() >= since)
+            })
+            .filter(|entry| {
+                query
+                    .until_ms
+                    .is_none_or(|until| entry.at.as_milliseconds_since_epoch() <= until)
+            })
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        rows.truncate(query.limit as usize);
+        Ok(rows)
+    }
 }
 
 #[tokio::test]
@@ -4286,6 +4334,102 @@ async fn registry_writes_record_to_the_audit_trail() {
         recorded.iter().any(|entry| entry.action == "tenant.create"),
         "the tenant create was recorded too"
     );
+}
+
+#[tokio::test]
+async fn the_audit_read_filters_and_needs_a_session() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let entry = |id: u128, action: &str, entity_type: &str, at_ms: i64| AuditEntry {
+        id: AuditId::new(Ulid::from_u128(id)),
+        tenant_id: Some(tenant()),
+        actor: AuditActor {
+            admin_id: "01ADMIN0000000000000000OPS".to_owned(),
+            email: "ops@pizza4ps.test".to_owned(),
+            role: AdminRole::Owner,
+        },
+        action: action.to_owned(),
+        entity_type: entity_type.to_owned(),
+        entity_id: store_id().to_string(),
+        before: None,
+        after: Some(serde_json::json!({ "name": "Bến Thành" })),
+        request_id: None,
+        at: Timestamp::from_milliseconds_since_epoch(at_ms).expect("a valid instant"),
+    };
+    audit
+        .append(&entry(1, "store.create", "store", NOW_MS - 2_000))
+        .await
+        .expect("append 1");
+    audit
+        .append(&entry(2, "store.update", "store", NOW_MS - 1_000))
+        .await
+        .expect("append 2");
+    audit
+        .append(&entry(3, "tenant.update", "tenant", NOW_MS))
+        .await
+        .expect("append 3");
+
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::audit_router(audit, admin, clock()));
+
+    // No session → the trail is behind the guard.
+    let denied = router
+        .clone()
+        .oneshot(get("/admin/audit", None))
+        .await
+        .expect("route the unauthenticated read");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = admin_cookie(&router).await;
+
+    // Unfiltered: every entry, newest first.
+    let all = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit", &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(all.status(), StatusCode::OK);
+    let all = json_body(all).await;
+    let rows = all.as_array().expect("array");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["action"], "tenant.update", "newest first");
+    assert_eq!(
+        rows[0]["actor_email"], "ops@pizza4ps.test",
+        "the actor snapshot is flattened onto the view"
+    );
+
+    // Filter by entity type.
+    let stores = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?entity_type=store", &cookie))
+        .await
+        .expect("route the filtered read");
+    let stores = json_body(stores).await;
+    assert_eq!(stores.as_array().expect("array").len(), 2);
+    assert!(
+        stores
+            .as_array()
+            .expect("array")
+            .iter()
+            .all(|row| row["entity_type"] == "store"),
+        "only store entries survive the filter"
+    );
+
+    // Filter by action.
+    let updates = router
+        .oneshot(get_with_cookie("/admin/audit?action=store.update", &cookie))
+        .await
+        .expect("route the action-filtered read");
+    let updates = json_body(updates).await;
+    assert_eq!(updates.as_array().expect("array").len(), 1);
+    assert_eq!(updates[0]["action"], "store.update");
 }
 
 #[tokio::test]

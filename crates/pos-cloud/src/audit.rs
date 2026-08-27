@@ -87,6 +87,31 @@ pub struct AuditEntry {
     pub at: Timestamp,
 }
 
+/// A filter for the audit read ([`AuditStore::query`]). Every field is optional; a `None` matches
+/// everything, so an all-`None` query with a `limit` is the plain newest-first read. `tenant`
+/// scoping is special: `Some(tenant)` returns only that tenant's rows (never the tenant-global
+/// `None`-tenant rows), while `None` reads across every tenant including the global ones — the
+/// trusted fleet-wide read the console's Audit screen uses.
+#[derive(Debug, Clone, Default)]
+pub struct AuditQuery {
+    /// The tenant to scope to, or `None` for the fleet-wide read.
+    pub tenant: Option<TenantId>,
+    /// Only entries for this entity type (e.g. `store`), or `None` for any.
+    pub entity_type: Option<String>,
+    /// Only entries for this entity id, or `None` for any.
+    pub entity_id: Option<String>,
+    /// Only entries with this action (e.g. `store.update`), or `None` for any.
+    pub action: Option<String>,
+    /// Only entries by this acting admin id, or `None` for any.
+    pub actor_admin_id: Option<String>,
+    /// Only entries at or after this instant (Unix ms), or `None` for no lower bound.
+    pub since_ms: Option<i64>,
+    /// Only entries at or before this instant (Unix ms), or `None` for no upper bound.
+    pub until_ms: Option<i64>,
+    /// The most rows to return, newest first.
+    pub limit: u32,
+}
+
 /// Appends and reads console audit entries.
 pub trait AuditStore {
     /// Appends one entry. Append-only: there is no update or delete.
@@ -109,6 +134,18 @@ pub trait AuditStore {
         &self,
         tenant: Option<TenantId>,
         limit: u32,
+    ) -> impl Future<Output = Result<Vec<AuditEntry>, AuditStoreError>> + Send;
+
+    /// Reads entries newest-first matching every set filter of `query` (a `None` filter matches
+    /// everything), up to `query.limit`. The filters are applied before the limit, so a narrow filter
+    /// still reaches older matching rows. This is what the Audit screen reads.
+    ///
+    /// # Errors
+    ///
+    /// [`AuditStoreError`] if the entries could not be read.
+    fn query(
+        &self,
+        query: &AuditQuery,
     ) -> impl Future<Output = Result<Vec<AuditEntry>, AuditStoreError>> + Send;
 }
 

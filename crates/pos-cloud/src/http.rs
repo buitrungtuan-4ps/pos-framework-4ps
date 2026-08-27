@@ -79,7 +79,7 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
-use crate::audit::{AuditActor, AuditEntry, AuditId, AuditRecorder, NoopAuditRecorder};
+use crate::audit::{AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder};
 use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
     LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
@@ -5439,6 +5439,166 @@ where
         Ok(context)
     } else {
         Err((StatusCode::FORBIDDEN, "insufficient permissions").into_response())
+    }
+}
+
+// --- Console audit read (`GET /admin/audit`, ADR-0069 slice 4) ----------------------------------
+
+/// The collaborators the audit read needs, stated independently of [`CloudApp`]: the concrete audit
+/// store (the [`AuditRecorder`] the write routes carry exposes only `record`, so the read carries the
+/// store itself), plus the admin and clock the session guard uses.
+#[derive(Clone)]
+struct AuditReadState<Au, A, C> {
+    audit: Au,
+    admin: A,
+    clock: C,
+}
+
+/// The default and maximum number of audit rows one read returns.
+const AUDIT_READ_DEFAULT_LIMIT: u32 = 200;
+const AUDIT_READ_MAX_LIMIT: u32 = 500;
+
+/// The filters the Audit screen names on the query string. Every field is optional; an absent field
+/// does not filter. `tenant_id` absent is the fleet-wide read (every tenant, including tenant-global
+/// entries); present scopes to one tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct AuditReadQuery {
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    entity_type: Option<String>,
+    #[serde(default)]
+    entity_id: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    actor_admin_id: Option<String>,
+    #[serde(default)]
+    since_ms: Option<i64>,
+    #[serde(default)]
+    until_ms: Option<i64>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw
+/// ULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AuditEntryView {
+    id: String,
+    tenant_id: Option<String>,
+    actor_admin_id: String,
+    actor_email: String,
+    actor_role: String,
+    action: String,
+    entity_type: String,
+    entity_id: String,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+    request_id: Option<String>,
+    at_ms: i64,
+}
+
+impl AuditEntryView {
+    fn from_entry(entry: AuditEntry) -> Self {
+        Self {
+            id: entry.id.to_string(),
+            tenant_id: entry.tenant_id.map(|tenant| tenant.to_string()),
+            actor_admin_id: entry.actor.admin_id,
+            actor_email: entry.actor.email,
+            actor_role: entry.actor.role.as_token().to_owned(),
+            action: entry.action,
+            entity_type: entry.entity_type,
+            entity_id: entry.entity_id,
+            before: entry.before,
+            after: entry.after,
+            request_id: entry.request_id,
+            at_ms: entry.at.as_milliseconds_since_epoch(),
+        }
+    }
+}
+
+/// Builds the audit-read sub-router ([ADR-0069](../../../docs/adr/0069-audit-trail.md) slice 4).
+///
+/// One read, `GET /admin/audit`, behind [`ConsolePermission::Read`] (every console role may read the
+/// trail). It names its tenant the admin-is-global way — a `?tenant_id=` query
+/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)); absent, it is the fleet-wide
+/// read. Like the other reads it carries its own state and is merged into the main router.
+pub fn audit_router<Au, A, C>(audit: Au, admin: A, clock: C) -> Router
+where
+    Au: AuditStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/audit", get(admin_list_audit::<Au, A, C>))
+        .with_state(AuditReadState {
+            audit,
+            admin,
+            clock,
+        })
+}
+
+/// A super-admin (any console role) reads the audit trail, filtered by the query string.
+async fn admin_list_audit<Au, A, C>(
+    State(state): State<AuditReadState<Au, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<AuditReadQuery>,
+) -> Response
+where
+    Au: AuditStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant = match query.tenant_id.as_deref() {
+        Some(text) => match text.parse::<Ulid>().map(TenantId::new) {
+            Ok(tenant) => Some(tenant),
+            Err(_ignored) => {
+                return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+            }
+        },
+        None => None,
+    };
+    let limit = query
+        .limit
+        .unwrap_or(AUDIT_READ_DEFAULT_LIMIT)
+        .clamp(1, AUDIT_READ_MAX_LIMIT);
+    let filter = crate::audit::AuditQuery {
+        tenant,
+        entity_type: query.entity_type,
+        entity_id: query.entity_id,
+        action: query.action,
+        actor_admin_id: query.actor_admin_id,
+        since_ms: query.since_ms,
+        until_ms: query.until_ms,
+        limit,
+    };
+    match state.audit.query(&filter).await {
+        Ok(entries) => {
+            let view: Vec<AuditEntryView> = entries
+                .into_iter()
+                .map(AuditEntryView::from_entry)
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "an audit read failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the audit service is unavailable",
+            )
+                .into_response()
+        }
     }
 }
 

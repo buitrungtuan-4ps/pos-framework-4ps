@@ -12,6 +12,8 @@ import type {
   AdminSessionView,
   AdminStatus,
   ApiKeySummary,
+  AuditEntry,
+  AuditFilter,
   Brand,
   CatalogItem,
   ChannelPrice,
@@ -602,4 +604,18 @@ export const api = {
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
     ),
   taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
+
+  // --- console audit trail (ADR-0069, Track G2) ---
+  // A fleet-wide, filterable read of who changed what, behind console.data.read. Every filter is
+  // optional; an absent `tenantId` reads across every tenant (including tenant-global entries).
+  listAudit: (filter: AuditFilter = {}) => {
+    const params = new URLSearchParams();
+    if (filter.tenantId) params.set("tenant_id", filter.tenantId);
+    if (filter.entityType) params.set("entity_type", filter.entityType);
+    if (filter.action) params.set("action", filter.action);
+    if (filter.actorAdminId) params.set("actor_admin_id", filter.actorAdminId);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return requestJson<AuditEntry[]>("GET", query ? `/admin/audit?${query}` : "/admin/audit");
+  },
 };

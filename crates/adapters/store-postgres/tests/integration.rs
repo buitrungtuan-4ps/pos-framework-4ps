@@ -1597,6 +1597,168 @@ mod audit_log {
             );
         });
     }
+
+    /// `search` applies each non-`None` filter in SQL before the limit: by entity type, by action,
+    /// by acting admin, and by a time window — so a narrow filter reaches the matching rows and a
+    /// tenant filter still excludes the tenant-global `NULL` rows ([ADR-0069] slice 4).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one scenario: it seeds four rows across tenants/actors/times then exercises each \
+                  filter dimension (entity, action, actor, time window, tenant) in turn; splitting \
+                  it would duplicate the shared multi-row setup"
+    )]
+    fn search_filters_by_entity_action_actor_and_time() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            let seed = |id: &'static str,
+                        tenant: Option<&'static str>,
+                        actor: &'static str,
+                        action: &'static str,
+                        entity_type: &'static str,
+                        at_ms: i64| {
+                let audit = audit.clone();
+                async move {
+                    audit
+                        .insert(
+                            id,
+                            tenant,
+                            actor,
+                            "a@pizza4ps.test",
+                            "ops",
+                            action,
+                            entity_type,
+                            "entity-1",
+                            None,
+                            None,
+                            None,
+                            at_ms,
+                        )
+                        .await
+                        .expect("append");
+                }
+            };
+            seed(
+                "01SRCH00000000000000000S1",
+                Some("tenant-a"),
+                "admin-x",
+                "store.update",
+                "store",
+                1000,
+            )
+            .await;
+            seed(
+                "01SRCH00000000000000000S2",
+                Some("tenant-a"),
+                "admin-y",
+                "store.create",
+                "store",
+                2000,
+            )
+            .await;
+            seed(
+                "01SRCH00000000000000000M1",
+                Some("tenant-a"),
+                "admin-x",
+                "menu.create",
+                "menu",
+                3000,
+            )
+            .await;
+            seed(
+                "01SRCH00000000000000000G1",
+                None,
+                "admin-x",
+                "tenant.create",
+                "tenant",
+                4000,
+            )
+            .await;
+
+            // By entity type: only the two store rows, newest first.
+            let stores = audit
+                .search(
+                    Some("tenant-a"),
+                    Some("store"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    10,
+                )
+                .await
+                .expect("search by entity type");
+            assert_eq!(stores.len(), 2);
+            assert_eq!(
+                stores.first().expect("a row").action,
+                "store.create",
+                "newest first"
+            );
+
+            // By action.
+            let creates = audit
+                .search(None, None, None, Some("store.create"), None, None, None, 10)
+                .await
+                .expect("search by action");
+            assert_eq!(creates.len(), 1);
+            assert_eq!(
+                creates.first().expect("a row").id,
+                "01SRCH00000000000000000S2"
+            );
+
+            // By acting admin, fleet-wide (includes the NULL-tenant global row).
+            let by_x = audit
+                .search(None, None, None, None, Some("admin-x"), None, None, 10)
+                .await
+                .expect("search by actor");
+            assert_eq!(by_x.len(), 3, "admin-x acted three times across tenants");
+            assert!(
+                by_x.iter().any(|row| row.tenant_id.is_none()),
+                "the fleet-wide read includes the global row"
+            );
+
+            // By time window [1500, 3500]: the create + the menu row.
+            let window = audit
+                .search(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1500),
+                    Some(3500),
+                    10,
+                )
+                .await
+                .expect("search by time window");
+            assert_eq!(window.len(), 2);
+            assert!(
+                window
+                    .iter()
+                    .all(|row| row.at_ms >= 1500 && row.at_ms <= 3500),
+                "only rows inside the window"
+            );
+
+            // A tenant filter excludes the tenant-global row.
+            let scoped = audit
+                .search(Some("tenant-a"), None, None, None, None, None, None, 10)
+                .await
+                .expect("search scoped");
+            assert_eq!(
+                scoped.len(),
+                3,
+                "the three tenant-a rows, not the global one"
+            );
+            assert!(
+                scoped
+                    .iter()
+                    .all(|row| row.tenant_id.as_deref() == Some("tenant-a")),
+                "a tenant filter never returns NULL-tenant rows"
+            );
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

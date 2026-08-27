@@ -47,7 +47,7 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
-use crate::audit::{AuditActor, AuditEntry, AuditId, AuditStore, AuditStoreError};
+use crate::audit::{AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore, AuditStoreError};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -1486,6 +1486,24 @@ impl AuditStore for PostgresAudit {
         let tenant = tenant.map(|tenant| tenant.to_string());
         let rows = self
             .fetch(tenant.as_deref(), i64::from(limit))
+            .await
+            .map_err(|error| AuditStoreError::new(error.to_string()))?;
+        rows.into_iter().map(audit_entry).collect()
+    }
+
+    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let tenant = query.tenant.map(|tenant| tenant.to_string());
+        let rows = self
+            .search(
+                tenant.as_deref(),
+                query.entity_type.as_deref(),
+                query.entity_id.as_deref(),
+                query.action.as_deref(),
+                query.actor_admin_id.as_deref(),
+                query.since_ms,
+                query.until_ms,
+                i64::from(query.limit),
+            )
             .await
             .map_err(|error| AuditStoreError::new(error.to_string()))?;
         rows.into_iter().map(audit_entry).collect()

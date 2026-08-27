@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console has an Audit screen: a filterable, fleet-wide record of who changed what** (roadmap
+  v2, Track G, G2 slice 4; [ADR-0069](docs/adr/0069-audit-trail.md)). Now that the write routes emit
+  entries, `GET /admin/audit` reads them back — newest first, behind `console.data.read` (every
+  console role) — with server-side filters for entity type, action, acting admin, and a time window;
+  an absent `tenant_id` is the fleet-wide read (every tenant, including tenant-global entries), a
+  present one scopes to that tenant and excludes the global rows. Filters run in SQL before the row
+  limit, so a narrow filter still reaches older matches. A new **Audit** screen (Overview nav) lists
+  the trail in the F2 kit's `DataTable` with entity/action/actor filters, and a detail drawer shows
+  each change's before/after JSON, actor, and instant; the entry's ULID stays behind Technical
+  details. The `AuditStore` seam gained a `query` read (an `AuditQuery` filter) alongside the plain
+  `list`. **Upgrade note:** no schema, `PROTOCOL_VERSION`, or permission change; reuses migration
+  `0022` and the existing `console.data.read` permission. Config version list/diff/rollback and the
+  per-Detail audit tab are the next G2 slices.
 - **The rest of the console's write surface now records to the audit trail** (roadmap v2, Track G,
   G2 slice 3; [ADR-0069](docs/adr/0069-audit-trail.md)). Extending slice 2 beyond the org registry,
   every remaining `/admin` mutation now appends one `audit_log` entry on success: API-key issue and

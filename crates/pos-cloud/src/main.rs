@@ -255,6 +255,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
+        // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
+        // only `record`), behind the same super-admin session guard as the other reads.
+        .merge(http::audit_router(
+            store.audit(),
+            store.admin(),
+            SystemClock,
+        ))
         // Fleet liveness (ADR-0068): the read-only console view of whether each store is up and in
         // sync — a join across the registry, `store_liveness` (captured on config pulls/heartbeats),
         // the config tree, and the order-relay queue, with online/offline derived at read.

@@ -52,11 +52,13 @@ price used to be?", and no basis for the accountability a multi-admin, complianc
   a v1 blocker. The table and seam are designed so that hardening changes only *where* `append` is
   called from, never the row's shape.
 
-- **A dedicated `AuditStore` seam.** A trait (`append`, and a paginated `list` the audit screen reads)
-  over an in-memory fake in tests and the `audit_log` table in the cloud — the same split every cloud
-  store uses. The rich, filterable read (by actor, entity, action, time window) is a later slice; slice
-  1 lands the table, the seam, the adapter, and a recent-first `list` sufficient to prove the
-  round-trip.
+- **A dedicated `AuditStore` seam.** A trait over an in-memory fake in tests and the `audit_log` table
+  in the cloud — the same split every cloud store uses. `append` writes; `list(tenant, limit)` is the
+  recent-first read slice 1 landed to prove the round-trip; `query(AuditQuery)` (slice 4) is the rich
+  filterable read the Audit screen uses — by tenant, entity type/id, action, acting admin, and a time
+  window. Every filter is optional (a `None` matches everything) and applied in SQL *before* the row
+  limit, so a narrow filter still reaches older matching rows; the read is behind `console.data.read`
+  and, with no tenant filter, spans the fleet including the tenant-global rows.
 
 **Rejected.**
 

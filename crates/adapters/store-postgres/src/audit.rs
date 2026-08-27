@@ -157,6 +157,61 @@ impl PostgresAudit {
         .map_err(unavailable)?;
         Ok(rows.iter().map(audit_row).collect())
     }
+
+    /// Reads audit rows newest-first matching every non-`None` filter, up to `limit`. Each filter is
+    /// bound unconditionally and applied as `($n IS NULL OR column = $n)`, so a `None` matches every
+    /// row and the filters run in SQL *before* the `LIMIT` — a narrow filter still reaches older
+    /// matches. `tenant_id = $1` (when `Some`) excludes the tenant-global `NULL` rows, exactly as
+    /// [`fetch`](Self::fetch) does; `None` reads across every tenant including the global rows.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is one independent, optional filter column; a struct here would only \
+                  re-list the same columns one call-site away, as `insert` already notes"
+    )]
+    pub async fn search(
+        &self,
+        tenant_id: Option<&str>,
+        entity_type: Option<&str>,
+        entity_id: Option<&str>,
+        action: Option<&str>,
+        actor_admin_id: Option<&str>,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<AuditLogRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {AUDIT_COLUMNS} FROM audit_log \
+                     WHERE ($1::text IS NULL OR tenant_id = $1) \
+                       AND ($2::text IS NULL OR entity_type = $2) \
+                       AND ($3::text IS NULL OR entity_id = $3) \
+                       AND ($4::text IS NULL OR action = $4) \
+                       AND ($5::text IS NULL OR actor_admin_id = $5) \
+                       AND ($6::bigint IS NULL OR at >= $6) \
+                       AND ($7::bigint IS NULL OR at <= $7) \
+                     ORDER BY at DESC, id DESC LIMIT $8"
+                ),
+                &[
+                    &tenant_id,
+                    &entity_type,
+                    &entity_id,
+                    &action,
+                    &actor_admin_id,
+                    &since_ms,
+                    &until_ms,
+                    &limit,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(audit_row).collect())
+    }
 }
 
 /// Reads one queried row into an [`AuditLogRow`]. The column order matches [`AUDIT_COLUMNS`].
