@@ -65,7 +65,6 @@ signal is invented where one already exists — the engine is the missing *watch
 | Relay backlog stuck | `relay_backlog` over a limit, or `relay_oldest_pending_at` older than a threshold | per store |
 | Webhook endpoint disabled | the tenant's endpoints with `disabled = true` (auto-resolves when re-enabled) | per endpoint |
 | Projector unhealthy | the projector's `task_health` row: stale (no tick within interval+slack), `ok=false`, or `failed>0` | server-wide |
-| JetStream near capacity | `LinkCapacity::is_at_least(pct)` on the cloud's stream | server-wide |
 
 **Conditions deferred (flagged), each needing upstream telemetry that does not exist yet** — recorded
 here so the gap is explicit, not silently dropped:
@@ -84,6 +83,11 @@ here so the gap is explicit, not silently dropped:
 - **Projector *failure streaks*.** `task_health` keeps only the latest tick, not a history, so this ADR
   alerts on the latest tick being unhealthy; counting consecutive failures needs a small history table
   and is a follow-up.
+- **JetStream near capacity (the cloud-side probe).** The evaluator *supports* this condition — it
+  takes a `LinkCapacity` and applies `is_at_least(pct)` — but nothing feeds it a reading yet: the
+  cloud consumes the stream through `NatsConsumer`, which exposes no capacity read, and NATS ingest is
+  optional. A cloud-side stream-info probe is a small, self-contained follow-up; the evaluator fires
+  the alert the day one is wired.
 
 **Consequences.**
 

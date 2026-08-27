@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The alert evaluator background loop** (roadmap v2, Track O2, slice 3;
+  [ADR-0073](docs/adr/0073-alerting.md)). The cloud now *watches* its read models: a new background
+  loop (in the mould of the rollup projector and webhook dispatcher) sweeps the fleet, task-health, and
+  webhook read models each tick, runs the pure evaluator, and reconciles the firing set against the
+  alert store — opening a new alert per newly-firing condition, refreshing live ones, and **resolving
+  those that have cleared** (a store coming back online clears its own offline alert). It records its
+  own `task_health` tick, so the watcher is itself watched, and is added to the health endpoint's
+  expected-loops set. Cadence and every threshold are `CloudConfig` tunables (`alert_eval_interval_secs`,
+  `alert_store_offline_secs` = 5 min, `alert_relay_backlog_max`, `alert_relay_oldest_secs`,
+  `alert_projector_stale_slack_secs`, `alert_jetstream_capacity_percent`) with sensible defaults. Live
+  conditions: store offline, relay backlog, webhook auto-disabled, projector unhealthy. The JetStream
+  capacity condition is supported by the evaluator but its cloud-side stream-info probe is a flagged
+  follow-up (`NatsConsumer` exposes no capacity read and NATS ingest is optional). **Upgrade note:**
+  additive cloud-internal loop + config tunables; no schema, protocol, or permission change; the loop
+  writes alerts to the `0027` table but nothing reads them until the console API lands (slice 5).
 - **Alert store: the `alerts` table and its seam** (roadmap v2, Track O2, slice 2;
   [ADR-0073](docs/adr/0073-alerting.md)). Persists operational alerts with an open→resolved lifecycle.
   Migration `0027_alerts.sql` adds the `alerts` table — nullable `tenant_id` (server-wide alerts carry

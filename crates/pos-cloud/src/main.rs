@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
+use pos_cloud::alerts::AlertThresholds;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
@@ -23,7 +24,7 @@ use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, CloudConfig, NatsIngestConfig, assets, cursor, dashboard, http, orders, relay,
+    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, cursor, dashboard, http, orders, relay,
 };
 use store_postgres::PostgresStore;
 
@@ -175,6 +176,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal(),
     ));
 
+    // The alert evaluator (ADR-0073, Track O2): each tick it reads the fleet, task-health, and webhook
+    // read models, decides which operational conditions are firing, and reconciles them against the
+    // alert store (open/refresh/resolve). It always runs — with nothing wrong it is a cheap per-tick
+    // no-op — and, like every loop, records its own health so the watcher is itself watched.
+    let alert_interval = Duration::from_secs(config.alert_eval_interval_secs);
+    let alert_thresholds = AlertThresholds {
+        store_offline_secs: config.alert_store_offline_secs,
+        relay_backlog_max: config.alert_relay_backlog_max,
+        relay_oldest_secs: config.alert_relay_oldest_secs,
+        jetstream_capacity_percent: config.alert_jetstream_capacity_percent,
+        projector_stale_slack_secs: config.alert_projector_stale_slack_secs,
+    };
+    tracing::info!(
+        interval_secs = config.alert_eval_interval_secs,
+        "alert evaluator started"
+    );
+    let alert_task = tokio::spawn(alerts::evaluator::run(
+        store.registry(),
+        store.fleet(),
+        store.webhooks(),
+        store.task_health(),
+        store.alerts(),
+        SystemClock,
+        alert_thresholds,
+        alert_interval,
+        shutdown_signal(),
+    ));
+
     // The optional monitoring profile (metrics-vm → VictoriaMetrics, ADR-0031): a sparse liveness
     // heartbeat off the sales path, gated by [metrics] and off by default. Per
     // `docs/capacity-and-reliability.md` the profile is off below ~50 stores in favour of sparse
@@ -218,6 +247,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut expected_tasks = vec![
         pos_cloud::health::ROLLUP_PROJECTOR.to_owned(),
         pos_cloud::health::WEBHOOK_DISPATCHER.to_owned(),
+        pos_cloud::health::ALERT_EVALUATOR.to_owned(),
     ];
     if config.retention_days.is_some() {
         expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
@@ -424,6 +454,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     webhook_task.abort();
     let _ = webhook_task.await;
+    alert_task.abort();
+    let _ = alert_task.await;
     if let Some(task) = metrics_task {
         task.abort();
         let _ = task.await;

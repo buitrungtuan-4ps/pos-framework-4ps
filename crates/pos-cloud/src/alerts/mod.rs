@@ -10,9 +10,11 @@
 //! background loop, delivery, and the `/admin` surface land in the following slices.
 
 pub mod eval;
+pub mod evaluator;
 pub mod model;
 pub mod store;
 
 pub use eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
+pub use evaluator::{PassSummary, reconcile};
 pub use model::{AlertKind, AlertSeverity, FiringAlert};
 pub use store::{AlertRecord, AlertStore, AlertStoreError};

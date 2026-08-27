@@ -24,6 +24,8 @@ pub const ROLLUP_PROJECTOR: &str = "rollup_projector";
 pub const RETENTION: &str = "retention";
 /// The canonical name of the webhook dispatcher loop.
 pub const WEBHOOK_DISPATCHER: &str = "webhook_dispatcher";
+/// The canonical name of the alert evaluator loop ([ADR-0073](../../../docs/adr/0073-alerting.md)).
+pub const ALERT_EVALUATOR: &str = "alert_evaluator";
 
 /// Builds a tick's self-describing detail. Every loop records at least `ok` (did this tick's work
 /// succeed) and `interval_secs` (its configured cadence, which the reader compares `now − last_tick`

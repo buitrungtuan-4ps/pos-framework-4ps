@@ -91,6 +91,41 @@ const fn default_metrics_interval_secs() -> u64 {
     60
 }
 
+/// How often the alert evaluator sweeps the read models, in seconds, when the config does not say —
+/// one minute ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+const fn default_alert_eval_interval_secs() -> u64 {
+    60
+}
+
+/// How long a store may be silent before an alert fires, in seconds, when the config does not say —
+/// five minutes (the O2 minimum set; the Fleet screen's own online view stays at three).
+const fn default_alert_store_offline_secs() -> u64 {
+    5 * 60
+}
+
+/// The relay backlog count at or above which a store's queue alerts, when the config does not say.
+const fn default_alert_relay_backlog_max() -> u64 {
+    100
+}
+
+/// How long the oldest still-pending relayed order may sit before the queue alerts, in seconds, when
+/// the config does not say — fifteen minutes.
+const fn default_alert_relay_oldest_secs() -> u64 {
+    15 * 60
+}
+
+/// Extra seconds past a background loop's own interval before its silence alerts as stale, when the
+/// config does not say.
+const fn default_alert_projector_stale_slack_secs() -> u64 {
+    60
+}
+
+/// Percent-of-capacity at or above which the store→cloud stream alerts, when the config does not say —
+/// eighty (`docs/capacity-and-reliability.md`).
+const fn default_alert_jetstream_capacity_percent() -> u32 {
+    80
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -167,6 +202,26 @@ pub struct CloudConfig {
     /// telemetry. Set it only when the `monitoring` compose profile is running.
     #[serde(default)]
     pub metrics: Option<MetricsConfig>,
+    /// How often the alert evaluator sweeps the read models, in seconds
+    /// ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+    #[serde(default = "default_alert_eval_interval_secs")]
+    pub alert_eval_interval_secs: u64,
+    /// How long a store may be silent before a store-offline alert fires, in seconds (ADR-0073).
+    #[serde(default = "default_alert_store_offline_secs")]
+    pub alert_store_offline_secs: u64,
+    /// The relay backlog count at or above which a store's queue alerts (ADR-0073).
+    #[serde(default = "default_alert_relay_backlog_max")]
+    pub alert_relay_backlog_max: u64,
+    /// How long the oldest pending relayed order may sit before the queue alerts, in seconds (ADR-0073).
+    #[serde(default = "default_alert_relay_oldest_secs")]
+    pub alert_relay_oldest_secs: u64,
+    /// Extra seconds past a loop's interval before its silence alerts as stale (ADR-0073).
+    #[serde(default = "default_alert_projector_stale_slack_secs")]
+    pub alert_projector_stale_slack_secs: u64,
+    /// Percent-of-capacity at or above which the store→cloud stream alerts (ADR-0073). The evaluator
+    /// applies it the day a cloud-side JetStream capacity probe is wired (a flagged follow-up).
+    #[serde(default = "default_alert_jetstream_capacity_percent")]
+    pub alert_jetstream_capacity_percent: u32,
 }
 
 /// The optional monitoring profile: where the sparse metrics heartbeat imports, and how often.
