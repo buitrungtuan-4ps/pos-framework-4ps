@@ -56,6 +56,20 @@ const fn default_retention_sweep_interval_secs() -> u64 {
     24 * 60 * 60
 }
 
+/// How many sign-in attempts one client (IP, and later email) may make within the rate-limit window
+/// before `/admin/login` refuses with a `429`, when the config does not say — ten, generous for a
+/// fat-fingered password/TOTP yet far below what an online brute-force needs
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+const fn default_admin_login_max_attempts() -> usize {
+    10
+}
+
+/// The sliding rate-limit window for `/admin/login`, in seconds, when the config does not say — five
+/// minutes ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+const fn default_admin_login_window_secs() -> u64 {
+    5 * 60
+}
+
 /// How often the webhook dispatcher sweeps the enabled fleet, in seconds, when the config does not
 /// say — ten seconds, prompt enough that a subscriber sees an event soon after it lands
 /// ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
@@ -102,6 +116,15 @@ pub struct CloudConfig {
     /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
     #[serde(default = "default_admin_session_idle_ttl_secs")]
     pub admin_session_idle_ttl_secs: u64,
+    /// How many `/admin/login` attempts one client may make within
+    /// [`Self::admin_login_window_secs`] before the endpoint refuses with a `429`
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+    #[serde(default = "default_admin_login_max_attempts")]
+    pub admin_login_max_attempts: usize,
+    /// The sliding rate-limit window for `/admin/login`, in seconds
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+    #[serde(default = "default_admin_login_window_secs")]
+    pub admin_login_window_secs: u64,
     /// How long a console-admin invitation stays acceptable, in seconds
     /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
     #[serde(default = "default_admin_invite_ttl_secs")]
@@ -217,6 +240,15 @@ mod tests {
             config.admin_session_idle_ttl_secs,
             30 * 60,
             "the admin session idle timeout defaults to thirty minutes when unset"
+        );
+        assert_eq!(
+            config.admin_login_max_attempts, 10,
+            "the admin login rate limit defaults to ten attempts when unset"
+        );
+        assert_eq!(
+            config.admin_login_window_secs,
+            5 * 60,
+            "the admin login rate-limit window defaults to five minutes when unset"
         );
         assert_eq!(
             config.retention_days, None,

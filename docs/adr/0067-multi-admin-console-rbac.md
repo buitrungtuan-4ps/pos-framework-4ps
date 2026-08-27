@@ -57,6 +57,18 @@ them, it does not revisit them).
   `Referrer-Policy`, `X-Frame-Options: DENY`) now land here. TOTP **re-enrolment** (a signed-in admin
   rotates their own secret) and one-time **recovery codes** (hashed, for a lost authenticator) close
   the account-recovery gap without the break-glass.
+  Concretely (slice 5): the rate-limit is a sliding window (a per-key deque of recent attempt
+  instants), default 10 attempts / 5 minutes, checked *before* the Argon2id verify so it costs an
+  attacker a `429` rather than the server a hashing storm and can never leak whether the credential
+  was right; a refused attempt is not recorded, so it does not extend a legitimate admin's window.
+  It is keyed by client IP today (read from `X-Forwarded-For` behind the P8 proxy); the `email:…` key
+  the "per email" limit needs lights up when per-admin email login lands — the limiter already
+  refuses if *any* presented key is over its limit. State is in-process (single box) and ephemeral,
+  so a restart fails open, never locking an operator out. The security headers are applied as one
+  router layer over every response — the console SPA, its assets, and the `/admin`/`/v1` APIs alike —
+  so the SPA served at the site root is protected too; the CSP locks `script-src` to `'self'` (the
+  built SPA carries no inline script) and relaxes only `style-src` with `'unsafe-inline'`, a
+  deliberately bounded concession for runtime inline styles.
 
 - **Console-only identity (Fork E).** These identities authenticate the **console only**. Store staff
   keep the edge offline-PIN system ([ADR-0030](0030-pairing-and-offline-auth.md)); there is no unified

@@ -48,9 +48,13 @@ use core::fmt::Write as _;
 use std::collections::BTreeSet;
 
 use argon2::password_hash::SaltString;
-use axum::extract::{Path, Query, State};
-use axum::http::header::{SET_COOKIE, USER_AGENT};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::header::{
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE, USER_AGENT,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -87,6 +91,7 @@ use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
 };
 use crate::auth::password::hash_password;
+use crate::auth::rate_limit::LoginRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
@@ -132,6 +137,33 @@ const DEFAULT_ADMIN_INVITE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
 /// configured value in via [`CloudApp::with_admin_session_idle_ttl_secs`].
 const DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS: u64 = 30 * 60;
 
+/// How many `/admin/login` attempts one client may make within the window before a `429`, when the
+/// binary does not override it ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+const DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS: usize = 10;
+
+/// The sliding `/admin/login` rate-limit window, in seconds, when the binary does not override it.
+const DEFAULT_ADMIN_LOGIN_WINDOW_SECS: u64 = 5 * 60;
+
+/// The `Content-Security-Policy` for the admin console
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). The built SPA loads one
+/// external module script and one external stylesheet from its own origin (see
+/// `dashboard/dist/index.html`), so scripts are locked to `'self'` with no inline allowance — the
+/// strongest lever against injected script. `style-src` keeps `'unsafe-inline'` because the SolidJS
+/// components set inline styles at runtime; an injected *style* is a far weaker foothold than an
+/// injected *script*, so this is a deliberate, bounded relaxation. Images allow `data:`/`blob:` for
+/// the embedded catalog thumbnails; `frame-ancestors 'none'` backs up `X-Frame-Options: DENY` against
+/// clickjacking, and `base-uri`/`form-action`/`object-src` are pinned shut.
+const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; \
+     font-src 'self'; \
+     connect-src 'self'; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'self'; \
+     frame-ancestors 'none'";
+
 /// Everything a request handler needs, bundled so the router carries one state type: the event
 /// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
 /// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
@@ -152,6 +184,7 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     admin_session_idle_ttl_secs: u64,
     admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
+    login_rate_limiter: LoginRateLimiter,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -185,14 +218,16 @@ where
             admin_session_idle_ttl_secs: self.admin_session_idle_ttl_secs,
             admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
+            login_rate_limiter: self.login_rate_limiter.clone(),
         }
     }
 }
 
 impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     /// Bundles the collaborators into one shareable application state, with the default super-admin
-    /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it).
-    pub const fn new(
+    /// session TTL ([`CloudApp::with_admin_session_ttl_secs`] overrides it) and a default login
+    /// rate-limiter ([`CloudApp::with_login_rate_limit`] overrides it).
+    pub fn new(
         cloud: Cloud<S>,
         rollups: R,
         keys: K,
@@ -213,6 +248,10 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             admin_session_idle_ttl_secs: DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS,
             admin_invite_ttl_secs: DEFAULT_ADMIN_INVITE_TTL_SECS,
             admin_setup_token: None,
+            login_rate_limiter: LoginRateLimiter::new(
+                DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
+                DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
+            ),
         }
     }
 
@@ -230,6 +269,17 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_admin_session_idle_ttl_secs(mut self, secs: u64) -> Self {
         self.admin_session_idle_ttl_secs = secs;
+        self
+    }
+
+    /// Sets the `/admin/login` rate limit — at most `max_attempts` sign-in attempts per client within
+    /// a `window_secs` sliding window ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)
+    /// slice 5); the binary threads the configured values in
+    /// ([`crate::config::CloudConfig::admin_login_max_attempts`],
+    /// [`crate::config::CloudConfig::admin_login_window_secs`]).
+    #[must_use]
+    pub fn with_login_rate_limit(mut self, max_attempts: usize, window_secs: u64) -> Self {
+        self.login_rate_limiter = LoginRateLimiter::new(max_attempts, window_secs);
         self
     }
 
@@ -356,6 +406,11 @@ where
             post(admin_enable_webhook::<S, R, K, C, A, T, W>),
         )
         .with_state(app)
+        // The admin-console security headers ([ADR-0067] slice 5) on every response this router
+        // serves. `main.rs` applies the same layer to the fully-composed service so the SPA fallback
+        // and the other merged routers are covered too; re-inserting the same header values there is
+        // idempotent.
+        .layer(axum::middleware::from_fn(security_headers))
 }
 
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
@@ -4102,6 +4157,18 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
+    // Throttle sign-in attempts before any expensive work ([ADR-0067] slice 5): an online guesser
+    // meets a cheap `429` rather than an Argon2id hashing storm, and a refused attempt is not even
+    // recorded, so a legitimate admin's next try is not pushed further out. Keyed by client IP today;
+    // the per-email key lights up when email login lands.
+    let ip = client_ip(&headers);
+    let rate_keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
+    if let Err(retry_after_secs) = app
+        .login_rate_limiter
+        .check_and_record(&rate_keys, app.clock.now())
+    {
+        return too_many_login_attempts(retry_after_secs);
+    }
     let Some(token) = mint_session_token() else {
         // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
         // closed with a retryable status rather than issue a guessable session.
@@ -4119,7 +4186,7 @@ where
         token: &token,
         idle_ttl_secs: app.admin_session_idle_ttl_secs,
         absolute_ttl_secs: app.admin_session_ttl_secs,
-        ip: client_ip(&headers),
+        ip,
         user_agent: header_str(&headers, USER_AGENT.as_str()),
     };
     match login(&app.admin, &app.clock, &request, &mint).await {
@@ -4153,6 +4220,42 @@ fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+/// A `429 Too Many Requests` for a rate-limited sign-in, with a `Retry-After` in seconds
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). Generic — it says
+/// nothing about whether the credential was right, and the throttle runs before the credential check,
+/// so it cannot become an oracle.
+fn too_many_login_attempts(retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many sign-in attempts; try again later",
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
+}
+
+/// Adds the admin-console security headers to every response
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5). Applied as a router layer
+/// so it covers the console SPA, its assets, and the `/admin` API alike: `Content-Security-Policy`
+/// (see [`CONTENT_SECURITY_POLICY_VALUE`]), `X-Content-Type-Options: nosniff` (no MIME sniffing),
+/// `X-Frame-Options: DENY` + the CSP's `frame-ancestors 'none'` (clickjacking), and
+/// `Referrer-Policy: no-referrer` (a console URL never leaks off-site). Harmless on the JSON `/v1`
+/// responses it also covers — those are never framed or rendered as documents.
+pub async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY_VALUE),
+    );
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    response
 }
 
 /// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).

@@ -3727,6 +3727,107 @@ async fn revoke_others_signs_out_every_session_but_the_current_one() {
     assert_eq!(remaining[0]["current"], true);
 }
 
+// --- Login rate-limit + security headers (G1 slice 5, ADR-0067) ---------------------------------
+
+/// The main router with a specific `/admin/login` rate limit, for the throttle test.
+fn login_rate_limited_router(max_attempts: usize, window_secs: u64) -> axum::Router {
+    let app = CloudApp::new(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        clock(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    )
+    .with_login_rate_limit(max_attempts, window_secs);
+    http::router(app)
+}
+
+#[tokio::test]
+async fn login_is_rate_limited_after_too_many_attempts() {
+    let router = login_rate_limited_router(3, 60);
+    // Bogus credentials: each attempt reaches the credential check and is refused, and is recorded by
+    // the limiter. The limiter runs before the credential check, so it can never leak whether the
+    // credential was right.
+    let bogus = serde_json::json!({ "password": "wrong-passphrase", "totp_code": "000000" });
+    for _ in 0..3 {
+        let refused = router
+            .clone()
+            .oneshot(post_json("/admin/login", &bogus))
+            .await
+            .expect("route login");
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNAUTHORIZED,
+            "an attempt within the limit reaches the credential check"
+        );
+    }
+    // The fourth attempt trips the limiter first: a 429 carrying a Retry-After.
+    let throttled = router
+        .clone()
+        .oneshot(post_json("/admin/login", &bogus))
+        .await
+        .expect("route login");
+    assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        throttled.headers().get("retry-after").is_some(),
+        "a rate-limited login carries a Retry-After for the client"
+    );
+}
+
+#[tokio::test]
+async fn every_response_carries_the_admin_security_headers() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    // The layer wraps every response, so even an unauthenticated probe carries the headers.
+    let response = router
+        .oneshot(get("/admin/session", None))
+        .await
+        .expect("route session probe");
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get("x-content-type-options")
+            .expect("nosniff header")
+            .to_str()
+            .expect("ascii"),
+        "nosniff"
+    );
+    assert_eq!(
+        headers
+            .get("x-frame-options")
+            .expect("frame-options header")
+            .to_str()
+            .expect("ascii"),
+        "DENY"
+    );
+    assert_eq!(
+        headers
+            .get("referrer-policy")
+            .expect("referrer-policy header")
+            .to_str()
+            .expect("ascii"),
+        "no-referrer"
+    );
+    let csp = headers
+        .get("content-security-policy")
+        .expect("a CSP header")
+        .to_str()
+        .expect("ascii");
+    assert!(
+        csp.contains("default-src 'self'"),
+        "CSP pins the default origin"
+    );
+    assert!(
+        csp.contains("script-src 'self'"),
+        "CSP locks scripts to self"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP backs up X-Frame-Options against clickjacking"
+    );
+}
+
 // --- Invitations and admin management (G1 slice 3, ADR-0067) ------------------------------------
 
 #[tokio::test]

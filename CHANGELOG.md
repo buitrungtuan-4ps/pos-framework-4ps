@@ -16,6 +16,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+- **The admin sign-in is rate-limited, and the console now ships defence-in-depth response headers**
+  (roadmap v2, Track G, G1 slice 5; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
+  `/admin/login` throttles attempts in a sliding window — by default 10 per 5 minutes per client
+  (`admin_login_max_attempts`, `admin_login_window_secs`), keyed by client IP today and ready for a
+  per-email key when email login lands — refusing the excess with `429 Too Many Requests` and a
+  `Retry-After`. The check runs **before** the Argon2id verify, so an online guesser costs a cheap
+  refusal rather than a hashing storm, and because it precedes the credential check it can never
+  become an oracle for whether a password was right; a refused attempt is not recorded, so it does
+  not push a legitimate admin's next try further out. Every console response now carries
+  `Content-Security-Policy` (scripts locked to `'self'` — the built SPA has no inline script — with a
+  bounded `'unsafe-inline'` for styles only), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY` (plus the CSP's `frame-ancestors 'none'`) against clickjacking, and
+  `Referrer-Policy: no-referrer`. **Upgrade note:** no schema, protocol, or permission change; two new
+  optional config values with safe defaults. The rate-limit state is in-process (the cloud is a
+  single box) and ephemeral — a restart clears it, failing open rather than locking anyone out. The
+  CSP is deliberately strict on scripts; if a future console feature needs a new subresource origin,
+  widen `CONTENT_SECURITY_POLICY_VALUE` in `crates/pos-cloud/src/http.rs` rather than loosening
+  `script-src`.
+
 ### Fixed
 - **The cloud catalog tables are now actually created on deployment** (Track G groundwork). Migrations
   `0013`–`0017` (catalog tax classes, item taxonomy, display/layout, modifier groups, menu sections)
