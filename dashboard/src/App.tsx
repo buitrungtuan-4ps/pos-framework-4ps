@@ -20,6 +20,7 @@ import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
 import { Fleet } from "./screens/Fleet";
+import { Floor } from "./screens/Floor";
 import { Login } from "./screens/Login";
 import { MySecurity } from "./screens/MySecurity";
 import { MySessions } from "./screens/MySessions";
@@ -27,6 +28,7 @@ import { NewStore } from "./screens/NewStore";
 import { People } from "./screens/People";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
+import { Stations } from "./screens/Stations";
 import { Stores } from "./screens/Stores";
 import { Translations } from "./screens/Translations";
 import { Webhooks } from "./screens/Webhooks";
@@ -75,6 +77,8 @@ export function App() {
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
           <Route path="/layout" component={Layout} />
+          <Route path="/floor" component={Floor} />
+          <Route path="/stations" component={Stations} />
           <Route path="/config" component={Config} />
           <Route path="/api-keys" component={ApiKeys} />
           <Route path="/devices" component={Devices} />

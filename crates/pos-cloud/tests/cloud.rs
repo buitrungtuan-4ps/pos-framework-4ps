@@ -49,6 +49,11 @@ use pos_cloud::devices::{
     DeviceProposalSummary, PersistedDeviceProposal,
 };
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
+use pos_cloud::floorplan::{
+    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
+    RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
+    TableStore, TableUpdate,
+};
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
@@ -80,9 +85,13 @@ use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_proto::BusinessDate;
+use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
+use pos_proto::ids::{
+    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
+    TenantId,
+};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -6908,6 +6917,485 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
     );
 }
 
+/// The floor master-data store as two in-memory lists — the same `AreaStore`/`TableStore` seams the
+/// binary implements over the tenant-and-store-scoped `floor_areas`/`floor_tables` tables. Areas and
+/// tables are archived, never removed (Track M2, ADR-0072).
+#[derive(Clone, Default)]
+struct FakeFloor {
+    areas: Arc<Mutex<Vec<Area>>>,
+    tables: Arc<Mutex<Vec<Table>>>,
+    stations: Arc<Mutex<Vec<Station>>>,
+    rules: Arc<Mutex<Vec<RoutingRule>>>,
+}
+
+impl AreaStore for FakeFloor {
+    async fn create(&self, area: &NewArea) -> Result<(), FloorStoreError> {
+        self.areas.lock().expect("lock").push(Area {
+            area_id: area.area_id,
+            tenant_id: area.tenant_id,
+            store_id: area.store_id,
+            name: area.name.clone(),
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Area>, FloorStoreError> {
+        let mut rows: Vec<Area> = self
+            .areas
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|area| area.tenant_id == tenant && area.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        area_id: AreaId,
+    ) -> Result<Option<Area>, FloorStoreError> {
+        Ok(self
+            .areas
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|area| area.tenant_id == tenant && area.area_id == area_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &AreaUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.areas.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|area| area.tenant_id == update.tenant_id && area.area_id == update.area_id)
+        else {
+            return Ok(false);
+        };
+        row.name.clone_from(&update.name);
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+impl TableStore for FakeFloor {
+    async fn create(&self, table: &NewTable) -> Result<(), FloorStoreError> {
+        self.tables.lock().expect("lock").push(Table {
+            table_id: table.table_id,
+            tenant_id: table.tenant_id,
+            store_id: table.store_id,
+            area_id: table.area_id,
+            label: table.label.clone(),
+            seats: table.seats,
+            position: table.position,
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Table>, FloorStoreError> {
+        let mut rows: Vec<Table> = self
+            .tables
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|table| table.tenant_id == tenant && table.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        table_id: TableId,
+    ) -> Result<Option<Table>, FloorStoreError> {
+        Ok(self
+            .tables
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|table| table.tenant_id == tenant && table.table_id == table_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &TableUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.tables.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|table| table.tenant_id == update.tenant_id && table.table_id == update.table_id)
+        else {
+            return Ok(false);
+        };
+        row.area_id = update.area_id;
+        row.label.clone_from(&update.label);
+        row.seats = update.seats;
+        row.position = update.position;
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end exercise of both floor seams (area + table CRUD, placement, and \
+              tenant/store isolation) reads better as a single narrative than split fixtures"
+)]
+async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
+    let store = FakeFloor::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let front = StoreId::new(Ulid::from_u128(0x5701));
+    let back = StoreId::new(Ulid::from_u128(0x5702));
+    let terrace = AreaId::new(Ulid::from_u128(1));
+    let hall = AreaId::new(Ulid::from_u128(2));
+
+    AreaStore::create(
+        &store,
+        &NewArea {
+            area_id: terrace,
+            tenant_id: mine,
+            store_id: front,
+            name: "Terrace".to_owned(),
+        },
+    )
+    .await
+    .expect("create terrace");
+    // A same-id area in another tenant/store must not leak into `mine`'s front-store list.
+    AreaStore::create(
+        &store,
+        &NewArea {
+            area_id: hall,
+            tenant_id: other,
+            store_id: back,
+            name: "Hall".to_owned(),
+        },
+    )
+    .await
+    .expect("create hall");
+
+    let areas = AreaStore::list(&store, mine, front)
+        .await
+        .expect("list areas");
+    assert_eq!(areas.len(), 1);
+    assert_eq!(areas[0].name, "Terrace");
+
+    // Rename + archive the area.
+    assert!(
+        AreaStore::update(
+            &store,
+            &AreaUpdate {
+                area_id: terrace,
+                tenant_id: mine,
+                name: "Front terrace".to_owned(),
+                status: EntityStatus::Archived,
+            },
+        )
+        .await
+        .expect("update area")
+    );
+    let terrace_view = AreaStore::get(&store, mine, terrace)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(terrace_view.name, "Front terrace");
+    assert_eq!(terrace_view.status, EntityStatus::Archived);
+
+    // A table carries an optional grid position; create one placed, then move + reseat it.
+    let table_one = TableId::new(Ulid::from_u128(10));
+    TableStore::create(
+        &store,
+        &NewTable {
+            table_id: table_one,
+            tenant_id: mine,
+            store_id: front,
+            area_id: terrace,
+            label: "T1".to_owned(),
+            seats: 4,
+            position: Some(GridPosition { column: 0, row: 0 }),
+        },
+    )
+    .await
+    .expect("create table");
+
+    let tables = TableStore::list(&store, mine, front)
+        .await
+        .expect("list tables");
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].seats, 4);
+    assert_eq!(tables[0].position, Some(GridPosition { column: 0, row: 0 }));
+
+    assert!(
+        TableStore::update(
+            &store,
+            &TableUpdate {
+                table_id: table_one,
+                tenant_id: mine,
+                area_id: terrace,
+                label: "T1".to_owned(),
+                seats: 6,
+                position: None,
+                status: EntityStatus::Active,
+            },
+        )
+        .await
+        .expect("update table")
+    );
+    let table_view = TableStore::get(&store, mine, table_one)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(table_view.seats, 6);
+    assert_eq!(table_view.position, None, "the table was unplaced");
+
+    // Cross-tenant/store isolation: mine's back store and the other tenant see none of mine's front.
+    assert!(
+        AreaStore::list(&store, mine, back)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+    assert!(
+        AreaStore::get(&store, other, terrace)
+            .await
+            .expect("get")
+            .is_none()
+    );
+}
+
+impl StationStore for FakeFloor {
+    async fn create(&self, station: &NewStation) -> Result<(), FloorStoreError> {
+        self.stations.lock().expect("lock").push(Station {
+            station_id: station.station_id,
+            tenant_id: station.tenant_id,
+            store_id: station.store_id,
+            name: station.name.clone(),
+            backup_station_id: station.backup_station_id,
+            is_default: station.is_default,
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Station>, FloorStoreError> {
+        let mut rows: Vec<Station> = self
+            .stations
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|station| station.tenant_id == tenant && station.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        station_id: StationId,
+    ) -> Result<Option<Station>, FloorStoreError> {
+        Ok(self
+            .stations
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|station| station.tenant_id == tenant && station.station_id == station_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &StationUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.stations.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|station| {
+            station.tenant_id == update.tenant_id && station.station_id == update.station_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&update.name);
+        row.backup_station_id = update.backup_station_id;
+        row.is_default = update.is_default;
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+impl RoutingRuleStore for FakeFloor {
+    async fn create(&self, rule: &NewRoutingRule) -> Result<(), FloorStoreError> {
+        self.rules.lock().expect("lock").push(RoutingRule {
+            rule_id: rule.rule_id,
+            tenant_id: rule.tenant_id,
+            store_id: rule.store_id,
+            station_id: rule.station_id,
+            menu_item_id: rule.menu_item_id,
+            course_id: rule.course_id,
+            sort: rule.sort,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<RoutingRule>, FloorStoreError> {
+        let mut rows: Vec<RoutingRule> = self
+            .rules
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|rule| rule.tenant_id == tenant && rule.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|rule| rule.sort); // the seam reads rules in `sort` order.
+        Ok(rows)
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        rule_id: RoutingRuleId,
+    ) -> Result<bool, FloorStoreError> {
+        let mut rows = self.rules.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|rule| !(rule.tenant_id == tenant && rule.rule_id == rule_id));
+        Ok(rows.len() != before)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end exercise of both kitchen seams (station CRUD + routing-rule create/list/\
+              remove, item and course rules) reads better as a single narrative than split fixtures"
+)]
+async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
+    let store = FakeFloor::default();
+    let mine = tenant();
+    let front = StoreId::new(Ulid::from_u128(0x5701));
+    let oven = StationId::new(Ulid::from_u128(1));
+    let bar = StationId::new(Ulid::from_u128(2));
+
+    StationStore::create(
+        &store,
+        &NewStation {
+            station_id: oven,
+            tenant_id: mine,
+            store_id: front,
+            name: "Oven".to_owned(),
+            backup_station_id: Some(bar),
+            is_default: true,
+        },
+    )
+    .await
+    .expect("create oven");
+    assert_eq!(
+        StationStore::list(&store, mine, front)
+            .await
+            .expect("list")
+            .len(),
+        1
+    );
+
+    // Update: drop the backup, keep default off now.
+    assert!(
+        StationStore::update(
+            &store,
+            &StationUpdate {
+                station_id: oven,
+                tenant_id: mine,
+                name: "Pizza oven".to_owned(),
+                backup_station_id: None,
+                is_default: false,
+                status: EntityStatus::Active,
+            },
+        )
+        .await
+        .expect("update")
+    );
+    let oven_view = StationStore::get(&store, mine, oven)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(oven_view.name, "Pizza oven");
+    assert_eq!(oven_view.backup_station_id, None);
+    assert!(!oven_view.is_default);
+
+    // Two routing rules — one by item, one by course — then remove one (returns false the 2nd time).
+    let item_rule = RoutingRuleId::new(Ulid::from_u128(50));
+    let course_rule = RoutingRuleId::new(Ulid::from_u128(51));
+    RoutingRuleStore::create(
+        &store,
+        &NewRoutingRule {
+            rule_id: item_rule,
+            tenant_id: mine,
+            store_id: front,
+            station_id: oven,
+            menu_item_id: Some(MenuItemId::new(Ulid::from_u128(100))),
+            course_id: None,
+            sort: 0,
+        },
+    )
+    .await
+    .expect("create item rule");
+    RoutingRuleStore::create(
+        &store,
+        &NewRoutingRule {
+            rule_id: course_rule,
+            tenant_id: mine,
+            store_id: front,
+            station_id: bar,
+            menu_item_id: None,
+            course_id: Some(CourseId::new(Ulid::from_u128(200))),
+            sort: 1,
+        },
+    )
+    .await
+    .expect("create course rule");
+    assert_eq!(
+        RoutingRuleStore::list(&store, mine, front)
+            .await
+            .expect("list rules")
+            .len(),
+        2
+    );
+    assert!(
+        RoutingRuleStore::remove(&store, mine, item_rule)
+            .await
+            .expect("remove")
+    );
+    assert!(
+        !RoutingRuleStore::remove(&store, mine, item_rule)
+            .await
+            .expect("remove again"),
+        "a rule already removed reports no change"
+    );
+    assert_eq!(
+        RoutingRuleStore::list(&store, mine, front)
+            .await
+            .expect("list rules")
+            .len(),
+        1,
+        "the course rule remains"
+    );
+}
+
 /// The role-template store as an in-memory list — the same seam the binary implements over a
 /// tenant-scoped table. Roles are archived, never removed.
 #[derive(Clone, Default)]
@@ -7315,6 +7803,387 @@ fn people_app_with_audit(
         FakeWebhooks::default(),
     );
     http::router(app).merge(http::people_router(people, admin, clock(), audit))
+}
+
+/// The main app merged with the floor & kitchen router, wired to a caller-supplied audit recorder
+/// (Track M2, ADR-0072).
+fn floor_app_with_audit(
+    admin: FakeAdmin,
+    floor: FakeFloor,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::floor_router(floor, admin, clock(), audit))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end lifecycle over the floor & kitchen routes — create an area, a table, a \
+              station, and a routing rule; reject a rule matching neither item nor course; list each; \
+              archive the area; remove the rule — kept together against the same data"
+)]
+async fn floor_routes_crud_lifecycle_audited() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_app_with_audit(
+        admin,
+        FakeFloor::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Create an area.
+    let area = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/areas",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Terrace" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create area");
+    assert_eq!(area.status(), StatusCode::CREATED);
+    let area_id = json_body(area).await["id"].as_str().expect("id").to_owned();
+
+    // Create a table in that area, placed on the grid.
+    let table = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/tables",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "area_id": area_id,
+                "name": "T1",
+                "seats": 4,
+                "grid_column": 0,
+                "grid_row": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create table");
+    assert_eq!(table.status(), StatusCode::CREATED);
+
+    // Create a station.
+    let station = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "name": "Oven",
+                "is_default": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create station");
+    assert_eq!(station.status(), StatusCode::CREATED);
+    let station_id = json_body(station).await["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    // A routing rule that matches neither an item nor a course is refused.
+    let bad_rule = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "station_id": station_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad rule");
+    assert_eq!(bad_rule.status(), StatusCode::BAD_REQUEST);
+
+    // A well-formed item rule is accepted.
+    let item_ulid = Ulid::from_u128(0xB0B).to_string();
+    let rule = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "station_id": station_id,
+                "menu_item_id": item_ulid,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create rule");
+    assert_eq!(rule.status(), StatusCode::CREATED);
+    let rule_id = json_body(rule).await["id"].as_str().expect("id").to_owned();
+
+    // Each list reads back one row.
+    for path in [
+        format!("/admin/floor/areas?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/floor/tables?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/kitchen/stations?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/kitchen/routing?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+    ] {
+        let listed = router
+            .clone()
+            .oneshot(get_with_cookie(&path, &cookie))
+            .await
+            .expect("route list");
+        assert_eq!(listed.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            json_body(listed).await.as_array().expect("array").len(),
+            1,
+            "{path}"
+        );
+    }
+
+    // Archive the area.
+    let archived = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/floor/areas/{area_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Terrace", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route archive area");
+    assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+
+    // Remove the routing rule.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/kitchen/routing/{rule_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove rule");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    // The write path is audited: the actions were recorded (floor data is not PII).
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let actions: Vec<&str> = recorded.iter().map(|entry| entry.action.as_str()).collect();
+    for action in [
+        "floor.area.create",
+        "floor.table.create",
+        "kitchen.station.create",
+        "kitchen.routing.create",
+        "floor.area.update",
+        "kitchen.routing.remove",
+    ] {
+        assert!(actions.contains(&action), "missing audit {action}");
+    }
+}
+
+/// The main app (sharing one config-tree store) merged with the floor CRUD and floor-publish routers,
+/// so a test can author master data and then publish it, reading the effective config back (ADR-0072).
+fn floor_publish_app(
+    admin: FakeAdmin,
+    floor: FakeFloor,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::floor_router(
+            floor.clone(),
+            admin.clone(),
+            clock(),
+            Arc::clone(&audit),
+        ))
+        .merge(http::floor_publish_router(
+            floor,
+            config,
+            admin,
+            clock(),
+            audit,
+        ))
+}
+
+#[tokio::test]
+async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        config,
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Author one area with a table and one station via the CRUD routes.
+    let area = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/areas",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Terrace" }),
+            &cookie,
+        ))
+        .await
+        .expect("create area");
+    let area_id = json_body(area).await["id"].as_str().expect("id").to_owned();
+    let table = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/tables",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid, "store_id": store_ulid, "area_id": area_id,
+                "name": "T1", "seats": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("create table");
+    assert_eq!(table.status(), StatusCode::CREATED);
+    let station = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Oven", "is_default": true }),
+            &cookie,
+        ))
+        .await
+        .expect("create station");
+    assert_eq!(station.status(), StatusCode::CREATED);
+
+    // Publish: the two nodes compile and version through the config tree.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish floor");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The effective config now carries top-level `floor` and `stations` nodes with the authored data.
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+    assert_eq!(
+        doc["floor"]["areas"][0]["name"],
+        serde_json::json!("Terrace")
+    );
+    assert_eq!(
+        doc["floor"]["areas"][0]["tables"][0]["label"],
+        serde_json::json!("T1")
+    );
+    assert_eq!(
+        doc["stations"]["stations"][0]["name"],
+        serde_json::json!("Oven")
+    );
+    assert!(
+        doc["stations"]["default_station_id"].as_str().is_some(),
+        "the default station rode into the node"
+    );
+}
+
+#[tokio::test]
+async fn table_qr_mints_a_signed_token_per_active_table() {
+    let admin = provisioned_admin();
+    let floor = FakeFloor::default();
+    let mine = tenant();
+    let store = store_id();
+    let area = AreaId::new(Ulid::from_u128(1));
+    let active = TableId::new(Ulid::from_u128(0xA1));
+    let archived = TableId::new(Ulid::from_u128(0xA2));
+    for (table_id, label) in [(active, "T1"), (archived, "T2")] {
+        TableStore::create(
+            &floor,
+            &NewTable {
+                table_id,
+                tenant_id: mine,
+                store_id: store,
+                area_id: area,
+                label: label.to_owned(),
+                seats: 4,
+                position: None,
+            },
+        )
+        .await
+        .expect("seed table");
+    }
+    // Archive T2 — an archived table is not printed on the QR sheet.
+    TableStore::update(
+        &floor,
+        &TableUpdate {
+            table_id: archived,
+            tenant_id: mine,
+            area_id: area,
+            label: "T2".to_owned(),
+            seats: 4,
+            position: None,
+            status: EntityStatus::Archived,
+        },
+    )
+    .await
+    .expect("archive T2");
+
+    let secret = TableTokenSecret::new("a-test-secret");
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::table_qr_router(floor, admin, clock(), secret.clone()));
+    let cookie = admin_cookie(&router).await;
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/floor/qr?tenant_id={}&store_id={}",
+                mine.as_ulid(),
+                store.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route table qr");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let tokens = body["tokens"].as_array().expect("tokens array");
+    assert_eq!(tokens.len(), 1, "only the active table is printed");
+    let token = tokens[0]["token"].as_str().expect("a token");
+    // The minted token verifies and names the active table — the same value the guest QR carries.
+    let table_ref = pos_cloud::qr::verify_table_token(&secret, token).expect("verifies");
+    assert_eq!(table_ref.table_id, active);
+    assert_eq!(table_ref.store_id, store);
 }
 
 #[tokio::test]

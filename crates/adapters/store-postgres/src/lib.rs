@@ -27,6 +27,7 @@ mod catalog;
 mod config_trees;
 mod devices;
 mod fleet;
+mod floor;
 mod order_queue;
 mod people;
 mod reconcile;
@@ -52,6 +53,7 @@ pub use catalog::{
 pub use config_trees::PostgresConfigTrees;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fleet::{FleetStoreRow, PostgresFleet};
+pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
 pub use order_queue::{OrderQueueRow, PendingOrderRow, PostgresOrderQueue, PostgresStoreDirectory};
 pub use people::{AssignmentRow, EmployeeRow, PostgresPeople, RoleTemplateRow};
 pub use reconcile::PostgresReconcile;

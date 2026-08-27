@@ -13,11 +13,16 @@ import type {
   AdminStatus,
   ApiKeySummary,
   Assignment,
+  Area,
   AuditEntry,
   AuditFilter,
   Brand,
   CapabilityCatalogue,
   CatalogItem,
+  FloorTable,
+  RoutingRule,
+  Station,
+  TableQrSheet,
   ChannelPrice,
   ConfigLevel,
   ConfigVersion,
@@ -368,6 +373,154 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+
+  // --- floor & kitchen (ADR-0072, Track M2): per-store areas/tables + kitchen stations/routing ---
+  // Reads need console.data.read; every write needs console.floor.manage (Owner/Admin) — the server
+  // re-checks. A floor is per-store, so lists pass both tenant_id and store_id. None of it is PII.
+  listAreas: (tenantId: string, storeId: string) =>
+    requestJson<Area[]>(
+      "GET",
+      `/admin/floor/areas?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  createArea: (tenantId: string, storeId: string, name: string) =>
+    requestJson<CreatedId>("POST", "/admin/floor/areas", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      name,
+    }),
+  updateArea: (
+    areaId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+  ) =>
+    requestVoid("PATCH", `/admin/floor/areas/${encodeURIComponent(areaId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      status: fields.status,
+    }),
+  listTables: (tenantId: string, storeId: string) =>
+    requestJson<FloorTable[]>(
+      "GET",
+      `/admin/floor/tables?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  createTable: (
+    tenantId: string,
+    storeId: string,
+    fields: {
+      areaId: string;
+      name: string;
+      seats: number;
+      gridColumn: number | null;
+      gridRow: number | null;
+    },
+  ) =>
+    requestJson<CreatedId>("POST", "/admin/floor/tables", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      area_id: fields.areaId,
+      name: fields.name,
+      seats: fields.seats,
+      grid_column: fields.gridColumn,
+      grid_row: fields.gridRow,
+    }),
+  updateTable: (
+    tableId: string,
+    tenantId: string,
+    fields: {
+      areaId: string;
+      name: string;
+      seats: number;
+      gridColumn: number | null;
+      gridRow: number | null;
+      status: EntityStatus;
+    },
+  ) =>
+    requestVoid("PATCH", `/admin/floor/tables/${encodeURIComponent(tableId)}`, {
+      tenant_id: tenantId,
+      area_id: fields.areaId,
+      name: fields.name,
+      seats: fields.seats,
+      grid_column: fields.gridColumn,
+      grid_row: fields.gridRow,
+      status: fields.status,
+    }),
+  listStations: (tenantId: string, storeId: string) =>
+    requestJson<Station[]>(
+      "GET",
+      `/admin/kitchen/stations?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  createStation: (
+    tenantId: string,
+    storeId: string,
+    fields: { name: string; backupStationId: string | null; isDefault: boolean },
+  ) =>
+    requestJson<CreatedId>("POST", "/admin/kitchen/stations", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      name: fields.name,
+      backup_station_id: fields.backupStationId,
+      is_default: fields.isDefault,
+    }),
+  updateStation: (
+    stationId: string,
+    tenantId: string,
+    fields: {
+      name: string;
+      backupStationId: string | null;
+      isDefault: boolean;
+      status: EntityStatus;
+    },
+  ) =>
+    requestVoid("PATCH", `/admin/kitchen/stations/${encodeURIComponent(stationId)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      backup_station_id: fields.backupStationId,
+      is_default: fields.isDefault,
+      status: fields.status,
+    }),
+  listRoutingRules: (tenantId: string, storeId: string) =>
+    requestJson<RoutingRule[]>(
+      "GET",
+      `/admin/kitchen/routing?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  createRoutingRule: (
+    tenantId: string,
+    storeId: string,
+    fields: {
+      stationId: string;
+      menuItemId: string | null;
+      courseId: string | null;
+      sort: number;
+    },
+  ) =>
+    requestJson<CreatedId>("POST", "/admin/kitchen/routing", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      station_id: fields.stationId,
+      menu_item_id: fields.menuItemId,
+      course_id: fields.courseId,
+      sort: fields.sort,
+    }),
+  removeRoutingRule: (tenantId: string, ruleId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/kitchen/routing/${encodeURIComponent(ruleId)}?${tenantQuery(tenantId)}`,
+    ),
+  // Compile the store's areas/tables + stations/routing into its `floor`/`stations` config nodes and
+  // version them through the config tree, so the edge applies the real floor plan. Needs
+  // console.config.publish; an inconsistent plan (a rule to an unknown station) answers 422.
+  publishFloor: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/floor/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+  // Mint the signed QR token for each of a store's active tables, for a printable sheet (ADR-0072).
+  // Only available when the cloud has a table-token secret configured (else the route is absent).
+  tableQrTokens: (tenantId: string, storeId: string) =>
+    requestJson<TableQrSheet>(
+      "GET",
+      `/admin/floor/qr?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),

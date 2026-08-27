@@ -36,6 +36,13 @@ export interface ShiftInfo {
 
 interface StoreShape {
   link: LinkStatus;
+  // The floor the app draws — the store's published tables once `loadFloor` syncs them, and a
+  // sensible default until it does (the never-blank config contract, ADR-0072).
+  floor: TableCard[];
+  // The station a fire and a bump route to when no per-item rule applies — the store's published
+  // default station once synced, and a bootstrap fallback until then. The edge re-derives a fired
+  // line's station from the published routing, so this is only the fallback the caller carries.
+  defaultStation: string;
   tableState: Record<string, string>;
   tableOrder: Record<string, string>;
   orderTable: Record<string, string>;
@@ -49,15 +56,22 @@ interface StoreShape {
 
 const tid = (code: string): string => code.padStart(26, "0");
 
-// A fixed eight-table floor until the store's real layout syncs from config (P7).
-export const FLOOR: readonly TableCard[] = Array.from({ length: 8 }, (_, index) => {
+// The fallback floor the app draws before the store's real layout syncs from config, and if a store
+// has none published (never-blank, ADR-0072). Replaced wholesale by `loadFloor` once the edge serves
+// the published plan.
+const DEFAULT_FLOOR: readonly TableCard[] = Array.from({ length: 8 }, (_, index) => {
   const number = index + 1;
   return { id: tid(`T${number.toString().padStart(2, "0")}`), label: String(number), state: "TABLE_STATE_FREE" };
 });
 
+// The fallback station a fire/bump carries until the store publishes a station plan (never-blank).
+const DEFAULT_STATION = tid("S01");
+
 const [state, setState] = createStore<StoreShape>({
   link: "connecting",
-  tableState: Object.fromEntries(FLOOR.map((table) => [table.id, table.state])),
+  floor: DEFAULT_FLOOR.map((table) => ({ ...table })),
+  defaultStation: DEFAULT_STATION,
+  tableState: Object.fromEntries(DEFAULT_FLOOR.map((table) => [table.id, table.state])),
   tableOrder: {},
   orderTable: {},
   lines: {},
@@ -67,6 +81,53 @@ const [state, setState] = createStore<StoreShape>({
 });
 
 export { state };
+
+// The floor the app draws — reactive, so a screen's `<For>` re-renders when `loadFloor` syncs the
+// store's real tables.
+export function floorTables(): readonly TableCard[] {
+  return state.floor;
+}
+
+// Reads the store's published floor plan and kitchen stations from the edge (ADR-0072) and folds them
+// in: the real tables replace the default grid, and the plan's default station replaces the bootstrap
+// fallback. Forgiving and never-blank — an empty plan or a failed read leaves the fallback in place,
+// so the floor is never wiped out from under the operator.
+export async function loadFloor(): Promise<void> {
+  let response;
+  try {
+    response = await api.floor();
+  } catch {
+    // The route may be briefly unavailable (a device that just paired, the edge still starting);
+    // keep whatever floor we hold and let a later reload pick it up.
+    return;
+  }
+  const tables: TableCard[] = [];
+  for (const area of response.floor.areas ?? []) {
+    for (const table of area.tables ?? []) {
+      tables.push({
+        id: table.table_id,
+        label: table.label,
+        state: state.tableState[table.table_id] ?? "TABLE_STATE_FREE",
+      });
+    }
+  }
+  const defaultStation = response.stations.default_station_id ?? undefined;
+  setState(
+    produce((draft) => {
+      if (tables.length > 0) {
+        draft.floor = tables;
+        // Rebuild the table-state map for the synced tables, preserving any live state already folded
+        // from the fan-out and defaulting new tables to free.
+        draft.tableState = Object.fromEntries(
+          tables.map((table) => [table.id, draft.tableState[table.id] ?? "TABLE_STATE_FREE"]),
+        );
+      }
+      if (defaultStation !== undefined) {
+        draft.defaultStation = defaultStation;
+      }
+    }),
+  );
+}
 
 // ---- reading ----------------------------------------------------------------
 
@@ -85,9 +146,6 @@ export function linesForTable(tableId: string): OrderLine[] {
 export function openBillFor(tableId: string): string | undefined {
   return state.openBill[tableId];
 }
-
-// A fixed kitchen station for the foundation; real stations arrive with the KDS routing config (P7).
-const STATION = tid("S01");
 
 // The bill total the operator collects, computed client-side from the captured line totals and the
 // bootstrap's single 10% standard rate — the same arithmetic the edge does for one tax class. Tax
@@ -239,7 +297,7 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.
 export function tableLabel(tableId: string): string {
-  return FLOOR.find((table) => table.id === tableId)?.label ?? tableId;
+  return state.floor.find((table) => table.id === tableId)?.label ?? tableId;
 }
 
 export interface KitchenLine {
@@ -273,7 +331,7 @@ export function firedLines(): KitchenLine[] {
 // Table counts by state, for the Today summary.
 export function tableCounts(): Record<string, number> {
   const counts: Record<string, number> = {};
-  for (const table of FLOOR) {
+  for (const table of state.floor) {
     const current = tableState(table.id);
     counts[current] = (counts[current] ?? 0) + 1;
   }
@@ -325,7 +383,9 @@ export async function addItem(tableId: string, item: MenuItem): Promise<void> {
 }
 
 export async function fire(lineId: string): Promise<void> {
-  const response = await api.fireLine(lineId, { station_id: STATION });
+  // The edge derives the fired line's station from the published routing (ADR-0072); the station we
+  // send is only the fallback it uses when the store has published no station plan yet.
+  const response = await api.fireLine(lineId, { station_id: state.defaultStation });
   setState("lines", lineId, "state", response.state);
 }
 
@@ -333,7 +393,11 @@ export async function fire(lineId: string): Promise<void> {
 // event and fans it out, so every KDS folds the same prepared set; the line drops off this screen at
 // once and stays off when its own event returns.
 export async function bump(orderId: string, orderLineIds: string[]): Promise<void> {
-  await api.bumpTicket({ order_id: orderId, station_id: STATION, order_line_ids: orderLineIds });
+  await api.bumpTicket({
+    order_id: orderId,
+    station_id: state.defaultStation,
+    order_line_ids: orderLineIds,
+  });
   setState(
     produce((draft) => {
       for (const id of orderLineIds) {

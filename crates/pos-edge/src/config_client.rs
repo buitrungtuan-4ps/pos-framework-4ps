@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
+use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::menu::MenuBook;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
@@ -117,6 +118,24 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         session.capabilities = CapabilityContext::from_flags(|key| {
             document.get(key).and_then(serde_json::Value::as_bool)
         });
+    }
+    // The `floor` and `stations` nodes the floor publish writes (ADR-0072): the store's areas/tables
+    // and its kitchen stations + item→station routing. Parsed via JSON text like the `menu` node; an
+    // absent or unparseable node leaves that plan as the base has it — a bad publish never blanks a
+    // trading store's floor or kitchen.
+    if let Some(floor) = document
+        .get("floor")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<FloorPlan>(&text).ok())
+    {
+        session.floor = floor;
+    }
+    if let Some(stations) = document
+        .get("stations")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<StationPlan>(&text).ok())
+    {
+        session.stations = stations;
     }
     session
 }
@@ -456,5 +475,79 @@ mod tests {
             "a publish naming no flags leaves the profile unchanged"
         );
         assert!(!rebuilt.capabilities.enabled(Capability::Tables));
+    }
+
+    #[test]
+    fn a_floor_and_stations_document_rebuild_the_session_plans() {
+        use pos_proto::floor::{
+            FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule, StationPlan,
+        };
+        use pos_proto::ids::{AreaId, StationId, TableId};
+
+        let table_id = TableId::new(Ulid::from_u128(0xA1));
+        let station_id = StationId::new(Ulid::from_u128(1));
+        let floor = FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(1)),
+            name: DisplayName::new("Terrace"),
+            tables: vec![FloorTable {
+                table_id,
+                label: DisplayName::new("T1"),
+                seats: 4,
+                position: None,
+            }],
+        });
+        let stations = StationPlan::new()
+            .with_station(KitchenStation {
+                station_id,
+                name: DisplayName::new("Oven"),
+                backup_station_id: None,
+            })
+            .with_rule(RoutingRule {
+                station_id,
+                menu_item_id: Some(item()),
+                course_id: None,
+            });
+        let document = serde_json::json!({
+            "floor": serde_json::to_value(&floor).expect("floor"),
+            "stations": serde_json::to_value(&stations).expect("stations"),
+        });
+
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(rebuilt.floor.tables().count(), 1);
+        assert!(rebuilt.floor.table(table_id).is_some());
+        // The fired-line resolver derives the station from the published routing (ADR-0072).
+        assert_eq!(rebuilt.resolve_station(item(), None), Some(station_id));
+    }
+
+    #[test]
+    fn an_absent_or_malformed_floor_or_stations_node_leaves_the_plans_unchanged() {
+        use pos_proto::floor::{FloorArea, FloorPlan, FloorTable};
+        use pos_proto::ids::{AreaId, TableId};
+
+        let table_id = TableId::new(Ulid::from_u128(0xA2));
+        let base = EdgeSession::bootstrap().with_floor(FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(2)),
+            name: DisplayName::new("Main"),
+            tables: vec![FloorTable {
+                table_id,
+                label: DisplayName::new("M1"),
+                seats: 2,
+                position: None,
+            }],
+        }));
+
+        // No floor/stations node: the seeded floor survives.
+        let no_node = session_from_config(&base, &serde_json::json!({ "other": true }));
+        assert!(no_node.floor.table(table_id).is_some());
+
+        // A malformed node is ignored, not fatal, and does not blank the plan.
+        let malformed = session_from_config(
+            &base,
+            &serde_json::json!({ "floor": "nope", "stations": 5 }),
+        );
+        assert!(
+            malformed.floor.table(table_id).is_some(),
+            "a malformed floor node leaves the plan unchanged"
+        );
     }
 }

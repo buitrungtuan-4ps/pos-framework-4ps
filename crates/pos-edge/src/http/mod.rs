@@ -12,6 +12,7 @@
 
 pub mod assets;
 pub mod bills;
+pub mod floor;
 pub mod health;
 pub mod kds;
 pub mod lines;
@@ -68,6 +69,9 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     Router::new()
+        // The store's published floor plan + kitchen stations, for the UI to render real tables and
+        // route fires (ADR-0072).
+        .route("/api/floor", get(floor::plan::<S>))
         // The floor: seat, clean, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
@@ -110,6 +114,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         AppError::Domain(inner) => (StatusCode::CONFLICT, inner.to_string()).into_response(),
         AppError::NoOpenOrder
         | AppError::UnknownLine
+        | AppError::UnroutableLine
         | AppError::UnknownBill
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen => (StatusCode::CONFLICT, error.to_string()).into_response(),

@@ -85,6 +85,12 @@ const MIGRATION_0023: &str = include_str!("../migrations/0023_employees.sql");
 /// People & access — `role_templates` + `employee_store_assignments` ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 const MIGRATION_0024: &str = include_str!("../migrations/0024_role_templates_and_assignments.sql");
 
+/// Floor master data — `floor_areas` + `floor_tables` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+const MIGRATION_0025: &str = include_str!("../migrations/0025_floor_areas_and_tables.sql");
+
+/// Kitchen master data — `kitchen_stations` + `station_routing_rules` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+const MIGRATION_0026: &str = include_str!("../migrations/0026_kitchen_stations_and_routing.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -138,6 +144,11 @@ impl PostgresStore {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or a statement fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one batch_execute per migration in order; a loop over a slice would hide the \
+                  explicit, greppable ordering the schema history relies on"
+    )]
     pub async fn migrate(&self) -> Result<(), PortError> {
         let connection = self.connection().await?;
         connection
@@ -234,6 +245,14 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0024)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0025)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0026)
             .await
             .map_err(unavailable)
     }
@@ -381,6 +400,15 @@ impl PostgresStore {
     #[must_use]
     pub fn people(&self) -> crate::people::PostgresPeople {
         crate::people::PostgresPeople::new(self.pool.clone())
+    }
+
+    /// The floor master-data store over this pool (Track M2, [ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AreaStore`/`TableStore` seams
+    /// over it. Tenant-scoped and per-store; areas and tables are archived, never deleted.
+    #[must_use]
+    pub fn floor(&self) -> crate::floor::PostgresFloor {
+        crate::floor::PostgresFloor::new(self.pool.clone())
     }
 
     /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).

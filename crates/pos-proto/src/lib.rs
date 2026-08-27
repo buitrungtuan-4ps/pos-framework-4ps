@@ -33,6 +33,7 @@ pub mod enums;
 pub mod envelope;
 pub mod error;
 pub mod events;
+pub mod floor;
 pub mod ids;
 pub mod locale;
 pub mod menu;
@@ -58,8 +59,9 @@ pub use enums::{
 pub use envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 pub use error::{ErrorBody, ErrorDetail, ErrorResponse, ErrorStatus};
 pub use events::{EventType, TypedPayload};
+pub use floor::{FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule, StationPlan};
 pub use ids::{
-    BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    AreaId, BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EmployeeId, EventId, IngredientId, MenuItemId, OrderId, OrderLineId,
     PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId,
     StoreId, SubjectId, TableId, TaxClassId, TenantId, VoucherId,

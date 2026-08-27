@@ -70,8 +70,8 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId,
-    StoreId, TaxClassId, TenantId,
+    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
+    MenuItemId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -112,6 +112,12 @@ use crate::devices::{
     PersistedDeviceProposal,
 };
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::floor_compiler::{compile_floor, compile_stations};
+use crate::floorplan::{
+    Area, AreaStore, AreaUpdate, NewArea, NewRoutingRule, NewStation, NewTable, RoutingRule,
+    RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table, TableStore,
+    TableUpdate,
+};
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::openapi::ApiDoc;
 use crate::people::{
@@ -120,6 +126,7 @@ use crate::people::{
     RoleTemplateStore, RoleTemplateUpdate, is_known_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
+use crate::qr::{TableTokenSecret, mint_table_token};
 use crate::reconcile::ReconcileStore;
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -2189,6 +2196,1382 @@ where
         )
             .into_response(),
     }
+}
+
+// --- Floor & kitchen master data (`/admin/floor`, `/admin/kitchen`, ADR-0072) -------------------
+
+/// The collaborators the floor/kitchen CRUD routes need: the master-data store, plus the
+/// admin/clock/audit every write carries.
+#[derive(Clone)]
+struct FloorState<F, A, C> {
+    floor: F,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// The (tenant, store) a floor/kitchen list is scoped to — a floor is per-store, so both are required.
+#[derive(Debug, Clone, Deserialize)]
+struct FloorListQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// The tenant a single-record floor/kitchen read is scoped to (the id is globally unique).
+#[derive(Debug, Clone, Deserialize)]
+struct FloorTenantQuery {
+    tenant_id: String,
+}
+
+/// Create a floor area.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateAreaRequest {
+    tenant_id: String,
+    store_id: String,
+    name: String,
+}
+
+/// Rename an area and/or set its status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAreaRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+/// Create a floor table.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateTableRequest {
+    tenant_id: String,
+    store_id: String,
+    area_id: String,
+    name: String,
+    #[serde(default)]
+    seats: u16,
+    #[serde(default)]
+    grid_column: Option<u16>,
+    #[serde(default)]
+    grid_row: Option<u16>,
+}
+
+/// Update a table's area, label, seats, position, and status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateTableRequest {
+    tenant_id: String,
+    area_id: String,
+    name: String,
+    #[serde(default)]
+    seats: u16,
+    #[serde(default)]
+    grid_column: Option<u16>,
+    #[serde(default)]
+    grid_row: Option<u16>,
+    status: String,
+}
+
+/// Create a kitchen station.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateStationRequest {
+    tenant_id: String,
+    store_id: String,
+    name: String,
+    #[serde(default)]
+    backup_station_id: Option<String>,
+    #[serde(default)]
+    is_default: bool,
+}
+
+/// Update a station's name, backup, default flag, and status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateStationRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    backup_station_id: Option<String>,
+    #[serde(default)]
+    is_default: bool,
+    status: String,
+}
+
+/// Create an item→station routing rule.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateRoutingRuleRequest {
+    tenant_id: String,
+    store_id: String,
+    station_id: String,
+    #[serde(default)]
+    menu_item_id: Option<String>,
+    #[serde(default)]
+    course_id: Option<String>,
+    #[serde(default)]
+    sort: u16,
+}
+
+/// Folds two optional grid coordinates into a [`GridPosition`] — a table is placed only when both are
+/// given; either alone is treated as unplaced.
+fn grid_position(column: Option<u16>, row: Option<u16>) -> Option<GridPosition> {
+    match (column, row) {
+        (Some(column), Some(row)) => Some(GridPosition { column, row }),
+        _ => None,
+    }
+}
+
+/// Maps any floor-store failure to a retryable `503`, logging the detail rather than leaking it.
+fn floor_error_response(error: &impl std::fmt::Display) -> Response {
+    tracing::error!(%error, "a floor & kitchen store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the floor service is unavailable",
+    )
+        .into_response()
+}
+
+/// `503` when OS entropy is unavailable to mint a floor/kitchen id.
+fn floor_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy for a floor & kitchen write");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the floor service is unavailable",
+    )
+        .into_response()
+}
+
+/// Parses an optional id field: `None`/empty → `Ok(None)`; a present value must be a ULID.
+fn parse_optional_ulid<T>(value: Option<&str>, wrap: impl Fn(Ulid) -> T) -> Result<Option<T>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        None => Ok(None),
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(wrap(ulid)))
+            .map_err(|_ignored| ()),
+    }
+}
+
+/// Builds the floor & kitchen master-data sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+///
+/// Reads are behind [`ConsolePermission::Read`]; every write is behind [`ConsolePermission::ManageFloor`]
+/// (Owner/Admin) and is audited. The tenant is named the admin-is-global way (a `?tenant_id=` /
+/// `?store_id=` query on reads, the request body on writes). None of this data is PII.
+pub fn floor_router<F, A, C>(floor: F, admin: A, clock: C, audit: Arc<dyn AuditRecorder>) -> Router
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/floor/areas",
+            get(admin_list_areas::<F, A, C>).post(admin_create_area::<F, A, C>),
+        )
+        .route(
+            "/admin/floor/areas/{area_id}",
+            get(admin_get_area::<F, A, C>).patch(admin_update_area::<F, A, C>),
+        )
+        .route(
+            "/admin/floor/tables",
+            get(admin_list_tables::<F, A, C>).post(admin_create_table::<F, A, C>),
+        )
+        .route(
+            "/admin/floor/tables/{table_id}",
+            get(admin_get_table::<F, A, C>).patch(admin_update_table::<F, A, C>),
+        )
+        .route(
+            "/admin/kitchen/stations",
+            get(admin_list_stations::<F, A, C>).post(admin_create_station::<F, A, C>),
+        )
+        .route(
+            "/admin/kitchen/stations/{station_id}",
+            get(admin_get_station::<F, A, C>).patch(admin_update_station::<F, A, C>),
+        )
+        .route(
+            "/admin/kitchen/routing",
+            get(admin_list_routing::<F, A, C>).post(admin_create_routing::<F, A, C>),
+        )
+        .route(
+            "/admin/kitchen/routing/{rule_id}",
+            delete(admin_remove_routing::<F, A, C>),
+        )
+        .with_state(FloorState {
+            floor,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Reads a `?tenant_id=` query into a `TenantId`, or returns the `400`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn floor_tenant(tenant_id: &str) -> Result<TenantId, Response> {
+    tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_ignored| (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response())
+}
+
+/// Reads a (tenant, store) list query, or returns the `400`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn floor_tenant_store(query: &FloorListQuery) -> Result<(TenantId, StoreId), Response> {
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response());
+    };
+    Ok((tenant_id, store_id))
+}
+
+async fn admin_list_areas<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FloorListQuery>,
+) -> Response
+where
+    F: AreaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match floor_tenant_store(&query) {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    match AreaStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(areas) => (StatusCode::OK, Json::<Vec<Area>>(areas)).into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_get_area<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(area_id): Path<String>,
+    Query(query): Query<FloorTenantQuery>,
+) -> Response
+where
+    F: AreaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match floor_tenant(&query.tenant_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Ok(area_id) = area_id.parse::<Ulid>().map(AreaId::new) else {
+        return (StatusCode::BAD_REQUEST, "the area id is not a ULID").into_response();
+    };
+    match AreaStore::get(&state.floor, tenant_id, area_id).await {
+        Ok(Some(area)) => (StatusCode::OK, Json(area)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such area").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_create_area<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAreaRequest>,
+) -> Response
+where
+    F: AreaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Some(area_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AreaId::new)
+    else {
+        return floor_entropy_unavailable();
+    };
+    let new_area = NewArea {
+        area_id,
+        tenant_id,
+        store_id,
+        name: request.name.clone(),
+    };
+    match AreaStore::create(&state.floor, &new_area).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": area_id.to_string(),
+                "store_id": store_id.to_string(),
+                "name": request.name,
+                "status": EntityStatus::Active.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.area.create",
+                "floor_area",
+                &area_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": area_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_update_area<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(area_id): Path<String>,
+    Json(request): Json<UpdateAreaRequest>,
+) -> Response
+where
+    F: AreaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(area_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        area_id.parse::<Ulid>().map(AreaId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the area id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let update = AreaUpdate {
+        area_id,
+        tenant_id,
+        name: request.name.clone(),
+        status,
+    };
+    match AreaStore::update(&state.floor, &update).await {
+        Ok(true) => {
+            let after = serde_json::json!({
+                "id": area_id.to_string(),
+                "name": request.name,
+                "status": status.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.area.update",
+                "floor_area",
+                &area_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such area").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_list_tables<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FloorListQuery>,
+) -> Response
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match floor_tenant_store(&query) {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    match TableStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(tables) => (StatusCode::OK, Json::<Vec<Table>>(tables)).into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_get_table<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(table_id): Path<String>,
+    Query(query): Query<FloorTenantQuery>,
+) -> Response
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match floor_tenant(&query.tenant_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Ok(table_id) = table_id.parse::<Ulid>().map(TableId::new) else {
+        return (StatusCode::BAD_REQUEST, "the table id is not a ULID").into_response();
+    };
+    match TableStore::get(&state.floor, tenant_id, table_id).await {
+        Ok(Some(table)) => (StatusCode::OK, Json(table)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such table").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_create_table<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTableRequest>,
+) -> Response
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id), Ok(area_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request.area_id.parse::<Ulid>().map(AreaId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, or area_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Some(table_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TableId::new)
+    else {
+        return floor_entropy_unavailable();
+    };
+    let new_table = NewTable {
+        table_id,
+        tenant_id,
+        store_id,
+        area_id,
+        label: request.name.clone(),
+        seats: request.seats,
+        position: grid_position(request.grid_column, request.grid_row),
+    };
+    match TableStore::create(&state.floor, &new_table).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": table_id.to_string(),
+                "area_id": area_id.to_string(),
+                "label": request.name,
+                "seats": request.seats,
+                "status": EntityStatus::Active.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.table.create",
+                "floor_table",
+                &table_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": table_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_update_table<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(table_id): Path<String>,
+    Json(request): Json<UpdateTableRequest>,
+) -> Response
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(table_id), Ok(area_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        table_id.parse::<Ulid>().map(TableId::new),
+        request.area_id.parse::<Ulid>().map(AreaId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the table id, tenant_id, or area_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let update = TableUpdate {
+        table_id,
+        tenant_id,
+        area_id,
+        label: request.name.clone(),
+        seats: request.seats,
+        position: grid_position(request.grid_column, request.grid_row),
+        status,
+    };
+    match TableStore::update(&state.floor, &update).await {
+        Ok(true) => {
+            let after = serde_json::json!({
+                "id": table_id.to_string(),
+                "area_id": area_id.to_string(),
+                "label": request.name,
+                "seats": request.seats,
+                "status": status.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.table.update",
+                "floor_table",
+                &table_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such table").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_list_stations<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FloorListQuery>,
+) -> Response
+where
+    F: StationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match floor_tenant_store(&query) {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    match StationStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(stations) => (StatusCode::OK, Json::<Vec<Station>>(stations)).into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_get_station<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(station_id): Path<String>,
+    Query(query): Query<FloorTenantQuery>,
+) -> Response
+where
+    F: StationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match floor_tenant(&query.tenant_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Ok(station_id) = station_id.parse::<Ulid>().map(StationId::new) else {
+        return (StatusCode::BAD_REQUEST, "the station id is not a ULID").into_response();
+    };
+    match StationStore::get(&state.floor, tenant_id, station_id).await {
+        Ok(Some(station)) => (StatusCode::OK, Json(station)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such station").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_create_station<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStationRequest>,
+) -> Response
+where
+    F: StationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Ok(backup_station_id) =
+        parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
+    else {
+        return (StatusCode::BAD_REQUEST, "backup_station_id is not a ULID").into_response();
+    };
+    let Some(station_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StationId::new)
+    else {
+        return floor_entropy_unavailable();
+    };
+    let new_station = NewStation {
+        station_id,
+        tenant_id,
+        store_id,
+        name: request.name.clone(),
+        backup_station_id,
+        is_default: request.is_default,
+    };
+    match StationStore::create(&state.floor, &new_station).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": station_id.to_string(),
+                "name": request.name,
+                "is_default": request.is_default,
+                "status": EntityStatus::Active.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "kitchen.station.create",
+                "kitchen_station",
+                &station_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": station_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_update_station<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(station_id): Path<String>,
+    Json(request): Json<UpdateStationRequest>,
+) -> Response
+where
+    F: StationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(station_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        station_id.parse::<Ulid>().map(StationId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the station id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    let Ok(backup_station_id) =
+        parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
+    else {
+        return (StatusCode::BAD_REQUEST, "backup_station_id is not a ULID").into_response();
+    };
+    let Some(status) = parse_entity_status(&request.status) else {
+        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+    };
+    let update = StationUpdate {
+        station_id,
+        tenant_id,
+        name: request.name.clone(),
+        backup_station_id,
+        is_default: request.is_default,
+        status,
+    };
+    match StationStore::update(&state.floor, &update).await {
+        Ok(true) => {
+            let after = serde_json::json!({
+                "id": station_id.to_string(),
+                "name": request.name,
+                "is_default": request.is_default,
+                "status": status.as_str(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "kitchen.station.update",
+                "kitchen_station",
+                &station_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such station").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_list_routing<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FloorListQuery>,
+) -> Response
+where
+    F: RoutingRuleStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match floor_tenant_store(&query) {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    match RoutingRuleStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(rules) => (StatusCode::OK, Json::<Vec<RoutingRule>>(rules)).into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_create_routing<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateRoutingRuleRequest>,
+) -> Response
+where
+    F: RoutingRuleStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id), Ok(station_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+        request.station_id.parse::<Ulid>().map(StationId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, or station_id is not a ULID",
+        )
+            .into_response();
+    };
+    let Ok(menu_item_id) = parse_optional_ulid(request.menu_item_id.as_deref(), MenuItemId::new)
+    else {
+        return (StatusCode::BAD_REQUEST, "menu_item_id is not a ULID").into_response();
+    };
+    let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
+        return (StatusCode::BAD_REQUEST, "course_id is not a ULID").into_response();
+    };
+    // A rule must match exactly one of an item or a course — the same rule the §10 validator enforces
+    // at publish, surfaced here so the console cannot store a rule that matches nothing or both.
+    if menu_item_id.is_some() == course_id.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a routing rule must match exactly one of menu_item_id or course_id",
+        )
+            .into_response();
+    }
+    let Some(rule_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoutingRuleId::new)
+    else {
+        return floor_entropy_unavailable();
+    };
+    let new_rule = NewRoutingRule {
+        rule_id,
+        tenant_id,
+        store_id,
+        station_id,
+        menu_item_id,
+        course_id,
+        sort: request.sort,
+    };
+    match RoutingRuleStore::create(&state.floor, &new_rule).await {
+        Ok(()) => {
+            let after = serde_json::json!({
+                "id": rule_id.to_string(),
+                "station_id": station_id.to_string(),
+                "menu_item_id": menu_item_id.map(|id| id.to_string()),
+                "course_id": course_id.map(|id| id.to_string()),
+                "sort": request.sort,
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "kitchen.routing.create",
+                "station_routing_rule",
+                &rule_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": rule_id.to_string() })),
+            )
+                .into_response()
+        }
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+async fn admin_remove_routing<F, A, C>(
+    State(state): State<FloorState<F, A, C>>,
+    headers: HeaderMap,
+    Path(rule_id): Path<String>,
+    Query(query): Query<FloorTenantQuery>,
+) -> Response
+where
+    F: RoutingRuleStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageFloor,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(rule_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        rule_id.parse::<Ulid>().map(RoutingRuleId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the rule id or tenant_id is not a ULID",
+        )
+            .into_response();
+    };
+    match RoutingRuleStore::remove(&state.floor, tenant_id, rule_id).await {
+        Ok(true) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "kitchen.routing.remove",
+                "station_routing_rule",
+                &rule_id.to_string(),
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such routing rule").into_response(),
+        Err(error) => floor_error_response(&error),
+    }
+}
+
+// --- Floor & kitchen publish (`/admin/floor/publish`, ADR-0072) ---------------------------------
+
+/// The collaborators the floor/kitchen publish route needs: the master-data store to compile from, the
+/// config-tree store to write onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct FloorPublishState<F, Cfg, A, C> {
+    floor: F,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishFloorRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the floor & kitchen publish sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+///
+/// One route: compile a store's areas/tables into a `FloorPlan` and its stations/routing into a
+/// `StationPlan`, run the §10 referential validation (`pos_core::floor`), and — only if valid — merge
+/// both onto the store's `floor` and `stations` config nodes and version them through the config tree.
+/// Behind [`ConsolePermission::PublishConfig`], the same gate as catalog/people/config publish.
+pub fn floor_publish_router<F, Cfg, A, C>(
+    floor: F,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/floor/publish",
+            post(admin_publish_floor::<F, Cfg, A, C>),
+        )
+        .with_state(FloorPublishState {
+            floor,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Compiles a store's floor & kitchen master data into its `floor`/`stations` config nodes and versions
+/// them — the same load→compile→validate→write→version shape as [`admin_publish_menu`], onto the
+/// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
+/// backup): an invalid plan is a `422` with the violated rules, never a stored state.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish is a single linear transaction — load areas/tables/stations/rules, compile \
+              both nodes, validate, merge onto the Store layer and version it; splitting the \
+              load-compile-write flow would scatter the config-tree state the final publish needs"
+)]
+async fn admin_publish_floor<F, Cfg, A, C>(
+    State(state): State<FloorPublishState<F, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishFloorRequest>,
+) -> Response
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified.
+    let areas = match AreaStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(areas) => areas,
+        Err(error) => return floor_error_response(&error),
+    };
+    let tables = match TableStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(tables) => tables,
+        Err(error) => return floor_error_response(&error),
+    };
+    let stations = match StationStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(stations) => stations,
+        Err(error) => return floor_error_response(&error),
+    };
+    let rules = match RoutingRuleStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(rules) => rules,
+        Err(error) => return floor_error_response(&error),
+    };
+
+    let floor_plan = compile_floor(&areas, &tables);
+    let station_plan = compile_stations(&stations, &rules);
+
+    // The §10 referential validation, before anything is written — the cloud never publishes a plan
+    // that names a station, backup, or area that does not exist.
+    let mut violations = pos_core::floor::floor_violations(&floor_plan);
+    violations.extend(pos_core::floor::station_violations(&station_plan));
+    if !violations.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response();
+    }
+
+    let (Ok(floor_value), Ok(stations_value)) = (
+        serde_json::to_value(&floor_plan),
+        serde_json::to_value(&station_plan),
+    ) else {
+        tracing::error!("could not serialise a compiled floor or station plan");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the floor service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `floor` and `stations` keys on the store's Store layer (index 2) and re-publish it,
+    // preserving the other Store-level keys (`menu`, `layout`, `permissions`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("floor".to_owned(), floor_value);
+        map.insert("stations".to_owned(), stations_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "config_version_id": id.to_string(),
+                    "area_count": floor_plan.areas().len(),
+                    "table_count": floor_plan.tables().count(),
+                    "station_count": station_plan.stations().len(),
+                })),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Table QR tokens (`/admin/floor/qr`, ADR-0072 + ADR-0057) -----------------------------------
+
+/// The collaborators the table-QR route needs: the floor store to read a store's tables, the
+/// admin/clock its session guard uses, and the signing secret the token is minted with.
+#[derive(Clone)]
+struct TableQrState<F, A, C> {
+    floor: F,
+    admin: A,
+    clock: C,
+    secret: TableTokenSecret,
+}
+
+/// One table's printable QR: its id, the label a host reads, and the signed token the guest's QR
+/// carries. The token binds `(tenant, store, table)` — no personal data — and is the same value
+/// `verify_table_token` checks on a guest order (ADR-0057).
+#[derive(Debug, Clone, serde::Serialize)]
+struct TableQrEntry {
+    table_id: String,
+    label: String,
+    token: String,
+}
+
+/// The store's table QR tokens, for the console's printable sheet.
+#[derive(Debug, Clone, serde::Serialize)]
+struct TableQrView {
+    store_id: String,
+    tokens: Vec<TableQrEntry>,
+}
+
+/// Builds the table-QR sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md),
+/// [ADR-0057](../../../docs/adr/0057-qr-ordering.md)).
+///
+/// One read, `GET /admin/floor/qr`, behind [`ConsolePermission::Read`]: mints the signed QR token for
+/// each of a store's active tables so the console can print a QR sheet. Wired only when a table-token
+/// secret is configured (the same gate the guest QR endpoint uses — a token no verifier would accept
+/// is not worth minting). The token is not PII; it is the public value printed on the code.
+pub fn table_qr_router<F, A, C>(floor: F, admin: A, clock: C, secret: TableTokenSecret) -> Router
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/floor/qr", get(admin_list_table_qr::<F, A, C>))
+        .with_state(TableQrState {
+            floor,
+            admin,
+            clock,
+            secret,
+        })
+}
+
+/// Mints a signed QR token for each of a store's active tables (ADR-0072).
+async fn admin_list_table_qr<F, A, C>(
+    State(state): State<TableQrState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FloorListQuery>,
+) -> Response
+where
+    F: TableStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match floor_tenant_store(&query) {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    let tables = match TableStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(tables) => tables,
+        Err(error) => return floor_error_response(&error),
+    };
+    let tokens = tables
+        .into_iter()
+        .filter(|table| table.status == EntityStatus::Active)
+        .map(|table| TableQrEntry {
+            token: mint_table_token(&state.secret, tenant_id, store_id, table.table_id),
+            table_id: table.table_id.to_string(),
+            label: table.label,
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(TableQrView {
+            store_id: store_id.to_string(),
+            tokens,
+        }),
+    )
+        .into_response()
 }
 
 // --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------

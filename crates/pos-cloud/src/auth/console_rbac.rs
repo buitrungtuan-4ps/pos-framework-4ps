@@ -139,6 +139,12 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Manage employees, role templates, store assignments, and reset staff PINs",
     },
+    /// Author a store's floor and kitchen: areas, tables, stations, and item→station routing rules.
+    ManageFloor {
+        id: "console.floor.manage",
+        roles: [Owner, Admin],
+        description: "Author floor areas and tables, kitchen stations, and station routing rules",
+    },
     /// Read any tenant data — reports, registry, configuration, catalog, translations.
     Read {
         id: "console.data.read",

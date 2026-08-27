@@ -9,6 +9,7 @@ import type {
   BumpResponse,
   CountShiftRequest,
   FireRequest,
+  FloorResponse,
   LineRequest,
   LineResponse,
   OpenShiftRequest,
@@ -53,6 +54,10 @@ export const api = {
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
   getTable: (tableId: string) => request<TableResponse>("GET", `/api/tables/${tableId}`),
+
+  // The store's published floor plan and kitchen stations (ADR-0072). The app reads this at start to
+  // draw the store's real tables and resolve fires to the store's default station.
+  floor: () => request<FloorResponse>("GET", "/api/floor"),
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),

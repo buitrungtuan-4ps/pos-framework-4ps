@@ -130,6 +130,11 @@ resource_id! {
     PaymentId
 }
 resource_id! {
+    /// A named region of a store's floor — a terrace, a mezzanine, the main hall. Tables belong to an
+    /// area, so a floor plan groups its tables the way a guest and a host think of the room.
+    AreaId
+}
+resource_id! {
     /// A table on a floor plan.
     TableId
 }

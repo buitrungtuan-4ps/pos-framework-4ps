@@ -65,6 +65,8 @@ pub mod cursor;
 pub mod dashboard;
 pub mod devices;
 pub mod fleet;
+pub mod floor_compiler;
+pub mod floorplan;
 pub mod health;
 pub mod http;
 pub mod images;

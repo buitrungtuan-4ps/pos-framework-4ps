@@ -111,6 +111,103 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The in-store app draws the store's real floor and routes fires by the published plan** (roadmap
+  v2, Track M2, slice 8; [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). The in-store `ui/` now reads
+  `GET /api/floor` at start and renders the store's published areas and tables instead of a hardcoded
+  eight, keeping a never-blank fallback (the default grid stays until a plan syncs, and if a store has
+  none published). Firing and bumping route to the store's published default station rather than the
+  old fixed `S01` — and the edge now **derives a fired line's station from the published routing**
+  (wiring `EdgeSession::resolve_station`, previously defined but unused): `fire_line` resolves the
+  station from the line's item/course rules and falls back to the caller's station only when the store
+  has no station plan yet, so a device fires a line without needing to know the kitchen's stations. The
+  edge's `POST /api/lines/{id}/fire` accepts an optional `station_id` (absent lets the plan decide),
+  and a fire that resolves to no station at all is a `409` (`UnroutableLine`) rather than a blank
+  route. **Upgrade note:** edge + in-store-UI only; `FireRequest.station_id` is now optional (an absent
+  field is accepted); no schema or `PROTOCOL_VERSION` change.
+- **Floor & kitchen console screens** (roadmap v2, Track M2, slice 7;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Two new master-data screens on the F2 CRUD kit,
+  both per-store and behind the working store in the top bar. **Floor** manages a store's areas and
+  tables (create/rename/archive areas; create/edit/archive tables by label, area, seat count, and an
+  optional grid column/row — the visual pointer-drag editor stays deferred to F3), publishes the plan
+  with one action (`publishFloor`), and renders the printable QR sheet (`tableQrTokens`), degrading to
+  a gentle "not configured" note when the cloud has no table-token secret rather than an error.
+  **Kitchen stations** manages stations (name, optional backup for printer failover, a catch-all
+  default flag) and item→station routing rules (the item is picked from the tenant's catalog, so no
+  course ULID is ever typed), and publishes the same plan. Both screens gate every write affordance on
+  `console.floor.manage` (Owner/Admin) — the server re-checks — and route outcomes through the F1
+  toast. New `/floor` and `/stations` nav entries (Master data group) with English + Vietnamese
+  strings. **Upgrade note:** dashboard-only; no schema, protocol, or permission change.
+- **Table QR-token minting** (roadmap v2, Track M2, slice 6;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md), [ADR-0057](docs/adr/0057-qr-ordering.md)). Wires the
+  previously-orphaned `mint_table_token`: `GET /admin/floor/qr` mints the signed QR token for each of a
+  store's active tables so the console can print a QR sheet. The token binds `(tenant, store, table)`
+  — no PII — and is the same value `verify_table_token` already checks on a guest order, so QR ordering
+  now closes end-to-end. Behind `console.data.read` and wired only when a table-token secret is
+  configured (the same gate as the guest `POST /v1/qr/orders`). The typed client gains `tableQrTokens`.
+  The printable QR sheet UI lands with the Floor screen (slice 7). **Upgrade note:** additive read
+  route; no schema or protocol change.
+- **The edge applies the `floor` & `stations` nodes** (roadmap v2, Track M2, slice 5;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `EdgeSession` gains `floor`/`stations` fields (with
+  `with_floor`/`with_stations` builders), and `session_from_config` rebuilds them from the pulled
+  document's `floor`/`stations` nodes with the same **never-blank** gate the `menu`/`permissions`
+  branches keep — an absent or malformed node leaves the plan unchanged. `EdgeSession::resolve_station`
+  derives a fired line's station from the published routing (a thin delegate to
+  `pos_core::floor::route_station`), so the store can route by rule instead of trusting the caller. A
+  new `GET /api/floor` serves the live floor plan + kitchen stations to the in-store UI (which renders
+  its real tables and routes fires in the next slice). **Upgrade note:** edge-only; the store now
+  applies a published floor plan and station routing where before it knew neither.
+- **Publish the `floor` & `stations` config nodes** (roadmap v2, Track M2, slice 4;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `POST /admin/floor/publish` compiles a store's
+  areas/tables into a `FloorPlan` and its stations/routing into a `StationPlan` (only active records;
+  a stale backup or a rule to a removed station is dropped, so the plan is consistent by
+  construction), runs the §10 referential validation (`pos_core::floor`), and — only if valid — merges
+  both onto the store's `floor` and `stations` config nodes and versions them through the config tree,
+  preserving the other Store-level keys (`menu`/`layout`/`permissions`/capability flags). An invalid
+  plan is a `422` with the violated rules, never a stored state. Behind `console.config.publish`,
+  audited `floor.publish` (counts only). The typed client gains `publishFloor`. **Upgrade note:**
+  additive route + two new config nodes; no `PROTOCOL_VERSION` change (the edge starts reading them in
+  the next slice).
+- **Floor & kitchen `/admin` CRUD routes** (roadmap v2, Track M2, slice 3;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `GET/POST /admin/floor/areas`,
+  `GET/PATCH /admin/floor/areas/{id}`, the same for `/admin/floor/tables`, `/admin/kitchen/stations`,
+  and `GET/POST /admin/kitchen/routing` + `DELETE /admin/kitchen/routing/{id}`. Reads are behind
+  `console.data.read`; every write is behind a new **`console.floor.manage`** permission (Owner/Admin)
+  and is audited (`floor.area.*`, `floor.table.*`, `kitchen.station.*`, `kitchen.routing.*`; floor data
+  is not PII). A routing rule is rejected unless it matches exactly one of an item or a course — the
+  same §10 rule the publish validator enforces, surfaced early as a `400`. The typed dashboard client
+  gains the matching `Area`/`FloorTable`/`Station`/`RoutingRule` types and list/create/update/remove
+  methods. **Upgrade note:** additive routes + one new console permission; no schema or protocol change.
+- **Kitchen master-data store: stations & routing rules** (roadmap v2, Track M2, slice 2b;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Migration `0026_kitchen_stations_and_routing.sql`
+  adds the per-store `kitchen_stations` (name, optional backup station for printer failover, an
+  `is_default` catch-all flag) and `station_routing_rules` (a fired line matched by item or course →
+  a station, in author-controlled `sort` order) tables, RLS-isolated like the floor. Stations are
+  archived-never-deleted; a routing rule is a mapping that is *removed* (like an assignment). New
+  `StationStore` / `RoutingRuleStore` seams + `store-postgres` adapter methods + an in-memory fake and
+  seam test. Not PII. **Upgrade note:** additive migration `0026` (rollback-safe); no protocol change.
+- **Floor master-data store: areas & tables** (roadmap v2, Track M2, slice 2a;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). A store's floor is now persisted master data:
+  migration `0025_floor_areas_and_tables.sql` adds the `floor_areas` and `floor_tables` tables —
+  per-store (a floor is a physical room, so both carry `store_id` beside `tenant_id`), RLS-isolated on
+  `app.tenant_id`, and archived-never-deleted like every other registry entity. New `AreaStore` /
+  `TableStore` seams (with an in-memory fake for tests and a `store-postgres` `PostgresFloor` adapter)
+  create/list/get/update areas and tables; a table carries a label, seat count, and an optional grid
+  position for the visual editor. Not PII. Seams and storage only in this slice; the CRUD routes,
+  publish, and console follow. **Upgrade note:** additive migration `0025` (rollback-safe); no protocol
+  change.
+- **Floor & kitchen master-data types** (roadmap v2, Track M2, slice 1;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Foundations for a store's floor plan and kitchen
+  routing: a new `AreaId` (a named region of the floor), and two shared `pos-proto` config shapes the
+  cloud authors and the edge reads through one type — `FloorPlan` (areas, each with its tables: a
+  label, seat count, and optional grid position) and `StationPlan` (kitchen stations, each with an
+  optional backup station, plus item→station routing rules and a default station). `pos-core::floor`
+  adds the pure referential validation (`floor_violations`/`station_violations` — table ids unique
+  across the floor, a routing rule names a known station and matches exactly one of an item or a
+  course, a backup names a known different station) the cloud will run before publishing, and
+  `route_station`, the resolver that turns a fired line into its station (item rule → course rule →
+  default). Types and logic only in this slice; the schema, publish, edge read, and console land in
+  the following M2 slices. **Upgrade note:** additive proto types; no schema or `PROTOCOL_VERSION`
+  change.
 - **A form-driven capability editor on the Config screen** (roadmap v2, Track M8, slice 3;
   [ADR-0071](docs/adr/0071-config-without-json.md)). The Config screen now offers the §10 capability
   catalogue as labelled toggles seeded from the store's current effective profile, the three presets

@@ -41,6 +41,7 @@ use pos_proto::events::{
     CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, KitchenTicketBumped,
     SalesOrderLineAdded, SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
 };
+use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
     StationId, StoreId, TableId, TaxClassId, TenantId,
@@ -188,6 +189,16 @@ pub struct EdgeSession {
     /// authorises no one from a roster until the console publishes its people, the same
     /// safe-by-default shape as the menu.
     pub staff: StaffRoster,
+    /// The store's floor plan — its areas and tables, as published on the `floor` config node
+    /// ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the bootstrap: the store
+    /// carries no roster of tables until the console publishes one (the in-store UI shows its own
+    /// fallback until then).
+    pub floor: FloorPlan,
+    /// The store's kitchen plan — its stations and item→station routing, as published on the
+    /// `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the
+    /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
+    /// own fallback.
+    pub stations: StationPlan,
 }
 
 impl EdgeSession {
@@ -224,6 +235,8 @@ impl EdgeSession {
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
+            floor: FloorPlan::new(),
+            stations: StationPlan::new(),
         }
     }
 
@@ -266,6 +279,35 @@ impl EdgeSession {
         self.staff = staff;
         self
     }
+
+    /// Installs a floor plan, for a test or the on-fakes example. The real store's floor arrives from
+    /// the cloud's `floor` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    #[must_use]
+    pub fn with_floor(mut self, floor: FloorPlan) -> Self {
+        self.floor = floor;
+        self
+    }
+
+    /// Installs a station plan, for a test or the on-fakes example. The real store's kitchen arrives
+    /// from the cloud's `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    #[must_use]
+    pub fn with_stations(mut self, stations: StationPlan) -> Self {
+        self.stations = stations;
+        self
+    }
+
+    /// The station a fired line routes to under the published plan (ADR-0072), or `None` when the
+    /// store has no station plan or no rule matches and it names no default. A thin delegate to the
+    /// pure `pos_core::floor::route_station`, so the edge derives the station from the published
+    /// routing instead of trusting the caller.
+    #[must_use]
+    pub fn resolve_station(
+        &self,
+        menu_item_id: MenuItemId,
+        course_id: Option<CourseId>,
+    ) -> Option<StationId> {
+        pos_core::floor::route_station(&self.stations, menu_item_id, course_id)
+    }
 }
 
 /// A failure applying a command.
@@ -289,6 +331,10 @@ pub enum AppError {
     /// A command named a line the edge does not know.
     #[error("no such order line")]
     UnknownLine,
+    /// A line was fired but no station could be resolved — the store has no station plan (no rule
+    /// matched and none is the default) and the caller named no station either (ADR-0072).
+    #[error("the line routes to no station")]
+    UnroutableLine,
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
@@ -1036,22 +1082,36 @@ impl<S: EventStore> Edge<S> {
     /// later slice); with the bootstrap empty recipe book there is nothing to consume, and the fire
     /// event is the durable record that stock left at fire, not at payment.
     ///
+    /// The station the line routes to is derived from the published routing plan (ADR-0072), not
+    /// dictated by the caller: `station_id` is an optional fallback used only when the store has no
+    /// station plan yet (no rule matched and none is the default). A device therefore fires a line
+    /// without needing to know the kitchen's stations, and the plan alone decides where it prints.
+    ///
     /// # Errors
     ///
-    /// [`AppError::UnknownLine`] for a line the edge does not know, [`AppError::Domain`] if firing is
-    /// not a legal move (already fired or voided) or the course capability is off, or [`AppError`] if
-    /// the store cannot be written.
+    /// [`AppError::UnknownLine`] for a line the edge does not know, [`AppError::UnroutableLine`] when
+    /// neither the plan nor the caller yields a station, [`AppError::Domain`] if firing is not a legal
+    /// move (already fired or voided) or the course capability is off, or [`AppError`] if the store
+    /// cannot be written.
     pub async fn fire_line(
         &self,
         actor: Actor,
         order_line_id: OrderLineId,
-        station_id: StationId,
+        station_id: Option<StationId>,
     ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        let session = self.session();
         let record = self
             .lock_projection()
             .line(order_line_id)
             .ok_or(AppError::UnknownLine)?;
+
+        // The published routing decides the station; the caller's station is only a fallback for a
+        // store that has not published a station plan yet (never-blank, ADR-0072).
+        let station_id = session
+            .resolve_station(record.menu_item_id, record.course_id)
+            .or(station_id)
+            .ok_or(AppError::UnroutableLine)?;
 
         let command = LineCommand::Fire {
             base_item: record.menu_item_id,
@@ -1059,7 +1119,7 @@ impl<S: EventStore> Edge<S> {
             quantity: record.quantity,
             course: record.course_id,
         };
-        let decision = decide_line(record.state, command, &ctx, &self.session().recipes)?;
+        let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
 
         let payload = SalesOrderLineFired {
             order_id: record.order_id,
@@ -1782,6 +1842,7 @@ mod tests {
     use pos_core::billing::Payment;
     use pos_core::decision::Actor;
     use pos_fakes::FakeStore;
+    use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StationId, StoreId, TableId};
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
@@ -1897,7 +1958,7 @@ mod tests {
 
             let station = StationId::new(Ulid::from_u128(9));
             let fired = edge
-                .fire_line(actor(), line.order_line_id, station)
+                .fire_line(actor(), line.order_line_id, Some(station))
                 .await
                 .expect("fires");
             assert_eq!(fired.state, OrderLineState::Fired);
@@ -1927,13 +1988,73 @@ mod tests {
             edge.seat_table(actor(), table).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             let station = StationId::new(Ulid::from_u128(9));
-            edge.fire_line(actor(), line.order_line_id, station)
+            edge.fire_line(actor(), line.order_line_id, Some(station))
                 .await
                 .expect("first fire");
 
             // A fired line cannot fire again — the domain refuses the transition.
-            let refused = edge.fire_line(actor(), line.order_line_id, station).await;
+            let refused = edge
+                .fire_line(actor(), line.order_line_id, Some(station))
+                .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    #[test]
+    fn a_fired_line_routes_to_the_planned_station_over_the_caller() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            // Publish a plan that routes the line's item (500) to station 700; the caller will name a
+            // different station (999), which the published routing must override (ADR-0072).
+            let planned = StationId::new(Ulid::from_u128(700));
+            let plan = StationPlan::new()
+                .with_station(KitchenStation {
+                    station_id: planned,
+                    name: DisplayName::new("Oven"),
+                    backup_station_id: None,
+                })
+                .with_rule(RoutingRule {
+                    station_id: planned,
+                    menu_item_id: Some(MenuItemId::new(Ulid::from_u128(500))),
+                    course_id: None,
+                });
+            edge.apply_session(EdgeSession::bootstrap().with_stations(plan));
+
+            let table = TableId::new(Ulid::from_u128(210));
+            edge.seat_table(actor(), table).await.expect("seats");
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let mut device = edge.fanout().subscribe();
+
+            let caller = StationId::new(Ulid::from_u128(999));
+            edge.fire_line(actor(), line.order_line_id, Some(caller))
+                .await
+                .expect("fires");
+
+            let frame = device.try_recv().expect("a fire frame reached the device");
+            assert!(frame.contains("sales.order_line.fired"));
+            assert!(
+                frame.contains(&planned.to_string()),
+                "the line routes to the plan's station, not the caller's"
+            );
+            assert!(
+                !frame.contains(&caller.to_string()),
+                "the caller's station is ignored when the plan resolves one"
+            );
+        });
+    }
+
+    #[test]
+    fn firing_with_no_station_plan_or_caller_is_unroutable() {
+        pos_fakes::executor::run_ready(async {
+            // The bootstrap session has an empty station plan; with no caller station either, a fire
+            // has nowhere to route and is refused rather than published with a blank station.
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(211));
+            edge.seat_table(actor(), table).await.expect("seats");
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let refused = edge.fire_line(actor(), line.order_line_id, None).await;
+            assert!(matches!(refused, Err(super::AppError::UnroutableLine)));
         });
     }
 

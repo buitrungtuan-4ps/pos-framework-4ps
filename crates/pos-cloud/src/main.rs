@@ -274,6 +274,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Floor & kitchen master data (ADR-0072, Track M2): a store's areas + tables and its kitchen
+        // stations + item→station routing rules. Reads behind Read; writes behind the new ManageFloor
+        // and audited. `store.floor()` is the area, table, station, and routing-rule seam at once.
+        .merge(http::floor_router(
+            store.floor(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Floor & kitchen publish (ADR-0072 slice 4): compile the store's areas/tables + stations/
+        // routing into the `floor`/`stations` config nodes and version them through the config tree,
+        // so the edge applies the real floor plan and station routing.
+        .merge(http::floor_publish_router(
+            store.floor(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
         // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
         // only `record`), behind the same super-admin session guard as the other reads.
@@ -358,17 +377,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // `POST /v1/orders` uses, guardrailed by the store's `qr` config.
     let service = if let Some(secret) = config.table_token_secret.clone() {
         tracing::info!("QR ordering enabled (POST /v1/qr/orders)");
-        service.merge(qr_http::qr_router(
-            TableTokenSecret::new(secret),
-            OrderRelay::new(
-                store.store_directory(),
+        service
+            .merge(qr_http::qr_router(
+                TableTokenSecret::new(secret.clone()),
+                OrderRelay::new(
+                    store.store_directory(),
+                    store.config_trees(),
+                    store.order_queue(),
+                    SystemClock,
+                ),
                 store.config_trees(),
-                store.order_queue(),
                 SystemClock,
-            ),
-            store.config_trees(),
-            SystemClock,
-        ))
+            ))
+            // Table QR minting (ADR-0072): the console reads each table's signed token here to print a
+            // QR sheet. Wired only with a secret, the same gate as the guest endpoint above.
+            .merge(http::table_qr_router(
+                store.floor(),
+                store.admin(),
+                SystemClock,
+                TableTokenSecret::new(secret),
+            ))
     } else {
         tracing::warn!("no table_token_secret configured; the QR ordering endpoint is off");
         service

@@ -11,7 +11,7 @@ import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Shift } from "./screens/Shift";
 import { Today } from "./screens/Today";
-import { fold, setLink } from "./state/store";
+import { fold, loadFloor, setLink } from "./state/store";
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
@@ -33,7 +33,12 @@ export function App() {
     },
     onStatus: setLink,
   });
-  onMount(() => link.start());
+  onMount(() => {
+    link.start();
+    // Draw the store's real floor and resolve fires to its default station (ADR-0072); a failure or an
+    // empty plan leaves the never-blank fallback in place.
+    void loadFloor();
+  });
   onCleanup(() => link.stop());
 
   return (

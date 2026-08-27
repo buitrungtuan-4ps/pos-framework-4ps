@@ -94,10 +94,10 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
             .expect("device B adds a line");
 
         // Fire the first course to the kitchen.
-        edge.fire_line(device_a(), line_a.order_line_id, station)
+        edge.fire_line(device_a(), line_a.order_line_id, Some(station))
             .await
             .expect("fires device A's line");
-        edge.fire_line(device_b(), line_b.order_line_id, station)
+        edge.fire_line(device_b(), line_b.order_line_id, Some(station))
             .await
             .expect("fires device B's line");
 
@@ -106,7 +106,7 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
             .add_line(device_a(), table, a_pizza(502))
             .await
             .expect("adds a later course");
-        edge.fire_line(device_a(), dessert.order_line_id, station)
+        edge.fire_line(device_a(), dessert.order_line_id, Some(station))
             .await
             .expect("fires the later course");
 
