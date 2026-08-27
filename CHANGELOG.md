@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Floor & kitchen console screens** (roadmap v2, Track M2, slice 7;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Two new master-data screens on the F2 CRUD kit,
+  both per-store and behind the working store in the top bar. **Floor** manages a store's areas and
+  tables (create/rename/archive areas; create/edit/archive tables by label, area, seat count, and an
+  optional grid column/row — the visual pointer-drag editor stays deferred to F3), publishes the plan
+  with one action (`publishFloor`), and renders the printable QR sheet (`tableQrTokens`), degrading to
+  a gentle "not configured" note when the cloud has no table-token secret rather than an error.
+  **Kitchen stations** manages stations (name, optional backup for printer failover, a catch-all
+  default flag) and item→station routing rules (the item is picked from the tenant's catalog, so no
+  course ULID is ever typed), and publishes the same plan. Both screens gate every write affordance on
+  `console.floor.manage` (Owner/Admin) — the server re-checks — and route outcomes through the F1
+  toast. New `/floor` and `/stations` nav entries (Master data group) with English + Vietnamese
+  strings. **Upgrade note:** dashboard-only; no schema, protocol, or permission change.
 - **Table QR-token minting** (roadmap v2, Track M2, slice 6;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md), [ADR-0057](docs/adr/0057-qr-ordering.md)). Wires the
   previously-orphaned `mint_table_token`: `GET /admin/floor/qr` mints the signed QR token for each of a
