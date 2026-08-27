@@ -135,8 +135,8 @@ impl EventStoreHarness for StoreHarness {
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
                  admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 subjects, webhook_endpoints, device_proposals, activation_codes, \
-                 device_credentials RESTART IDENTITY;",
+                 stores, order_queue, subjects, webhook_endpoints, device_proposals, \
+                 activation_codes, device_credentials RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -178,8 +178,8 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, subjects, webhook_endpoints, device_proposals, \
-             activation_codes, device_credentials RESTART IDENTITY",
+             config_trees, store_liveness, stores, order_queue, subjects, webhook_endpoints, \
+             device_proposals, activation_codes, device_credentials RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1222,6 +1222,162 @@ mod config_tree_store {
                 row.get::<_, Option<i64>>(2),
                 None,
                 "a heartbeat-only store has no config-pull instant"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The fleet read model: identity + liveness + config drift + relay backlog (ADR-0068 slice 3).
+// ---------------------------------------------------------------------------
+
+mod fleet_store {
+    use super::{block_on, prepared};
+    use pos_proto::{StoreId, TenantId, Ulid};
+
+    /// The fleet read joins registry identity, liveness, config drift, and relay backlog into one row
+    /// per store, scoped to its tenant. A configured+seen store shows all four; a bare registered
+    /// store shows identity only; a different tenant sees nothing ([ADR-0068] slice 3).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario: it seeds all four joined tables (registry, config tree, \
+                  liveness, order queue) and asserts every field of the joined row, plus fetch_one \
+                  and tenant-scope — splitting it would duplicate the multi-table setup"
+    )]
+    fn joins_identity_liveness_drift_and_backlog() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+
+            let tenant = TenantId::new(Ulid::from_u128(0x000F_1EE7));
+            let seen = StoreId::new(Ulid::from_u128(0x570A)); // configured + seen + a backlog
+            let bare = StoreId::new(Ulid::from_u128(0x570B)); // registered, never seen, unconfigured
+
+            registry
+                .insert_store(&bare.to_string(), &tenant.to_string(), None, "Bare")
+                .await
+                .expect("insert the bare store");
+            registry
+                .insert_store(&seen.to_string(), &tenant.to_string(), None, "Seen")
+                .await
+                .expect("insert the seen store");
+
+            // The seen store holds v1 while the published history's last id is v2 — a drift the read
+            // surfaces by comparison, not storage.
+            let held = "0000000000CONFIGVERSIONV1AA";
+            let published = "0000000000CONFIGVERSIONV2AA";
+            let state = format!(
+                r#"{{"k":20,"layers":[{{}},{{}},{{}},{{}}],"history":[{{"id":"{held}","effective":{{}}}},{{"id":"{published}","effective":{{}}}}]}}"#
+            );
+            trees
+                .save_state(tenant, seen, &state)
+                .await
+                .expect("save the config tree");
+            trees
+                .record_seen(tenant, seen, Some(held), 1000)
+                .await
+                .expect("record the pull");
+
+            // Two orders queued for the seen store: one still pending (arrived at epoch 1_234_567s),
+            // one already reported. Only the pending one is backlog.
+            admin
+                .execute(
+                    "INSERT INTO order_queue \
+                     (tenant_id, store_id, sales_channel, external_reference, queued_id, payload, status, created_at) \
+                     VALUES ($1, $2, 'grab', 'ref-pending', 'q-pending', '{}'::jsonb, 'pending', to_timestamp(1234567.0)), \
+                            ($1, $2, 'grab', 'ref-reported', 'q-reported', '{}'::jsonb, 'reported', now())",
+                    &[&tenant.to_string(), &seen.to_string()],
+                )
+                .await
+                .expect("seed the order queue");
+
+            let rows = fleet
+                .list(&tenant.to_string())
+                .await
+                .expect("list the fleet");
+            assert_eq!(rows.len(), 2, "both of the tenant's stores are listed");
+
+            // Look rows up by id — created_at can tie for two inserts in the same millisecond, so the
+            // list order is not asserted here.
+            let seen_row = rows
+                .iter()
+                .find(|row| row.store_id == seen.to_string())
+                .expect("the seen store is present");
+            assert_eq!(seen_row.name, "Seen");
+            assert_eq!(seen_row.status, "active");
+            assert_eq!(
+                seen_row.last_seen_at_ms,
+                Some(1000),
+                "last-seen from the pull"
+            );
+            assert_eq!(seen_row.last_config_pull_at_ms, Some(1000));
+            assert_eq!(
+                seen_row.config_version_held.as_deref(),
+                Some(held),
+                "the held version the edge reported"
+            );
+            assert_eq!(
+                seen_row.config_version_published.as_deref(),
+                Some(published),
+                "the published version is the last history id"
+            );
+            assert_eq!(
+                seen_row.relay_backlog, 1,
+                "only the pending order counts toward the backlog"
+            );
+            assert_eq!(
+                seen_row.oldest_pending_at_ms,
+                Some(1_234_567_000),
+                "the oldest pending order's arrival, in Unix ms"
+            );
+
+            let bare_row = rows
+                .iter()
+                .find(|row| row.store_id == bare.to_string())
+                .expect("the bare store is present");
+            assert_eq!(bare_row.name, "Bare");
+            assert_eq!(
+                bare_row.last_seen_at_ms, None,
+                "a store that never checked in has no last-seen"
+            );
+            assert_eq!(bare_row.config_version_held, None);
+            assert_eq!(
+                bare_row.config_version_published, None,
+                "an unconfigured store has no published version"
+            );
+            assert_eq!(bare_row.relay_backlog, 0);
+            assert_eq!(bare_row.oldest_pending_at_ms, None);
+
+            // fetch_one returns exactly one store; an unknown store is None.
+            let one = fleet
+                .fetch_one(&tenant.to_string(), &seen.to_string())
+                .await
+                .expect("fetch one")
+                .expect("the seen store is present");
+            assert_eq!(one.name, "Seen");
+            assert_eq!(one.relay_backlog, 1);
+            let unknown = StoreId::new(Ulid::from_u128(0xDEAD));
+            assert!(
+                fleet
+                    .fetch_one(&tenant.to_string(), &unknown.to_string())
+                    .await
+                    .expect("fetch one")
+                    .is_none(),
+                "an unknown store reads as None"
+            );
+
+            // A different tenant with the same store ids sees nothing — the read is tenant-scoped.
+            let other = TenantId::new(Ulid::from_u128(0xB0B));
+            assert!(
+                fleet
+                    .list(&other.to_string())
+                    .await
+                    .expect("list the other tenant")
+                    .is_empty(),
+                "the fleet read is scoped to the tenant"
             );
         });
     }

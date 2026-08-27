@@ -319,6 +319,15 @@ impl PostgresStore {
         crate::registry::PostgresRegistry::new(self.pool.clone())
     }
 
+    /// The fleet read model over this pool ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `FleetStore` seam over it. A
+    /// read-only join across `stores`, `store_liveness`, `config_trees`, and `order_queue`.
+    #[must_use]
+    pub fn fleet(&self) -> crate::fleet::PostgresFleet {
+        crate::fleet::PostgresFleet::new(self.pool.clone())
+    }
+
     /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `CatalogStore` seam over it and

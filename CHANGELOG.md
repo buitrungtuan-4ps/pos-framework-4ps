@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console can read the fleet: which stores are online, in sync, and how deep their order
+  backlog is** (roadmap v2, Track O, O1 slice 3; [ADR-0068](docs/adr/0068-fleet-liveness.md)).
+  `GET /admin/fleet?tenant_id=…` lists every store of a tenant, and `GET /admin/fleet/{store_id}`
+  reads one, as a read-only join across four tables the operator would otherwise have to correlate by
+  hand: the registry `stores` row (name, status), `store_liveness` (last-seen, held version, last
+  config pull), the config tree (the currently-published version), and the order-relay queue (pending
+  backlog + oldest-pending age). Each row carries two verdicts derived at read time so the answer is
+  always current with no background sweep: `online` (`now − last_seen_at` within a 180-second
+  freshness window — a few pull/heartbeat cycles of slack) and `config_current` (the held version
+  equals the published one). A store that is un-configured, never-seen, or has an empty queue simply
+  reports `null`/`0` in those fields. Both routes are behind the existing `console.data.read`
+  permission, so every console role — Owner, Admin, Ops, Viewer — can watch the fleet. **Upgrade
+  note:** none — read-only `/admin` routes over existing tables; no migration, `PROTOCOL_VERSION`, or
+  permission-identifier change, and `/admin` stays absent from the public OpenAPI.
 - **A store can send a lightweight liveness heartbeat** (roadmap v2, Track O, O1 slice 2;
   [ADR-0068](docs/adr/0068-fleet-liveness.md)). `POST /sync/stores/{id}/heartbeat` — authenticated
   with the same scoped `read_config` API key the config pull uses — advances the store's

@@ -44,13 +44,15 @@ use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::registry::{
-    BrandRecord, DeviceRecord, RegistryStore, RegistryStoreError, StoreRecord, TenantRecord,
+    BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError, StoreRecord,
+    TenantRecord,
 };
 use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
@@ -3609,6 +3611,247 @@ fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
         FakeWebhooks::default(),
     );
     http::router(app).merge(http::registry_router(registry, admin, clock()))
+}
+
+// --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
+
+/// The fleet read model as an in-memory list of `(tenant, row)` — the binary joins four real tables,
+/// but the handler and its online/offline derivation are the same code here.
+#[derive(Clone, Default)]
+struct FakeFleet {
+    rows: Arc<Mutex<Vec<(TenantId, FleetRow)>>>,
+}
+
+impl FakeFleet {
+    /// Seeds one store's fleet row under a tenant.
+    fn with_row(self, tenant: TenantId, row: FleetRow) -> Self {
+        self.rows.lock().expect("lock").push((tenant, row));
+        self
+    }
+}
+
+impl FleetStore for FakeFleet {
+    async fn list_fleet(&self, tenant: TenantId) -> Result<Vec<FleetRow>, FleetStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(row_tenant, _)| *row_tenant == tenant)
+            .map(|(_, row)| row.clone())
+            .collect())
+    }
+
+    async fn store_detail(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<FleetRow>, FleetStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(row_tenant, row)| *row_tenant == tenant && row.store_id == store)
+            .map(|(_, row)| row.clone()))
+    }
+}
+
+/// A timestamp `offset_ms` before the fixed test clock's instant.
+fn seen_ago(offset_ms: i64) -> Timestamp {
+    Timestamp::from_milliseconds_since_epoch(NOW_MS - offset_ms).expect("a valid instant")
+}
+
+/// The main router (for `/admin/login`) merged with the fleet sub-router, one shared admin store.
+fn fleet_app(admin: FakeAdmin, fleet: FakeFleet) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::fleet_router(fleet, admin, clock()))
+}
+
+#[tokio::test]
+async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
+    let online_store = StoreId::new(Ulid::from_u128(0x00F1_EE7A));
+    let offline_store = StoreId::new(Ulid::from_u128(0x00F1_EE7B));
+    // One store seen a second ago, holding the published version — online and in sync. One seen ten
+    // minutes ago, holding an old version, with a relay backlog — offline and drifted.
+    let fleet = FakeFleet::default()
+        .with_row(
+            tenant(),
+            FleetRow {
+                store_id: online_store,
+                name: "Bến Thành".to_owned(),
+                status: EntityStatus::Active,
+                last_seen_at: Some(seen_ago(1_000)),
+                last_config_pull_at: Some(seen_ago(1_000)),
+                config_version_held: Some("v-current".to_owned()),
+                config_version_published: Some("v-current".to_owned()),
+                relay_backlog: 0,
+                relay_oldest_pending_at: None,
+            },
+        )
+        .with_row(
+            tenant(),
+            FleetRow {
+                store_id: offline_store,
+                name: "Xuân Thủy".to_owned(),
+                status: EntityStatus::Active,
+                last_seen_at: Some(seen_ago(600_000)),
+                last_config_pull_at: Some(seen_ago(600_000)),
+                config_version_held: Some("v-old".to_owned()),
+                config_version_published: Some("v-current".to_owned()),
+                relay_backlog: 3,
+                relay_oldest_pending_at: Some(seen_ago(120_000)),
+            },
+        );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json_body(listed).await;
+    let rows = body.as_array().expect("an array of stores");
+    assert_eq!(rows.len(), 2, "both of the tenant's stores are listed");
+
+    let online = &rows[0];
+    assert_eq!(online["store_id"], online_store.as_ulid().to_string());
+    assert_eq!(online["name"], "Bến Thành");
+    assert_eq!(online["online"], true, "seen a second ago reads as online");
+    assert_eq!(
+        online["config_current"], true,
+        "held equals published, so it is current"
+    );
+    assert_eq!(online["relay_backlog"], 0);
+
+    let offline = &rows[1];
+    assert_eq!(
+        offline["online"], false,
+        "seen ten minutes ago is past the freshness window"
+    );
+    assert_eq!(
+        offline["config_current"], false,
+        "holding an old version is a drift"
+    );
+    assert_eq!(offline["config_version_held"], "v-old");
+    assert_eq!(offline["config_version_published"], "v-current");
+    assert_eq!(offline["relay_backlog"], 3);
+    assert_eq!(offline["relay_oldest_pending_at_ms"], NOW_MS - 120_000);
+}
+
+#[tokio::test]
+async fn fleet_never_seen_store_is_offline_and_not_current() {
+    let store = StoreId::new(Ulid::from_u128(0x00F1_EE7C));
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: store,
+            name: "Phú Mỹ Hưng".to_owned(),
+            status: EntityStatus::Active,
+            last_seen_at: None,
+            last_config_pull_at: None,
+            config_version_held: None,
+            config_version_published: Some("v-current".to_owned()),
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+        },
+    );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet list");
+    let row = &json_body(listed).await[0];
+    assert_eq!(
+        row["online"], false,
+        "a store that never checked in is offline"
+    );
+    assert_eq!(
+        row["last_seen_at_ms"],
+        serde_json::Value::Null,
+        "and carries no last-seen instant"
+    );
+    assert_eq!(
+        row["config_current"], false,
+        "a store holding nothing is not current, even against a published version"
+    );
+}
+
+#[tokio::test]
+async fn fleet_reads_one_store_and_404s_an_unknown_one() {
+    let store = StoreId::new(Ulid::from_u128(0x00F1_EE7D));
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: store,
+            name: "Thảo Điền".to_owned(),
+            status: EntityStatus::Active,
+            last_seen_at: Some(seen_ago(1_000)),
+            last_config_pull_at: Some(seen_ago(1_000)),
+            config_version_held: Some("v-current".to_owned()),
+            config_version_published: Some("v-current".to_owned()),
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+        },
+    );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store.as_ulid().to_string();
+
+    let found = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{store_ulid}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the store detail");
+    assert_eq!(found.status(), StatusCode::OK);
+    assert_eq!(json_body(found).await["name"], "Thảo Điền");
+
+    let unknown = StoreId::new(Ulid::from_u128(0xDEAD)).as_ulid().to_string();
+    let missing = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{unknown}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the store detail");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn fleet_needs_a_session() {
+    let router = fleet_app(provisioned_admin(), FakeFleet::default());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let denied = router
+        .oneshot(get(&format!("/admin/fleet?tenant_id={tenant_ulid}"), None))
+        .await
+        .expect("route the fleet list");
+    assert_eq!(
+        denied.status(),
+        StatusCode::UNAUTHORIZED,
+        "the fleet view is behind the admin session guard"
+    );
 }
 
 #[tokio::test]

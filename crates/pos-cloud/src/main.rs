@@ -228,6 +228,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Fleet liveness (ADR-0068): the read-only console view of whether each store is up and in
+        // sync — a join across the registry, `store_liveness` (captured on config pulls/heartbeats),
+        // the config tree, and the order-relay queue, with online/offline derived at read.
+        .merge(http::fleet_router(
+            store.fleet(),
+            store.admin(),
+            SystemClock,
+        ))
         // Catalog authoring (ADR-0066): the write surface for the menu source of truth — items,
         // menus with inheritance, and per-channel placements — from which a MenuBook is compiled.
         .merge(http::catalog_router(

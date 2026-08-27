@@ -25,11 +25,12 @@ use std::collections::{BTreeMap, HashSet};
 use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, BrandRow, CatalogItemRow,
     CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, NewSessionRow,
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
-    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
-    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, FleetStoreRow,
+    NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
+    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
+    TenantRow,
 };
 
 use pos_ports::PortError;
@@ -68,6 +69,7 @@ use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::orders::StoreDirectory;
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::registry::{
@@ -1280,6 +1282,57 @@ impl RegistryStore for PostgresRegistry {
         )
         .await
         .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+}
+
+// --- The fleet read model (ADR-0068) -----------------------------------------------------------
+
+/// Converts one joined `store-postgres` fleet row into the cloud's [`FleetRow`]. A liveness timestamp
+/// out of range (impossible for values this cloud wrote) fails safe to "never seen" rather than
+/// failing the whole listing; a negative backlog (impossible from a `count`) reads as zero.
+fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
+    let last_seen_at = row
+        .last_seen_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let last_config_pull_at = row
+        .last_config_pull_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let relay_oldest_pending_at = row
+        .oldest_pending_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    Ok(FleetRow {
+        store_id: parse_registry_store(&row.store_id)
+            .map_err(|error| FleetStoreError::new(error.to_string()))?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+        last_seen_at,
+        last_config_pull_at,
+        config_version_held: row.config_version_held,
+        config_version_published: row.config_version_published,
+        relay_backlog: u64::try_from(row.relay_backlog).unwrap_or(0),
+        relay_oldest_pending_at,
+    })
+}
+
+impl FleetStore for PostgresFleet {
+    async fn list_fleet(&self, tenant: TenantId) -> Result<Vec<FleetRow>, FleetStoreError> {
+        let rows = self
+            .list(&tenant.to_string())
+            .await
+            .map_err(|error| FleetStoreError::new(error.to_string()))?;
+        rows.into_iter().map(fleet_row).collect()
+    }
+
+    async fn store_detail(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<FleetRow>, FleetStoreError> {
+        let row = self
+            .fetch_one(&tenant.to_string(), &store.to_string())
+            .await
+            .map_err(|error| FleetStoreError::new(error.to_string()))?;
+        row.map(fleet_row).transpose()
     }
 }
 

@@ -46,6 +46,21 @@ answers it, captured from the signal the edge already sends.
   threshold`; nothing writes an offline flag (there is no event when a store goes quiet). The
   threshold is a read-side concern the fleet slice owns, so this ADR stores only the raw instant.
 
+- **The fleet read (slice 3) is its own sub-router over a read-only join.** `GET /admin/fleet`
+  (whole fleet for a `?tenant_id=`) and `GET /admin/fleet/{store_id}` (one store) are served by a
+  `fleet_router` with its own `FleetState` — the same self-contained-sub-router pattern the registry
+  and catalog use, so no `CloudApp` generic is added. The read is a `FleetStore` seam whose
+  store-postgres impl `LEFT JOIN`s the registry `stores` row (identity, status), `store_liveness`
+  (last-seen, held version, last pull), the config tree (published version = the id of the last
+  element of `ConfigTreeState.history`, extracted in SQL), and an aggregate over `order_queue`
+  (pending count + oldest-pending instant) — one row per store, so the console never pulls a whole
+  tree or queue to summarise. Both routes are gated by the existing `console.data.read` permission
+  (every console role, so Ops and Viewer see the fleet); a store un-configured, never-seen, or with an
+  empty queue simply carries `null`/`0` in those fields. The handler derives `online` (against a
+  180-second freshness window, a few pull/heartbeat cycles of slack) and `config_current` (held equals
+  published) at read time, so the answer needs no background sweep. `/admin` is absent from the gated
+  OpenAPI (like `/internal` and `/sync`), so the fleet routes add no drift-gate surface.
+
 **Rejected.**
 
 - **Columns on `config_trees` or on the registry `stores` row** — rejected: liveness must exist for a
