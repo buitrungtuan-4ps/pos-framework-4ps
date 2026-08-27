@@ -27,8 +27,10 @@ price used to be?", and no basis for the accountability a multi-admin, complianc
   the application role.
 
 - **`tenant_id` is nullable and the row is RLS-isolated by it.** Most actions are a tenant's data (a
-  store rename, an API key); a few are tenant-global (creating a tenant, admin management, the
-  break-glass reset) and carry `tenant_id = NULL`. The table enables row-level security keyed on
+  store rename, an API key) and are scoped to that tenant — including a *tenant create*, which scopes
+  to the new tenant's own id, so the tenant's audit tab shows its own creation as the first entry. A
+  few actions have no owning tenant (console admin management, the break-glass reset) and carry
+  `tenant_id = NULL`. The table enables row-level security keyed on
   `app.tenant_id` exactly as `config_trees` does, so a query role sees only its own tenant's rows and
   never the global ones; the trusted pool-owner connection the server runs as bypasses RLS to write
   any tenant's row and to read across tenants for the console's audit screen.

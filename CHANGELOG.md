@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The org-registry write routes now record to the audit trail** (roadmap v2, Track G, G2 slice 2;
+  [ADR-0069](docs/adr/0069-audit-trail.md)). Building on the slice-1 store, every successful
+  tenant/brand/store/device create or update under `/admin` now appends one `audit_log` entry — the
+  acting admin snapshotted from the session, the `resource.verb` action (`tenant.create`,
+  `store.update`, `device.create`, …), the affected entity's id, and the new value as `after`. The
+  recorder is carried as an object-safe `Arc<dyn AuditRecorder>` shared across the router and the
+  registry sub-router, so a handler emits without threading a store generic through the router types;
+  a create scopes its entry to the entity's owning tenant (a tenant create to the *new* tenant's id,
+  so a tenant's audit tab opens with its own creation). Recording is **best-effort after the write**:
+  an audit-store failure is logged, never surfaced, so a mutation the operator asked for and that
+  succeeded is never failed by its audit write. Reading the mutation's prior value into `before` and
+  covering the remaining `/admin` write surfaces (keys, webhooks, config, catalog, admin management,
+  the break-glass reset) are the next G2 slices. **Upgrade note:** no schema, `PROTOCOL_VERSION`, or
+  permission-identifier change; reuses migration `0022`. No customer or employee personal data is
+  recorded — entries capture administrative actions on business metadata, keyed to console operators.
 - **The foundation for a console audit trail — an append-only record of who changed what** (roadmap
   v2, Track G, G2 slice 1; [ADR-0069](docs/adr/0069-audit-trail.md)). Until now none of the ~60
   console write routes recorded anything; G1 gave every operator a distinct identity, and this lands
@@ -120,9 +135,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (`resource.verb`), the affected entity, the before/after as `jsonb`, and the instant — with a new
   `AuditStore` seam (`append` + a recent-first, tenant-scoped `list`). Append-only is enforced at the
   grant (`SELECT`/`INSERT` only, never `UPDATE`/`DELETE`) and rows are RLS-isolated by tenant, with
-  tenant-global actions (a tenant create, admin management) carried as `NULL`-tenant rows visible only
-  to the trusted connection. This slice is the seam and table; threading the actor through the write
-  routes and emitting entries are the next G2 slices. **Upgrade note:** one additive, forward-only,
+  tenant-global actions (console admin management, the break-glass reset) carried as `NULL`-tenant
+  rows visible only to the trusted connection. This slice is the seam and table; threading the actor
+  through the write routes and emitting entries are the next G2 slices. **Upgrade note:** one additive,
+  forward-only,
   append-only migration `0022_audit_log`; no `PROTOCOL_VERSION` or permission-identifier change. No
   customer or employee personal data is recorded — the log captures administrative actions on business
   metadata (store names, config, keys), keyed to console operators.

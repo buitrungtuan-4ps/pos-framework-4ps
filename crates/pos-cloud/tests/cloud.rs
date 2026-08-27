@@ -21,7 +21,10 @@ use argon2::password_hash::SaltString;
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
-use pos_cloud::audit::{AuditActor, AuditEntry, AuditId, AuditStore, AuditStoreError};
+use pos_cloud::audit::{
+    AuditActor, AuditEntry, AuditId, AuditRecorder, AuditSink, AuditStore, AuditStoreError,
+    NoopAuditRecorder,
+};
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -3602,8 +3605,19 @@ impl RegistryStore for FakeRegistry {
 }
 
 /// The main router (for `/admin/login`) and the registry sub-router, sharing one admin store —
-/// production's `merge`, in a test.
+/// production's `merge`, in a test. Audit is a no-op here; the emission path is asserted by
+/// [`registry_app_with_audit`].
 fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
+    registry_app_with_audit(admin, registry, Arc::new(NoopAuditRecorder))
+}
+
+/// As [`registry_app`], but with a caller-supplied audit recorder so a test can assert that a
+/// registry write records to the audit trail (ADR-0069).
+fn registry_app_with_audit(
+    admin: FakeAdmin,
+    registry: FakeRegistry,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -3612,7 +3626,7 @@ fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::registry_router(registry, admin, clock()))
+    http::router(app).merge(http::registry_router(registry, admin, clock(), audit))
 }
 
 // --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
@@ -4114,6 +4128,76 @@ async fn audit_appends_and_lists_newest_first_scoped_by_tenant() {
 
     let all = audit.list(None, 10).await.expect("list across tenants");
     assert_eq!(all.len(), 3, "no tenant filter reads across every tenant");
+}
+
+#[tokio::test]
+async fn registry_writes_record_to_the_audit_trail() {
+    let audit = FakeAudit::default();
+    let sink: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(audit.clone()));
+    let router = registry_app_with_audit(provisioned_admin(), FakeRegistry::default(), sink);
+    let cookie = admin_cookie(&router).await;
+
+    // A tenant create mints its id server-side and, on success, records one audit entry.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    // A store create under it records a second entry, scoped to the tenant.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/stores",
+            &serde_json::json!({ "tenant_id": tenant_id, "name": "Bến Thành" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create store");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let store_id = json_body(created).await["store_id"]
+        .as_str()
+        .expect("a store id")
+        .to_owned();
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    assert_eq!(recorded.len(), 2, "each successful write records one entry");
+    let store_entry = recorded
+        .iter()
+        .find(|entry| entry.action == "store.create")
+        .expect("the store create was recorded");
+    assert_eq!(store_entry.entity_type, "store");
+    assert_eq!(
+        store_entry.entity_id, store_id,
+        "the new entity's id is recorded"
+    );
+    assert_eq!(
+        store_entry.tenant_id.map(|id| id.to_string()),
+        Some(tenant_id.clone()),
+        "the entry is scoped to the owning tenant"
+    );
+    assert!(store_entry.before.is_none(), "a create has no prior value");
+    assert!(
+        store_entry.after.is_some(),
+        "a create records the new value"
+    );
+    assert!(
+        !store_entry.actor.email.is_empty() && !store_entry.actor.admin_id.is_empty(),
+        "the acting admin is snapshotted onto the entry"
+    );
+    assert!(
+        recorded.iter().any(|entry| entry.action == "tenant.create"),
+        "the tenant create was recorded too"
+    );
 }
 
 #[tokio::test]

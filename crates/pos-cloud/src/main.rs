@@ -8,11 +8,13 @@
 
 use core::time::Duration;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
 
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
+use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::qr::TableTokenSecret;
@@ -63,6 +65,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
     // config routes author, and the webhook-endpoint store the `/admin` webhook routes register into.
     let cloud = Cloud::new(store.clone());
+    // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
+    // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
+    // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
+    // can emit without threading an `AuditStore` generic through the already-large router types.
+    let audit: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(store.audit()));
     let app = CloudApp::new(
         cloud.clone(),
         store.rollups(),
@@ -72,6 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.config_trees(),
         store.webhooks(),
     )
+    .with_audit(Arc::clone(&audit))
     .with_admin_session_ttl_secs(config.admin_session_ttl_secs)
     .with_admin_session_idle_ttl_secs(config.admin_session_idle_ttl_secs)
     .with_admin_invite_ttl_secs(config.admin_invite_ttl_secs)
@@ -243,6 +251,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.registry(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         // Fleet liveness (ADR-0068): the read-only console view of whether each store is up and in
         // sync — a join across the registry, `store_liveness` (captured on config pulls/heartbeats),

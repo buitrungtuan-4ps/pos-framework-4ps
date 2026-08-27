@@ -46,6 +46,7 @@
 use core::fmt;
 use core::fmt::Write as _;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use argon2::password_hash::SaltString;
 use axum::extract::{Path, Query, Request, State};
@@ -78,6 +79,7 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
+use crate::audit::{AuditActor, AuditEntry, AuditId, AuditRecorder, NoopAuditRecorder};
 use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
     LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
@@ -192,6 +194,9 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
     login_rate_limiter: LoginRateLimiter,
+    /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
+    /// no-op, so a route can always record unconditionally; the binary wires the real store in.
+    audit: Arc<dyn AuditRecorder>,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -226,6 +231,7 @@ where
             admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
             login_rate_limiter: self.login_rate_limiter.clone(),
+            audit: Arc::clone(&self.audit),
         }
     }
 }
@@ -259,7 +265,17 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
                 DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
                 DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
             ),
+            audit: Arc::new(NoopAuditRecorder),
         }
+    }
+
+    /// Sets the console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)); the binary
+    /// wraps its `store-postgres` audit store and threads it in. Left unset, mutations are not audited
+    /// (a no-op recorder), the posture the fakes-backed tests use unless they assert on audit.
+    #[must_use]
+    pub fn with_audit(mut self, audit: Arc<dyn AuditRecorder>) -> Self {
+        self.audit = audit;
+        self
     }
 
     /// Sets how long an issued super-admin session stays valid, in seconds — the binary threads the
@@ -836,6 +852,7 @@ struct RegistryState<Rg, A, C> {
     registry: Rg,
     admin: A,
     clock: C,
+    audit: Arc<dyn AuditRecorder>,
 }
 
 /// Builds the org-registry sub-router ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
@@ -844,7 +861,12 @@ struct RegistryState<Rg, A, C> {
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
 /// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]).
-pub fn registry_router<Rg, A, C>(registry: Rg, admin: A, clock: C) -> Router
+pub fn registry_router<Rg, A, C>(
+    registry: Rg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
 where
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
@@ -887,6 +909,7 @@ where
             registry,
             admin,
             clock,
+            audit,
         })
 }
 
@@ -1370,7 +1393,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1378,8 +1401,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let Some(tenant_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TenantId::new)
     else {
@@ -1391,7 +1415,22 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_tenant(&record).await {
-        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(()) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "tenant.create",
+                "tenant",
+                &tenant_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
         Err(error) => registry_error_response(&error),
     }
 }
@@ -1408,7 +1447,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1416,8 +1455,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let Ok(tenant_id) = tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "the tenant id is not a ULID").into_response();
     };
@@ -1430,7 +1470,22 @@ where
         status,
     };
     match state.registry.update_tenant(&record).await {
-        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(true) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "tenant.update",
+                "tenant",
+                &tenant_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::OK, Json(record)).into_response()
+        }
         Ok(false) => (StatusCode::NOT_FOUND, "no such tenant").into_response(),
         Err(error) => registry_error_response(&error),
     }
@@ -1477,7 +1532,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1485,8 +1540,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
     };
@@ -1502,7 +1558,22 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_brand(&record).await {
-        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(()) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "brand.create",
+                "brand",
+                &brand_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
         Err(error) => registry_error_response(&error),
     }
 }
@@ -1519,7 +1590,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1527,8 +1598,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (Ok(brand_id), Ok(tenant_id)) = (
         brand_id.parse::<Ulid>().map(BrandId::new),
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1549,7 +1621,22 @@ where
         status,
     };
     match state.registry.update_brand(&record).await {
-        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(true) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "brand.update",
+                "brand",
+                &brand_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::OK, Json(record)).into_response()
+        }
         Ok(false) => (StatusCode::NOT_FOUND, "no such brand").into_response(),
         Err(error) => registry_error_response(&error),
     }
@@ -1608,7 +1695,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1616,8 +1703,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
     };
@@ -1637,7 +1725,22 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_store(&record).await {
-        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(()) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store.create",
+                "store",
+                &store_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
         Err(error) => registry_error_response(&error),
     }
 }
@@ -1654,7 +1757,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1662,8 +1765,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (Ok(store_id), Ok(tenant_id)) = (
         store_id.parse::<Ulid>().map(StoreId::new),
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1688,7 +1792,22 @@ where
         status,
     };
     match state.registry.update_store(&record).await {
-        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(true) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store.update",
+                "store",
+                &store_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::OK, Json(record)).into_response()
+        }
         Ok(false) => (StatusCode::NOT_FOUND, "no such store").into_response(),
         Err(error) => registry_error_response(&error),
     }
@@ -1744,7 +1863,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1752,8 +1871,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
         store_id.parse::<Ulid>().map(StoreId::new),
@@ -1778,7 +1898,22 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_device(&record).await {
-        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(()) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device.create",
+                "device",
+                &device_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
         Err(error) => registry_error_response(&error),
     }
 }
@@ -1795,7 +1930,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -1803,8 +1938,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
         store_id.parse::<Ulid>().map(StoreId::new),
@@ -1828,7 +1964,22 @@ where
         status,
     };
     match state.registry.update_device(&record).await {
-        Ok(true) => (StatusCode::OK, Json(record)).into_response(),
+        Ok(true) => {
+            let after = serde_json::to_value(&record).ok();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device.update",
+                "device",
+                &device_id.to_string(),
+                None,
+                after,
+            )
+            .await;
+            (StatusCode::OK, Json(record)).into_response()
+        }
         Ok(false) => (StatusCode::NOT_FOUND, "no such device").into_response(),
         Err(error) => registry_error_response(&error),
     }
@@ -4867,6 +5018,58 @@ where
     } else {
         Err((StatusCode::FORBIDDEN, "insufficient permissions").into_response())
     }
+}
+
+/// Records one console mutation to the audit trail ([ADR-0069](../../../docs/adr/0069-audit-trail.md)),
+/// best-effort and after the mutation has already succeeded: mints the entry id from `clock`, snapshots
+/// the acting admin from `actor`, and hands the entry to the recorder (which logs, never propagates, a
+/// store failure). A mint failure is logged and the entry dropped rather than failing the caller's
+/// completed mutation. `before` is the entity's prior value (`None` for a create), `after` its new
+/// value (`None` for a delete); `tenant` scopes the entry (`None` for a tenant-global action).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one audit entry is genuinely this many independent facts — recorder, clock, actor, \
+              tenant scope, action, entity type+id, and the before/after values; bundling them into \
+              a struct at every one of the many call sites would only add ceremony, not clarity"
+)]
+async fn audit_action<C>(
+    audit: &Arc<dyn AuditRecorder>,
+    clock: &C,
+    actor: &AdminContext,
+    tenant: Option<TenantId>,
+    action: &str,
+    entity_type: &str,
+    entity_id: &str,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+) where
+    C: ClockSource,
+{
+    let now = clock.now();
+    let Some(ulid) = mint_ulid(now.as_milliseconds_since_epoch()) else {
+        tracing::error!(
+            action,
+            "could not mint an audit id; this action is not recorded"
+        );
+        return;
+    };
+    let entry = AuditEntry {
+        id: AuditId::new(ulid),
+        tenant_id: tenant,
+        actor: AuditActor {
+            admin_id: actor.admin.id.clone(),
+            email: actor.admin.email.clone(),
+            role: actor.admin.role,
+        },
+        action: action.to_owned(),
+        entity_type: entity_type.to_owned(),
+        entity_id: entity_id.to_owned(),
+        before,
+        after,
+        request_id: None,
+        at: now,
+    };
+    audit.record(entry).await;
 }
 
 /// A super-admin request to provision a new API key for a tenant.

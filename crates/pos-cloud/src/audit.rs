@@ -17,6 +17,7 @@
 
 use core::fmt;
 use core::future::Future;
+use core::pin::Pin;
 
 use pos_proto::ids::TenantId;
 use pos_proto::time::Timestamp;
@@ -109,6 +110,61 @@ pub trait AuditStore {
         tenant: Option<TenantId>,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<AuditEntry>, AuditStoreError>> + Send;
+}
+
+/// An object-safe audit recorder: records one entry, best-effort. This is what the HTTP routes carry
+/// (as `Arc<dyn AuditRecorder>`), so every write handler can emit an audit entry without threading an
+/// `AuditStore` generic through the router's already-large type parameters. The append future is boxed
+/// so the trait stays object-safe; a store failure is the recorder's to log and swallow, never the
+/// caller's to propagate — a mutation that succeeded must not fail because its audit write did
+/// ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
+pub trait AuditRecorder: Send + Sync {
+    /// Records `entry`, awaiting the underlying append; a failure is logged, not returned.
+    fn record(&self, entry: AuditEntry) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+/// Wraps a concrete [`AuditStore`] as an object-safe [`AuditRecorder`], logging (never propagating) an
+/// append failure. The binary wraps its `store-postgres` audit store in this and hands the router an
+/// `Arc<dyn AuditRecorder>`.
+#[derive(Debug, Clone)]
+pub struct AuditSink<Au> {
+    store: Au,
+}
+
+impl<Au> AuditSink<Au> {
+    /// Wraps `store`.
+    pub const fn new(store: Au) -> Self {
+        Self { store }
+    }
+}
+
+impl<Au> AuditRecorder for AuditSink<Au>
+where
+    Au: AuditStore + Send + Sync,
+{
+    fn record(&self, entry: AuditEntry) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            if let Err(error) = self.store.append(&entry).await {
+                tracing::error!(
+                    %error,
+                    action = %entry.action,
+                    entity_type = %entry.entity_type,
+                    "recording a console audit entry failed"
+                );
+            }
+        })
+    }
+}
+
+/// An audit recorder that drops every entry — the default a router carries when no audit store is
+/// wired (tests that do not assert on audit), so a handler can always call `record` unconditionally.
+#[derive(Debug, Clone, Copy)]
+pub struct NoopAuditRecorder;
+
+impl AuditRecorder for NoopAuditRecorder {
+    fn record(&self, _entry: AuditEntry) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }
 
 /// A failure of the audit store itself — the database is unreachable, or a stored row could not be
