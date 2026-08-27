@@ -71,6 +71,7 @@ pub mod images;
 pub mod metrics;
 mod openapi;
 pub mod orders;
+pub mod people;
 mod persistence;
 pub mod qr;
 pub mod qr_http;

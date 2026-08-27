@@ -1762,6 +1762,148 @@ mod audit_log {
 }
 
 // ---------------------------------------------------------------------------
+// The employee store: tenant-scoped, RLS-isolated, PIN held only as its hash (ADR-0070).
+// ---------------------------------------------------------------------------
+
+mod employees_store {
+    use super::{block_on, prepared};
+
+    /// Employees insert and read back tenant-scoped and newest-first; the code is unique within a
+    /// tenant but free across tenants; `has_pin` reflects `set_pin` without ever exposing the hash on
+    /// a read (only `pin_phc` reads it back); an update renames/archives; and the grant is
+    /// SELECT/INSERT/UPDATE only — no DELETE (an employee is archived, never removed) ([ADR-0070]).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario over the real table: insert across two tenants, the \
+                  unique-code constraint, scoped + newest-first reads, the PIN hash round-trip and \
+                  has_pin flag, an update, and the append-only-ish grant — splitting it would \
+                  duplicate the multi-tenant setup"
+    )]
+    fn insert_scoped_pin_round_trip_and_grant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            // Two tenants, both using the staff code "A01" — unique per tenant, not globally.
+            people
+                .insert("01EMP0000000000000000000A1", "tenant-a", "A01", "Alice")
+                .await
+                .expect("insert alice");
+            people
+                .insert("01EMP0000000000000000000A2", "tenant-a", "A02", "Anh")
+                .await
+                .expect("insert anh");
+            people
+                .insert("01EMP0000000000000000000B1", "tenant-b", "A01", "Bao")
+                .await
+                .expect("a duplicate code is fine under a different tenant");
+
+            // The unique index refuses a second "A01" within tenant-a.
+            assert!(
+                people
+                    .insert("01EMP0000000000000000000A3", "tenant-a", "A01", "Clone")
+                    .await
+                    .is_err(),
+                "staff codes are unique within a tenant"
+            );
+
+            // Tenant-scoped, newest-first, and no PIN yet.
+            let scoped = people.fetch("tenant-a").await.expect("fetch tenant-a");
+            assert_eq!(scoped.len(), 2, "only tenant-a's own employees");
+            assert_eq!(scoped.first().expect("a row").name, "Anh", "newest first");
+            assert!(scoped.iter().all(|row| !row.has_pin), "no PIN set yet");
+
+            // A different tenant sees only its own.
+            let other = people.fetch("tenant-b").await.expect("fetch tenant-b");
+            assert_eq!(other.len(), 1);
+            assert_eq!(other.first().expect("a row").code, "A01");
+
+            // Set a PIN hash: has_pin flips, and the hash round-trips only via pin_phc — fetch never
+            // carries it.
+            assert!(
+                people
+                    .set_pin(
+                        "tenant-a",
+                        "01EMP0000000000000000000A1",
+                        "argon2id$phc$alice"
+                    )
+                    .await
+                    .expect("set pin"),
+                "the row was found"
+            );
+            let alice = people
+                .fetch_one("tenant-a", "01EMP0000000000000000000A1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert!(alice.has_pin, "has_pin reflects the set PIN");
+            assert_eq!(
+                people
+                    .pin_phc("tenant-a", "01EMP0000000000000000000A1")
+                    .await
+                    .expect("pin_phc"),
+                Some("argon2id$phc$alice".to_owned()),
+                "the trusted path reads the stored hash back"
+            );
+
+            // A PIN set scoped to the wrong tenant matches no row.
+            assert!(
+                !people
+                    .set_pin("tenant-b", "01EMP0000000000000000000A1", "x")
+                    .await
+                    .expect("cross-tenant set"),
+                "set_pin is tenant-scoped"
+            );
+
+            // Rename + archive.
+            assert!(
+                people
+                    .set(
+                        "tenant-a",
+                        "01EMP0000000000000000000A1",
+                        "Alice Nguyen",
+                        "archived"
+                    )
+                    .await
+                    .expect("update"),
+                "the row changed"
+            );
+            let archived = people
+                .fetch_one("tenant-a", "01EMP0000000000000000000A1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert_eq!(archived.name, "Alice Nguyen");
+            assert_eq!(archived.status, "archived");
+
+            // Append-only-ish grant: app_tenant may SELECT/INSERT/UPDATE but never DELETE.
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employees', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            let can_update: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employees', 'UPDATE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            assert!(!can_delete, "employees is never DELETEd — archived instead");
+            assert!(
+                can_update,
+                "app_tenant may UPDATE (rename / archive / set PIN)"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The subject store: retention / PII masking (ADR-0035).
 // ---------------------------------------------------------------------------
 

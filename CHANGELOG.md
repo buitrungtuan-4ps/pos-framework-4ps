@@ -111,6 +111,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The cloud can now record a store's employees (foundation)** (roadmap v2, Track M1, slice 1;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). The console's first record of *who works at a
+  store* — and the console's first **T1 Restricted / Vietnam-PDPD-scoped** data. A new tenant-scoped,
+  RLS-isolated `employees` table (migration `0023`) holds only what access control needs: a minted
+  `id`, the owning tenant, a `name`, the tenant-unique staff `code`, a status, and `pin_phc` — the
+  **Argon2id** hash of the set PIN, `NULL` until set and **never the PIN itself**. A new
+  `EmployeeStore` seam (create / list / get / update / set-or-reset PIN) with a `store-postgres`
+  adapter and an in-memory fake; a read exposes only `has_pin`, never the hash. Employees are
+  **archived, never hard-deleted** (no `DELETE` grant), so history and any published permission set
+  stay reconcilable and erasure is handled through the Data Protection contact ([ADR-0035](docs/adr/0035-retention-and-pii-masking.md)),
+  not an ad-hoc delete. This is access management, not employee monitoring — no contact, biometric,
+  behavioural, or location data. No routes or UI yet; this is the store the later M1 slices (role
+  templates, per-store assignments, `/admin` CRUD, People screen, and the `permissions` config node
+  the edge applies) build on. **PDPD note:** a deployment storing employee PII must confirm its
+  lawful basis, staff notification, retention period, and DPIA — surfaced by the console, not presumed
+  by the code. **Upgrade note:** one additive, forward-only migration `0023_employees`; no
+  `PROTOCOL_VERSION` or permission change.
 - **Detail views now show the entity's own audit history, and who resolved device proposals**
   (roadmap v2, Track G, G2 slice 6; [ADR-0069](docs/adr/0069-audit-trail.md)). A reusable
   `AuditTrail` panel reads an entity's history from the same `GET /admin/audit` (filtered by entity

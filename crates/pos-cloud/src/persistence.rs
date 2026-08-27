@@ -25,12 +25,12 @@ use std::collections::{BTreeMap, HashSet};
 use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AuditLogRow, BrandRow, CatalogItemRow,
     CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, FleetStoreRow,
-    NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresFleet, PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth,
-    PostgresTranslations, PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, EmployeeRow,
+    FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
+    PostgresAdmin, PostgresApiKeys, PostgresAudit, PostgresCatalog, PostgresConfigTrees,
+    PostgresDeviceProposals, PostgresFleet, PostgresOrderQueue, PostgresPeople, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTranslations, PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -73,6 +73,9 @@ use crate::devices::{
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
+use crate::people::{
+    Employee, EmployeeId, EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewEmployee,
+};
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -1507,6 +1510,100 @@ impl AuditStore for PostgresAudit {
             .await
             .map_err(|error| AuditStoreError::new(error.to_string()))?;
         rows.into_iter().map(audit_entry).collect()
+    }
+}
+
+// --- people & access (Track M1, ADR-0070): the `employees` rows converted to the EmployeeStore domain ---
+
+/// Converts a stored employee row into the domain [`Employee`], parsing the ids and status. A row with
+/// an unparseable id is corruption the caller should see, not silently drop.
+fn employee_record(row: EmployeeRow) -> Result<Employee, EmployeeStoreError> {
+    let employee_id = row
+        .id
+        .parse::<Ulid>()
+        .map(EmployeeId::new)
+        .map_err(|error| {
+            EmployeeStoreError::new(format!("stored employee id is not a ULID: {error}"))
+        })?;
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|error| {
+            EmployeeStoreError::new(format!("stored tenant id is not a ULID: {error}"))
+        })?;
+    Ok(Employee {
+        employee_id,
+        tenant_id,
+        code: row.code,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+        has_pin: row.has_pin,
+    })
+}
+
+impl EmployeeStore for PostgresPeople {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        self.insert(
+            &employee.employee_id.to_string(),
+            &employee.tenant_id.to_string(),
+            &employee.code,
+            &employee.name,
+        )
+        .await
+        .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        let rows = self
+            .fetch(&tenant.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))?;
+        rows.into_iter().map(employee_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        let row = self
+            .fetch_one(&tenant.to_string(), &employee_id.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))?;
+        row.map(employee_record).transpose()
+    }
+
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        self.set(
+            &employee.tenant_id.to_string(),
+            &employee.employee_id.to_string(),
+            &employee.name,
+            employee.status.as_str(),
+        )
+        .await
+        .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        PostgresPeople::set_pin(self, &tenant.to_string(), &employee_id.to_string(), pin_phc)
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        PostgresPeople::pin_phc(self, &tenant.to_string(), &employee_id.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))
     }
 }
 

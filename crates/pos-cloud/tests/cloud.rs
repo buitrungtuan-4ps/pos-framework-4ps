@@ -52,6 +52,9 @@ use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
+use pos_cloud::people::{
+    Employee, EmployeeId, EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewEmployee,
+};
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
@@ -6677,4 +6680,227 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
     assert_eq!(category["name"], "Pizza");
     assert_eq!(category["buttons"][0]["label"], "Margherita");
     assert_eq!(category["buttons"][0]["menu_item_id"], item);
+}
+
+// --- People & access (Track M1, ADR-0070) ------------------------------------------------------
+
+/// The employee store as an in-memory list — the binary writes a tenant-scoped table, but the seam
+/// (create / list / get / update / set-or-reset PIN) is the same code here. The PIN is held only as
+/// the opaque hash the caller passed, and never returned by a read — only whether one is set.
+#[derive(Clone, Default)]
+struct FakeEmployees {
+    rows: Arc<Mutex<Vec<FakeEmployeeRow>>>,
+}
+
+#[derive(Clone)]
+struct FakeEmployeeRow {
+    employee_id: EmployeeId,
+    tenant_id: TenantId,
+    code: String,
+    name: String,
+    status: EntityStatus,
+    pin_phc: Option<String>,
+}
+
+impl FakeEmployeeRow {
+    fn view(&self) -> Employee {
+        Employee {
+            employee_id: self.employee_id,
+            tenant_id: self.tenant_id,
+            code: self.code.clone(),
+            name: self.name.clone(),
+            status: self.status,
+            has_pin: self.pin_phc.is_some(),
+        }
+    }
+}
+
+impl EmployeeStore for FakeEmployees {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows
+            .iter()
+            .any(|row| row.tenant_id == employee.tenant_id && row.code == employee.code)
+        {
+            return Err(EmployeeStoreError::new(
+                "duplicate staff code within the tenant",
+            ));
+        }
+        rows.push(FakeEmployeeRow {
+            employee_id: employee.employee_id,
+            tenant_id: employee.tenant_id,
+            code: employee.code.clone(),
+            name: employee.name.clone(),
+            status: EntityStatus::Active,
+            pin_phc: None,
+        });
+        Ok(())
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        let mut rows: Vec<Employee> = self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant)
+            .map(FakeEmployeeRow::view)
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .map(FakeEmployeeRow::view))
+    }
+
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == employee.tenant_id && row.employee_id == employee.employee_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&employee.name);
+        row.status = employee.status;
+        Ok(true)
+    }
+
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+        else {
+            return Ok(false);
+        };
+        row.pin_phc = Some(pin_phc.to_owned());
+        Ok(true)
+    }
+
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .and_then(|row| row.pin_phc.clone()))
+    }
+}
+
+#[tokio::test]
+async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
+    let store = FakeEmployees::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let bob = EmployeeId::new(Ulid::from_u128(2));
+
+    store
+        .create(&NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "A01".to_owned(),
+            name: "Alice".to_owned(),
+        })
+        .await
+        .expect("create alice");
+    store
+        .create(&NewEmployee {
+            employee_id: bob,
+            tenant_id: other,
+            code: "A01".to_owned(),
+            name: "Bob".to_owned(),
+        })
+        .await
+        .expect("a duplicate code is fine under a different tenant");
+
+    // A duplicate code within the same tenant is refused.
+    assert!(
+        store
+            .create(&NewEmployee {
+                employee_id: EmployeeId::new(Ulid::from_u128(3)),
+                tenant_id: mine,
+                code: "A01".to_owned(),
+                name: "Clone".to_owned(),
+            })
+            .await
+            .is_err(),
+        "staff codes are unique within a tenant"
+    );
+
+    // Listing is tenant-scoped and a fresh employee has no PIN.
+    let listed = store.list(mine).await.expect("list");
+    assert_eq!(listed.len(), 1, "only this tenant's employees");
+    assert_eq!(listed[0].name, "Alice");
+    assert!(!listed[0].has_pin, "a new employee has no PIN set");
+
+    // Rename + archive.
+    assert!(
+        store
+            .update(&EmployeeUpdate {
+                employee_id: alice,
+                tenant_id: mine,
+                name: "Alice Nguyen".to_owned(),
+                status: EntityStatus::Archived,
+            })
+            .await
+            .expect("update"),
+        "the row was found and changed"
+    );
+    let alice_view = store.get(mine, alice).await.expect("get").expect("present");
+    assert_eq!(alice_view.name, "Alice Nguyen");
+    assert_eq!(alice_view.status, EntityStatus::Archived);
+
+    // Setting a PIN flips has_pin and round-trips the (opaque) hash — which the read never exposes.
+    assert!(
+        store
+            .set_pin(mine, alice, "argon2id$fake$hash")
+            .await
+            .expect("set pin"),
+        "the row was found"
+    );
+    assert!(
+        store
+            .get(mine, alice)
+            .await
+            .expect("get")
+            .expect("present")
+            .has_pin
+    );
+    assert_eq!(
+        store.pin_phc(mine, alice).await.expect("pin"),
+        Some("argon2id$fake$hash".to_owned()),
+        "the trusted publish path reads the stored hash back"
+    );
+
+    // Cross-tenant isolation: mine cannot see or address the other tenant's employee.
+    assert!(store.get(mine, bob).await.expect("get").is_none());
+    assert!(
+        !store
+            .set_pin(mine, bob, "x")
+            .await
+            .expect("set pin across tenant"),
+        "a PIN set is scoped to the tenant — no row matched"
+    );
 }
