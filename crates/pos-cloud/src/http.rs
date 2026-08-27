@@ -423,6 +423,18 @@ where
             get(admin_config_effective::<S, R, K, C, A, T, W>),
         )
         .route(
+            "/admin/stores/{store_id}/config/versions",
+            get(admin_config_versions::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config/versions/{version_id}",
+            get(admin_config_version_effective::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/config/rollback",
+            post(admin_config_rollback::<S, R, K, C, A, T, W>),
+        )
+        .route(
             "/admin/stores/{store_id}/config/{level}",
             axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
         )
@@ -7000,6 +7012,229 @@ where
             .into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+// --- Config version history (`/admin/stores/{id}/config/versions` + `/config/rollback`, ADR-0069) --
+
+/// One published config version as the console lists it: the version id, when it was published (from
+/// the ULID's own timestamp, Unix ms), and whether it is the store's current version.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigVersionView {
+    version_id: String,
+    at_ms: i64,
+    current: bool,
+}
+
+/// A super-admin rolls a store's config back to a past version.
+#[derive(Debug, Clone, Deserialize)]
+struct RollbackConfigRequest {
+    /// The version to restore (a ULID); its effective document becomes the new current version.
+    version_id: String,
+}
+
+/// Lists a store's published config versions newest-first (super-admin only). The version history is
+/// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
+/// timestamp column is needed. `404` if the store has no tree yet.
+async fn admin_config_versions<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            let current = tree.current_version();
+            let mut views: Vec<ConfigVersionView> = tree
+                .version_ids()
+                .into_iter()
+                .map(|id| ConfigVersionView {
+                    version_id: id.to_string(),
+                    at_ms: i64::try_from(id.as_ulid().timestamp_ms()).unwrap_or(i64::MAX),
+                    current: current == Some(id),
+                })
+                .collect();
+            views.reverse(); // history is oldest-first; the console reads newest-first.
+            (StatusCode::OK, Json(views)).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// The effective (composed, validated) document of one past config version (super-admin only), for
+/// the console's diff view. `404` if the store or the named version is unknown.
+async fn admin_config_version_effective<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path((store_id, version_id)): Path<(String, String)>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id), Ok(version_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+        version_id.parse::<Ulid>().map(ConfigVersionId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, or the version id is not a ULID",
+        )
+            .into_response();
+    };
+    match app.config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            match tree.effective_at(version_id) {
+                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                None => (StatusCode::NOT_FOUND, "no such config version").into_response(),
+            }
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's
+/// effective document is re-published as a *new* current version, so nothing in the history is altered
+/// or removed and the store pulls the restored config on its next sync. The action is audited as
+/// `config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). `404` if the store or the
+/// named version is unknown.
+async fn admin_config_rollback<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+    Json(request): Json<RollbackConfigRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id), Ok(version_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+        request.version_id.parse::<Ulid>().map(ConfigVersionId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id, store_id, or the version id is not a ULID",
+        )
+            .into_response();
+    };
+    let Some(state) = (match app.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    }) else {
+        return (
+            StatusCode::NOT_FOUND,
+            "the store has no published configuration",
+        )
+            .into_response();
+    };
+    let mut tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+    let Some(new_version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch())
+    else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    let Some(new_id) = tree.restore(version_id, new_version_id) else {
+        return (StatusCode::NOT_FOUND, "no such config version").into_response();
+    };
+    if let Err(error) = app
+        .config_trees
+        .save(tenant_id, store_id, &tree.state())
+        .await
+    {
+        return config_store_error_response(&error);
+    }
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        "config.rollback",
+        "config",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({
+            "restored_from": version_id.to_string(),
+            "config_version_id": new_id.to_string(),
+        })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(PublishedConfig {
+            config_version_id: new_id.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 /// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup

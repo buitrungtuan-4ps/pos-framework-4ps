@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A store's config now has a version history you can view, diff, and roll back** (roadmap v2,
+  Track G, G2 slice 5; [ADR-0033](docs/adr/0033-config-tree.md),
+  [ADR-0069](docs/adr/0069-audit-trail.md)). The config tree already kept every published version;
+  this surfaces it. `GET …/config/versions` lists them newest-first (each version's instant read from
+  its own ULID, and the current one flagged), `GET …/config/versions/{id}` returns a past version's
+  effective document for a diff, and `POST …/config/rollback` restores a chosen version — **append-only**:
+  it re-publishes that version's effective config as a *new* current version, so nothing in the
+  history is altered and the store pulls the restored config on its next sync. Rollback is audited as
+  `config.rollback`. The Config screen gains a version-history list with a per-version view, a
+  "compare with current" line diff, and a confirm-gated roll-back. **Upgrade note:** no schema,
+  `PROTOCOL_VERSION`, or permission change — the reads reuse `console.data.read` and rollback reuses
+  `console.config.publish`; the version log is the config tree's existing persisted state. Rollback
+  restores the *effective* configuration exactly; per-level layer attribution is flattened into the
+  base layer (documented in ADR-0069).
 - **The console has an Audit screen: a filterable, fleet-wide record of who changed what** (roadmap
   v2, Track G, G2 slice 4; [ADR-0069](docs/adr/0069-audit-trail.md)). Now that the write routes emit
   entries, `GET /admin/audit` reads them back — newest first, behind `console.data.read` (every

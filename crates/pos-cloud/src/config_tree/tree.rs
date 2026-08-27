@@ -235,6 +235,41 @@ impl<V: ConfigValidator> ConfigTree<V> {
             .map(|version| &version.effective)
     }
 
+    /// Every published version id, oldest first — the console's version-history read (ADR-0069 G2).
+    #[must_use]
+    pub fn version_ids(&self) -> Vec<ConfigVersionId> {
+        self.history.iter().map(|version| version.id).collect()
+    }
+
+    /// Restores a past version as a new current version, append-only: appends a version whose
+    /// effective document equals `version_id`'s, under `new_version_id`, and flattens that document
+    /// into the base (Tenant) layer so the tree's effective is restored exactly and later authoring
+    /// composes on top of it. Returns `None` if there is no such version.
+    ///
+    /// The restored document is trusted as already-validated — it was validated when first published,
+    /// exactly as [`from_state`](Self::from_state) trusts the rehydrated history — so this does not
+    /// re-run validation. Layer *attribution* (which level a field came from) is not preserved; the
+    /// **effective** config, the only thing a store receives, is.
+    pub fn restore(
+        &mut self,
+        version_id: ConfigVersionId,
+        new_version_id: ConfigVersionId,
+    ) -> Option<ConfigVersionId> {
+        let effective = self
+            .history
+            .iter()
+            .find(|version| version.id == version_id)?
+            .effective
+            .clone();
+        let empty = || Value::Object(serde_json::Map::new());
+        self.layers = [effective.clone(), empty(), empty(), empty()];
+        self.history.push(Version {
+            id: new_version_id,
+            effective,
+        });
+        Some(new_version_id)
+    }
+
     /// The current effective document — always a validated one, so it is also the last-known-good.
     #[must_use]
     pub fn current_effective(&self) -> Option<&Value> {

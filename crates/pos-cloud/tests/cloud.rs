@@ -1821,6 +1821,130 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario: publish two versions, list them, read one back for the diff \
+              view, roll back, and assert the append-only restore — splitting it would duplicate the \
+              multi-publish setup"
+)]
+async fn config_versions_list_read_back_and_roll_back_append_only() {
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let base = format!("/admin/stores/{store_ulid}/config");
+
+    // Two published versions: v1 sets the currency, v2 overrides it at the store layer.
+    let publish = |doc: serde_json::Value, level: &'static str| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let uri = format!("{base}/{level}?tenant_id={tenant_ulid}");
+        async move {
+            let response = router
+                .oneshot(put_with_cookie(&uri, &doc, &cookie))
+                .await
+                .expect("route the publish");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await["config_version_id"]
+                .as_str()
+                .expect("a version id")
+                .to_owned()
+        }
+    };
+    let v1 = publish(serde_json::json!({ "currency_code": "VND" }), "tenant").await;
+    let _v2 = publish(serde_json::json!({ "currency_code": "SGD" }), "store").await;
+
+    // The history lists both, newest first, with the latest flagged current.
+    let versions = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the versions list");
+    assert_eq!(versions.status(), StatusCode::OK);
+    let versions = json_body(versions).await;
+    let rows = versions.as_array().expect("array");
+    assert_eq!(rows.len(), 2, "both published versions are listed");
+    assert_eq!(rows[0]["current"], true, "the newest is current");
+    assert_eq!(rows[1]["current"], false);
+    assert!(
+        rows[0]["at_ms"].as_i64().is_some(),
+        "each version carries its instant"
+    );
+
+    // v1's effective is readable for the diff view.
+    let v1_effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions/{v1}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the version read");
+    assert_eq!(v1_effective.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(v1_effective).await,
+        serde_json::json!({ "currency_code": "VND" }),
+        "v1's effective is the tenant-only document"
+    );
+
+    // Roll back to v1: a new current version is appended, restoring v1's effective.
+    let rollback = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("{base}/rollback?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "version_id": v1 }),
+            &cookie,
+        ))
+        .await
+        .expect("route the rollback");
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let restored = json_body(rollback).await["config_version_id"]
+        .as_str()
+        .expect("a new version id")
+        .to_owned();
+    assert_ne!(
+        restored, v1,
+        "rollback appends a new version, never mutates history"
+    );
+
+    // The store's current effective is back to v1's, and the history now holds three versions.
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the effective read");
+    assert_eq!(
+        json_body(effective).await,
+        serde_json::json!({ "currency_code": "VND" }),
+        "rollback restored v1's effective config"
+    );
+    let after = router
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the versions list");
+    assert_eq!(
+        json_body(after).await.as_array().expect("array").len(),
+        3,
+        "the rollback is a third, appended version"
+    );
+}
+
+#[tokio::test]
 async fn an_incoherent_config_is_rejected_with_violations() {
     let router = http::router(app_full(
         Cloud::new(FakeStore::new()),

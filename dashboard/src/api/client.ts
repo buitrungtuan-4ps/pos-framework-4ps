@@ -18,6 +18,7 @@ import type {
   CatalogItem,
   ChannelPrice,
   ConfigLevel,
+  ConfigVersion,
   CreateApiKeyResponse,
   DailyRollup,
   Device,
@@ -205,6 +206,24 @@ export const api = {
       "PUT",
       `/admin/stores/${encodeURIComponent(storeId)}/config/${level}?${tenantQuery(tenantId)}`,
       document,
+    ),
+  // Config version history (ADR-0069 G2): list the append-only versions, read one's effective
+  // document for the diff view, and roll back (which appends a new current version).
+  configVersions: (tenantId: string, storeId: string) =>
+    requestJson<ConfigVersion[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/versions?${tenantQuery(tenantId)}`,
+    ),
+  configVersionEffective: (tenantId: string, storeId: string, versionId: string) =>
+    requestJson<Json>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/versions/${encodeURIComponent(versionId)}?${tenantQuery(tenantId)}`,
+    ),
+  rollbackConfig: (tenantId: string, storeId: string, versionId: string) =>
+    requestJson<PublishedConfig>(
+      "POST",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/rollback?${tenantQuery(tenantId)}`,
+      { version_id: versionId },
     ),
 
   // --- rollups (ADR-0060 admin read) ---

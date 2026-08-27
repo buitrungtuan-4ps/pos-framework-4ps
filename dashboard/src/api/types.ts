@@ -16,6 +16,14 @@ export type Json =
 export type ConfigLevel = "tenant" | "brand" | "store" | "device";
 export const CONFIG_LEVELS: readonly ConfigLevel[] = ["tenant", "brand", "store", "device"];
 
+/** One published config version from `GET /admin/stores/{id}/config/versions` (ADR-0069 G2). `at_ms`
+ *  is read from the version ULID itself; `current` marks the version the store is on now. */
+export interface ConfigVersion {
+  readonly version_id: string;
+  readonly at_ms: number;
+  readonly current: boolean;
+}
+
 /** The one-time TOTP enrolment returned by `POST /admin/setup` (ADR-0034). */
 export interface Enrolment {
   readonly otpauth_uri: string;
