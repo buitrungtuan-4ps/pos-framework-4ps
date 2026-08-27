@@ -547,7 +547,7 @@ mod admin_store {
             let sessions = store.admin();
             let hash = [7_u8; 32];
             sessions
-                .insert_session(&hash, 2000)
+                .insert_session(&hash, 2000, None)
                 .await
                 .expect("insert the session");
 
