@@ -76,6 +76,9 @@ const MIGRATION_0020: &str = include_str!("../migrations/0020_store_liveness.sql
 /// Background-task health — last-tick per loop ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
 const MIGRATION_0021: &str = include_str!("../migrations/0021_task_health.sql");
 
+/// The console audit trail — append-only record of who changed what ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
+const MIGRATION_0022: &str = include_str!("../migrations/0022_audit_log.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -214,6 +217,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0021)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0022)
+            .await
             .map_err(unavailable)
     }
 
@@ -342,6 +349,15 @@ impl PostgresStore {
     #[must_use]
     pub fn task_health(&self) -> crate::task_health::PostgresTaskHealth {
         crate::task_health::PostgresTaskHealth::new(self.pool.clone())
+    }
+
+    /// The console audit trail over this pool ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AuditStore` seam over it. An
+    /// append-only record of who changed what across the `/admin` write routes.
+    #[must_use]
+    pub fn audit(&self) -> crate::audit::PostgresAudit {
+        crate::audit::PostgresAudit::new(self.pool.clone())
     }
 
     /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).

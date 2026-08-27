@@ -135,8 +135,8 @@ impl EventStoreHarness for StoreHarness {
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
                  admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 task_health, stores, order_queue, subjects, webhook_endpoints, device_proposals, \
-                 activation_codes, device_credentials RESTART IDENTITY;",
+                 task_health, audit_log, stores, order_queue, subjects, webhook_endpoints, \
+                 device_proposals, activation_codes, device_credentials RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -178,7 +178,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, task_health, stores, order_queue, subjects, \
+             config_trees, store_liveness, task_health, audit_log, stores, order_queue, subjects, \
              webhook_endpoints, device_proposals, activation_codes, device_credentials \
              RESTART IDENTITY",
         )
@@ -1454,6 +1454,146 @@ mod task_health {
                 rows.first().expect("the newest row").task,
                 "retention",
                 "the most recently ticked loop sorts first"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The console audit trail: append-only, tenant-scoped, INSERT/SELECT-only (ADR-0069).
+// ---------------------------------------------------------------------------
+
+mod audit_log {
+    use super::{block_on, prepared};
+
+    /// Entries append and read back newest-first, scoped to their tenant (a NULL-tenant global entry
+    /// shows only in the fleet-wide read); before/after round-trip through jsonb; and the grant is
+    /// append-only — `app_tenant` has SELECT/INSERT but not UPDATE or DELETE ([ADR-0069]).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario: it appends three entries (tenant-scoped and global), \
+                  reads them back scoped and fleet-wide, checks the jsonb round-trip, and asserts \
+                  the append-only grant — splitting it would duplicate the multi-row setup"
+    )]
+    fn appends_scoped_newest_first_and_is_append_only() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+
+            // Two entries for tenant-a (an update, then an archive carrying before/after), and one
+            // tenant-global entry (NULL tenant) for a tenant create.
+            audit
+                .insert(
+                    "01AUDIT000000000000000001A",
+                    Some("tenant-a"),
+                    "01ADMIN0000000000000000OPS",
+                    "ops@pizza4ps.test",
+                    "ops",
+                    "store.update",
+                    "store",
+                    "store-1",
+                    None,
+                    Some(r#"{"name":"Bến Thành"}"#),
+                    None,
+                    1000,
+                )
+                .await
+                .expect("append the first entry");
+            audit
+                .insert(
+                    "01AUDIT000000000000000002A",
+                    Some("tenant-a"),
+                    "01ADMIN0000000000000000OPS",
+                    "ops@pizza4ps.test",
+                    "ops",
+                    "store.archive",
+                    "store",
+                    "store-1",
+                    Some(r#"{"name":"Bến Thành","status":"active"}"#),
+                    Some(r#"{"name":"Bến Thành","status":"archived"}"#),
+                    Some("req-9"),
+                    2000,
+                )
+                .await
+                .expect("append the second entry");
+            audit
+                .insert(
+                    "01AUDIT000000000000000003G",
+                    None,
+                    "01ADMIN00000000000000OWNER",
+                    "owner@pizza4ps.test",
+                    "owner",
+                    "tenant.create",
+                    "tenant",
+                    "tenant-a",
+                    None,
+                    Some(r#"{"name":"Pizza 4P's"}"#),
+                    None,
+                    3000,
+                )
+                .await
+                .expect("append the global entry");
+
+            // Tenant-scoped read: only tenant-a's two, newest-first.
+            let scoped = audit
+                .fetch(Some("tenant-a"), 10)
+                .await
+                .expect("fetch tenant-a");
+            assert_eq!(scoped.len(), 2, "only the tenant's own entries");
+            let newest = scoped.first().expect("an entry");
+            assert_eq!(newest.action, "store.archive", "newest-first");
+            assert_eq!(newest.at_ms, 2000);
+            assert_eq!(newest.request_id.as_deref(), Some("req-9"));
+            let after: serde_json::Value =
+                serde_json::from_str(newest.after_json.as_deref().expect("an after value"))
+                    .expect("after is valid json");
+            assert_eq!(
+                after.get("status").and_then(serde_json::Value::as_str),
+                Some("archived"),
+                "before/after round-trip through jsonb"
+            );
+
+            // Fleet-wide read: all three, including the NULL-tenant global entry.
+            let all = audit.fetch(None, 10).await.expect("fetch all");
+            assert_eq!(all.len(), 3, "the fleet-wide read spans every tenant");
+            assert!(
+                all.iter()
+                    .any(|row| row.tenant_id.is_none() && row.action == "tenant.create"),
+                "the tenant-global entry is included"
+            );
+
+            // A different tenant sees nothing.
+            let other = audit
+                .fetch(Some("tenant-b"), 10)
+                .await
+                .expect("fetch tenant-b");
+            assert!(other.is_empty(), "the read is scoped to the tenant");
+
+            // Append-only at the grant: app_tenant may SELECT/INSERT but never UPDATE or DELETE.
+            let can_update: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'audit_log', 'UPDATE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'audit_log', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            assert!(
+                !can_update,
+                "audit_log is append-only: no UPDATE for app_tenant"
+            );
+            assert!(
+                !can_delete,
+                "audit_log is append-only: no DELETE for app_tenant"
             );
         });
     }

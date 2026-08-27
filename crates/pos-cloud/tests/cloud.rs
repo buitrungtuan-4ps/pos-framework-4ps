@@ -21,6 +21,7 @@ use argon2::password_hash::SaltString;
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
+use pos_cloud::audit::{AuditActor, AuditEntry, AuditId, AuditStore, AuditStoreError};
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -4025,6 +4026,94 @@ async fn task_health_needs_a_session() {
         StatusCode::UNAUTHORIZED,
         "the health view is behind the admin session guard"
     );
+}
+
+// --- Console audit trail (ADR-0069 slice 1) ----------------------------------------------------
+
+/// The audit trail as an in-memory append-only list — the binary appends to a real table, but the
+/// seam and its recent-first, tenant-scoped read are the same code here.
+#[derive(Clone, Default)]
+struct FakeAudit {
+    entries: Arc<Mutex<Vec<AuditEntry>>>,
+}
+
+impl AuditStore for FakeAudit {
+    async fn append(&self, entry: &AuditEntry) -> Result<(), AuditStoreError> {
+        self.entries.lock().expect("lock").push(entry.clone());
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: Option<TenantId>,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows: Vec<AuditEntry> = self
+            .entries
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|entry| tenant.is_none() || entry.tenant_id == tenant)
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+}
+
+#[tokio::test]
+async fn audit_appends_and_lists_newest_first_scoped_by_tenant() {
+    let audit = FakeAudit::default();
+    let entry = |id: u128, tenant: Option<TenantId>, action: &str, at_ms: i64| AuditEntry {
+        id: AuditId::new(Ulid::from_u128(id)),
+        tenant_id: tenant,
+        actor: AuditActor {
+            admin_id: "01ADMIN0000000000000000OPS".to_owned(),
+            email: "ops@pizza4ps.test".to_owned(),
+            role: AdminRole::Ops,
+        },
+        action: action.to_owned(),
+        entity_type: "store".to_owned(),
+        entity_id: store_id().to_string(),
+        before: None,
+        after: Some(serde_json::json!({ "name": "Bến Thành" })),
+        request_id: None,
+        at: Timestamp::from_milliseconds_since_epoch(at_ms).expect("a valid instant"),
+    };
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    audit
+        .append(&entry(1, Some(mine), "store.update", NOW_MS - 2_000))
+        .await
+        .expect("append 1");
+    audit
+        .append(&entry(2, Some(mine), "store.archive", NOW_MS - 1_000))
+        .await
+        .expect("append 2");
+    audit
+        .append(&entry(3, Some(other), "store.update", NOW_MS))
+        .await
+        .expect("append for another tenant");
+
+    let listed = audit.list(Some(mine), 10).await.expect("list this tenant");
+    assert_eq!(listed.len(), 2, "only this tenant's entries are listed");
+    let newest = listed.first().expect("an entry");
+    assert_eq!(
+        newest.action, "store.archive",
+        "the newest entry sorts first"
+    );
+    assert_eq!(
+        newest.actor.email, "ops@pizza4ps.test",
+        "the acting admin is snapshotted onto the entry"
+    );
+    assert!(
+        listed.iter().any(|entry| entry.action == "store.update"),
+        "the tenant's earlier entry is present too"
+    );
+
+    let all = audit.list(None, 10).await.expect("list across tenants");
+    assert_eq!(all.len(), 3, "no tenant filter reads across every tenant");
 }
 
 #[tokio::test]

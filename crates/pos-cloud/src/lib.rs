@@ -53,6 +53,7 @@
 
 pub mod activation;
 pub mod assets;
+pub mod audit;
 pub mod auth;
 pub mod catalog;
 pub mod catalog_compiler;

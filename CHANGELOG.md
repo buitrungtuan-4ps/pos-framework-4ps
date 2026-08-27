@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The foundation for a console audit trail — an append-only record of who changed what** (roadmap
+  v2, Track G, G2 slice 1; [ADR-0069](docs/adr/0069-audit-trail.md)). Until now none of the ~60
+  console write routes recorded anything; G1 gave every operator a distinct identity, and this lands
+  the store that finally makes an accountable trail possible. A new append-only `audit_log` table
+  (migration `0022`) holds one row per console mutation — the acting admin *snapshotted* at action
+  time (id, email, role, so renaming or deleting an admin later never rewrites history), the action
+  (`resource.verb`), the affected entity, the before/after as `jsonb`, and the instant — with a new
+  `AuditStore` seam (`append` + a recent-first, tenant-scoped `list`). Append-only is enforced at the
+  grant (`SELECT`/`INSERT` only, never `UPDATE`/`DELETE`) and rows are RLS-isolated by tenant, with
+  tenant-global actions (a tenant create, admin management) carried as `NULL`-tenant rows visible only
+  to the trusted connection. This slice is the seam and table; threading the actor through the write
+  routes and emitting entries are the next G2 slices. **Upgrade note:** one additive, forward-only,
+  append-only migration `0022_audit_log`; no `PROTOCOL_VERSION` or permission-identifier change. No
+  customer or employee personal data is recorded — the log captures administrative actions on business
+  metadata (store names, config, keys), keyed to console operators.
 - **The console has a Fleet screen: every store's liveness and the background workers' health at a
   glance** (roadmap v2, Track O, O1 slice 5; [ADR-0068](docs/adr/0068-fleet-liveness.md)). A new
   tenant-scoped `/fleet` screen presents the two O1 reads in one operational view: a system-health
