@@ -505,6 +505,14 @@ export const api = {
       "DELETE",
       `/admin/kitchen/routing/${encodeURIComponent(ruleId)}?${tenantQuery(tenantId)}`,
     ),
+  // Compile the store's areas/tables + stations/routing into its `floor`/`stations` config nodes and
+  // version them through the config tree, so the edge applies the real floor plan. Needs
+  // console.config.publish; an inconsistent plan (a rule to an unknown station) answers 422.
+  publishFloor: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/floor/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),

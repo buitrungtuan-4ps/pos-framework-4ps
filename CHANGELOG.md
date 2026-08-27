@@ -111,6 +111,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Publish the `floor` & `stations` config nodes** (roadmap v2, Track M2, slice 4;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `POST /admin/floor/publish` compiles a store's
+  areas/tables into a `FloorPlan` and its stations/routing into a `StationPlan` (only active records;
+  a stale backup or a rule to a removed station is dropped, so the plan is consistent by
+  construction), runs the §10 referential validation (`pos_core::floor`), and — only if valid — merges
+  both onto the store's `floor` and `stations` config nodes and versions them through the config tree,
+  preserving the other Store-level keys (`menu`/`layout`/`permissions`/capability flags). An invalid
+  plan is a `422` with the violated rules, never a stored state. Behind `console.config.publish`,
+  audited `floor.publish` (counts only). The typed client gains `publishFloor`. **Upgrade note:**
+  additive route + two new config nodes; no `PROTOCOL_VERSION` change (the edge starts reading them in
+  the next slice).
 - **Floor & kitchen `/admin` CRUD routes** (roadmap v2, Track M2, slice 3;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `GET/POST /admin/floor/areas`,
   `GET/PATCH /admin/floor/areas/{id}`, the same for `/admin/floor/tables`, `/admin/kitchen/stations`,

@@ -7944,7 +7944,11 @@ async fn floor_routes_crud_lifecycle_audited() {
             .await
             .expect("route list");
         assert_eq!(listed.status(), StatusCode::OK, "{path}");
-        assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1, "{path}");
+        assert_eq!(
+            json_body(listed).await.as_array().expect("array").len(),
+            1,
+            "{path}"
+        );
     }
 
     // Archive the area.
@@ -7983,6 +7987,128 @@ async fn floor_routes_crud_lifecycle_audited() {
     ] {
         assert!(actions.contains(&action), "missing audit {action}");
     }
+}
+
+/// The main app (sharing one config-tree store) merged with the floor CRUD and floor-publish routers,
+/// so a test can author master data and then publish it, reading the effective config back (ADR-0072).
+fn floor_publish_app(
+    admin: FakeAdmin,
+    floor: FakeFloor,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::floor_router(
+            floor.clone(),
+            admin.clone(),
+            clock(),
+            Arc::clone(&audit),
+        ))
+        .merge(http::floor_publish_router(
+            floor,
+            config,
+            admin,
+            clock(),
+            audit,
+        ))
+}
+
+#[tokio::test]
+async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        config,
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Author one area with a table and one station via the CRUD routes.
+    let area = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/areas",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Terrace" }),
+            &cookie,
+        ))
+        .await
+        .expect("create area");
+    let area_id = json_body(area).await["id"].as_str().expect("id").to_owned();
+    let table = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/tables",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid, "store_id": store_ulid, "area_id": area_id,
+                "name": "T1", "seats": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("create table");
+    assert_eq!(table.status(), StatusCode::CREATED);
+    let station = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Oven", "is_default": true }),
+            &cookie,
+        ))
+        .await
+        .expect("create station");
+    assert_eq!(station.status(), StatusCode::CREATED);
+
+    // Publish: the two nodes compile and version through the config tree.
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish floor");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The effective config now carries top-level `floor` and `stations` nodes with the authored data.
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+    assert_eq!(
+        doc["floor"]["areas"][0]["name"],
+        serde_json::json!("Terrace")
+    );
+    assert_eq!(
+        doc["floor"]["areas"][0]["tables"][0]["label"],
+        serde_json::json!("T1")
+    );
+    assert_eq!(
+        doc["stations"]["stations"][0]["name"],
+        serde_json::json!("Oven")
+    );
+    assert!(
+        doc["stations"]["default_station_id"].as_str().is_some(),
+        "the default station rode into the node"
+    );
 }
 
 #[tokio::test]

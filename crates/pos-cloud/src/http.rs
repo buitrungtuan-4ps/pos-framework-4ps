@@ -112,6 +112,7 @@ use crate::devices::{
     PersistedDeviceProposal,
 };
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, NewArea, NewRoutingRule, NewStation, NewTable, RoutingRule,
     RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table, TableStore,
@@ -3256,6 +3257,219 @@ where
         }
         Ok(false) => (StatusCode::NOT_FOUND, "no such routing rule").into_response(),
         Err(error) => floor_error_response(&error),
+    }
+}
+
+// --- Floor & kitchen publish (`/admin/floor/publish`, ADR-0072) ---------------------------------
+
+/// The collaborators the floor/kitchen publish route needs: the master-data store to compile from, the
+/// config-tree store to write onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct FloorPublishState<F, Cfg, A, C> {
+    floor: F,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishFloorRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the floor & kitchen publish sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+///
+/// One route: compile a store's areas/tables into a `FloorPlan` and its stations/routing into a
+/// `StationPlan`, run the §10 referential validation (`pos_core::floor`), and — only if valid — merge
+/// both onto the store's `floor` and `stations` config nodes and version them through the config tree.
+/// Behind [`ConsolePermission::PublishConfig`], the same gate as catalog/people/config publish.
+pub fn floor_publish_router<F, Cfg, A, C>(
+    floor: F,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/floor/publish",
+            post(admin_publish_floor::<F, Cfg, A, C>),
+        )
+        .with_state(FloorPublishState {
+            floor,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Compiles a store's floor & kitchen master data into its `floor`/`stations` config nodes and versions
+/// them — the same load→compile→validate→write→version shape as [`admin_publish_menu`], onto the
+/// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
+/// backup): an invalid plan is a `422` with the violated rules, never a stored state.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish is a single linear transaction — load areas/tables/stations/rules, compile \
+              both nodes, validate, merge onto the Store layer and version it; splitting the \
+              load-compile-write flow would scatter the config-tree state the final publish needs"
+)]
+async fn admin_publish_floor<F, Cfg, A, C>(
+    State(state): State<FloorPublishState<F, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishFloorRequest>,
+) -> Response
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+
+    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified.
+    let areas = match AreaStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(areas) => areas,
+        Err(error) => return floor_error_response(&error),
+    };
+    let tables = match TableStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(tables) => tables,
+        Err(error) => return floor_error_response(&error),
+    };
+    let stations = match StationStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(stations) => stations,
+        Err(error) => return floor_error_response(&error),
+    };
+    let rules = match RoutingRuleStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(rules) => rules,
+        Err(error) => return floor_error_response(&error),
+    };
+
+    let floor_plan = compile_floor(&areas, &tables);
+    let station_plan = compile_stations(&stations, &rules);
+
+    // The §10 referential validation, before anything is written — the cloud never publishes a plan
+    // that names a station, backup, or area that does not exist.
+    let mut violations = pos_core::floor::floor_violations(&floor_plan);
+    violations.extend(pos_core::floor::station_violations(&station_plan));
+    if !violations.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response();
+    }
+
+    let (Ok(floor_value), Ok(stations_value)) = (
+        serde_json::to_value(&floor_plan),
+        serde_json::to_value(&station_plan),
+    ) else {
+        tracing::error!("could not serialise a compiled floor or station plan");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the floor service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `floor` and `stations` keys on the store's Store layer (index 2) and re-publish it,
+    // preserving the other Store-level keys (`menu`, `layout`, `permissions`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("floor".to_owned(), floor_value);
+        map.insert("stations".to_owned(), stations_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "floor.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "config_version_id": id.to_string(),
+                    "area_count": floor_plan.areas().len(),
+                    "table_count": floor_plan.tables().count(),
+                    "station_count": station_plan.stations().len(),
+                })),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
     }
 }
 
