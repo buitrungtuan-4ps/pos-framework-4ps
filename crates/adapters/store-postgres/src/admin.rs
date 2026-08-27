@@ -160,7 +160,7 @@ impl PostgresAdmin {
                 "INSERT INTO admin_sessions \
                  (token_hash, created_at, expires_at, absolute_expires_at, idle_ttl_ms, \
                   admin_id, ip, user_agent) \
-                 VALUES ($1, to_timestamp($2::double precision / 1000.0), $3, $4, $5, $6, $7, $8) \
+                 VALUES ($1, to_timestamp($2::bigint / 1000.0), $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (token_hash) DO NOTHING",
                 &[
                     &session.token_hash,
