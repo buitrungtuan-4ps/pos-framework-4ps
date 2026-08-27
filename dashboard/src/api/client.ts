@@ -12,6 +12,7 @@ import type {
   AdminSessionView,
   AdminStatus,
   ApiKeySummary,
+  Assignment,
   AuditEntry,
   AuditFilter,
   Brand,
@@ -20,11 +21,13 @@ import type {
   ConfigLevel,
   ConfigVersion,
   CreateApiKeyResponse,
+  CreatedId,
   DailyRollup,
   Device,
   DeviceProposalSummary,
   DisplayCategory,
   DisplaySubcategory,
+  Employee,
   EntityStatus,
   Enrolment,
   FleetStore,
@@ -37,11 +40,13 @@ import type {
   MenuPlacement,
   MenuSection,
   ModifierGroup,
+  PermissionInfo,
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
   PublishedConfig,
   RegisterWebhookResponse,
+  RoleTemplate,
   Store,
   TaskHealthReport,
   TaxClass,
@@ -276,6 +281,79 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
       device_id: deviceId,
+    }),
+
+  // --- people & access (ADR-0070, Track M1): employees, role templates, per-store assignments ---
+  // Reads need only console.data.read; every write needs console.people.manage (Owner/Admin) — the
+  // server re-checks, the console only hides what a role cannot do. A PIN is set/reset, never read: it
+  // is hashed server-side and this client never sees the digits back (only whether one is set).
+  listEmployees: (tenantId: string) =>
+    requestJson<Employee[]>("GET", `/admin/employees?${tenantQuery(tenantId)}`),
+  getEmployee: (tenantId: string, id: string) =>
+    requestJson<Employee>(
+      "GET",
+      `/admin/employees/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
+  createEmployee: (tenantId: string, code: string, name: string) =>
+    requestJson<CreatedId>("POST", "/admin/employees", { tenant_id: tenantId, code, name }),
+  updateEmployee: (id: string, tenantId: string, fields: { name: string; status: EntityStatus }) =>
+    requestVoid("PATCH", `/admin/employees/${encodeURIComponent(id)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      status: fields.status,
+    }),
+  setEmployeePin: (id: string, tenantId: string, pin: string) =>
+    requestVoid("PUT", `/admin/employees/${encodeURIComponent(id)}/pin`, {
+      tenant_id: tenantId,
+      pin,
+    }),
+
+  listRoles: (tenantId: string) =>
+    requestJson<RoleTemplate[]>("GET", `/admin/roles?${tenantQuery(tenantId)}`),
+  createRole: (tenantId: string, name: string, permissions: string[]) =>
+    requestJson<CreatedId>("POST", "/admin/roles", { tenant_id: tenantId, name, permissions }),
+  updateRole: (
+    id: string,
+    tenantId: string,
+    fields: { name: string; permissions: string[]; status: EntityStatus },
+  ) =>
+    requestVoid("PATCH", `/admin/roles/${encodeURIComponent(id)}`, {
+      tenant_id: tenantId,
+      name: fields.name,
+      permissions: fields.permissions,
+      status: fields.status,
+    }),
+
+  listAssignmentsByStore: (tenantId: string, storeId: string) =>
+    requestJson<Assignment[]>(
+      "GET",
+      `/admin/assignments?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  createAssignment: (
+    tenantId: string,
+    employeeId: string,
+    storeId: string,
+    roleTemplateId: string,
+  ) =>
+    requestJson<CreatedId>("POST", "/admin/assignments", {
+      tenant_id: tenantId,
+      employee_id: employeeId,
+      store_id: storeId,
+      role_template_id: roleTemplateId,
+    }),
+  removeAssignment: (tenantId: string, id: string) =>
+    requestVoid("DELETE", `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),
+
+  // The pos-core permission catalogue (§9) the role editor offers, so the console never invents a
+  // permission string — it presents these and stores a chosen subset.
+  permissionCatalogue: () => requestJson<PermissionInfo[]>("GET", "/admin/people/permissions"),
+
+  // Compile a store's people + roles + assignments into its `permissions` config node and version it
+  // through the config tree, so the edge applies the published set. Needs console.people.manage.
+  publishPermissions: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/people/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
     }),
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---

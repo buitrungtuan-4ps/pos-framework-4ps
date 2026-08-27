@@ -52,6 +52,12 @@ use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
+use pos_cloud::people::{
+    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
+    EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
+    RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
+    is_known_permission, permission_catalogue,
+};
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
@@ -6677,4 +6683,1078 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
     assert_eq!(category["name"], "Pizza");
     assert_eq!(category["buttons"][0]["label"], "Margherita");
     assert_eq!(category["buttons"][0]["menu_item_id"], item);
+}
+
+// --- People & access (Track M1, ADR-0070) ------------------------------------------------------
+
+/// The employee store as an in-memory list — the binary writes a tenant-scoped table, but the seam
+/// (create / list / get / update / set-or-reset PIN) is the same code here. The PIN is held only as
+/// the opaque hash the caller passed, and never returned by a read — only whether one is set.
+#[derive(Clone, Default)]
+struct FakeEmployees {
+    rows: Arc<Mutex<Vec<FakeEmployeeRow>>>,
+}
+
+#[derive(Clone)]
+struct FakeEmployeeRow {
+    employee_id: EmployeeId,
+    tenant_id: TenantId,
+    code: String,
+    name: String,
+    status: EntityStatus,
+    pin_phc: Option<String>,
+}
+
+impl FakeEmployeeRow {
+    fn view(&self) -> Employee {
+        Employee {
+            employee_id: self.employee_id,
+            tenant_id: self.tenant_id,
+            code: self.code.clone(),
+            name: self.name.clone(),
+            status: self.status,
+            has_pin: self.pin_phc.is_some(),
+        }
+    }
+}
+
+impl EmployeeStore for FakeEmployees {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows
+            .iter()
+            .any(|row| row.tenant_id == employee.tenant_id && row.code == employee.code)
+        {
+            return Err(EmployeeStoreError::new(
+                "duplicate staff code within the tenant",
+            ));
+        }
+        rows.push(FakeEmployeeRow {
+            employee_id: employee.employee_id,
+            tenant_id: employee.tenant_id,
+            code: employee.code.clone(),
+            name: employee.name.clone(),
+            status: EntityStatus::Active,
+            pin_phc: None,
+        });
+        Ok(())
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        let mut rows: Vec<Employee> = self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant)
+            .map(FakeEmployeeRow::view)
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .map(FakeEmployeeRow::view))
+    }
+
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == employee.tenant_id && row.employee_id == employee.employee_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&employee.name);
+        row.status = employee.status;
+        Ok(true)
+    }
+
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+        else {
+            return Ok(false);
+        };
+        row.pin_phc = Some(pin_phc.to_owned());
+        Ok(true)
+    }
+
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .and_then(|row| row.pin_phc.clone()))
+    }
+}
+
+#[tokio::test]
+async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
+    let store = FakeEmployees::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let bob = EmployeeId::new(Ulid::from_u128(2));
+
+    store
+        .create(&NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "A01".to_owned(),
+            name: "Alice".to_owned(),
+        })
+        .await
+        .expect("create alice");
+    store
+        .create(&NewEmployee {
+            employee_id: bob,
+            tenant_id: other,
+            code: "A01".to_owned(),
+            name: "Bob".to_owned(),
+        })
+        .await
+        .expect("a duplicate code is fine under a different tenant");
+
+    // A duplicate code within the same tenant is refused.
+    assert!(
+        store
+            .create(&NewEmployee {
+                employee_id: EmployeeId::new(Ulid::from_u128(3)),
+                tenant_id: mine,
+                code: "A01".to_owned(),
+                name: "Clone".to_owned(),
+            })
+            .await
+            .is_err(),
+        "staff codes are unique within a tenant"
+    );
+
+    // Listing is tenant-scoped and a fresh employee has no PIN.
+    let listed = store.list(mine).await.expect("list");
+    assert_eq!(listed.len(), 1, "only this tenant's employees");
+    assert_eq!(listed[0].name, "Alice");
+    assert!(!listed[0].has_pin, "a new employee has no PIN set");
+
+    // Rename + archive.
+    assert!(
+        store
+            .update(&EmployeeUpdate {
+                employee_id: alice,
+                tenant_id: mine,
+                name: "Alice Nguyen".to_owned(),
+                status: EntityStatus::Archived,
+            })
+            .await
+            .expect("update"),
+        "the row was found and changed"
+    );
+    let alice_view = store.get(mine, alice).await.expect("get").expect("present");
+    assert_eq!(alice_view.name, "Alice Nguyen");
+    assert_eq!(alice_view.status, EntityStatus::Archived);
+
+    // Setting a PIN flips has_pin and round-trips the (opaque) hash — which the read never exposes.
+    assert!(
+        store
+            .set_pin(mine, alice, "argon2id$fake$hash")
+            .await
+            .expect("set pin"),
+        "the row was found"
+    );
+    assert!(
+        store
+            .get(mine, alice)
+            .await
+            .expect("get")
+            .expect("present")
+            .has_pin
+    );
+    assert_eq!(
+        store.pin_phc(mine, alice).await.expect("pin"),
+        Some("argon2id$fake$hash".to_owned()),
+        "the trusted publish path reads the stored hash back"
+    );
+
+    // Cross-tenant isolation: mine cannot see or address the other tenant's employee.
+    assert!(store.get(mine, bob).await.expect("get").is_none());
+    assert!(
+        !store
+            .set_pin(mine, bob, "x")
+            .await
+            .expect("set pin across tenant"),
+        "a PIN set is scoped to the tenant — no row matched"
+    );
+}
+
+/// The role-template store as an in-memory list — the same seam the binary implements over a
+/// tenant-scoped table. Roles are archived, never removed.
+#[derive(Clone, Default)]
+struct FakeRoleTemplates {
+    rows: Arc<Mutex<Vec<RoleTemplate>>>,
+}
+
+impl RoleTemplateStore for FakeRoleTemplates {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows
+            .iter()
+            .any(|row| row.tenant_id == template.tenant_id && row.name == template.name)
+        {
+            return Err(RoleTemplateStoreError::new(
+                "duplicate role name within the tenant",
+            ));
+        }
+        rows.push(RoleTemplate {
+            role_template_id: template.role_template_id,
+            tenant_id: template.tenant_id,
+            name: template.name.clone(),
+            permissions: template.permissions.clone(),
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+        let mut rows: Vec<RoleTemplate> = self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
+            .cloned())
+    }
+
+    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == template.tenant_id && row.role_template_id == template.role_template_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&template.name);
+        row.permissions.clone_from(&template.permissions);
+        row.status = template.status;
+        Ok(true)
+    }
+}
+
+/// The assignment store as an in-memory list — the same seam the binary implements. An assignment is
+/// removed (offboarding), not archived.
+#[derive(Clone, Default)]
+struct FakeAssignments {
+    rows: Arc<Mutex<Vec<Assignment>>>,
+}
+
+impl AssignmentStore for FakeAssignments {
+    async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows.iter().any(|row| {
+            row.tenant_id == assignment.tenant_id
+                && row.employee_id == assignment.employee_id
+                && row.store_id == assignment.store_id
+        }) {
+            return Err(AssignmentStoreError::new(
+                "the employee is already assigned to that store",
+            ));
+        }
+        rows.push(Assignment {
+            assignment_id: assignment.assignment_id,
+            tenant_id: assignment.tenant_id,
+            employee_id: assignment.employee_id,
+            store_id: assignment.store_id,
+            role_template_id: assignment.role_template_id,
+        });
+        Ok(())
+    }
+
+    async fn list_for_store(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && row.store_id == store_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_for_employee(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<bool, AssignmentStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| !(row.tenant_id == tenant && row.assignment_id == assignment_id));
+        Ok(rows.len() != before)
+    }
+}
+
+#[test]
+fn permission_catalogue_matches_pos_core_and_validates_ids() {
+    let catalogue = permission_catalogue();
+    assert!(!catalogue.is_empty(), "the catalogue is non-empty");
+    // Every catalogue id is accepted, and something outside it is rejected — the check the routes use
+    // so a role template never stores a permission that is not in the pos-core registry (§9).
+    for info in &catalogue {
+        assert!(is_known_permission(info.id), "{} is known", info.id);
+    }
+    assert!(is_known_permission("billing.discount.apply"));
+    assert!(!is_known_permission("not.a.real.permission"));
+}
+
+#[tokio::test]
+async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
+    let store = FakeRoleTemplates::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
+
+    store
+        .create(&NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec![
+                "billing.discount.apply".to_owned(),
+                "sales.item.open".to_owned(),
+            ],
+        })
+        .await
+        .expect("create cashier");
+    // The same name is fine under another tenant — templates are per-tenant.
+    store
+        .create(&NewRoleTemplate {
+            role_template_id: RoleTemplateId::new(Ulid::from_u128(11)),
+            tenant_id: other,
+            name: "Cashier".to_owned(),
+            permissions: vec![],
+        })
+        .await
+        .expect("another tenant's Cashier");
+    assert!(
+        store
+            .create(&NewRoleTemplate {
+                role_template_id: RoleTemplateId::new(Ulid::from_u128(12)),
+                tenant_id: mine,
+                name: "Cashier".to_owned(),
+                permissions: vec![],
+            })
+            .await
+            .is_err(),
+        "role names are unique within a tenant"
+    );
+
+    let listed = store.list(mine).await.expect("list");
+    assert_eq!(listed.len(), 1, "only this tenant's roles");
+    assert_eq!(listed[0].permissions.len(), 2);
+
+    // Edit the permission set and archive.
+    assert!(
+        store
+            .update(&RoleTemplateUpdate {
+                role_template_id: cashier,
+                tenant_id: mine,
+                name: "Cashier".to_owned(),
+                permissions: vec!["sales.item.open".to_owned()],
+                status: EntityStatus::Archived,
+            })
+            .await
+            .expect("update")
+    );
+    let view = store
+        .get(mine, cashier)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(view.permissions, vec!["sales.item.open".to_owned()]);
+    assert_eq!(view.status, EntityStatus::Archived);
+}
+
+#[tokio::test]
+async fn assignment_store_binds_person_to_store_and_removes_scoped_by_tenant() {
+    let store = FakeAssignments::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let where_they_work = store_id();
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
+    let assignment = AssignmentId::new(Ulid::from_u128(20));
+
+    store
+        .assign(&NewAssignment {
+            assignment_id: assignment,
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: where_they_work,
+            role_template_id: cashier,
+        })
+        .await
+        .expect("assign alice");
+    // The same person at the same store twice is refused.
+    assert!(
+        store
+            .assign(&NewAssignment {
+                assignment_id: AssignmentId::new(Ulid::from_u128(21)),
+                tenant_id: mine,
+                employee_id: alice,
+                store_id: where_they_work,
+                role_template_id: cashier,
+            })
+            .await
+            .is_err(),
+        "a person is assigned to a store at most once"
+    );
+
+    // Readable both ways, and tenant-scoped.
+    assert_eq!(
+        store
+            .list_for_store(mine, where_they_work)
+            .await
+            .expect("by store")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .list_for_employee(mine, alice)
+            .await
+            .expect("by employee")
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .list_for_store(other, where_they_work)
+            .await
+            .expect("other tenant")
+            .is_empty(),
+        "another tenant sees none of these assignments"
+    );
+
+    // Removing across a tenant boundary matches nothing; removing within the tenant offboards.
+    assert!(
+        !store
+            .remove(other, assignment)
+            .await
+            .expect("remove across tenant")
+    );
+    assert!(store.remove(mine, assignment).await.expect("remove"));
+    assert!(
+        store
+            .list_for_employee(mine, alice)
+            .await
+            .expect("after remove")
+            .is_empty(),
+        "the assignment is gone"
+    );
+}
+
+/// The three people seams as one type — what a router that carries a single `people` state needs (the
+/// binary's `PostgresPeople` implements all three). Delegates to the per-seam fakes above.
+#[derive(Clone, Default)]
+struct FakePeople {
+    employees: FakeEmployees,
+    roles: FakeRoleTemplates,
+    assignments: FakeAssignments,
+}
+
+impl EmployeeStore for FakePeople {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        self.employees.create(employee).await
+    }
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        self.employees.list(tenant).await
+    }
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        self.employees.get(tenant, employee_id).await
+    }
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        self.employees.update(employee).await
+    }
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        self.employees.set_pin(tenant, employee_id, pin_phc).await
+    }
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        self.employees.pin_phc(tenant, employee_id).await
+    }
+}
+
+impl RoleTemplateStore for FakePeople {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+        self.roles.create(template).await
+    }
+    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+        self.roles.list(tenant).await
+    }
+    async fn get(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+        self.roles.get(tenant, role_template_id).await
+    }
+    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+        self.roles.update(template).await
+    }
+}
+
+impl AssignmentStore for FakePeople {
+    async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
+        self.assignments.assign(assignment).await
+    }
+    async fn list_for_store(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        self.assignments.list_for_store(tenant, store_id).await
+    }
+    async fn list_for_employee(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        self.assignments
+            .list_for_employee(tenant, employee_id)
+            .await
+    }
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<bool, AssignmentStoreError> {
+        self.assignments.remove(tenant, assignment_id).await
+    }
+}
+
+/// The main app merged with the people router, wired to a caller-supplied audit recorder so a test can
+/// assert the audit trail (ADR-0070).
+fn people_app_with_audit(
+    admin: FakeAdmin,
+    people: FakePeople,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::people_router(people, admin, clock(), audit))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end lifecycle over the people routes — create/read/set-PIN/update an \
+              employee, create a role and reject an unknown permission, assign/list/remove, and the \
+              audit + no-PII-in-the-trail assertions — kept together so the invariant is checked \
+              against the same data the whole flow produced"
+)]
+async fn people_routes_crud_lifecycle_audited_without_pii() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(admin, people, Arc::new(AuditSink::new(audit.clone())));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Create an employee (identity only).
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create employee");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    // The roster read shows the employee, with no PIN yet.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list employees");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let employees = json_body(listed).await;
+    assert_eq!(employees.as_array().expect("array").len(), 1);
+    assert_eq!(employees[0]["has_pin"], serde_json::json!(false));
+
+    // Set a PIN: non-digits are rejected, four digits accepted.
+    let bad_pin = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/employees/{employee_id}/pin"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "pin": "abcd" }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad pin");
+    assert_eq!(bad_pin.status(), StatusCode::BAD_REQUEST);
+    let set_pin = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/employees/{employee_id}/pin"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "pin": "1234" }),
+            &cookie,
+        ))
+        .await
+        .expect("route set pin");
+    assert_eq!(set_pin.status(), StatusCode::NO_CONTENT);
+
+    // Now has_pin is true on a read-one.
+    let one = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees/{employee_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route get one");
+    assert_eq!(one.status(), StatusCode::OK);
+    assert_eq!(json_body(one).await["has_pin"], serde_json::json!(true));
+
+    // Rename + archive.
+    let updated = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route update");
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+
+    // The permission catalogue is offered for the role editor.
+    let catalogue = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/people/permissions", &cookie))
+        .await
+        .expect("route permissions");
+    assert_eq!(catalogue.status(), StatusCode::OK);
+    assert!(
+        !json_body(catalogue)
+            .await
+            .as_array()
+            .expect("array")
+            .is_empty()
+    );
+
+    // A role naming an unknown permission is refused.
+    let bad_role = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Bogus", "permissions": ["not.a.real.permission"] }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad role");
+    assert_eq!(bad_role.status(), StatusCode::BAD_REQUEST);
+
+    // A valid role.
+    let role = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Cashier", "permissions": ["billing.discount.apply"] }),
+            &cookie,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(role.status(), StatusCode::CREATED);
+    let role_id = json_body(role).await["id"].as_str().expect("id").to_owned();
+
+    // Assign the employee to a store with that role.
+    let assign = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/assignments",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "employee_id": employee_id,
+                "store_id": store_ulid,
+                "role_template_id": role_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route assign");
+    assert_eq!(assign.status(), StatusCode::CREATED);
+    let assignment_id = json_body(assign).await["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    // Readable by store and by employee.
+    let by_store = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/assignments?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route by store");
+    assert_eq!(by_store.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(by_store).await.as_array().expect("array").len(),
+        1
+    );
+    let by_employee = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/assignments?tenant_id={tenant_ulid}&employee_id={employee_id}"),
+            &cookie,
+        ))
+        .await
+        .expect("route by employee");
+    assert_eq!(by_employee.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(by_employee)
+            .await
+            .as_array()
+            .expect("array")
+            .len(),
+        1
+    );
+
+    // Remove (offboard).
+    let remove = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/assignments/{assignment_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove");
+    assert_eq!(remove.status(), StatusCode::NO_CONTENT);
+
+    // Every write was audited — and the trail never carries the employee's name, PIN, or PIN hash.
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let actions: Vec<&str> = recorded.iter().map(|entry| entry.action.as_str()).collect();
+    for expected in [
+        "employee.create",
+        "employee.set_pin",
+        "employee.update",
+        "role.create",
+        "assignment.create",
+        "assignment.remove",
+    ] {
+        assert!(actions.contains(&expected), "recorded {expected}");
+    }
+    let dump = serde_json::to_string(
+        &recorded
+            .iter()
+            .map(|entry| {
+                (
+                    entry.action.clone(),
+                    entry.before.clone(),
+                    entry.after.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .expect("serialize the trail");
+    assert!(
+        !dump.contains("Alice"),
+        "the employee's name never enters the audit trail"
+    );
+    assert!(
+        !dump.contains("1234"),
+        "the PIN never enters the audit trail"
+    );
+    assert!(
+        !dump.to_lowercase().contains("argon2"),
+        "the PIN hash never enters the audit trail"
+    );
+    // The employee.create entry does record the code (id/code/status), just not the name.
+    assert!(dump.contains("C01"), "the staff code is recorded");
+}
+
+#[tokio::test]
+async fn people_writes_require_manage_people_but_reads_need_only_read() {
+    let admin = provisioned_admin();
+    let router = people_app_with_audit(
+        admin.clone(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // A Viewer may read the roster…
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}"),
+            &viewer,
+        ))
+        .await
+        .expect("route read");
+    assert_eq!(
+        read.status(),
+        StatusCode::OK,
+        "read needs only console.data.read"
+    );
+
+    // …but not create an employee (that needs console.people.manage).
+    let forbidden = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &viewer,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    // Ops cannot manage people either.
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let ops_forbidden = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Cashier", "permissions": [] }),
+            &ops,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(ops_forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+/// The main app merged with the people-publish router, sharing one config-tree fake so the test can
+/// read back the node the publish wrote.
+fn people_publish_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::people_publish_router(
+        people,
+        config,
+        admin,
+        clock(),
+        audit,
+    ))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end publish scenario: seed an employee+PIN+role+assignment through the seam, \
+              publish, then assert the compiled node landed on the config tree with the flattened \
+              permission and PIN hash and that the audit carries no name or PIN — kept together so the \
+              invariant is checked against the same state the publish produced"
+)]
+async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let mine = tenant();
+    let store = store_id();
+    let alice = EmployeeId::new(Ulid::from_u128(0xA11));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(0xCA5));
+
+    // Seed a store's people directly through the seam: an employee with a PIN, a role, an assignment.
+    EmployeeStore::create(
+        &people,
+        &NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "C01".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
+        .await
+        .expect("set pin");
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec!["billing.discount.apply".to_owned()],
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: store,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign");
+
+    let router = people_publish_app(
+        admin,
+        people.clone(),
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({
+                "tenant_id": mine.as_ulid().to_string(),
+                "store_id": store.as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    assert!(!version.is_empty());
+
+    // The compiled node landed on the store layer, flattening the role and carrying the PIN hash.
+    let state = config
+        .load(mine, store)
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.layers[2]["permissions"];
+    assert_eq!(
+        node["store_id"],
+        serde_json::json!(store.as_ulid().to_string())
+    );
+    let staff = node["staff"].as_array().expect("staff array");
+    assert_eq!(staff.len(), 1);
+    assert_eq!(staff[0]["code"], serde_json::json!("C01"));
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!(["billing.discount.apply"])
+    );
+    assert_eq!(
+        staff[0]["pin_phc"],
+        serde_json::json!("argon2id$phc$alice"),
+        "the PIN hash rides to the store for offline verification"
+    );
+
+    // The audit records the publish — the config version and staff count, never a name or PIN.
+    let recorded = audit.list(None, 10).await.expect("list audit");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.action == "permissions.publish")
+        .expect("the publish was recorded");
+    let dump = serde_json::to_string(&entry.after).expect("serialize");
+    assert!(dump.contains("staff_count"), "the staff count is recorded");
+    assert!(
+        !dump.contains("Alice"),
+        "no employee name in the audit trail"
+    );
+    assert!(
+        !dump.to_lowercase().contains("argon2"),
+        "no PIN hash in the audit trail"
+    );
 }

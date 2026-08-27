@@ -111,6 +111,85 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The edge applies the published `permissions` node — staff sign in against the cloud's set**
+  (roadmap v2, Track M1, slice 6; [ADR-0070](docs/adr/0070-people-and-access.md)). The edge's
+  config-pull rebuild now reads the `permissions` node into a `StaffRoster` on the `EdgeSession` (each
+  badge `code` → the granted permission set + the Argon2id PIN hash), and
+  `EdgeSession::authorise_staff(code, pin)` verifies a sign-in against the published hash offline
+  ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)), returning the person's `PermissionSet` on
+  success — so the store authorises staff from the console's published set rather than a local roster.
+  A permission id the running edge predates is dropped (forward-compatible), and an absent or
+  malformed node leaves the roster unchanged — the same safe-by-default rebuild as the menu. This
+  completes Track M1 (people & access). **Upgrade note:** edge-only; no `PROTOCOL_VERSION` change (the
+  node rides the existing config tree).
+- **Publish a store's people to its `permissions` config node** (roadmap v2, Track M1, slice 5;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). A pure compiler turns a store's active assignments
+  into the flat, edge-shaped `permissions` document — per staff member: `id`, `code`, `name`, the
+  granted permission set (the assignment's role flattened to its `pos-core` ids, deduped and sorted),
+  and the **Argon2id PIN hash** the edge verifies against offline ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md))
+  — archived employees dropped, staff sorted by code so the output is byte-stable. `POST
+  /admin/people/publish` writes it onto the store's `permissions` config node and versions it through
+  the config tree, so it rides to the store like every other config change ([ADR-0033](docs/adr/0033-config-tree.md))
+  — no new channel. Behind `console.config.publish`; the audit records the config version and staff
+  count, never a name or PIN. The People screen gains a **Publish to store** action. **Upgrade note:**
+  additive route + config node; no `PROTOCOL_VERSION` change (the node rides the existing config tree).
+- **A People console screen — manage employees, roles, PINs, and store assignments** (roadmap v2,
+  Track M1, slice 4; [ADR-0070](docs/adr/0070-people-and-access.md)). A new tenant-scoped `/people`
+  screen on the F2 CRUD kit: an employee roster (with create, archive/restore, and a set/reset-PIN
+  dialog whose digits are sent once and never shown again — the list shows only whether a PIN is
+  *set*); a role editor (a drawer of the `pos-core` permission catalogue grouped by area, so the
+  operator picks capabilities, never types a permission string); and per-store assignments (assign a
+  person to the store chosen in the top bar, with a role, and remove to offboard). All write
+  affordances are gated on the operator holding `console.people.manage` (owner/admin); reads open to
+  any admin (the server re-checks every route). Wired into the nav under Master data and the typed
+  API client. **Upgrade note:** dashboard-only; no API or schema change beyond slice 3's routes.
+- **`/admin` console API for employees, roles, and assignments — every write audited** (roadmap v2,
+  Track M1, slice 3; [ADR-0070](docs/adr/0070-people-and-access.md)). The write and read surface the
+  People console will use: `GET/POST /admin/employees`, `GET/PATCH /admin/employees/{id}`,
+  `PUT /admin/employees/{id}/pin` (set/reset — the PIN is Argon2id-hashed server-side and never
+  returned, stored raw, or logged), `GET/POST /admin/roles`, `GET/PATCH /admin/roles/{id}`,
+  `GET/POST /admin/assignments` (list by `?store_id=` or `?employee_id=`),
+  `DELETE /admin/assignments/{id}`, and `GET /admin/people/permissions` (the `pos-core` catalogue the
+  role editor offers, so the console never invents a permission string). A role's permission set is
+  validated against that catalogue before it is stored. A new **`console.people.manage`** permission
+  (Owner/Admin) gates every write; reads need only `console.data.read`. Every write emits an audit
+  entry ([ADR-0069](docs/adr/0069-audit-trail.md)) that records the employee **id, code, status, and
+  role — never the name, and never the PIN or its hash** (a test asserts the trail never contains the
+  name, the PIN, or an `argon2` hash). **Upgrade note:** additive routes only; no `PROTOCOL_VERSION`
+  change; one new console permission (`console.people.manage`).
+- **Role templates and per-store staff assignments (foundation)** (roadmap v2, Track M1, slice 2;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). Two new tenant-scoped, RLS-isolated tables
+  (migration `0024`) that give a store's employees their *access*: `role_templates` — a tenant's
+  named roles (e.g. *Cashier*, *Manager*), each a stored subset of the **`pos-core` permission
+  catalogue** (§9) held as a `jsonb` id set; and `employee_store_assignments` — the join binding a
+  person to one of their tenant's stores with a role. New `RoleTemplateStore` and `AssignmentStore`
+  seams (create/list/get/update roles; assign/list-by-store/list-by-employee/remove assignments) with
+  `store-postgres` adapters and in-memory fakes. The console never invents a permission string: a new
+  `permission_catalogue()` exposes the `pos-core` catalogue (id, group, risk, PIN policy, description)
+  and `is_known_permission()` validates a stored subset against it. Roles are **archived, never
+  deleted** (no `DELETE` grant), like employees; an assignment is a plain grant that is **removed**
+  (offboarding a person from a store), so it alone carries a `DELETE` grant. None of this is PII
+  beyond the employee row itself — a role is names + permission ids, an assignment is three ids. No
+  routes or UI yet (M1 slice 3 adds `/admin` CRUD + audit). **Upgrade note:** one additive,
+  forward-only migration `0024_role_templates_and_assignments`; no `PROTOCOL_VERSION` or permission
+  change.
+- **The cloud can now record a store's employees (foundation)** (roadmap v2, Track M1, slice 1;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). The console's first record of *who works at a
+  store* — and the console's first **T1 Restricted / Vietnam-PDPD-scoped** data. A new tenant-scoped,
+  RLS-isolated `employees` table (migration `0023`) holds only what access control needs: a minted
+  `id`, the owning tenant, a `name`, the tenant-unique staff `code`, a status, and `pin_phc` — the
+  **Argon2id** hash of the set PIN, `NULL` until set and **never the PIN itself**. A new
+  `EmployeeStore` seam (create / list / get / update / set-or-reset PIN) with a `store-postgres`
+  adapter and an in-memory fake; a read exposes only `has_pin`, never the hash. Employees are
+  **archived, never hard-deleted** (no `DELETE` grant), so history and any published permission set
+  stay reconcilable and erasure is handled through the Data Protection contact ([ADR-0035](docs/adr/0035-retention-and-pii-masking.md)),
+  not an ad-hoc delete. This is access management, not employee monitoring — no contact, biometric,
+  behavioural, or location data. No routes or UI yet; this is the store the later M1 slices (role
+  templates, per-store assignments, `/admin` CRUD, People screen, and the `permissions` config node
+  the edge applies) build on. **PDPD note:** a deployment storing employee PII must confirm its
+  lawful basis, staff notification, retention period, and DPIA — surfaced by the console, not presumed
+  by the code. **Upgrade note:** one additive, forward-only migration `0023_employees`; no
+  `PROTOCOL_VERSION` or permission change.
 - **Detail views now show the entity's own audit history, and who resolved device proposals**
   (roadmap v2, Track G, G2 slice 6; [ADR-0069](docs/adr/0069-audit-trail.md)). A reusable
   `AuditTrail` panel reads an entity's history from the same `GET /admin/audit` (filtered by entity

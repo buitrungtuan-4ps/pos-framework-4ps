@@ -133,6 +133,12 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Edit the translation grid",
     },
+    /// Manage a store's people: employees, role templates, per-store assignments, and PIN reset.
+    ManagePeople {
+        id: "console.people.manage",
+        roles: [Owner, Admin],
+        description: "Manage employees, role templates, store assignments, and reset staff PINs",
+    },
     /// Read any tenant data — reports, registry, configuration, catalog, translations.
     Read {
         id: "console.data.read",
@@ -205,6 +211,7 @@ mod tests {
             ConsolePermission::ManageStores,
             ConsolePermission::ManageCatalog,
             ConsolePermission::ManageTranslations,
+            ConsolePermission::ManagePeople,
             ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
         ] {

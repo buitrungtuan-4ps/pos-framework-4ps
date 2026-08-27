@@ -23,14 +23,15 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminInviteRow, AdminSessionRow, AdminUserRow, AuditLogRow, BrandRow, CatalogItemRow,
-    CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, FleetStoreRow,
-    NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresFleet, PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth,
-    PostgresTranslations, PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
+    AdminInviteRow, AdminSessionRow, AdminUserRow, AssignmentRow, AuditLogRow, BrandRow,
+    CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
+    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
+    DeviceRow, EmployeeRow, FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow,
+    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresAudit, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresOrderQueue,
+    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
+    PostgresWebhooks, RoleTemplateRow, StoreRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -73,6 +74,11 @@ use crate::devices::{
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
+use crate::people::{
+    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
+    EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
+    RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
+};
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -1507,6 +1513,277 @@ impl AuditStore for PostgresAudit {
             .await
             .map_err(|error| AuditStoreError::new(error.to_string()))?;
         rows.into_iter().map(audit_entry).collect()
+    }
+}
+
+// --- people & access (Track M1, ADR-0070): the `employees` rows converted to the EmployeeStore domain ---
+
+/// Converts a stored employee row into the domain [`Employee`], parsing the ids and status. A row with
+/// an unparseable id is corruption the caller should see, not silently drop.
+fn employee_record(row: EmployeeRow) -> Result<Employee, EmployeeStoreError> {
+    let employee_id = row
+        .id
+        .parse::<Ulid>()
+        .map(EmployeeId::new)
+        .map_err(|error| {
+            EmployeeStoreError::new(format!("stored employee id is not a ULID: {error}"))
+        })?;
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|error| {
+            EmployeeStoreError::new(format!("stored tenant id is not a ULID: {error}"))
+        })?;
+    Ok(Employee {
+        employee_id,
+        tenant_id,
+        code: row.code,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+        has_pin: row.has_pin,
+    })
+}
+
+impl EmployeeStore for PostgresPeople {
+    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+        self.insert(
+            &employee.employee_id.to_string(),
+            &employee.tenant_id.to_string(),
+            &employee.code,
+            &employee.name,
+        )
+        .await
+        .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+        let rows = self
+            .fetch(&tenant.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))?;
+        rows.into_iter().map(employee_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<Employee>, EmployeeStoreError> {
+        let row = self
+            .fetch_one(&tenant.to_string(), &employee_id.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))?;
+        row.map(employee_record).transpose()
+    }
+
+    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+        self.set(
+            &employee.tenant_id.to_string(),
+            &employee.employee_id.to_string(),
+            &employee.name,
+            employee.status.as_str(),
+        )
+        .await
+        .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn set_pin(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+        pin_phc: &str,
+    ) -> Result<bool, EmployeeStoreError> {
+        PostgresPeople::set_pin(self, &tenant.to_string(), &employee_id.to_string(), pin_phc)
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+
+    async fn pin_phc(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Option<String>, EmployeeStoreError> {
+        PostgresPeople::pin_phc(self, &tenant.to_string(), &employee_id.to_string())
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))
+    }
+}
+
+/// Converts a stored role-template row into the domain [`RoleTemplate`], parsing the ids, status, and
+/// the `jsonb` permission array.
+fn role_template_record(row: RoleTemplateRow) -> Result<RoleTemplate, RoleTemplateStoreError> {
+    let role_template_id = row
+        .id
+        .parse::<Ulid>()
+        .map(RoleTemplateId::new)
+        .map_err(|error| {
+            RoleTemplateStoreError::new(format!("stored role-template id is not a ULID: {error}"))
+        })?;
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|error| {
+            RoleTemplateStoreError::new(format!("stored tenant id is not a ULID: {error}"))
+        })?;
+    let permissions: Vec<String> =
+        serde_json::from_str(&row.permissions_json).map_err(|error| {
+            RoleTemplateStoreError::new(format!(
+                "stored role-template permissions are not JSON: {error}"
+            ))
+        })?;
+    Ok(RoleTemplate {
+        role_template_id,
+        tenant_id,
+        name: row.name,
+        permissions,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+impl RoleTemplateStore for PostgresPeople {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
+            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
+        })?;
+        self.insert_role_template(
+            &template.role_template_id.to_string(),
+            &template.tenant_id.to_string(),
+            &template.name,
+            &permissions_json,
+        )
+        .await
+        .map_err(|error| RoleTemplateStoreError::new(error.to_string()))
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+        let rows = self
+            .fetch_role_templates(&tenant.to_string())
+            .await
+            .map_err(|error| RoleTemplateStoreError::new(error.to_string()))?;
+        rows.into_iter().map(role_template_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+        let row = self
+            .fetch_role_template(&tenant.to_string(), &role_template_id.to_string())
+            .await
+            .map_err(|error| RoleTemplateStoreError::new(error.to_string()))?;
+        row.map(role_template_record).transpose()
+    }
+
+    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
+            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
+        })?;
+        self.set_role_template(
+            &template.tenant_id.to_string(),
+            &template.role_template_id.to_string(),
+            &template.name,
+            &permissions_json,
+            template.status.as_str(),
+        )
+        .await
+        .map_err(|error| RoleTemplateStoreError::new(error.to_string()))
+    }
+}
+
+/// Converts a stored assignment row into the domain [`Assignment`], parsing the four ids.
+fn assignment_record(row: &AssignmentRow) -> Result<Assignment, AssignmentStoreError> {
+    let assignment_id = row
+        .id
+        .parse::<Ulid>()
+        .map(AssignmentId::new)
+        .map_err(|error| {
+            AssignmentStoreError::new(format!("stored assignment id is not a ULID: {error}"))
+        })?;
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|error| {
+            AssignmentStoreError::new(format!("stored tenant id is not a ULID: {error}"))
+        })?;
+    let employee_id = row
+        .employee_id
+        .parse::<Ulid>()
+        .map(EmployeeId::new)
+        .map_err(|error| {
+            AssignmentStoreError::new(format!("stored employee id is not a ULID: {error}"))
+        })?;
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|error| {
+            AssignmentStoreError::new(format!("stored store id is not a ULID: {error}"))
+        })?;
+    let role_template_id = row
+        .role_template_id
+        .parse::<Ulid>()
+        .map(RoleTemplateId::new)
+        .map_err(|error| {
+            AssignmentStoreError::new(format!("stored role-template id is not a ULID: {error}"))
+        })?;
+    Ok(Assignment {
+        assignment_id,
+        tenant_id,
+        employee_id,
+        store_id,
+        role_template_id,
+    })
+}
+
+impl AssignmentStore for PostgresPeople {
+    async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
+        self.insert_assignment(
+            &assignment.assignment_id.to_string(),
+            &assignment.tenant_id.to_string(),
+            &assignment.employee_id.to_string(),
+            &assignment.store_id.to_string(),
+            &assignment.role_template_id.to_string(),
+        )
+        .await
+        .map_err(|error| AssignmentStoreError::new(error.to_string()))
+    }
+
+    async fn list_for_store(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .fetch_assignments_for_store(&tenant.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
+        rows.iter().map(assignment_record).collect()
+    }
+
+    async fn list_for_employee(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .fetch_assignments_for_employee(&tenant.to_string(), &employee_id.to_string())
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
+        rows.iter().map(assignment_record).collect()
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<bool, AssignmentStoreError> {
+        self.delete_assignment(&tenant.to_string(), &assignment_id.to_string())
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))
     }
 }
 

@@ -1762,6 +1762,345 @@ mod audit_log {
 }
 
 // ---------------------------------------------------------------------------
+// The employee store: tenant-scoped, RLS-isolated, PIN held only as its hash (ADR-0070).
+// ---------------------------------------------------------------------------
+
+mod employees_store {
+    use super::{block_on, prepared};
+
+    /// Employees insert and read back tenant-scoped and newest-first; the code is unique within a
+    /// tenant but free across tenants; `has_pin` reflects `set_pin` without ever exposing the hash on
+    /// a read (only `pin_phc` reads it back); an update renames/archives; and the grant is
+    /// SELECT/INSERT/UPDATE only — no DELETE (an employee is archived, never removed) ([ADR-0070]).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario over the real table: insert across two tenants, the \
+                  unique-code constraint, scoped + newest-first reads, the PIN hash round-trip and \
+                  has_pin flag, an update, and the append-only-ish grant — splitting it would \
+                  duplicate the multi-tenant setup"
+    )]
+    fn insert_scoped_pin_round_trip_and_grant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            // Two tenants, both using the staff code "A01" — unique per tenant, not globally.
+            people
+                .insert("01EMP0000000000000000000A1", "tenant-a", "A01", "Alice")
+                .await
+                .expect("insert alice");
+            people
+                .insert("01EMP0000000000000000000A2", "tenant-a", "A02", "Anh")
+                .await
+                .expect("insert anh");
+            people
+                .insert("01EMP0000000000000000000B1", "tenant-b", "A01", "Bao")
+                .await
+                .expect("a duplicate code is fine under a different tenant");
+
+            // The unique index refuses a second "A01" within tenant-a.
+            assert!(
+                people
+                    .insert("01EMP0000000000000000000A3", "tenant-a", "A01", "Clone")
+                    .await
+                    .is_err(),
+                "staff codes are unique within a tenant"
+            );
+
+            // Tenant-scoped, newest-first, and no PIN yet.
+            let scoped = people.fetch("tenant-a").await.expect("fetch tenant-a");
+            assert_eq!(scoped.len(), 2, "only tenant-a's own employees");
+            assert_eq!(scoped.first().expect("a row").name, "Anh", "newest first");
+            assert!(scoped.iter().all(|row| !row.has_pin), "no PIN set yet");
+
+            // A different tenant sees only its own.
+            let other = people.fetch("tenant-b").await.expect("fetch tenant-b");
+            assert_eq!(other.len(), 1);
+            assert_eq!(other.first().expect("a row").code, "A01");
+
+            // Set a PIN hash: has_pin flips, and the hash round-trips only via pin_phc — fetch never
+            // carries it.
+            assert!(
+                people
+                    .set_pin(
+                        "tenant-a",
+                        "01EMP0000000000000000000A1",
+                        "argon2id$phc$alice"
+                    )
+                    .await
+                    .expect("set pin"),
+                "the row was found"
+            );
+            let alice = people
+                .fetch_one("tenant-a", "01EMP0000000000000000000A1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert!(alice.has_pin, "has_pin reflects the set PIN");
+            assert_eq!(
+                people
+                    .pin_phc("tenant-a", "01EMP0000000000000000000A1")
+                    .await
+                    .expect("pin_phc"),
+                Some("argon2id$phc$alice".to_owned()),
+                "the trusted path reads the stored hash back"
+            );
+
+            // A PIN set scoped to the wrong tenant matches no row.
+            assert!(
+                !people
+                    .set_pin("tenant-b", "01EMP0000000000000000000A1", "x")
+                    .await
+                    .expect("cross-tenant set"),
+                "set_pin is tenant-scoped"
+            );
+
+            // Rename + archive.
+            assert!(
+                people
+                    .set(
+                        "tenant-a",
+                        "01EMP0000000000000000000A1",
+                        "Alice Nguyen",
+                        "archived"
+                    )
+                    .await
+                    .expect("update"),
+                "the row changed"
+            );
+            let archived = people
+                .fetch_one("tenant-a", "01EMP0000000000000000000A1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert_eq!(archived.name, "Alice Nguyen");
+            assert_eq!(archived.status, "archived");
+
+            // Append-only-ish grant: app_tenant may SELECT/INSERT/UPDATE but never DELETE.
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employees', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            let can_update: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employees', 'UPDATE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            assert!(!can_delete, "employees is never DELETEd — archived instead");
+            assert!(
+                can_update,
+                "app_tenant may UPDATE (rename / archive / set PIN)"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Role templates + per-store assignments: people & access (ADR-0070, M1 slice 2).
+// ---------------------------------------------------------------------------
+
+mod role_templates_and_assignments {
+    use super::{block_on, prepared};
+
+    /// Role templates insert with a jsonb permission set that round-trips as its JSON text, read back
+    /// tenant-scoped and newest-first, and update name/permissions/status. The grant is
+    /// SELECT/INSERT/UPDATE only — no DELETE (a role is archived, never removed) ([ADR-0070]).
+    #[test]
+    fn role_templates_round_trip_permissions_and_grant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            people
+                .insert_role_template(
+                    "01ROLE000000000000000000A1",
+                    "tenant-a",
+                    "Cashier",
+                    r#"["billing.discount.apply","sales.item.open"]"#,
+                )
+                .await
+                .expect("insert cashier");
+            people
+                .insert_role_template("01ROLE000000000000000000B1", "tenant-b", "Cashier", "[]")
+                .await
+                .expect("a duplicate name is fine under a different tenant");
+
+            // The unique index refuses a second "Cashier" within tenant-a.
+            assert!(
+                people
+                    .insert_role_template("01ROLE000000000000000000A2", "tenant-a", "Cashier", "[]")
+                    .await
+                    .is_err(),
+                "role names are unique within a tenant"
+            );
+
+            // Tenant-scoped read; the jsonb permission set round-trips as its JSON text.
+            let scoped = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch tenant-a");
+            assert_eq!(scoped.len(), 1, "only tenant-a's own roles");
+            let cashier = scoped.first().expect("a row");
+            let permissions: Vec<String> =
+                serde_json::from_str(&cashier.permissions_json).expect("permissions are JSON");
+            assert_eq!(
+                permissions,
+                vec![
+                    "billing.discount.apply".to_owned(),
+                    "sales.item.open".to_owned()
+                ]
+            );
+
+            // Update the permission set + archive.
+            assert!(
+                people
+                    .set_role_template(
+                        "tenant-a",
+                        "01ROLE000000000000000000A1",
+                        "Cashier",
+                        r#"["sales.item.open"]"#,
+                        "archived",
+                    )
+                    .await
+                    .expect("update"),
+                "the row changed"
+            );
+            let updated = people
+                .fetch_role_template("tenant-a", "01ROLE000000000000000000A1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert_eq!(updated.status, "archived");
+            let updated_permissions: Vec<String> =
+                serde_json::from_str(&updated.permissions_json).expect("permissions are JSON");
+            assert_eq!(updated_permissions, vec!["sales.item.open".to_owned()]);
+
+            // Roles are archived, never deleted: no DELETE grant.
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'role_templates', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            assert!(
+                !can_delete,
+                "role_templates is never DELETEd — archived instead"
+            );
+        });
+    }
+
+    /// Assignments bind a person to a store with a role, read both by store and by employee,
+    /// tenant-scoped; the same person at the same store is refused; and — unlike employees/roles — an
+    /// assignment IS removable (a DELETE grant), which offboards the person ([ADR-0070]).
+    #[test]
+    fn assignments_bind_read_and_remove_with_delete_grant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            people
+                .insert_assignment(
+                    "01ASSIGN00000000000000000A",
+                    "tenant-a",
+                    "01EMP0000000000000000000A1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000A1",
+                )
+                .await
+                .expect("assign");
+            // The same person at the same store twice is refused by the unique index.
+            assert!(
+                people
+                    .insert_assignment(
+                        "01ASSIGN00000000000000000B",
+                        "tenant-a",
+                        "01EMP0000000000000000000A1",
+                        "01STORE000000000000000000S",
+                        "01ROLE000000000000000000A1",
+                    )
+                    .await
+                    .is_err(),
+                "a person is assigned to a store at most once"
+            );
+
+            // Readable both ways, tenant-scoped.
+            assert_eq!(
+                people
+                    .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
+                    .await
+                    .expect("by store")
+                    .len(),
+                1
+            );
+            assert_eq!(
+                people
+                    .fetch_assignments_for_employee("tenant-a", "01EMP0000000000000000000A1")
+                    .await
+                    .expect("by employee")
+                    .len(),
+                1
+            );
+            assert!(
+                people
+                    .fetch_assignments_for_store("tenant-b", "01STORE000000000000000000S")
+                    .await
+                    .expect("other tenant")
+                    .is_empty(),
+                "another tenant sees none of these assignments"
+            );
+
+            // Cross-tenant remove matches nothing; a scoped remove offboards.
+            assert!(
+                !people
+                    .delete_assignment("tenant-b", "01ASSIGN00000000000000000A")
+                    .await
+                    .expect("cross-tenant remove"),
+                "delete is tenant-scoped"
+            );
+            assert!(
+                people
+                    .delete_assignment("tenant-a", "01ASSIGN00000000000000000A")
+                    .await
+                    .expect("remove"),
+                "the row was removed"
+            );
+            assert!(
+                people
+                    .fetch_assignments_for_employee("tenant-a", "01EMP0000000000000000000A1")
+                    .await
+                    .expect("after remove")
+                    .is_empty(),
+                "the assignment is gone"
+            );
+
+            // Assignments ARE removable — a DELETE grant, unlike employees/roles.
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employee_store_assignments', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            assert!(
+                can_delete,
+                "an assignment is removed (offboarding), not archived"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The subject store: retention / PII masking (ADR-0035).
 // ---------------------------------------------------------------------------
 

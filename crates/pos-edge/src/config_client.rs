@@ -26,19 +26,49 @@ use core::future::Future;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
+use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::menu::MenuBook;
 
-use crate::app::{Edge, EdgeSession};
+use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
+/// One staff member as the published `permissions` node carries them (ADR-0070). The edge reads only
+/// what it authorises against — the `code`, the granted permission ids, and the PIN hash; `id` and
+/// `name` are present on the wire but not needed here, and serde ignores them.
+#[derive(serde::Deserialize)]
+struct PublishedStaff {
+    code: String,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    pin_phc: Option<String>,
+}
+
+/// The published `permissions` node: the store's staff (ADR-0070).
+#[derive(serde::Deserialize)]
+struct PublishedPermissions {
+    #[serde(default)]
+    staff: Vec<PublishedStaff>,
+}
+
+/// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
+/// `pos-core` catalogue (§9) does not know — an older edge simply ignores a permission it predates
+/// rather than failing to apply the whole node.
+fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
+    ids.iter()
+        .filter_map(|id| Permission::ALL.iter().copied().find(|p| p.meta().id == id))
+        .collect()
+}
+
 /// Rebuilds an [`EdgeSession`] from a synced config document, on top of a base session.
 ///
 /// Reads the compiled `menu` node (a [`MenuBook`], ADR-0066) and installs the catalog for the
-/// session's channel. Any node that is absent or does not parse is left as the base has it — a bad or
-/// partial publish never blanks a field, it just does not change it.
+/// session's channel, and the `permissions` node (ADR-0070) into the staff roster the edge authorises
+/// against. Any node that is absent or does not parse is left as the base has it — a bad or partial
+/// publish never blanks a field, it just does not change it.
 #[must_use]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
@@ -51,6 +81,25 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<MenuBook>(&text).ok())
     {
         session.menu = book.catalog_for(channel).clone();
+    }
+    // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
+    // authorises sign-ins against, replacing any local roster.
+    if let Some(published) = document
+        .get("permissions")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedPermissions>(&text).ok())
+    {
+        let mut roster = StaffRoster::new();
+        for member in published.staff {
+            roster.insert(
+                member.code,
+                StaffAuth {
+                    permissions: permission_set_from_ids(&member.permissions),
+                    pin_phc: member.pin_phc,
+                },
+            );
+        }
+        session.staff = roster;
     }
     session
 }
@@ -242,6 +291,106 @@ mod tests {
         assert!(
             rebuilt.menu.get(item()).is_some(),
             "a malformed menu node is ignored, not fatal"
+        );
+    }
+
+    /// A real Argon2id PHC of `pin`, with a fixed salt so the test needs no RNG (as `auth.rs` does).
+    fn hash_of(pin: &str) -> String {
+        use argon2::Argon2;
+        use argon2::password_hash::{PasswordHasher as _, SaltString};
+        let salt = SaltString::encode_b64(b"a-fixed-test-salt").expect("a valid salt");
+        Argon2::default()
+            .hash_password(pin.as_bytes(), &salt)
+            .expect("hash")
+            .to_string()
+    }
+
+    /// A `permissions` node with one staff member (code `C01`, one known permission, a PIN hash) plus
+    /// a permission id the catalogue does not know (dropped) and a member with no PIN.
+    fn document_with_permissions() -> serde_json::Value {
+        serde_json::json!({
+            "permissions": {
+                "store_id": "01STORE000000000000000000",
+                "staff": [
+                    {
+                        "id": "01EMP0000000000000000000A1",
+                        "code": "C01",
+                        "name": "Alice",
+                        "permissions": ["billing.discount.apply", "not.a.real.permission"],
+                        "pin_phc": hash_of("2468"),
+                    },
+                    {
+                        "id": "01EMP0000000000000000000A2",
+                        "code": "C02",
+                        "name": "Bao",
+                        "permissions": [],
+                        "pin_phc": null,
+                    }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn a_permissions_node_becomes_the_staff_roster_and_authorises_sign_in() {
+        use pos_core::permission::Permission;
+
+        let base = EdgeSession::bootstrap();
+        assert!(base.staff.is_empty(), "the bootstrap roster is empty");
+
+        let rebuilt = session_from_config(&base, &document_with_permissions());
+        assert_eq!(rebuilt.staff.len(), 2, "both staff are applied");
+
+        // The known permission id maps in; the unknown one is dropped, not fatal.
+        let alice = rebuilt.staff.get("C01").expect("C01 is in the roster");
+        assert!(alice.permissions.contains(Permission::ApplyDiscount));
+        assert!(!alice.permissions.contains(Permission::VoidFiredLine));
+
+        // A correct PIN authorises and yields the granted set; a wrong PIN does not.
+        let granted = rebuilt
+            .authorise_staff("C01", "2468")
+            .expect("correct PIN authorises");
+        assert!(granted.contains(Permission::ApplyDiscount));
+        assert!(
+            rebuilt.authorise_staff("C01", "0000").is_none(),
+            "a wrong PIN yields nothing"
+        );
+        assert!(
+            rebuilt.authorise_staff("NOPE", "2468").is_none(),
+            "an unknown code yields nothing"
+        );
+        assert!(
+            rebuilt.authorise_staff("C02", "2468").is_none(),
+            "a member with no PIN set cannot sign in"
+        );
+    }
+
+    #[test]
+    fn an_absent_or_malformed_permissions_node_leaves_the_roster_unchanged() {
+        use crate::app::{StaffAuth, StaffRoster};
+        use pos_core::permission::Permission;
+
+        let mut roster = StaffRoster::new();
+        roster.insert(
+            "C09",
+            StaffAuth {
+                permissions: [Permission::AddOpenItem].into_iter().collect(),
+                pin_phc: Some(hash_of("1234")),
+            },
+        );
+        let base = EdgeSession::bootstrap().with_staff(roster);
+
+        // No `permissions` node: the existing roster survives.
+        let no_node = session_from_config(&base, &serde_json::json!({ "other": true }));
+        assert_eq!(no_node.staff.len(), 1);
+        assert!(no_node.authorise_staff("C09", "1234").is_some());
+
+        // A malformed node is ignored, not fatal, and does not blank the roster.
+        let malformed = session_from_config(&base, &serde_json::json!({ "permissions": "nope" }));
+        assert_eq!(
+            malformed.staff.len(),
+            1,
+            "a malformed node leaves the roster unchanged"
         );
     }
 }

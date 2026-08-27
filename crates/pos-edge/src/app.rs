@@ -16,7 +16,7 @@
 //! ([ADR-0013](../../../docs/adr/0013-async-strategy.md)). It wires the **table floor cycle** (seat,
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -88,6 +88,69 @@ impl StoreIdentity {
     }
 }
 
+/// One staff member as the store authorises them ([ADR-0070](../../../docs/adr/0070-people-and-access.md)):
+/// the permission set their assigned role grants, and the Argon2id PIN hash the edge verifies against
+/// offline ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)). Both arrive in the store's
+/// published `permissions` config node — the store never invents them.
+#[derive(Debug, Clone)]
+pub struct StaffAuth {
+    /// What the person's role grants (§9).
+    pub permissions: PermissionSet,
+    /// The Argon2id PHC hash of their PIN, or `None` if none is set (they cannot sign in until one is).
+    pub pin_phc: Option<String>,
+}
+
+/// The store's staff, keyed by the badge `code` a person types, as published from the cloud
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). This is the roster the edge authorises
+/// against — replacing any local, out-of-band staff list with the set the console published.
+#[derive(Debug, Clone, Default)]
+pub struct StaffRoster {
+    by_code: BTreeMap<String, StaffAuth>,
+}
+
+impl StaffRoster {
+    /// An empty roster — the bootstrap default until the cloud publishes the `permissions` node.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds (or replaces) a staff member under their `code`.
+    pub fn insert(&mut self, code: impl Into<String>, auth: StaffAuth) {
+        self.by_code.insert(code.into(), auth);
+    }
+
+    /// The staff member under `code`, if any.
+    #[must_use]
+    pub fn get(&self, code: &str) -> Option<&StaffAuth> {
+        self.by_code.get(code)
+    }
+
+    /// How many staff the roster holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_code.len()
+    }
+
+    /// Whether the roster is empty (no staff published yet).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_code.is_empty()
+    }
+
+    /// Authorises a sign-in: verifies `pin` against the published Argon2id hash for `code`, returning
+    /// the granted [`PermissionSet`] on success. `None` for an unknown code, a member with no PIN set,
+    /// or a wrong PIN — so a bad sign-in never yields any permissions. The rate-limit that turns
+    /// repeated failures into a lockout is [`crate::auth::Lockout`] (ADR-0030); this is the pure
+    /// verify against the published set.
+    #[must_use]
+    pub fn authorise(&self, code: &str, pin: &str) -> Option<PermissionSet> {
+        let auth = self.by_code.get(code)?;
+        let phc = auth.pin_phc.as_deref()?;
+        crate::auth::verify_pin(phc, pin).then_some(auth.permissions)
+    }
+}
+
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
 /// is config-driven; the values arrive from the cloud config tree in P7.
@@ -120,6 +183,11 @@ pub struct EdgeSession {
     /// The channel a walk-in bill's order came in on, which selects the tax rate. `DineIn` for a
     /// full-service store; a marketplace order overrides it per bill (P11).
     pub sales_channel: SalesChannel,
+    /// The store's staff and what each may do, as published from the cloud on the `permissions` config
+    /// node ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). Empty in the bootstrap: a store
+    /// authorises no one from a roster until the console publishes its people, the same
+    /// safe-by-default shape as the menu.
+    pub staff: StaffRoster,
 }
 
 impl EdgeSession {
@@ -155,7 +223,16 @@ impl EdgeSession {
             ),
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
+            staff: StaffRoster::new(),
         }
+    }
+
+    /// Authorises a staff sign-in against the published roster (ADR-0070): a correct `code` + `pin`
+    /// yields that person's granted [`PermissionSet`]; anything else yields `None`. This is the store
+    /// applying the cloud's published set rather than a local roster.
+    #[must_use]
+    pub fn authorise_staff(&self, code: &str, pin: &str) -> Option<PermissionSet> {
+        self.staff.authorise(code, pin)
     }
 
     /// Installs a menu catalog, for a test or the on-fakes example. The real store's menu arrives
@@ -170,6 +247,14 @@ impl EdgeSession {
     #[must_use]
     pub fn with_tax_rates(mut self, tax_rates: TaxRateTable) -> Self {
         self.tax_rates = tax_rates;
+        self
+    }
+
+    /// Installs a staff roster, for a test or the on-fakes example. The real store's roster arrives
+    /// from the cloud's `permissions` config node (ADR-0070); this builder seeds one without a cloud.
+    #[must_use]
+    pub fn with_staff(mut self, staff: StaffRoster) -> Self {
+        self.staff = staff;
         self
     }
 }

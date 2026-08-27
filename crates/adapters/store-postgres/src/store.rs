@@ -79,6 +79,12 @@ const MIGRATION_0021: &str = include_str!("../migrations/0021_task_health.sql");
 /// The console audit trail — append-only record of who changed what ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
 const MIGRATION_0022: &str = include_str!("../migrations/0022_audit_log.sql");
 
+/// People & access, foundation — the `employees` table ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+const MIGRATION_0023: &str = include_str!("../migrations/0023_employees.sql");
+
+/// People & access — `role_templates` + `employee_store_assignments` ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+const MIGRATION_0024: &str = include_str!("../migrations/0024_role_templates_and_assignments.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -221,6 +227,14 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0022)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0023)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0024)
+            .await
             .map_err(unavailable)
     }
 
@@ -358,6 +372,15 @@ impl PostgresStore {
     #[must_use]
     pub fn audit(&self) -> crate::audit::PostgresAudit {
         crate::audit::PostgresAudit::new(self.pool.clone())
+    }
+
+    /// The employee store over this pool (Track M1, [ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `EmployeeStore` seam over it.
+    /// Tenant-scoped, RLS-isolated; the PIN is held only as its Argon2id hash and never read out.
+    #[must_use]
+    pub fn people(&self) -> crate::people::PostgresPeople {
+        crate::people::PostgresPeople::new(self.pool.clone())
     }
 
     /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
