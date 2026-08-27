@@ -12,6 +12,7 @@
 
 pub mod assets;
 pub mod bills;
+pub mod floor;
 pub mod health;
 pub mod kds;
 pub mod lines;
@@ -68,6 +69,9 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     Router::new()
+        // The store's published floor plan + kitchen stations, for the UI to render real tables and
+        // route fires (ADR-0072).
+        .route("/api/floor", get(floor::plan::<S>))
         // The floor: seat, clean, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))

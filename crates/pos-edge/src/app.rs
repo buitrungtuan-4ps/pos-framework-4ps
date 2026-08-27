@@ -41,6 +41,7 @@ use pos_proto::events::{
     CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, KitchenTicketBumped,
     SalesOrderLineAdded, SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
 };
+use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
     StationId, StoreId, TableId, TaxClassId, TenantId,
@@ -188,6 +189,16 @@ pub struct EdgeSession {
     /// authorises no one from a roster until the console publishes its people, the same
     /// safe-by-default shape as the menu.
     pub staff: StaffRoster,
+    /// The store's floor plan — its areas and tables, as published on the `floor` config node
+    /// ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the bootstrap: the store
+    /// carries no roster of tables until the console publishes one (the in-store UI shows its own
+    /// fallback until then).
+    pub floor: FloorPlan,
+    /// The store's kitchen plan — its stations and item→station routing, as published on the
+    /// `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the
+    /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
+    /// own fallback.
+    pub stations: StationPlan,
 }
 
 impl EdgeSession {
@@ -224,6 +235,8 @@ impl EdgeSession {
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
+            floor: FloorPlan::new(),
+            stations: StationPlan::new(),
         }
     }
 
@@ -265,6 +278,35 @@ impl EdgeSession {
     pub fn with_staff(mut self, staff: StaffRoster) -> Self {
         self.staff = staff;
         self
+    }
+
+    /// Installs a floor plan, for a test or the on-fakes example. The real store's floor arrives from
+    /// the cloud's `floor` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    #[must_use]
+    pub fn with_floor(mut self, floor: FloorPlan) -> Self {
+        self.floor = floor;
+        self
+    }
+
+    /// Installs a station plan, for a test or the on-fakes example. The real store's kitchen arrives
+    /// from the cloud's `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    #[must_use]
+    pub fn with_stations(mut self, stations: StationPlan) -> Self {
+        self.stations = stations;
+        self
+    }
+
+    /// The station a fired line routes to under the published plan (ADR-0072), or `None` when the
+    /// store has no station plan or no rule matches and it names no default. A thin delegate to the
+    /// pure `pos_core::floor::route_station`, so the edge derives the station from the published
+    /// routing instead of trusting the caller.
+    #[must_use]
+    pub fn resolve_station(
+        &self,
+        menu_item_id: MenuItemId,
+        course_id: Option<CourseId>,
+    ) -> Option<StationId> {
+        pos_core::floor::route_station(&self.stations, menu_item_id, course_id)
     }
 }
 

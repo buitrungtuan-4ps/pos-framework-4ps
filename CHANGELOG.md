@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The edge applies the `floor` & `stations` nodes** (roadmap v2, Track M2, slice 5;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `EdgeSession` gains `floor`/`stations` fields (with
+  `with_floor`/`with_stations` builders), and `session_from_config` rebuilds them from the pulled
+  document's `floor`/`stations` nodes with the same **never-blank** gate the `menu`/`permissions`
+  branches keep — an absent or malformed node leaves the plan unchanged. `EdgeSession::resolve_station`
+  derives a fired line's station from the published routing (a thin delegate to
+  `pos_core::floor::route_station`), so the store can route by rule instead of trusting the caller. A
+  new `GET /api/floor` serves the live floor plan + kitchen stations to the in-store UI (which renders
+  its real tables and routes fires in the next slice). **Upgrade note:** edge-only; the store now
+  applies a published floor plan and station routing where before it knew neither.
 - **Publish the `floor` & `stations` config nodes** (roadmap v2, Track M2, slice 4;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `POST /admin/floor/publish` compiles a store's
   areas/tables into a `FloorPlan` and its stations/routing into a `StationPlan` (only active records;
