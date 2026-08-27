@@ -112,6 +112,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.clone(),
         store.rollups(),
         store.clone(),
+        SystemClock,
+        store.task_health(),
         projector_interval,
         shutdown_signal(),
     ));
@@ -132,6 +134,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.subjects(),
             RetentionPolicy::from_days(days),
             SystemClock,
+            store.task_health(),
             interval,
             shutdown_signal(),
         ))
@@ -159,6 +162,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.webhooks(),
         TlsWebhookSender::new(webhook_timeout),
         SystemClock,
+        store.task_health(),
         webhook_interval,
         shutdown_signal(),
     ));
@@ -199,6 +203,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
+
+    // The background loops this deployment turned on, for the health endpoint to check against: the
+    // projector and webhook dispatcher always run; the retention cron only when a period is set. A loop
+    // in this set that has never ticked reads as unhealthy rather than being silently absent.
+    let mut expected_tasks = vec![
+        pos_cloud::health::ROLLUP_PROJECTOR.to_owned(),
+        pos_cloud::health::WEBHOOK_DISPATCHER.to_owned(),
+    ];
+    if config.retention_days.is_some() {
+        expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
+    }
+
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
@@ -227,6 +243,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.registry(),
             store.admin(),
             SystemClock,
+        ))
+        // Fleet liveness (ADR-0068): the read-only console view of whether each store is up and in
+        // sync — a join across the registry, `store_liveness` (captured on config pulls/heartbeats),
+        // the config tree, and the order-relay queue, with online/offline derived at read.
+        .merge(http::fleet_router(
+            store.fleet(),
+            store.admin(),
+            SystemClock,
+        ))
+        // Background-task health (ADR-0068 slice 4): the read-only console view of whether the
+        // off-request loops are alive and keeping up. `expected_tasks` names the loops this
+        // deployment actually turned on, so a loop dead since boot reads as unhealthy, not missing.
+        .merge(http::health_router(
+            store.task_health(),
+            store.admin(),
+            SystemClock,
+            expected_tasks,
         ))
         // Catalog authoring (ADR-0066): the write surface for the menu source of truth — items,
         // menus with inheritance, and per-channel placements — from which a MenuBook is compiled.

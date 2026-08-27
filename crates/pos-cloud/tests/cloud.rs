@@ -44,13 +44,16 @@ use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
+use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
 use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
 use pos_cloud::registry::{
-    BrandRecord, DeviceRecord, RegistryStore, RegistryStoreError, StoreRecord, TenantRecord,
+    BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError, StoreRecord,
+    TenantRecord,
 };
 use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
@@ -69,7 +72,7 @@ use pos_ports::PortError;
 use pos_proto::BusinessDate;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
+use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -679,10 +682,27 @@ fn admin_totp_code() -> String {
     )
 }
 
-/// The config-tree store, keyed by `(tenant, store)` exactly as the real table.
+/// A recorded liveness contact: the version the store reported holding (or `None`) and the contact
+/// instant in Unix ms — mirroring the `store_liveness` row's `(config_version_held, last_seen_at)`.
+type RecordedSeen = (Option<ConfigVersionId>, i64);
+
+/// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
+/// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
 struct FakeConfigTrees {
     rows: Arc<Mutex<HashMap<(TenantId, StoreId), ConfigTreeState>>>,
+    seen: Arc<Mutex<HashMap<(TenantId, StoreId), RecordedSeen>>>,
+}
+
+impl FakeConfigTrees {
+    /// The `(held_version, seen_at_ms)` last recorded for a store, or `None` if it never checked in.
+    fn recorded_seen(&self, tenant: TenantId, store: StoreId) -> Option<RecordedSeen> {
+        self.seen
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .copied()
+    }
 }
 
 impl ConfigTreeStore for FakeConfigTrees {
@@ -709,6 +729,36 @@ impl ConfigTreeStore for FakeConfigTrees {
             .lock()
             .expect("lock")
             .insert((tenant, store), state.clone());
+        Ok(())
+    }
+
+    async fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        self.seen.lock().expect("lock").insert(
+            (tenant, store),
+            (held_version, seen_at.as_milliseconds_since_epoch()),
+        );
+        Ok(())
+    }
+
+    async fn record_store_heartbeat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
+        self.seen
+            .lock()
+            .expect("lock")
+            .entry((tenant, store))
+            .and_modify(|entry| entry.1 = seen_at.as_milliseconds_since_epoch())
+            .or_insert((None, seen_at.as_milliseconds_since_epoch()));
         Ok(())
     }
 }
@@ -1915,6 +1965,140 @@ async fn config_sync_serves_an_update_then_reports_up_to_date() {
 }
 
 #[tokio::test]
+async fn config_sync_records_store_liveness() {
+    // The config pull is the fleet-liveness signal (ADR-0068): each pull records the store's contact
+    // and the version it reported holding, without altering the sync response.
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
+            &doc,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    // Nothing is recorded until the store actually pulls.
+    assert!(
+        config_trees.recorded_seen(tenant(), store_id()).is_none(),
+        "no liveness before any pull"
+    );
+
+    // A pull holding nothing records the contact at the clock's instant, with a null held version.
+    let fresh = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(fresh.status(), StatusCode::OK);
+    let (held, seen_at) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("the pull recorded liveness");
+    assert_eq!(
+        held, None,
+        "a store holding nothing records a null held version"
+    );
+    assert_eq!(
+        seen_at, NOW_MS,
+        "the contact instant is the server clock's now"
+    );
+
+    // A pull holding the current version records exactly that version.
+    let current = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config?held_version={version}"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(current.status(), StatusCode::OK);
+    let (held, _) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("liveness recorded");
+    assert_eq!(
+        held.map(|version| version.to_string()),
+        Some(version),
+        "the held version the edge reported is recorded verbatim"
+    );
+}
+
+#[tokio::test]
+async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
+    // A lightweight heartbeat (ADR-0068 slice 2) records the store's contact without a config pull,
+    // gated by the same read_config scope, and preserves any version a prior pull recorded.
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/heartbeat");
+
+    // No bearer → 401; a key scoped elsewhere → 403 (closed, not merely empty).
+    let anon = router
+        .clone()
+        .oneshot(post_json(&uri, &serde_json::json!({})))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let rollups_only = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+    let wrong_scope = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({}),
+            &rollups_only,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
+
+    // A read_config key records the contact and answers 204.
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let beat = router
+        .oneshot(post_json_bearer(&uri, &serde_json::json!({}), &token))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    let (held, seen_at) = config_trees
+        .recorded_seen(tenant(), store_id())
+        .expect("the heartbeat recorded liveness");
+    assert_eq!(held, None, "a heartbeat carries no held version");
+    assert_eq!(
+        seen_at, NOW_MS,
+        "the contact instant is the server clock's now"
+    );
+}
+
+#[tokio::test]
 async fn config_sync_is_closed_without_the_read_config_scope() {
     let keys = FakeKeys::default();
     let (router, config_token, store_ulid, _version) = published_config(&keys).await;
@@ -3014,6 +3198,25 @@ impl ConfigTreeStore for EmptyConfigTrees {
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }
+
+    async fn record_store_seen(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+        _held_version: Option<ConfigVersionId>,
+        _seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        Ok(())
+    }
+
+    async fn record_store_heartbeat(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+        _seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        Ok(())
+    }
 }
 
 /// One queued order the fake holds.
@@ -3409,6 +3612,419 @@ fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
         FakeWebhooks::default(),
     );
     http::router(app).merge(http::registry_router(registry, admin, clock()))
+}
+
+// --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
+
+/// The fleet read model as an in-memory list of `(tenant, row)` — the binary joins four real tables,
+/// but the handler and its online/offline derivation are the same code here.
+#[derive(Clone, Default)]
+struct FakeFleet {
+    rows: Arc<Mutex<Vec<(TenantId, FleetRow)>>>,
+}
+
+impl FakeFleet {
+    /// Seeds one store's fleet row under a tenant.
+    fn with_row(self, tenant: TenantId, row: FleetRow) -> Self {
+        self.rows.lock().expect("lock").push((tenant, row));
+        self
+    }
+}
+
+impl FleetStore for FakeFleet {
+    async fn list_fleet(&self, tenant: TenantId) -> Result<Vec<FleetRow>, FleetStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(row_tenant, _)| *row_tenant == tenant)
+            .map(|(_, row)| row.clone())
+            .collect())
+    }
+
+    async fn store_detail(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<FleetRow>, FleetStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(row_tenant, row)| *row_tenant == tenant && row.store_id == store)
+            .map(|(_, row)| row.clone()))
+    }
+}
+
+/// A timestamp `offset_ms` before the fixed test clock's instant.
+fn seen_ago(offset_ms: i64) -> Timestamp {
+    Timestamp::from_milliseconds_since_epoch(NOW_MS - offset_ms).expect("a valid instant")
+}
+
+/// The main router (for `/admin/login`) merged with the fleet sub-router, one shared admin store.
+fn fleet_app(admin: FakeAdmin, fleet: FakeFleet) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::fleet_router(fleet, admin, clock()))
+}
+
+#[tokio::test]
+async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
+    let online_store = StoreId::new(Ulid::from_u128(0x00F1_EE7A));
+    let offline_store = StoreId::new(Ulid::from_u128(0x00F1_EE7B));
+    // One store seen a second ago, holding the published version — online and in sync. One seen ten
+    // minutes ago, holding an old version, with a relay backlog — offline and drifted.
+    let fleet = FakeFleet::default()
+        .with_row(
+            tenant(),
+            FleetRow {
+                store_id: online_store,
+                name: "Bến Thành".to_owned(),
+                status: EntityStatus::Active,
+                last_seen_at: Some(seen_ago(1_000)),
+                last_config_pull_at: Some(seen_ago(1_000)),
+                config_version_held: Some("v-current".to_owned()),
+                config_version_published: Some("v-current".to_owned()),
+                relay_backlog: 0,
+                relay_oldest_pending_at: None,
+            },
+        )
+        .with_row(
+            tenant(),
+            FleetRow {
+                store_id: offline_store,
+                name: "Xuân Thủy".to_owned(),
+                status: EntityStatus::Active,
+                last_seen_at: Some(seen_ago(600_000)),
+                last_config_pull_at: Some(seen_ago(600_000)),
+                config_version_held: Some("v-old".to_owned()),
+                config_version_published: Some("v-current".to_owned()),
+                relay_backlog: 3,
+                relay_oldest_pending_at: Some(seen_ago(120_000)),
+            },
+        );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json_body(listed).await;
+    let rows = body.as_array().expect("an array of stores");
+    assert_eq!(rows.len(), 2, "both of the tenant's stores are listed");
+
+    let online = &rows[0];
+    assert_eq!(online["store_id"], online_store.as_ulid().to_string());
+    assert_eq!(online["name"], "Bến Thành");
+    assert_eq!(online["online"], true, "seen a second ago reads as online");
+    assert_eq!(
+        online["config_current"], true,
+        "held equals published, so it is current"
+    );
+    assert_eq!(online["relay_backlog"], 0);
+
+    let offline = &rows[1];
+    assert_eq!(
+        offline["online"], false,
+        "seen ten minutes ago is past the freshness window"
+    );
+    assert_eq!(
+        offline["config_current"], false,
+        "holding an old version is a drift"
+    );
+    assert_eq!(offline["config_version_held"], "v-old");
+    assert_eq!(offline["config_version_published"], "v-current");
+    assert_eq!(offline["relay_backlog"], 3);
+    assert_eq!(offline["relay_oldest_pending_at_ms"], NOW_MS - 120_000);
+}
+
+#[tokio::test]
+async fn fleet_never_seen_store_is_offline_and_not_current() {
+    let store = StoreId::new(Ulid::from_u128(0x00F1_EE7C));
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: store,
+            name: "Phú Mỹ Hưng".to_owned(),
+            status: EntityStatus::Active,
+            last_seen_at: None,
+            last_config_pull_at: None,
+            config_version_held: None,
+            config_version_published: Some("v-current".to_owned()),
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+        },
+    );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet list");
+    let row = &json_body(listed).await[0];
+    assert_eq!(
+        row["online"], false,
+        "a store that never checked in is offline"
+    );
+    assert_eq!(
+        row["last_seen_at_ms"],
+        serde_json::Value::Null,
+        "and carries no last-seen instant"
+    );
+    assert_eq!(
+        row["config_current"], false,
+        "a store holding nothing is not current, even against a published version"
+    );
+}
+
+#[tokio::test]
+async fn fleet_reads_one_store_and_404s_an_unknown_one() {
+    let store = StoreId::new(Ulid::from_u128(0x00F1_EE7D));
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: store,
+            name: "Thảo Điền".to_owned(),
+            status: EntityStatus::Active,
+            last_seen_at: Some(seen_ago(1_000)),
+            last_config_pull_at: Some(seen_ago(1_000)),
+            config_version_held: Some("v-current".to_owned()),
+            config_version_published: Some("v-current".to_owned()),
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+        },
+    );
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store.as_ulid().to_string();
+
+    let found = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{store_ulid}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the store detail");
+    assert_eq!(found.status(), StatusCode::OK);
+    assert_eq!(json_body(found).await["name"], "Thảo Điền");
+
+    let unknown = StoreId::new(Ulid::from_u128(0xDEAD)).as_ulid().to_string();
+    let missing = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{unknown}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the store detail");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn fleet_needs_a_session() {
+    let router = fleet_app(provisioned_admin(), FakeFleet::default());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let denied = router
+        .oneshot(get(&format!("/admin/fleet?tenant_id={tenant_ulid}"), None))
+        .await
+        .expect("route the fleet list");
+    assert_eq!(
+        denied.status(),
+        StatusCode::UNAUTHORIZED,
+        "the fleet view is behind the admin session guard"
+    );
+}
+
+// --- Background-task health (ADR-0068 slice 4) -------------------------------------------------
+
+/// The task-health store as an in-memory map of `task -> (last_tick_ms, detail)` — the binary upserts
+/// a real table, but the handler and its staleness derivation are the same code here.
+#[derive(Clone, Default)]
+struct FakeTaskHealth {
+    rows: Arc<Mutex<HashMap<String, (i64, serde_json::Value)>>>,
+}
+
+impl FakeTaskHealth {
+    /// Seeds a loop's most recent tick.
+    fn with_tick(self, task: &str, at_ms: i64, detail: serde_json::Value) -> Self {
+        self.rows
+            .lock()
+            .expect("lock")
+            .insert(task.to_owned(), (at_ms, detail));
+        self
+    }
+}
+
+impl TaskHealthStore for FakeTaskHealth {
+    async fn record_tick(
+        &self,
+        task: &str,
+        at: Timestamp,
+        detail: &serde_json::Value,
+    ) -> Result<(), TaskHealthError> {
+        self.rows.lock().expect("lock").insert(
+            task.to_owned(),
+            (at.as_milliseconds_since_epoch(), detail.clone()),
+        );
+        Ok(())
+    }
+
+    async fn list_health(&self) -> Result<Vec<TaskHealth>, TaskHealthError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(task, (ms, detail))| TaskHealth {
+                task: task.clone(),
+                last_tick_at: Timestamp::from_milliseconds_since_epoch(*ms).expect("valid"),
+                detail: detail.clone(),
+            })
+            .collect())
+    }
+}
+
+/// The main router (for `/admin/login`) merged with the health sub-router, one shared admin store.
+fn health_app(admin: FakeAdmin, health: FakeTaskHealth, expected: Vec<String>) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::health_router(health, admin, clock(), expected))
+}
+
+#[tokio::test]
+async fn task_health_reports_fresh_stale_and_never_ticked() {
+    // The projector ticked 10s ago on a 30s interval (fresh); the dispatcher an hour ago (stale);
+    // retention is expected but has never ticked (dead since boot).
+    let store = FakeTaskHealth::default()
+        .with_tick(
+            health::ROLLUP_PROJECTOR,
+            NOW_MS - 10_000,
+            serde_json::json!({ "ok": true, "interval_secs": 30, "folded": 4 }),
+        )
+        .with_tick(
+            health::WEBHOOK_DISPATCHER,
+            NOW_MS - 3_600_000,
+            serde_json::json!({ "ok": true, "interval_secs": 30 }),
+        );
+    let expected = vec![
+        health::ROLLUP_PROJECTOR.to_owned(),
+        health::WEBHOOK_DISPATCHER.to_owned(),
+        health::RETENTION.to_owned(),
+    ];
+    let router = health_app(provisioned_admin(), store, expected);
+    let cookie = admin_cookie(&router).await;
+
+    let response = router
+        .oneshot(get_with_cookie("/admin/health/tasks", &cookie))
+        .await
+        .expect("route the health read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(
+        body["healthy"], false,
+        "one expected loop is stale and one never ticked"
+    );
+    let tasks = body["tasks"].as_array().expect("a tasks array");
+    assert_eq!(tasks.len(), 3);
+
+    let projector = tasks
+        .iter()
+        .find(|task| task["task"] == health::ROLLUP_PROJECTOR)
+        .expect("the projector is listed");
+    assert_eq!(
+        projector["healthy"], true,
+        "a tick 10s ago within a 30s interval is fresh"
+    );
+    assert_eq!(projector["seconds_since"], 10);
+    assert_eq!(
+        projector["detail"]["folded"], 4,
+        "the tick's detail is echoed"
+    );
+
+    let webhook = tasks
+        .iter()
+        .find(|task| task["task"] == health::WEBHOOK_DISPATCHER)
+        .expect("the dispatcher is listed");
+    assert_eq!(
+        webhook["healthy"], false,
+        "an hour-old tick is well past 30s times the slack"
+    );
+
+    let retention = tasks
+        .iter()
+        .find(|task| task["task"] == health::RETENTION)
+        .expect("retention is listed even though it never ticked");
+    assert_eq!(retention["expected"], true);
+    assert_eq!(retention["healthy"], false, "never-ticked is never healthy");
+    assert_eq!(retention["last_tick_at_ms"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn task_health_flags_a_fresh_but_failing_loop() {
+    // A loop that ticked recently but whose last tick's work failed is unhealthy — alive is not enough.
+    let store = FakeTaskHealth::default().with_tick(
+        health::ROLLUP_PROJECTOR,
+        NOW_MS - 5_000,
+        serde_json::json!({ "ok": false, "interval_secs": 30 }),
+    );
+    let router = health_app(
+        provisioned_admin(),
+        store,
+        vec![health::ROLLUP_PROJECTOR.to_owned()],
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/health/tasks", &cookie))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(
+        body["healthy"], false,
+        "a recent tick whose work failed is still unhealthy"
+    );
+    assert_eq!(body["tasks"][0]["healthy"], false);
+}
+
+#[tokio::test]
+async fn task_health_needs_a_session() {
+    let router = health_app(provisioned_admin(), FakeTaskHealth::default(), Vec::new());
+    let denied = router
+        .oneshot(get("/admin/health/tasks", None))
+        .await
+        .expect("route the health read");
+    assert_eq!(
+        denied.status(),
+        StatusCode::UNAUTHORIZED,
+        "the health view is behind the admin session guard"
+    );
 }
 
 #[tokio::test]

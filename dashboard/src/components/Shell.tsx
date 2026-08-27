@@ -31,7 +31,13 @@ const ADMIN_MANAGERS: readonly AdminRole[] = ["owner", "admin"];
 // glance whether a screen is ready to open (its tenant, or tenant *and* store, is set) or is waiting
 // on a choice in the top bar. The console-identity screens carry no scope and are always reachable.
 const NAV_GROUPS: readonly NavGroup[] = [
-  { key: "nav.group.overview", items: [{ href: "/", key: "nav.reports", scope: "store" }] },
+  {
+    key: "nav.group.overview",
+    items: [
+      { href: "/", key: "nav.reports", scope: "store" },
+      { href: "/fleet", key: "nav.fleet", scope: "tenant" },
+    ],
+  },
   {
     key: "nav.group.masterData",
     items: [

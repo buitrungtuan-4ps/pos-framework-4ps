@@ -11,6 +11,27 @@ export function formatCount(value: number): string {
 }
 
 /**
+ * A past instant as locale-aware relative text (e.g. `5 minutes ago`, `2 hours ago`). `seconds` is how
+ * long ago the instant was (a non-negative age). Uses `Intl.RelativeTimeFormat`, so the phrasing is
+ * localized by the platform without a catalogue entry per unit; the fleet view's "last seen" and the
+ * health view's "last tick" both read through it.
+ */
+export function formatRelativeAge(seconds: number): string {
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
+  const age = Math.max(0, Math.round(seconds));
+  if (age < 60) {
+    return rtf.format(-age, "second");
+  }
+  if (age < 3600) {
+    return rtf.format(-Math.round(age / 60), "minute");
+  }
+  if (age < 86_400) {
+    return rtf.format(-Math.round(age / 3600), "hour");
+  }
+  return rtf.format(-Math.round(age / 86_400), "day");
+}
+
+/**
  * An integer `Money` value, grouped for the active locale with its currency code appended (e.g.
  * `150,000 VND`). `amount_minor` is the currency's smallest unit; for VND (v1) that is a whole đồng,
  * so the grouped integer is the price the operator reads. Currencies with a fractional minor unit are

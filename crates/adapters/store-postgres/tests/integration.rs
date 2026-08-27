@@ -134,9 +134,9 @@ impl EventStoreHarness for StoreHarness {
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 admin_invites, admin_recovery_codes, admin_users, config_trees, subjects, \
-                 webhook_endpoints, device_proposals, activation_codes, \
-                 device_credentials RESTART IDENTITY;",
+                 admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
+                 task_health, stores, order_queue, subjects, webhook_endpoints, device_proposals, \
+                 activation_codes, device_credentials RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -178,8 +178,9 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, subjects, webhook_endpoints, device_proposals, activation_codes, \
-             device_credentials RESTART IDENTITY",
+             config_trees, store_liveness, task_health, stores, order_queue, subjects, \
+             webhook_endpoints, device_proposals, activation_codes, device_credentials \
+             RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1077,6 +1078,382 @@ mod config_tree_store {
                     .expect("load")
                     .is_none(),
                 "the load is scoped to the tenant"
+            );
+        });
+    }
+
+    /// A config pull records the store's liveness (contact instant, held version, pull instant), and a
+    /// second pull upserts that row in place rather than duplicating ([ADR-0068]).
+    #[test]
+    fn records_store_liveness_on_a_pull() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE));
+            let store_id = StoreId::new(Ulid::from_u128(0x57));
+            let held = "0000000000CONFIGVERSION0AA";
+
+            // First pull: holds a version, seen at t=1000ms.
+            trees
+                .record_seen(tenant, store_id, Some(held), 1000)
+                .await
+                .expect("record seen");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("the pull recorded a liveness row");
+            assert_eq!(
+                row.get::<_, i64>(0),
+                1000,
+                "last_seen_at is the contact instant"
+            );
+            assert_eq!(
+                row.get::<_, Option<String>>(1).as_deref(),
+                Some(held),
+                "the held version is recorded verbatim"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(1000),
+                "a config pull stamps last_config_pull_at too"
+            );
+
+            // Second pull at t=2000ms holding nothing: upserts in place — one row, advanced instant,
+            // held version cleared.
+            trees
+                .record_seen(tenant, store_id, None, 2000)
+                .await
+                .expect("record seen again");
+            let count: i64 = admin
+                .query_one(
+                    "SELECT count(*) FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("count")
+                .get(0);
+            assert_eq!(count, 1, "the second pull upserts rather than duplicating");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held FROM store_liveness \
+                     WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, i64>(0), 2000, "the instant advanced");
+            assert_eq!(
+                row.get::<_, Option<String>>(1),
+                None,
+                "holding nothing clears the recorded held version"
+            );
+        });
+    }
+
+    /// A heartbeat advances only `last_seen_at`, preserving the held version and last-config-pull
+    /// instant a prior pull recorded; a heartbeat before any pull creates the row with those NULL
+    /// ([ADR-0068] slice 2).
+    #[test]
+    fn heartbeat_advances_last_seen_only() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE2));
+            let store_id = StoreId::new(Ulid::from_u128(0x58));
+
+            // A config pull first, then a later heartbeat: the heartbeat bumps last_seen and leaves the
+            // held version and the config-pull instant as the pull recorded them.
+            trees
+                .record_seen(tenant, store_id, Some("0000000000HELDVERSION00AAA"), 1000)
+                .await
+                .expect("record seen");
+            trees
+                .record_heartbeat(tenant, store_id, 5000)
+                .await
+                .expect("record heartbeat");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(
+                row.get::<_, i64>(0),
+                5000,
+                "the heartbeat advanced last_seen"
+            );
+            assert_eq!(
+                row.get::<_, Option<String>>(1).as_deref(),
+                Some("0000000000HELDVERSION00AAA"),
+                "the held version a prior pull recorded is preserved"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(1000),
+                "the last-config-pull instant is preserved"
+            );
+
+            // A heartbeat for a store that has never pulled creates the row with those two NULL.
+            let fresh = StoreId::new(Ulid::from_u128(0x59));
+            trees
+                .record_heartbeat(tenant, fresh, 2000)
+                .await
+                .expect("record heartbeat for a fresh store");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, config_version_held, last_config_pull_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &fresh.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, i64>(0), 2000);
+            assert_eq!(
+                row.get::<_, Option<String>>(1),
+                None,
+                "a heartbeat-only store holds no recorded version"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                None,
+                "a heartbeat-only store has no config-pull instant"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The fleet read model: identity + liveness + config drift + relay backlog (ADR-0068 slice 3).
+// ---------------------------------------------------------------------------
+
+mod fleet_store {
+    use super::{block_on, prepared};
+    use pos_proto::{StoreId, TenantId, Ulid};
+
+    /// The fleet read joins registry identity, liveness, config drift, and relay backlog into one row
+    /// per store, scoped to its tenant. A configured+seen store shows all four; a bare registered
+    /// store shows identity only; a different tenant sees nothing ([ADR-0068] slice 3).
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end scenario: it seeds all four joined tables (registry, config tree, \
+                  liveness, order queue) and asserts every field of the joined row, plus fetch_one \
+                  and tenant-scope — splitting it would duplicate the multi-table setup"
+    )]
+    fn joins_identity_liveness_drift_and_backlog() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+
+            let tenant = TenantId::new(Ulid::from_u128(0x000F_1EE7));
+            let seen = StoreId::new(Ulid::from_u128(0x570A)); // configured + seen + a backlog
+            let bare = StoreId::new(Ulid::from_u128(0x570B)); // registered, never seen, unconfigured
+
+            registry
+                .insert_store(&bare.to_string(), &tenant.to_string(), None, "Bare")
+                .await
+                .expect("insert the bare store");
+            registry
+                .insert_store(&seen.to_string(), &tenant.to_string(), None, "Seen")
+                .await
+                .expect("insert the seen store");
+
+            // The seen store holds v1 while the published history's last id is v2 — a drift the read
+            // surfaces by comparison, not storage.
+            let held = "0000000000CONFIGVERSIONV1AA";
+            let published = "0000000000CONFIGVERSIONV2AA";
+            let state = format!(
+                r#"{{"k":20,"layers":[{{}},{{}},{{}},{{}}],"history":[{{"id":"{held}","effective":{{}}}},{{"id":"{published}","effective":{{}}}}]}}"#
+            );
+            trees
+                .save_state(tenant, seen, &state)
+                .await
+                .expect("save the config tree");
+            trees
+                .record_seen(tenant, seen, Some(held), 1000)
+                .await
+                .expect("record the pull");
+
+            // Two orders queued for the seen store: one still pending (arrived at epoch 1_234_567s),
+            // one already reported. Only the pending one is backlog.
+            admin
+                .execute(
+                    "INSERT INTO order_queue \
+                     (tenant_id, store_id, sales_channel, external_reference, queued_id, payload, status, created_at) \
+                     VALUES ($1, $2, 'grab', 'ref-pending', 'q-pending', '{}'::jsonb, 'pending', to_timestamp(1234567.0)), \
+                            ($1, $2, 'grab', 'ref-reported', 'q-reported', '{}'::jsonb, 'reported', now())",
+                    &[&tenant.to_string(), &seen.to_string()],
+                )
+                .await
+                .expect("seed the order queue");
+
+            let rows = fleet
+                .list(&tenant.to_string())
+                .await
+                .expect("list the fleet");
+            assert_eq!(rows.len(), 2, "both of the tenant's stores are listed");
+
+            // Look rows up by id — created_at can tie for two inserts in the same millisecond, so the
+            // list order is not asserted here.
+            let seen_row = rows
+                .iter()
+                .find(|row| row.store_id == seen.to_string())
+                .expect("the seen store is present");
+            assert_eq!(seen_row.name, "Seen");
+            assert_eq!(seen_row.status, "active");
+            assert_eq!(
+                seen_row.last_seen_at_ms,
+                Some(1000),
+                "last-seen from the pull"
+            );
+            assert_eq!(seen_row.last_config_pull_at_ms, Some(1000));
+            assert_eq!(
+                seen_row.config_version_held.as_deref(),
+                Some(held),
+                "the held version the edge reported"
+            );
+            assert_eq!(
+                seen_row.config_version_published.as_deref(),
+                Some(published),
+                "the published version is the last history id"
+            );
+            assert_eq!(
+                seen_row.relay_backlog, 1,
+                "only the pending order counts toward the backlog"
+            );
+            assert_eq!(
+                seen_row.oldest_pending_at_ms,
+                Some(1_234_567_000),
+                "the oldest pending order's arrival, in Unix ms"
+            );
+
+            let bare_row = rows
+                .iter()
+                .find(|row| row.store_id == bare.to_string())
+                .expect("the bare store is present");
+            assert_eq!(bare_row.name, "Bare");
+            assert_eq!(
+                bare_row.last_seen_at_ms, None,
+                "a store that never checked in has no last-seen"
+            );
+            assert_eq!(bare_row.config_version_held, None);
+            assert_eq!(
+                bare_row.config_version_published, None,
+                "an unconfigured store has no published version"
+            );
+            assert_eq!(bare_row.relay_backlog, 0);
+            assert_eq!(bare_row.oldest_pending_at_ms, None);
+
+            // fetch_one returns exactly one store; an unknown store is None.
+            let one = fleet
+                .fetch_one(&tenant.to_string(), &seen.to_string())
+                .await
+                .expect("fetch one")
+                .expect("the seen store is present");
+            assert_eq!(one.name, "Seen");
+            assert_eq!(one.relay_backlog, 1);
+            let unknown = StoreId::new(Ulid::from_u128(0xDEAD));
+            assert!(
+                fleet
+                    .fetch_one(&tenant.to_string(), &unknown.to_string())
+                    .await
+                    .expect("fetch one")
+                    .is_none(),
+                "an unknown store reads as None"
+            );
+
+            // A different tenant with the same store ids sees nothing — the read is tenant-scoped.
+            let other = TenantId::new(Ulid::from_u128(0xB0B));
+            assert!(
+                fleet
+                    .list(&other.to_string())
+                    .await
+                    .expect("list the other tenant")
+                    .is_empty(),
+                "the fleet read is scoped to the tenant"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Background-task health: last-tick per loop, upserted (ADR-0068 slice 4).
+// ---------------------------------------------------------------------------
+
+mod task_health {
+    use super::{block_on, prepared};
+
+    /// A loop's tick records a row; a second tick upserts it in place (one row, latest instant and
+    /// detail win); and the detail JSON round-trips through the `jsonb` column.
+    #[test]
+    fn records_and_upserts_a_loop_tick() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let health = store.task_health();
+
+            // First tick: the projector at t=1000ms, folding four stores.
+            health
+                .record(
+                    "rollup_projector",
+                    1000,
+                    r#"{"ok":true,"interval_secs":30,"folded":4}"#,
+                )
+                .await
+                .expect("record the first tick");
+            let rows = health.fetch_all().await.expect("fetch all");
+            assert_eq!(rows.len(), 1, "one loop, one row");
+            let first = rows.first().expect("the recorded row");
+            assert_eq!(first.task, "rollup_projector");
+            assert_eq!(first.last_tick_at_ms, 1000);
+            let detail: serde_json::Value =
+                serde_json::from_str(&first.detail_json).expect("detail is valid json");
+            assert_eq!(
+                detail.get("folded").and_then(serde_json::Value::as_i64),
+                Some(4),
+                "the detail round-trips through jsonb"
+            );
+
+            // A second tick for the same loop upserts in place: still one row, advanced instant.
+            health
+                .record(
+                    "rollup_projector",
+                    5000,
+                    r#"{"ok":true,"interval_secs":30,"folded":0}"#,
+                )
+                .await
+                .expect("record the second tick");
+            let count: i64 = admin
+                .query_one("SELECT count(*) FROM task_health", &[])
+                .await
+                .expect("count")
+                .get(0);
+            assert_eq!(count, 1, "the second tick upserts rather than duplicating");
+            let rows = health.fetch_all().await.expect("fetch all");
+            assert_eq!(
+                rows.first().expect("the upserted row").last_tick_at_ms,
+                5000,
+                "the instant advanced"
+            );
+
+            // A second, distinct loop gets its own row; fetch_all orders most-recently-ticked first.
+            health
+                .record("retention", 9000, r#"{"ok":true,"interval_secs":86400}"#)
+                .await
+                .expect("record a second loop");
+            let rows = health.fetch_all().await.expect("fetch all");
+            assert_eq!(rows.len(), 2, "two distinct loops, two rows");
+            assert_eq!(
+                rows.first().expect("the newest row").task,
+                "retention",
+                "the most recently ticked loop sorts first"
             );
         });
     }

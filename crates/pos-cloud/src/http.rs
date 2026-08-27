@@ -109,6 +109,8 @@ use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
 };
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::openapi::ApiDoc;
 use crate::reconcile::ReconcileStore;
 use crate::registry::{
@@ -335,6 +337,10 @@ where
         .route(
             "/sync/stores/{store_id}/config",
             get(edge_config_sync::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/sync/stores/{store_id}/heartbeat",
+            post(edge_heartbeat::<S, R, K, C, A, T, W>),
         )
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
@@ -882,6 +888,359 @@ where
             admin,
             clock,
         })
+}
+
+// --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------
+
+/// A store is **online** if its most recent contact is within this window of now. Liveness is captured
+/// on every config pull ([ADR-0033](../../../docs/adr/0033-config-tree.md)) and on the edge's
+/// heartbeat ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2), so this threshold is a
+/// few of those cycles of slack: one dropped pull or heartbeat must not flap a healthy store to
+/// offline. Owned here, at the read, because online/offline is derived — never stored (ADR-0068).
+const FLEET_ONLINE_THRESHOLD_MS: i64 = 180_000;
+
+/// The collaborators the fleet routes need, stated independently of [`CloudApp`]: the fleet read
+/// model, plus the admin and clock every session guard (and the online-at-read derivation) uses. Like
+/// [`RegistryState`], it carries its own state and is merged into the main router.
+#[derive(Clone)]
+struct FleetState<F, A, C> {
+    fleet: F,
+    admin: A,
+    clock: C,
+}
+
+/// One store as the fleet console sees it: the seam's raw facts plus the two verdicts derived at read
+/// time — `online` (from `last_seen_at` against [`FLEET_ONLINE_THRESHOLD_MS`]) and `config_current`
+/// (the held version equals the published one). Timestamps are Unix milliseconds, the shape the
+/// dashboard reads; the store id is a string so the console shows a name and hides the ULID.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FleetStoreView {
+    store_id: String,
+    name: String,
+    status: EntityStatus,
+    online: bool,
+    last_seen_at_ms: Option<i64>,
+    last_config_pull_at_ms: Option<i64>,
+    config_version_held: Option<String>,
+    config_version_published: Option<String>,
+    config_current: bool,
+    relay_backlog: u64,
+    relay_oldest_pending_at_ms: Option<i64>,
+}
+
+impl FleetStoreView {
+    /// Builds the view from a seam row, deriving `online` against `now_ms` and `config_current` from
+    /// the held-vs-published comparison (a store that has published nothing, or holds nothing, is not
+    /// "current" — there is a gap to close either way).
+    fn from_row(row: FleetRow, now_ms: i64) -> Self {
+        let last_seen_at_ms = row
+            .last_seen_at
+            .map(pos_proto::Timestamp::as_milliseconds_since_epoch);
+        let online = last_seen_at_ms
+            .is_some_and(|seen| now_ms.saturating_sub(seen) <= FLEET_ONLINE_THRESHOLD_MS);
+        let config_current = match (&row.config_version_held, &row.config_version_published) {
+            (Some(held), Some(published)) => held == published,
+            _ => false,
+        };
+        Self {
+            store_id: row.store_id.to_string(),
+            name: row.name,
+            status: row.status,
+            online,
+            last_seen_at_ms,
+            last_config_pull_at_ms: row
+                .last_config_pull_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            config_version_held: row.config_version_held,
+            config_version_published: row.config_version_published,
+            config_current,
+            relay_backlog: row.relay_backlog,
+            relay_oldest_pending_at_ms: row
+                .relay_oldest_pending_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+        }
+    }
+}
+
+/// Builds the fleet-liveness sub-router ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 3).
+///
+/// Two reads, both behind [`ConsolePermission::Read`] (every console role, so Ops and Viewer see the
+/// fleet) and both naming their tenant the admin-is-global way — a `?tenant_id=` query
+/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): the whole fleet, and one
+/// store's detail. Online/offline is derived here at read time, so the answer is always current
+/// without any background sweep.
+pub fn fleet_router<F, A, C>(fleet: F, admin: A, clock: C) -> Router
+where
+    F: FleetStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/fleet", get(admin_list_fleet::<F, A, C>))
+        .route("/admin/fleet/{store_id}", get(admin_fleet_store::<F, A, C>))
+        .with_state(FleetState {
+            fleet,
+            admin,
+            clock,
+        })
+}
+
+/// Maps a fleet read failure to a retryable `503`, logging the detail rather than leaking it.
+fn fleet_error_response(error: &FleetStoreError) -> Response {
+    tracing::error!(%error, "a fleet read failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the fleet service is unavailable",
+    )
+        .into_response()
+}
+
+/// A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.
+async fn admin_list_fleet<F, A, C>(
+    State(state): State<FleetState<F, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    F: FleetStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    match state.fleet.list_fleet(tenant).await {
+        Ok(rows) => {
+            let views: Vec<FleetStoreView> = rows
+                .into_iter()
+                .map(|row| FleetStoreView::from_row(row, now_ms))
+                .collect();
+            (StatusCode::OK, Json(views)).into_response()
+        }
+        Err(error) => fleet_error_response(&error),
+    }
+}
+
+/// A super-admin (any console role) reads one store's fleet detail; `404` if the tenant has no such
+/// store.
+async fn admin_fleet_store<F, A, C>(
+    State(state): State<FleetState<F, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    F: FleetStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant), Ok(store)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the tenant_id or store id is not a ULID",
+        )
+            .into_response();
+    };
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    match state.fleet.store_detail(tenant, store).await {
+        Ok(Some(row)) => {
+            (StatusCode::OK, Json(FleetStoreView::from_row(row, now_ms))).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Err(error) => fleet_error_response(&error),
+    }
+}
+
+// --- Background-task health (`/admin/health/tasks`, ADR-0068 slice 4) ---------------------------
+
+/// A task is judged **stale** if its most recent tick is older than its configured interval times
+/// this slack — a few missed ticks, not one — so an interval-boundary jitter never flaps a healthy
+/// loop to unhealthy. The interval comes from the tick's own recorded `interval_secs`.
+const TASK_STALENESS_SLACK: i64 = 3;
+
+/// The interval assumed for a tick whose detail omits `interval_secs` (a defensive default; every
+/// loop this cloud ships records its interval).
+const DEFAULT_TASK_INTERVAL_SECS: i64 = 300;
+
+/// The collaborators the health route needs: the task-health store, the admin and clock the session
+/// guard uses, and the set of task names this deployment *expects* to be running (so a loop that has
+/// never ticked — dead since boot — is reported as unhealthy rather than silently absent). Its own
+/// state, merged into the main router like [`FleetState`].
+#[derive(Clone)]
+struct HealthState<H, A, C> {
+    health: H,
+    admin: A,
+    clock: C,
+    expected: Vec<String>,
+}
+
+/// One background loop as the console sees it: identity, whether the deployment expects it to run, a
+/// health verdict derived at read time, when it last ticked, and its self-describing detail.
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskHealthView {
+    task: String,
+    expected: bool,
+    healthy: bool,
+    last_tick_at_ms: Option<i64>,
+    seconds_since: Option<i64>,
+    detail: serde_json::Value,
+}
+
+impl TaskHealthView {
+    /// The view for a task that has ticked at least once: fresh (within its interval × slack) and its
+    /// last tick's work succeeded (`ok` — absent reads as alive).
+    fn from_recorded(task: &str, expected: bool, recorded: &TaskHealth, now_ms: i64) -> Self {
+        let last_tick_ms = recorded.last_tick_at.as_milliseconds_since_epoch();
+        let interval_secs = recorded
+            .detail
+            .get("interval_secs")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(DEFAULT_TASK_INTERVAL_SECS);
+        let ok = recorded
+            .detail
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let age_secs = now_ms.saturating_sub(last_tick_ms) / 1000;
+        let fresh = now_ms.saturating_sub(last_tick_ms)
+            <= interval_secs
+                .saturating_mul(1000)
+                .saturating_mul(TASK_STALENESS_SLACK);
+        Self {
+            task: task.to_owned(),
+            expected,
+            healthy: fresh && ok,
+            last_tick_at_ms: Some(last_tick_ms),
+            seconds_since: Some(age_secs),
+            detail: recorded.detail.clone(),
+        }
+    }
+
+    /// The view for an expected task that has never ticked — dead since boot, so never healthy.
+    fn never_ticked(task: &str) -> Self {
+        Self {
+            task: task.to_owned(),
+            expected: true,
+            healthy: false,
+            last_tick_at_ms: None,
+            seconds_since: None,
+            detail: serde_json::Value::Object(serde_json::Map::new()),
+        }
+    }
+}
+
+/// The whole-fleet-of-loops report: an overall verdict (every *expected* loop is healthy) plus the
+/// per-loop views. Extra loops that ticked but the deployment does not expect are reported too
+/// (`expected: false`), so nothing is hidden, but they do not sway the overall verdict.
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskHealthReport {
+    healthy: bool,
+    tasks: Vec<TaskHealthView>,
+}
+
+/// Builds the background-task health sub-router ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)
+/// slice 4). One read, `GET /admin/health/tasks`, behind [`ConsolePermission::Read`] (every console
+/// role). `expected` names the loops this deployment turned on, so a loop that never ticked is
+/// surfaced as unhealthy rather than missing.
+pub fn health_router<H, A, C>(health: H, admin: A, clock: C, expected: Vec<String>) -> Router
+where
+    H: TaskHealthStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/health/tasks", get(admin_task_health::<H, A, C>))
+        .with_state(HealthState {
+            health,
+            admin,
+            clock,
+            expected,
+        })
+}
+
+/// Maps a task-health read failure to a retryable `503`, logging the detail rather than leaking it.
+fn health_error_response(error: &TaskHealthError) -> Response {
+    tracing::error!(%error, "a task-health read failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the health service is unavailable",
+    )
+        .into_response()
+}
+
+/// Reports every background loop's health: each expected loop (whether or not it has ticked) plus any
+/// extra loop that has. `503` if the store is unreachable.
+async fn admin_task_health<H, A, C>(
+    State(state): State<HealthState<H, A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    H: TaskHealthStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    let recorded = match state.health.list_health().await {
+        Ok(rows) => rows,
+        Err(error) => return health_error_response(&error),
+    };
+
+    let mut tasks = Vec::new();
+    // Every expected loop first, in the deployment's order: its recorded row if it has ticked, else a
+    // never-ticked (unhealthy) placeholder.
+    for task in &state.expected {
+        match recorded.iter().find(|row| &row.task == task) {
+            Some(row) => tasks.push(TaskHealthView::from_recorded(task, true, row, now_ms)),
+            None => tasks.push(TaskHealthView::never_ticked(task)),
+        }
+    }
+    // Then any loop that ticked but the deployment does not expect — surfaced, but not counted toward
+    // the overall verdict.
+    for row in &recorded {
+        if !state.expected.iter().any(|task| task == &row.task) {
+            tasks.push(TaskHealthView::from_recorded(&row.task, false, row, now_ms));
+        }
+    }
+
+    let healthy = tasks
+        .iter()
+        .filter(|view| view.expected)
+        .all(|view| view.healthy);
+    (StatusCode::OK, Json(TaskHealthReport { healthy, tasks })).into_response()
 }
 
 /// A `?tenant_id=` query for the tenant-scoped listings.
@@ -4134,6 +4493,16 @@ where
             }
         },
     };
+    // Record the store's contact and the version it reported holding, for the fleet view
+    // ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)). Best-effort telemetry: a liveness-write
+    // failure is logged and swallowed, never failing the config pull the store actually needs.
+    if let Err(error) = app
+        .config_trees
+        .record_store_seen(grant.tenant(), store_id, held, app.clock.now())
+        .await
+    {
+        tracing::warn!(%error, "recording store liveness on a config pull failed");
+    }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's trees.
     match app.config_trees.load(grant.tenant(), store_id).await {
         Ok(Some(state)) => {
@@ -4149,6 +4518,48 @@ where
             "the store has no published configuration",
         )
             .into_response(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// `POST /sync/stores/{store_id}/heartbeat` — a store's lightweight liveness ping
+/// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped
+/// API key the config pull uses (`read_config`), it advances the store's `last_seen_at` and nothing
+/// else, so a store that is up but not currently pulling config (a parked long-poll, a quiet period
+/// between publishes) still registers as online. `204` on success; unlike the config-pull capture,
+/// recording is this request's whole purpose, so a store-write failure is a `503` the edge retries,
+/// not a swallowed best-effort write.
+async fn edge_heartbeat<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
+        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+    };
+    // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
+    match app
+        .config_trees
+        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
 }

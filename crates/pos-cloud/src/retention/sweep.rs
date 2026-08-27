@@ -113,30 +113,53 @@ where
 ///
 /// A sweep error is logged and retried on the next tick rather than crashing the cloud — a masking
 /// pass that is a day late is a far smaller problem than a cloud that will not start.
-pub async fn run<S, C>(
+pub async fn run<S, C, H>(
     store: S,
     policy: RetentionPolicy,
     clock: C,
+    health: H,
     interval: Duration,
     shutdown: impl Future<Output = ()>,
 ) where
     S: SubjectStore,
     C: ClockSource,
+    H: crate::health::TaskHealthStore,
 {
     tokio::pin!(shutdown);
     loop {
-        match sweep(&store, policy, clock.now()).await {
+        let report = sweep(&store, policy, clock.now()).await;
+        let detail = match &report {
             Ok(report) if report.masked > 0 => {
                 tracing::info!(
                     masked = report.masked,
                     batches = report.batches,
                     "retention sweep masked records past their retention period"
                 );
+                crate::health::tick_detail(
+                    true,
+                    interval.as_secs(),
+                    serde_json::json!({ "masked": report.masked, "batches": report.batches }),
+                )
             }
-            Ok(_) => tracing::debug!("retention sweep found nothing past retention"),
+            Ok(report) => {
+                tracing::debug!("retention sweep found nothing past retention");
+                crate::health::tick_detail(
+                    true,
+                    interval.as_secs(),
+                    serde_json::json!({ "masked": report.masked, "batches": report.batches }),
+                )
+            }
             Err(error) => {
                 tracing::error!(error = %error, "retention sweep failed; will retry next interval");
+                crate::health::tick_detail(false, interval.as_secs(), serde_json::json!({}))
             }
+        };
+        // Best-effort health telemetry: a failure to record must never crash the sweep loop.
+        if let Err(error) = health
+            .record_tick(crate::health::RETENTION, clock.now(), &detail)
+            .await
+        {
+            tracing::warn!(%error, "recording retention task health failed");
         }
         tokio::select! {
             biased;
@@ -274,6 +297,28 @@ mod tests {
         assert_eq!(second.masked, 0, "already-masked records are not revisited");
     }
 
+    /// A task-health store that records nothing — the sweep loop's health telemetry is best-effort,
+    /// so the loop under test does not depend on it.
+    #[derive(Clone)]
+    struct NoopHealth;
+
+    impl crate::health::TaskHealthStore for NoopHealth {
+        async fn record_tick(
+            &self,
+            _task: &str,
+            _at: Timestamp,
+            _detail: &serde_json::Value,
+        ) -> Result<(), crate::health::TaskHealthError> {
+            Ok(())
+        }
+
+        async fn list_health(
+            &self,
+        ) -> Result<Vec<crate::health::TaskHealth>, crate::health::TaskHealthError> {
+            Ok(Vec::new())
+        }
+    }
+
     #[tokio::test]
     async fn run_sweeps_once_then_stops_on_an_already_fired_shutdown() {
         use core::time::Duration;
@@ -287,6 +332,7 @@ mod tests {
             store,
             RetentionPolicy::from_days(1),
             clock,
+            NoopHealth,
             Duration::from_secs(3600),
             core::future::ready(()),
         )

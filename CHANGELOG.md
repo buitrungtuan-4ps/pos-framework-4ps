@@ -111,6 +111,68 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console has a Fleet screen: every store's liveness and the background workers' health at a
+  glance** (roadmap v2, Track O, O1 slice 5; [ADR-0068](docs/adr/0068-fleet-liveness.md)). A new
+  tenant-scoped `/fleet` screen presents the two O1 reads in one operational view: a system-health
+  strip (the rollup projector, retention sweep, and webhook dispatcher, each healthy or not, with when
+  it last ran) above a table of the tenant's stores — online/offline, last seen, config in-sync or
+  behind, and relay backlog with the oldest pending order's age — plus a per-store detail drawer. It
+  polls every 15 seconds so "online" and "last seen" stay current without a manual refresh, hides the
+  store ULID behind a Technical-details disclosure, and is fully localized (en/vi). Built on the F2
+  CRUD kit; read-only. **Upgrade note:** none — a frontend screen over the existing `/admin/fleet` and
+  `/admin/health/tasks` reads; no API, migration, or permission change.
+- **The console can see whether the background workers are alive and keeping up** (roadmap v2, Track
+  O, O1 slice 4; [ADR-0068](docs/adr/0068-fleet-liveness.md)). The cloud's off-request loops — the
+  rollup projector, the retention/PII sweep, the webhook dispatcher — now record a heartbeat at the
+  end of every tick (a `task_health` row with the instant and a small detail: whether the tick's work
+  succeeded, its configured interval, a count or two). `GET /admin/health/tasks` reports each loop the
+  deployment turned on, deriving a health verdict at read time — a loop is unhealthy if it has gone
+  quiet (last tick older than its interval times a few cycles of slack), never ticked at all (dead
+  since boot, surfaced rather than hidden), or ticked recently but its last pass failed. Behind the
+  existing `console.data.read` permission (every console role). **Upgrade note:** one additive,
+  forward-only migration `0021_task_health` (fleet-wide server state — no `tenant_id`, no RLS, like
+  `super_admin`); no `PROTOCOL_VERSION` or permission-identifier change, and `/admin` stays absent
+  from the public OpenAPI.
+- **The console can read the fleet: which stores are online, in sync, and how deep their order
+  backlog is** (roadmap v2, Track O, O1 slice 3; [ADR-0068](docs/adr/0068-fleet-liveness.md)).
+  `GET /admin/fleet?tenant_id=…` lists every store of a tenant, and `GET /admin/fleet/{store_id}`
+  reads one, as a read-only join across four tables the operator would otherwise have to correlate by
+  hand: the registry `stores` row (name, status), `store_liveness` (last-seen, held version, last
+  config pull), the config tree (the currently-published version), and the order-relay queue (pending
+  backlog + oldest-pending age). Each row carries two verdicts derived at read time so the answer is
+  always current with no background sweep: `online` (`now − last_seen_at` within a 180-second
+  freshness window — a few pull/heartbeat cycles of slack) and `config_current` (the held version
+  equals the published one). A store that is un-configured, never-seen, or has an empty queue simply
+  reports `null`/`0` in those fields. Both routes are behind the existing `console.data.read`
+  permission, so every console role — Owner, Admin, Ops, Viewer — can watch the fleet. **Upgrade
+  note:** none — read-only `/admin` routes over existing tables; no migration, `PROTOCOL_VERSION`, or
+  permission-identifier change, and `/admin` stays absent from the public OpenAPI.
+- **A store can send a lightweight liveness heartbeat** (roadmap v2, Track O, O1 slice 2;
+  [ADR-0068](docs/adr/0068-fleet-liveness.md)). `POST /sync/stores/{id}/heartbeat` — authenticated
+  with the same scoped `read_config` API key the config pull uses — advances the store's
+  `last_seen_at` and nothing else, so a store that is up but not currently pulling config (a parked
+  long-poll, a quiet spell between publishes) still reads as online. It preserves the version and
+  config-pull instant a prior pull recorded; a heartbeat-only store's row carries those `NULL`. Unlike
+  the config-pull capture, recording is the request's whole purpose, so a store-write failure answers
+  `503` for the edge to retry rather than being swallowed. The edge gains a thin, seam-tested
+  heartbeat loop (`heartbeat_client`) that pings on a fixed interval, mirroring the config-pull loop;
+  its real HTTPS sender wires in alongside the config-transport handoff. **Upgrade note:** none —
+  additive route on the existing `store_liveness` table; no migration, `PROTOCOL_VERSION`, or
+  permission-identifier change.
+- **The cloud now records when each store was last seen and which config version it holds** (roadmap
+  v2, Track O, O1 slice 1; [ADR-0068](docs/adr/0068-fleet-liveness.md)). An edge pulls its
+  configuration on a loop (`GET /sync/stores/{id}/config`), carrying the version it currently holds;
+  the handler used that only to decide up-to-date-vs-deliver and then discarded it, so the cloud never
+  knew whether a store was actually there. Each pull now upserts a `store_liveness` row — the contact
+  instant, the version the edge reported holding, and the pull instant — the smallest durable record
+  the forthcoming fleet overview reads to show which stores are online and on the current config. The
+  write is **best-effort**: a liveness-store failure is logged and swallowed, never failing the config
+  pull the store needs. It is captured through the `ConfigTreeStore` seam (the one the pull path
+  already holds) into a table kept deliberately separate from `config_trees`, so a store with no
+  published config — and, in a later slice, one that only heartbeats — still registers as seen.
+  Online/offline is derived at read time, not stored. **Upgrade note:** additive migration
+  `0020_store_liveness` (RLS-isolated by tenant like `config_trees`); no `PROTOCOL_VERSION` change
+  (the edge already sends the held version), no permission-identifier change.
 - **The back office now has screens for admins, invitations, sessions, and account security**
   (roadmap v2, Track G, G1 slice 7 — the last G1 slice; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
   Three console screens put the multi-admin surface built in slices 3–6 in front of an operator, on

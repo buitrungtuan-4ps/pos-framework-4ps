@@ -25,19 +25,20 @@ use std::collections::{BTreeMap, HashSet};
 use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, BrandRow, CatalogItemRow,
     CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
-    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, NewSessionRow,
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresApiKeys,
-    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresOrderQueue,
-    PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow, TenantRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, FleetStoreRow,
+    NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
+    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
+    PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId, StoreId, SubjectId,
-    TaxClassId, TenantId,
+    ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId,
+    StoreId, SubjectId, TaxClassId, TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -68,6 +69,8 @@ use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::registry::{
@@ -327,6 +330,35 @@ impl ConfigTreeStore for PostgresConfigTrees {
             ConfigStoreError::new(format!("encoding the config tree failed: {error}"))
         })?;
         self.save_state(tenant, store, &json)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
+    async fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        let held = held_version.map(|version| version.to_string());
+        self.record_seen(
+            tenant,
+            store,
+            held.as_deref(),
+            seen_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
+    async fn record_store_heartbeat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+    ) -> Result<(), ConfigStoreError> {
+        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch())
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
@@ -1251,6 +1283,99 @@ impl RegistryStore for PostgresRegistry {
         )
         .await
         .map_err(|error| RegistryStoreError::new(error.to_string()))
+    }
+}
+
+// --- The fleet read model (ADR-0068) -----------------------------------------------------------
+
+/// Converts one joined `store-postgres` fleet row into the cloud's [`FleetRow`]. A liveness timestamp
+/// out of range (impossible for values this cloud wrote) fails safe to "never seen" rather than
+/// failing the whole listing; a negative backlog (impossible from a `count`) reads as zero.
+fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
+    let last_seen_at = row
+        .last_seen_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let last_config_pull_at = row
+        .last_config_pull_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let relay_oldest_pending_at = row
+        .oldest_pending_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    Ok(FleetRow {
+        store_id: parse_registry_store(&row.store_id)
+            .map_err(|error| FleetStoreError::new(error.to_string()))?,
+        name: row.name,
+        status: EntityStatus::from_db(&row.status),
+        last_seen_at,
+        last_config_pull_at,
+        config_version_held: row.config_version_held,
+        config_version_published: row.config_version_published,
+        relay_backlog: u64::try_from(row.relay_backlog).unwrap_or(0),
+        relay_oldest_pending_at,
+    })
+}
+
+impl FleetStore for PostgresFleet {
+    async fn list_fleet(&self, tenant: TenantId) -> Result<Vec<FleetRow>, FleetStoreError> {
+        let rows = self
+            .list(&tenant.to_string())
+            .await
+            .map_err(|error| FleetStoreError::new(error.to_string()))?;
+        rows.into_iter().map(fleet_row).collect()
+    }
+
+    async fn store_detail(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<FleetRow>, FleetStoreError> {
+        let row = self
+            .fetch_one(&tenant.to_string(), &store.to_string())
+            .await
+            .map_err(|error| FleetStoreError::new(error.to_string()))?;
+        row.map(fleet_row).transpose()
+    }
+}
+
+// --- Background-task health (ADR-0068 slice 4) --------------------------------------------------
+
+/// Converts one `store-postgres` task-health row into the cloud's [`TaskHealth`]. A tick instant out
+/// of range (impossible for values this cloud wrote) or a detail that will not parse fails safe — the
+/// instant to the epoch, the detail to an empty object — rather than dropping the whole listing, since
+/// this is health telemetry and a decode fault must not itself read as "no health data".
+fn task_health(row: TaskHealthRow) -> TaskHealth {
+    let last_tick_at =
+        Timestamp::from_milliseconds_since_epoch(row.last_tick_at_ms).unwrap_or(Timestamp::EPOCH);
+    let detail = serde_json::from_str(&row.detail_json)
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    TaskHealth {
+        task: row.task,
+        last_tick_at,
+        detail,
+    }
+}
+
+impl TaskHealthStore for PostgresTaskHealth {
+    async fn record_tick(
+        &self,
+        task: &str,
+        at: Timestamp,
+        detail: &serde_json::Value,
+    ) -> Result<(), TaskHealthError> {
+        let detail_json = serde_json::to_string(detail).map_err(|error| {
+            TaskHealthError::new(format!("encoding a task-health detail failed: {error}"))
+        })?;
+        self.record(task, at.as_milliseconds_since_epoch(), &detail_json)
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))
+    }
+
+    async fn list_health(&self) -> Result<Vec<TaskHealth>, TaskHealthError> {
+        let rows = self
+            .fetch_all()
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))?;
+        Ok(rows.into_iter().map(task_health).collect())
     }
 }
 

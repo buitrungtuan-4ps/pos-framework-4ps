@@ -18,6 +18,7 @@ import { Catalog } from "./screens/Catalog";
 import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
+import { Fleet } from "./screens/Fleet";
 import { Login } from "./screens/Login";
 import { MySecurity } from "./screens/MySecurity";
 import { MySessions } from "./screens/MySessions";
@@ -66,6 +67,7 @@ export function App() {
         <Route path="/invite" component={AcceptInvite} />
         <Route path="/" component={Guarded}>
           <Route path="/" component={Reports} />
+          <Route path="/fleet" component={Fleet} />
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />

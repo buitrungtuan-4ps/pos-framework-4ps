@@ -24,6 +24,7 @@ import type {
   DisplaySubcategory,
   EntityStatus,
   Enrolment,
+  FleetStore,
   InviteAdminResponse,
   ItemCategory,
   ItemSubcategory,
@@ -39,6 +40,7 @@ import type {
   PublishedConfig,
   RegisterWebhookResponse,
   Store,
+  TaskHealthReport,
   TaxClass,
   Tenant,
   TranslationGrid,
@@ -588,4 +590,16 @@ export const api = {
       "DELETE",
       `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,
     ),
+
+  // --- fleet liveness + background-task health (ADR-0068, Track O1) ---
+  // The fleet read is tenant-scoped (a store's liveness is its tenant's data); the task-health read is
+  // fleet-wide server state (the loops run once per cloud). Both are behind console.data.read.
+  listFleet: (tenantId: string) =>
+    requestJson<FleetStore[]>("GET", `/admin/fleet?${tenantQuery(tenantId)}`),
+  fleetStore: (tenantId: string, storeId: string) =>
+    requestJson<FleetStore>(
+      "GET",
+      `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
+    ),
+  taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
 };

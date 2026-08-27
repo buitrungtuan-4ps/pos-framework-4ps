@@ -12,7 +12,8 @@
 
 use core::future::Future;
 
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
+use pos_proto::time::Timestamp;
 
 use super::ConfigTreeState;
 
@@ -40,6 +41,41 @@ pub trait ConfigTreeStore {
         tenant: TenantId,
         store: StoreId,
         state: &ConfigTreeState,
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
+
+    /// Records that a store contacted the cloud on its config pull
+    /// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)): the contact instant `seen_at` and the
+    /// config version it reported holding (`None` if it holds nothing yet). This is the fleet-liveness
+    /// read model's only write; the config pull is the liveness signal, so the seam that owns
+    /// config-pull persistence records it. Callers treat it as best-effort telemetry and must not fail
+    /// the pull the store needs if this write fails.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_store_seen(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        held_version: Option<ConfigVersionId>,
+        seen_at: Timestamp,
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
+
+    /// Records a store's lightweight heartbeat ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)
+    /// slice 2): advances `last_seen_at` to `seen_at` and nothing else, for a store that is up but not
+    /// currently pulling config (a parked long-poll, or a quiet period between publishes). It leaves
+    /// the recorded held version and last-config-pull instant untouched — a heartbeat is "I am here",
+    /// not "I pulled". Unlike the config-pull capture this is the request's whole purpose, so the
+    /// caller surfaces a failure rather than swallowing it.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_store_heartbeat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 }
 
