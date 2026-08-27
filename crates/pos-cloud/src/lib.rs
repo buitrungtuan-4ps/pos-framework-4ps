@@ -52,6 +52,7 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+pub mod alerts;
 pub mod assets;
 pub mod audit;
 pub mod auth;

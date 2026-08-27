@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Alerting foundations: the alert model and a pure evaluator** (roadmap v2, Track O2, slice 1;
+  [ADR-0073](docs/adr/0073-alerting.md)). Begins Track **O2 (Alerting)** — the cloud finally *watches*
+  the read models O1 built instead of only serving them on demand. This first slice lays the type
+  foundations: `pos_cloud::alerts` defines the `AlertKind` catalogue (store offline, relay backlog,
+  webhook disabled, projector unhealthy, JetStream near-capacity), an ordered `AlertSeverity`, and the
+  `FiringAlert` a detector produces; and a **pure `evaluate`** that turns a read-model snapshot
+  (per-tenant fleet rows + disabled webhook endpoints, background-task health, an optional JetStream
+  capacity reading, and tunable thresholds) into the firing set — no I/O and no clock, so every
+  condition is exhaustively unit-tested. ADR-0073 records the engine's design (open→resolved lifecycle,
+  delivery over the console + the existing webhook transport, email/chat as seams) and, explicitly,
+  which conditions ship on ready data now versus those deferred for want of upstream telemetry (clock
+  drift, disk-low, print-error spike, e-invoice/fiscal, projector failure *streaks*). Store, background
+  loop, delivery, and the `/admin` surface land in the following slices. **Upgrade note:** additive
+  cloud-internal types only; nothing runs yet — no schema, route, protocol, or permission change.
 - **The in-store app draws the store's real floor and routes fires by the published plan** (roadmap
   v2, Track M2, slice 8; [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). The in-store `ui/` now reads
   `GET /api/floor` at start and renders the store's published areas and tables instead of a hardcoded
