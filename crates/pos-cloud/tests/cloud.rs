@@ -53,7 +53,10 @@ use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::people::{
-    Employee, EmployeeId, EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewEmployee,
+    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
+    EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
+    RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
+    is_known_permission, permission_catalogue,
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
@@ -6902,5 +6905,305 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
             .await
             .expect("set pin across tenant"),
         "a PIN set is scoped to the tenant — no row matched"
+    );
+}
+
+/// The role-template store as an in-memory list — the same seam the binary implements over a
+/// tenant-scoped table. Roles are archived, never removed.
+#[derive(Clone, Default)]
+struct FakeRoleTemplates {
+    rows: Arc<Mutex<Vec<RoleTemplate>>>,
+}
+
+impl RoleTemplateStore for FakeRoleTemplates {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows
+            .iter()
+            .any(|row| row.tenant_id == template.tenant_id && row.name == template.name)
+        {
+            return Err(RoleTemplateStoreError::new(
+                "duplicate role name within the tenant",
+            ));
+        }
+        rows.push(RoleTemplate {
+            role_template_id: template.role_template_id,
+            tenant_id: template.tenant_id,
+            name: template.name.clone(),
+            permissions: template.permissions.clone(),
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+        let mut rows: Vec<RoleTemplate> = self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
+            .cloned())
+    }
+
+    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == template.tenant_id && row.role_template_id == template.role_template_id
+        }) else {
+            return Ok(false);
+        };
+        row.name.clone_from(&template.name);
+        row.permissions.clone_from(&template.permissions);
+        row.status = template.status;
+        Ok(true)
+    }
+}
+
+/// The assignment store as an in-memory list — the same seam the binary implements. An assignment is
+/// removed (offboarding), not archived.
+#[derive(Clone, Default)]
+struct FakeAssignments {
+    rows: Arc<Mutex<Vec<Assignment>>>,
+}
+
+impl AssignmentStore for FakeAssignments {
+    async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows.iter().any(|row| {
+            row.tenant_id == assignment.tenant_id
+                && row.employee_id == assignment.employee_id
+                && row.store_id == assignment.store_id
+        }) {
+            return Err(AssignmentStoreError::new(
+                "the employee is already assigned to that store",
+            ));
+        }
+        rows.push(Assignment {
+            assignment_id: assignment.assignment_id,
+            tenant_id: assignment.tenant_id,
+            employee_id: assignment.employee_id,
+            store_id: assignment.store_id,
+            role_template_id: assignment.role_template_id,
+        });
+        Ok(())
+    }
+
+    async fn list_for_store(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && row.store_id == store_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_for_employee(
+        &self,
+        tenant: TenantId,
+        employee_id: EmployeeId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && row.employee_id == employee_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<bool, AssignmentStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|row| !(row.tenant_id == tenant && row.assignment_id == assignment_id));
+        Ok(rows.len() != before)
+    }
+}
+
+#[test]
+fn permission_catalogue_matches_pos_core_and_validates_ids() {
+    let catalogue = permission_catalogue();
+    assert!(!catalogue.is_empty(), "the catalogue is non-empty");
+    // Every catalogue id is accepted, and something outside it is rejected — the check the routes use
+    // so a role template never stores a permission that is not in the pos-core registry (§9).
+    for info in &catalogue {
+        assert!(is_known_permission(info.id), "{} is known", info.id);
+    }
+    assert!(is_known_permission("billing.discount.apply"));
+    assert!(!is_known_permission("not.a.real.permission"));
+}
+
+#[tokio::test]
+async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
+    let store = FakeRoleTemplates::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
+
+    store
+        .create(&NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec![
+                "billing.discount.apply".to_owned(),
+                "sales.item.open".to_owned(),
+            ],
+        })
+        .await
+        .expect("create cashier");
+    // The same name is fine under another tenant — templates are per-tenant.
+    store
+        .create(&NewRoleTemplate {
+            role_template_id: RoleTemplateId::new(Ulid::from_u128(11)),
+            tenant_id: other,
+            name: "Cashier".to_owned(),
+            permissions: vec![],
+        })
+        .await
+        .expect("another tenant's Cashier");
+    assert!(
+        store
+            .create(&NewRoleTemplate {
+                role_template_id: RoleTemplateId::new(Ulid::from_u128(12)),
+                tenant_id: mine,
+                name: "Cashier".to_owned(),
+                permissions: vec![],
+            })
+            .await
+            .is_err(),
+        "role names are unique within a tenant"
+    );
+
+    let listed = store.list(mine).await.expect("list");
+    assert_eq!(listed.len(), 1, "only this tenant's roles");
+    assert_eq!(listed[0].permissions.len(), 2);
+
+    // Edit the permission set and archive.
+    assert!(
+        store
+            .update(&RoleTemplateUpdate {
+                role_template_id: cashier,
+                tenant_id: mine,
+                name: "Cashier".to_owned(),
+                permissions: vec!["sales.item.open".to_owned()],
+                status: EntityStatus::Archived,
+            })
+            .await
+            .expect("update")
+    );
+    let view = store
+        .get(mine, cashier)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(view.permissions, vec!["sales.item.open".to_owned()]);
+    assert_eq!(view.status, EntityStatus::Archived);
+}
+
+#[tokio::test]
+async fn assignment_store_binds_person_to_store_and_removes_scoped_by_tenant() {
+    let store = FakeAssignments::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let where_they_work = store_id();
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
+    let assignment = AssignmentId::new(Ulid::from_u128(20));
+
+    store
+        .assign(&NewAssignment {
+            assignment_id: assignment,
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: where_they_work,
+            role_template_id: cashier,
+        })
+        .await
+        .expect("assign alice");
+    // The same person at the same store twice is refused.
+    assert!(
+        store
+            .assign(&NewAssignment {
+                assignment_id: AssignmentId::new(Ulid::from_u128(21)),
+                tenant_id: mine,
+                employee_id: alice,
+                store_id: where_they_work,
+                role_template_id: cashier,
+            })
+            .await
+            .is_err(),
+        "a person is assigned to a store at most once"
+    );
+
+    // Readable both ways, and tenant-scoped.
+    assert_eq!(
+        store
+            .list_for_store(mine, where_they_work)
+            .await
+            .expect("by store")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .list_for_employee(mine, alice)
+            .await
+            .expect("by employee")
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .list_for_store(other, where_they_work)
+            .await
+            .expect("other tenant")
+            .is_empty(),
+        "another tenant sees none of these assignments"
+    );
+
+    // Removing across a tenant boundary matches nothing; removing within the tenant offboards.
+    assert!(
+        !store
+            .remove(other, assignment)
+            .await
+            .expect("remove across tenant")
+    );
+    assert!(store.remove(mine, assignment).await.expect("remove"));
+    assert!(
+        store
+            .list_for_employee(mine, alice)
+            .await
+            .expect("after remove")
+            .is_empty(),
+        "the assignment is gone"
     );
 }

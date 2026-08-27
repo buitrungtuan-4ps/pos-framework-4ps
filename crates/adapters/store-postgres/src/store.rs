@@ -82,6 +82,9 @@ const MIGRATION_0022: &str = include_str!("../migrations/0022_audit_log.sql");
 /// People & access, foundation — the `employees` table ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 const MIGRATION_0023: &str = include_str!("../migrations/0023_employees.sql");
 
+/// People & access — `role_templates` + `employee_store_assignments` ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+const MIGRATION_0024: &str = include_str!("../migrations/0024_role_templates_and_assignments.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -227,6 +230,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0023)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0024)
             .await
             .map_err(unavailable)
     }

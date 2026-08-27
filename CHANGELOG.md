@@ -111,6 +111,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Role templates and per-store staff assignments (foundation)** (roadmap v2, Track M1, slice 2;
+  [ADR-0070](docs/adr/0070-people-and-access.md)). Two new tenant-scoped, RLS-isolated tables
+  (migration `0024`) that give a store's employees their *access*: `role_templates` — a tenant's
+  named roles (e.g. *Cashier*, *Manager*), each a stored subset of the **`pos-core` permission
+  catalogue** (§9) held as a `jsonb` id set; and `employee_store_assignments` — the join binding a
+  person to one of their tenant's stores with a role. New `RoleTemplateStore` and `AssignmentStore`
+  seams (create/list/get/update roles; assign/list-by-store/list-by-employee/remove assignments) with
+  `store-postgres` adapters and in-memory fakes. The console never invents a permission string: a new
+  `permission_catalogue()` exposes the `pos-core` catalogue (id, group, risk, PIN policy, description)
+  and `is_known_permission()` validates a stored subset against it. Roles are **archived, never
+  deleted** (no `DELETE` grant), like employees; an assignment is a plain grant that is **removed**
+  (offboarding a person from a store), so it alone carries a `DELETE` grant. None of this is PII
+  beyond the employee row itself — a role is names + permission ids, an assignment is three ids. No
+  routes or UI yet (M1 slice 3 adds `/admin` CRUD + audit). **Upgrade note:** one additive,
+  forward-only migration `0024_role_templates_and_assignments`; no `PROTOCOL_VERSION` or permission
+  change.
 - **The cloud can now record a store's employees (foundation)** (roadmap v2, Track M1, slice 1;
   [ADR-0070](docs/adr/0070-people-and-access.md)). The console's first record of *who works at a
   store* — and the console's first **T1 Restricted / Vietnam-PDPD-scoped** data. A new tenant-scoped,

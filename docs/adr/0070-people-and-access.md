@@ -32,8 +32,11 @@ assert on their behalf.
   until a PIN is set, **never the PIN itself**. `created_at`/`updated_at` are kept for the record.
 - **Per-store assignment is a join table** (`employee_store_assignments`): an employee works at zero
   or more of their tenant's stores, each assignment carrying the `role_template_id` that store grants
-  them. Both sides are the same tenant (enforced by the FKs + RLS); removing an assignment offboards
-  the person from that store without deleting the person.
+  them. All three ids belong to the same tenant — the `tenant_id` column + RLS isolate the rows, and
+  the route layer checks referential validity before a write (the schema follows the codebase's
+  soft-reference convention — e.g. `devices.store_id` — rather than cross-table foreign keys under
+  RLS). Unlike employees and roles, an assignment is a plain grant that is **removed** — removing it
+  offboards the person from that store without deleting the person.
 - **Role templates map a name to a set of `pos-core` permissions** — a `role_templates` table holds a
   tenant's named roles (e.g. *Cashier*, *Shift lead*, *Manager*), each a stored set of permission
   identifiers drawn from the **`pos-core` permission registry** (§9), the single source of truth for
