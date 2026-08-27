@@ -16,6 +16,14 @@ export type Json =
 export type ConfigLevel = "tenant" | "brand" | "store" | "device";
 export const CONFIG_LEVELS: readonly ConfigLevel[] = ["tenant", "brand", "store", "device"];
 
+/** One published config version from `GET /admin/stores/{id}/config/versions` (ADR-0069 G2). `at_ms`
+ *  is read from the version ULID itself; `current` marks the version the store is on now. */
+export interface ConfigVersion {
+  readonly version_id: string;
+  readonly at_ms: number;
+  readonly current: boolean;
+}
+
 /** The one-time TOTP enrolment returned by `POST /admin/setup` (ADR-0034). */
 export interface Enrolment {
   readonly otpauth_uri: string;
@@ -358,4 +366,33 @@ export interface TaskHealthEntry {
 export interface TaskHealthReport {
   readonly healthy: boolean;
   readonly tasks: readonly TaskHealthEntry[];
+}
+
+/** One console audit entry from `GET /admin/audit` (ADR-0069, Track G2). Ids are strings (the screen
+ *  shows the action and actor, and hides the ULID behind Technical details); the actor snapshot is
+ *  flattened; `at_ms` is Unix milliseconds. */
+export interface AuditEntry {
+  readonly id: string;
+  readonly tenant_id: string | null;
+  readonly actor_admin_id: string;
+  readonly actor_email: string;
+  readonly actor_role: string;
+  readonly action: string;
+  readonly entity_type: string;
+  readonly entity_id: string;
+  readonly before: Json | null;
+  readonly after: Json | null;
+  readonly request_id: string | null;
+  readonly at_ms: number;
+}
+
+/** The filters `GET /admin/audit` accepts. Every field is optional; an absent field does not filter.
+ *  `tenantId` absent is the fleet-wide read (every tenant, including tenant-global entries). */
+export interface AuditFilter {
+  readonly tenantId?: string;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly action?: string;
+  readonly actorAdminId?: string;
+  readonly limit?: number;
 }

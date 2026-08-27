@@ -21,6 +21,10 @@ use argon2::password_hash::SaltString;
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
+use pos_cloud::audit::{
+    AuditActor, AuditEntry, AuditId, AuditQuery, AuditRecorder, AuditSink, AuditStore,
+    AuditStoreError, NoopAuditRecorder,
+};
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -1817,6 +1821,130 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario: publish two versions, list them, read one back for the diff \
+              view, roll back, and assert the append-only restore — splitting it would duplicate the \
+              multi-publish setup"
+)]
+async fn config_versions_list_read_back_and_roll_back_append_only() {
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let base = format!("/admin/stores/{store_ulid}/config");
+
+    // Two published versions: v1 sets the currency, v2 overrides it at the store layer.
+    let publish = |doc: serde_json::Value, level: &'static str| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let uri = format!("{base}/{level}?tenant_id={tenant_ulid}");
+        async move {
+            let response = router
+                .oneshot(put_with_cookie(&uri, &doc, &cookie))
+                .await
+                .expect("route the publish");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await["config_version_id"]
+                .as_str()
+                .expect("a version id")
+                .to_owned()
+        }
+    };
+    let v1 = publish(serde_json::json!({ "currency_code": "VND" }), "tenant").await;
+    let _v2 = publish(serde_json::json!({ "currency_code": "SGD" }), "store").await;
+
+    // The history lists both, newest first, with the latest flagged current.
+    let versions = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the versions list");
+    assert_eq!(versions.status(), StatusCode::OK);
+    let versions = json_body(versions).await;
+    let rows = versions.as_array().expect("array");
+    assert_eq!(rows.len(), 2, "both published versions are listed");
+    assert_eq!(rows[0]["current"], true, "the newest is current");
+    assert_eq!(rows[1]["current"], false);
+    assert!(
+        rows[0]["at_ms"].as_i64().is_some(),
+        "each version carries its instant"
+    );
+
+    // v1's effective is readable for the diff view.
+    let v1_effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions/{v1}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the version read");
+    assert_eq!(v1_effective.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(v1_effective).await,
+        serde_json::json!({ "currency_code": "VND" }),
+        "v1's effective is the tenant-only document"
+    );
+
+    // Roll back to v1: a new current version is appended, restoring v1's effective.
+    let rollback = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("{base}/rollback?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "version_id": v1 }),
+            &cookie,
+        ))
+        .await
+        .expect("route the rollback");
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let restored = json_body(rollback).await["config_version_id"]
+        .as_str()
+        .expect("a new version id")
+        .to_owned();
+    assert_ne!(
+        restored, v1,
+        "rollback appends a new version, never mutates history"
+    );
+
+    // The store's current effective is back to v1's, and the history now holds three versions.
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the effective read");
+    assert_eq!(
+        json_body(effective).await,
+        serde_json::json!({ "currency_code": "VND" }),
+        "rollback restored v1's effective config"
+    );
+    let after = router
+        .oneshot(get_with_cookie(
+            &format!("{base}/versions?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the versions list");
+    assert_eq!(
+        json_body(after).await.as_array().expect("array").len(),
+        3,
+        "the rollback is a third, appended version"
+    );
+}
+
+#[tokio::test]
 async fn an_incoherent_config_is_rejected_with_violations() {
     let router = http::router(app_full(
         Cloud::new(FakeStore::new()),
@@ -2357,7 +2485,13 @@ fn device_app(admin: FakeAdmin, keys: FakeKeys, devices: FakeDevices) -> axum::R
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::device_router(devices, admin, keys, clock()))
+    http::router(app).merge(http::device_router(
+        devices,
+        admin,
+        keys,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 #[tokio::test]
@@ -2428,6 +2562,83 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approved = json_body(after).await;
     assert_eq!(approved.as_array().expect("array").len(), 1);
     assert_eq!(approved[0]["address"], "192.168.1.50:9100");
+}
+
+#[tokio::test]
+async fn approving_a_device_proposal_records_to_the_audit_trail() {
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let sink: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(audit.clone()));
+    let router = http::router(app).merge(http::device_router(
+        devices,
+        admin,
+        keys.clone(),
+        clock(),
+        sink,
+    ));
+    let cookie = admin_cookie(&router).await;
+    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &serde_json::json!({ "kind": "printer", "name": "Kitchen 1", "address": "192.168.1.50:9100" }),
+            &token,
+        ))
+        .await
+        .expect("route the proposal");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let approve = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approve.status(), StatusCode::NO_CONTENT);
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.entity_type == "device_proposal")
+        .expect("the resolve was recorded");
+    assert_eq!(
+        entry.action, "device_proposal.approve",
+        "approve is distinguished from reject"
+    );
+    assert_eq!(
+        entry.entity_id, id,
+        "the resolved proposal's id is recorded"
+    );
+    assert_eq!(
+        entry.tenant_id.map(|id| id.to_string()),
+        Some(tenant_ulid),
+        "the entry is scoped to the tenant"
+    );
+    assert!(
+        !entry.actor.email.is_empty(),
+        "the resolving admin is snapshotted onto the entry"
+    );
 }
 
 #[tokio::test]
@@ -2503,7 +2714,12 @@ fn translation_app(admin: FakeAdmin, translations: FakeTranslations) -> axum::Ro
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::translation_router(translations, admin, clock()))
+    http::router(app).merge(http::translation_router(
+        translations,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 #[tokio::test]
@@ -3601,8 +3817,19 @@ impl RegistryStore for FakeRegistry {
 }
 
 /// The main router (for `/admin/login`) and the registry sub-router, sharing one admin store —
-/// production's `merge`, in a test.
+/// production's `merge`, in a test. Audit is a no-op here; the emission path is asserted by
+/// [`registry_app_with_audit`].
 fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
+    registry_app_with_audit(admin, registry, Arc::new(NoopAuditRecorder))
+}
+
+/// As [`registry_app`], but with a caller-supplied audit recorder so a test can assert that a
+/// registry write records to the audit trail (ADR-0069).
+fn registry_app_with_audit(
+    admin: FakeAdmin,
+    registry: FakeRegistry,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -3611,7 +3838,7 @@ fn registry_app(admin: FakeAdmin, registry: FakeRegistry) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::registry_router(registry, admin, clock()))
+    http::router(app).merge(http::registry_router(registry, admin, clock(), audit))
 }
 
 // --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
@@ -4025,6 +4252,308 @@ async fn task_health_needs_a_session() {
         StatusCode::UNAUTHORIZED,
         "the health view is behind the admin session guard"
     );
+}
+
+// --- Console audit trail (ADR-0069 slice 1) ----------------------------------------------------
+
+/// The audit trail as an in-memory append-only list — the binary appends to a real table, but the
+/// seam and its recent-first, tenant-scoped read are the same code here.
+#[derive(Clone, Default)]
+struct FakeAudit {
+    entries: Arc<Mutex<Vec<AuditEntry>>>,
+}
+
+impl AuditStore for FakeAudit {
+    async fn append(&self, entry: &AuditEntry) -> Result<(), AuditStoreError> {
+        self.entries.lock().expect("lock").push(entry.clone());
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: Option<TenantId>,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows: Vec<AuditEntry> = self
+            .entries
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|entry| tenant.is_none() || entry.tenant_id == tenant)
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
+    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows: Vec<AuditEntry> = self
+            .entries
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|entry| query.tenant.is_none() || entry.tenant_id == query.tenant)
+            .filter(|entry| {
+                query
+                    .entity_type
+                    .as_ref()
+                    .is_none_or(|value| &entry.entity_type == value)
+            })
+            .filter(|entry| {
+                query
+                    .entity_id
+                    .as_ref()
+                    .is_none_or(|value| &entry.entity_id == value)
+            })
+            .filter(|entry| {
+                query
+                    .action
+                    .as_ref()
+                    .is_none_or(|value| &entry.action == value)
+            })
+            .filter(|entry| {
+                query
+                    .actor_admin_id
+                    .as_ref()
+                    .is_none_or(|value| &entry.actor.admin_id == value)
+            })
+            .filter(|entry| {
+                query
+                    .since_ms
+                    .is_none_or(|since| entry.at.as_milliseconds_since_epoch() >= since)
+            })
+            .filter(|entry| {
+                query
+                    .until_ms
+                    .is_none_or(|until| entry.at.as_milliseconds_since_epoch() <= until)
+            })
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        rows.truncate(query.limit as usize);
+        Ok(rows)
+    }
+}
+
+#[tokio::test]
+async fn audit_appends_and_lists_newest_first_scoped_by_tenant() {
+    let audit = FakeAudit::default();
+    let entry = |id: u128, tenant: Option<TenantId>, action: &str, at_ms: i64| AuditEntry {
+        id: AuditId::new(Ulid::from_u128(id)),
+        tenant_id: tenant,
+        actor: AuditActor {
+            admin_id: "01ADMIN0000000000000000OPS".to_owned(),
+            email: "ops@pizza4ps.test".to_owned(),
+            role: AdminRole::Ops,
+        },
+        action: action.to_owned(),
+        entity_type: "store".to_owned(),
+        entity_id: store_id().to_string(),
+        before: None,
+        after: Some(serde_json::json!({ "name": "Bến Thành" })),
+        request_id: None,
+        at: Timestamp::from_milliseconds_since_epoch(at_ms).expect("a valid instant"),
+    };
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    audit
+        .append(&entry(1, Some(mine), "store.update", NOW_MS - 2_000))
+        .await
+        .expect("append 1");
+    audit
+        .append(&entry(2, Some(mine), "store.archive", NOW_MS - 1_000))
+        .await
+        .expect("append 2");
+    audit
+        .append(&entry(3, Some(other), "store.update", NOW_MS))
+        .await
+        .expect("append for another tenant");
+
+    let listed = audit.list(Some(mine), 10).await.expect("list this tenant");
+    assert_eq!(listed.len(), 2, "only this tenant's entries are listed");
+    let newest = listed.first().expect("an entry");
+    assert_eq!(
+        newest.action, "store.archive",
+        "the newest entry sorts first"
+    );
+    assert_eq!(
+        newest.actor.email, "ops@pizza4ps.test",
+        "the acting admin is snapshotted onto the entry"
+    );
+    assert!(
+        listed.iter().any(|entry| entry.action == "store.update"),
+        "the tenant's earlier entry is present too"
+    );
+
+    let all = audit.list(None, 10).await.expect("list across tenants");
+    assert_eq!(all.len(), 3, "no tenant filter reads across every tenant");
+}
+
+#[tokio::test]
+async fn registry_writes_record_to_the_audit_trail() {
+    let audit = FakeAudit::default();
+    let sink: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(audit.clone()));
+    let router = registry_app_with_audit(provisioned_admin(), FakeRegistry::default(), sink);
+    let cookie = admin_cookie(&router).await;
+
+    // A tenant create mints its id server-side and, on success, records one audit entry.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    // A store create under it records a second entry, scoped to the tenant.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/stores",
+            &serde_json::json!({ "tenant_id": tenant_id, "name": "Bến Thành" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create store");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let store_id = json_body(created).await["store_id"]
+        .as_str()
+        .expect("a store id")
+        .to_owned();
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    assert_eq!(recorded.len(), 2, "each successful write records one entry");
+    let store_entry = recorded
+        .iter()
+        .find(|entry| entry.action == "store.create")
+        .expect("the store create was recorded");
+    assert_eq!(store_entry.entity_type, "store");
+    assert_eq!(
+        store_entry.entity_id, store_id,
+        "the new entity's id is recorded"
+    );
+    assert_eq!(
+        store_entry.tenant_id.map(|id| id.to_string()),
+        Some(tenant_id.clone()),
+        "the entry is scoped to the owning tenant"
+    );
+    assert!(store_entry.before.is_none(), "a create has no prior value");
+    assert!(
+        store_entry.after.is_some(),
+        "a create records the new value"
+    );
+    assert!(
+        !store_entry.actor.email.is_empty() && !store_entry.actor.admin_id.is_empty(),
+        "the acting admin is snapshotted onto the entry"
+    );
+    assert!(
+        recorded.iter().any(|entry| entry.action == "tenant.create"),
+        "the tenant create was recorded too"
+    );
+}
+
+#[tokio::test]
+async fn the_audit_read_filters_and_needs_a_session() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let entry = |id: u128, action: &str, entity_type: &str, at_ms: i64| AuditEntry {
+        id: AuditId::new(Ulid::from_u128(id)),
+        tenant_id: Some(tenant()),
+        actor: AuditActor {
+            admin_id: "01ADMIN0000000000000000OPS".to_owned(),
+            email: "ops@pizza4ps.test".to_owned(),
+            role: AdminRole::Owner,
+        },
+        action: action.to_owned(),
+        entity_type: entity_type.to_owned(),
+        entity_id: store_id().to_string(),
+        before: None,
+        after: Some(serde_json::json!({ "name": "Bến Thành" })),
+        request_id: None,
+        at: Timestamp::from_milliseconds_since_epoch(at_ms).expect("a valid instant"),
+    };
+    audit
+        .append(&entry(1, "store.create", "store", NOW_MS - 2_000))
+        .await
+        .expect("append 1");
+    audit
+        .append(&entry(2, "store.update", "store", NOW_MS - 1_000))
+        .await
+        .expect("append 2");
+    audit
+        .append(&entry(3, "tenant.update", "tenant", NOW_MS))
+        .await
+        .expect("append 3");
+
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::audit_router(audit, admin, clock()));
+
+    // No session → the trail is behind the guard.
+    let denied = router
+        .clone()
+        .oneshot(get("/admin/audit", None))
+        .await
+        .expect("route the unauthenticated read");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = admin_cookie(&router).await;
+
+    // Unfiltered: every entry, newest first.
+    let all = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit", &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(all.status(), StatusCode::OK);
+    let all = json_body(all).await;
+    let rows = all.as_array().expect("array");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["action"], "tenant.update", "newest first");
+    assert_eq!(
+        rows[0]["actor_email"], "ops@pizza4ps.test",
+        "the actor snapshot is flattened onto the view"
+    );
+
+    // Filter by entity type.
+    let stores = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?entity_type=store", &cookie))
+        .await
+        .expect("route the filtered read");
+    let stores = json_body(stores).await;
+    assert_eq!(stores.as_array().expect("array").len(), 2);
+    assert!(
+        stores
+            .as_array()
+            .expect("array")
+            .iter()
+            .all(|row| row["entity_type"] == "store"),
+        "only store entries survive the filter"
+    );
+
+    // Filter by action.
+    let updates = router
+        .oneshot(get_with_cookie("/admin/audit?action=store.update", &cookie))
+        .await
+        .expect("route the action-filtered read");
+    let updates = json_body(updates).await;
+    assert_eq!(updates.as_array().expect("array").len(), 1);
+    assert_eq!(updates[0]["action"], "store.update");
 }
 
 #[tokio::test]
@@ -5353,7 +5882,12 @@ fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::catalog_router(catalog, admin, clock()))
+    http::router(app).merge(http::catalog_router(
+        catalog,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 /// A ULID string an operator never types — the routes accept it in the body/path, the fake scopes by
@@ -5940,12 +6474,14 @@ fn catalog_publish_app(
             catalog.clone(),
             admin.clone(),
             clock(),
+            Arc::new(NoopAuditRecorder),
         ))
         .merge(http::catalog_publish_router(
             catalog,
             config_trees,
             admin,
             clock(),
+            Arc::new(NoopAuditRecorder),
         ))
 }
 

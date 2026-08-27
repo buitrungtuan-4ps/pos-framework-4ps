@@ -22,6 +22,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { AuditTrail } from "../components/AuditTrail";
 
 /** How often the view re-reads the fleet and health, so "online" and "last seen" stay current. */
 const POLL_MS = 15_000;
@@ -291,6 +292,10 @@ export function Fleet() {
                 <TechnicalDetails label={t("common.technicalDetails")}>
                   {store().store_id}
                 </TechnicalDetails>
+                <div>
+                  <span class="mb-2 block text-sm font-medium text-ink">{t("audit.history")}</span>
+                  <AuditTrail entityType="store" entityId={store().store_id} />
+                </div>
               </div>
             )}
           </Show>

@@ -8,11 +8,13 @@
 
 use core::time::Duration;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
 
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
+use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::qr::TableTokenSecret;
@@ -63,6 +65,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
     // config routes author, and the webhook-endpoint store the `/admin` webhook routes register into.
     let cloud = Cloud::new(store.clone());
+    // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
+    // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
+    // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
+    // can emit without threading an `AuditStore` generic through the already-large router types.
+    let audit: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(store.audit()));
     let app = CloudApp::new(
         cloud.clone(),
         store.rollups(),
@@ -72,6 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.config_trees(),
         store.webhooks(),
     )
+    .with_audit(Arc::clone(&audit))
     .with_admin_session_ttl_secs(config.admin_session_ttl_secs)
     .with_admin_session_idle_ttl_secs(config.admin_session_idle_ttl_secs)
     .with_admin_invite_ttl_secs(config.admin_invite_ttl_secs)
@@ -225,11 +233,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             store.api_keys(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         .merge(http::translation_router(
             store.translations(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         .merge(http::activation_router(
             store.activation_codes(),
@@ -241,6 +251,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // by migration 0011, so an existing cell's fleet appears here on the first boot after upgrade.
         .merge(http::registry_router(
             store.registry(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
+        // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
+        // only `record`), behind the same super-admin session guard as the other reads.
+        .merge(http::audit_router(
+            store.audit(),
             store.admin(),
             SystemClock,
         ))
@@ -267,6 +286,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.catalog(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
         // config node, so it rides the config tree to the store like every other config change.
@@ -275,6 +295,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.config_trees(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store

@@ -11,6 +11,7 @@ import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { type Column, ConfirmDialog, DataTable, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
+import { AuditTrail } from "../components/AuditTrail";
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
@@ -121,6 +122,13 @@ export function Devices() {
             )}
           </Show>
         </Card>
+
+        <div class="mt-6">
+          <Card title={t("devices.resolved")}>
+            <p class="mb-3 text-sm text-ink-muted">{t("devices.resolvedHint")}</p>
+            <AuditTrail entityType="device_proposal" />
+          </Card>
+        </div>
 
         <ConfirmDialog
           open={pendingReject() !== null}

@@ -23,14 +23,14 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminInviteRow, AdminSessionRow, AdminUserRow, BrandRow, CatalogItemRow,
+    AdminInviteRow, AdminSessionRow, AdminUserRow, AuditLogRow, BrandRow, CatalogItemRow,
     CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
     CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, FleetStoreRow,
     NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
-    PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
-    PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
+    PostgresApiKeys, PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresFleet, PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups,
+    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth,
+    PostgresTranslations, PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -47,6 +47,7 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
+use crate::audit::{AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore, AuditStoreError};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -1376,6 +1377,136 @@ impl TaskHealthStore for PostgresTaskHealth {
             .await
             .map_err(|error| TaskHealthError::new(error.to_string()))?;
         Ok(rows.into_iter().map(task_health).collect())
+    }
+}
+
+// --- The console audit trail (ADR-0069) -------------------------------------------------------
+
+/// Converts one stored `audit_log` row into the cloud's [`AuditEntry`], failing loudly on a
+/// malformed id/tenant/role/timestamp or an undecodable before/after — every one of those is store
+/// corruption (this cloud wrote well-formed values), not an ordinary absence.
+fn audit_entry(row: AuditLogRow) -> Result<AuditEntry, AuditStoreError> {
+    let id = row
+        .id
+        .parse::<Ulid>()
+        .map(AuditId::new)
+        .map_err(|_ignored| {
+            AuditStoreError::new(format!("an audit id is not a ULID: {}", row.id))
+        })?;
+    let tenant_id = match row.tenant_id {
+        Some(text) => Some(
+            text.parse::<Ulid>()
+                .map(TenantId::new)
+                .map_err(|_ignored| AuditStoreError::new("an audit tenant id is not a ULID"))?,
+        ),
+        None => None,
+    };
+    let role = AdminRole::from_token(&row.actor_role).ok_or_else(|| {
+        AuditStoreError::new(format!(
+            "unknown audit actor role token: {}",
+            row.actor_role
+        ))
+    })?;
+    let before = decode_audit_value(row.before_json, "before")?;
+    let after = decode_audit_value(row.after_json, "after")?;
+    let at = Timestamp::from_milliseconds_since_epoch(row.at_ms)
+        .map_err(|_ignored| AuditStoreError::new("an audit timestamp is out of range"))?;
+    Ok(AuditEntry {
+        id,
+        tenant_id,
+        actor: AuditActor {
+            admin_id: row.actor_admin_id,
+            email: row.actor_email,
+            role,
+        },
+        action: row.action,
+        entity_type: row.entity_type,
+        entity_id: row.entity_id,
+        before,
+        after,
+        request_id: row.request_id,
+        at,
+    })
+}
+
+/// Decodes a stored audit before/after JSON document, or `None` if the column was `NULL`.
+fn decode_audit_value(
+    text: Option<String>,
+    which: &str,
+) -> Result<Option<serde_json::Value>, AuditStoreError> {
+    match text {
+        Some(json) => serde_json::from_str(&json).map(Some).map_err(|error| {
+            AuditStoreError::new(format!("decoding an audit {which} value failed: {error}"))
+        }),
+        None => Ok(None),
+    }
+}
+
+/// Encodes an audit before/after value to JSON text for storage, or `None` if absent.
+fn encode_audit_value(
+    value: Option<&serde_json::Value>,
+    which: &str,
+) -> Result<Option<String>, AuditStoreError> {
+    match value {
+        Some(value) => serde_json::to_string(value).map(Some).map_err(|error| {
+            AuditStoreError::new(format!("encoding an audit {which} value failed: {error}"))
+        }),
+        None => Ok(None),
+    }
+}
+
+impl AuditStore for PostgresAudit {
+    async fn append(&self, entry: &AuditEntry) -> Result<(), AuditStoreError> {
+        let tenant = entry.tenant_id.map(|tenant| tenant.to_string());
+        let before = encode_audit_value(entry.before.as_ref(), "before")?;
+        let after = encode_audit_value(entry.after.as_ref(), "after")?;
+        self.insert(
+            &entry.id.to_string(),
+            tenant.as_deref(),
+            &entry.actor.admin_id,
+            &entry.actor.email,
+            entry.actor.role.as_token(),
+            &entry.action,
+            &entry.entity_type,
+            &entry.entity_id,
+            before.as_deref(),
+            after.as_deref(),
+            entry.request_id.as_deref(),
+            entry.at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AuditStoreError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: Option<TenantId>,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let tenant = tenant.map(|tenant| tenant.to_string());
+        let rows = self
+            .fetch(tenant.as_deref(), i64::from(limit))
+            .await
+            .map_err(|error| AuditStoreError::new(error.to_string()))?;
+        rows.into_iter().map(audit_entry).collect()
+    }
+
+    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let tenant = query.tenant.map(|tenant| tenant.to_string());
+        let rows = self
+            .search(
+                tenant.as_deref(),
+                query.entity_type.as_deref(),
+                query.entity_id.as_deref(),
+                query.action.as_deref(),
+                query.actor_admin_id.as_deref(),
+                query.since_ms,
+                query.until_ms,
+                i64::from(query.limit),
+            )
+            .await
+            .map_err(|error| AuditStoreError::new(error.to_string()))?;
+        rows.into_iter().map(audit_entry).collect()
     }
 }
 

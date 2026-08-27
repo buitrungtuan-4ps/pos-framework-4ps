@@ -111,6 +111,90 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Detail views now show the entity's own audit history, and who resolved device proposals**
+  (roadmap v2, Track G, G2 slice 6; [ADR-0069](docs/adr/0069-audit-trail.md)). A reusable
+  `AuditTrail` panel reads an entity's history from the same `GET /admin/audit` (filtered by entity
+  type and id) and shows who created it, who last changed it, and the entries between — surfacing
+  `created/updated at·by` straight from the trail rather than from denormalized columns. It is wired
+  into the Fleet store drawer (a store's change history) and the Devices screen (a "recently
+  resolved" panel naming who approved or rejected each proposal — the `resolved_by` the roadmap
+  calls for). The panel drops into any Detail view. **Upgrade note:** no schema, API, or permission
+  change — it reuses the slice-4 read and `console.data.read`.
+- **A store's config now has a version history you can view, diff, and roll back** (roadmap v2,
+  Track G, G2 slice 5; [ADR-0033](docs/adr/0033-config-tree.md),
+  [ADR-0069](docs/adr/0069-audit-trail.md)). The config tree already kept every published version;
+  this surfaces it. `GET …/config/versions` lists them newest-first (each version's instant read from
+  its own ULID, and the current one flagged), `GET …/config/versions/{id}` returns a past version's
+  effective document for a diff, and `POST …/config/rollback` restores a chosen version — **append-only**:
+  it re-publishes that version's effective config as a *new* current version, so nothing in the
+  history is altered and the store pulls the restored config on its next sync. Rollback is audited as
+  `config.rollback`. The Config screen gains a version-history list with a per-version view, a
+  "compare with current" line diff, and a confirm-gated roll-back. **Upgrade note:** no schema,
+  `PROTOCOL_VERSION`, or permission change — the reads reuse `console.data.read` and rollback reuses
+  `console.config.publish`; the version log is the config tree's existing persisted state. Rollback
+  restores the *effective* configuration exactly; per-level layer attribution is flattened into the
+  base layer (documented in ADR-0069).
+- **The console has an Audit screen: a filterable, fleet-wide record of who changed what** (roadmap
+  v2, Track G, G2 slice 4; [ADR-0069](docs/adr/0069-audit-trail.md)). Now that the write routes emit
+  entries, `GET /admin/audit` reads them back — newest first, behind `console.data.read` (every
+  console role) — with server-side filters for entity type, action, acting admin, and a time window;
+  an absent `tenant_id` is the fleet-wide read (every tenant, including tenant-global entries), a
+  present one scopes to that tenant and excludes the global rows. Filters run in SQL before the row
+  limit, so a narrow filter still reaches older matches. A new **Audit** screen (Overview nav) lists
+  the trail in the F2 kit's `DataTable` with entity/action/actor filters, and a detail drawer shows
+  each change's before/after JSON, actor, and instant; the entry's ULID stays behind Technical
+  details. The `AuditStore` seam gained a `query` read (an `AuditQuery` filter) alongside the plain
+  `list`. **Upgrade note:** no schema, `PROTOCOL_VERSION`, or permission change; reuses migration
+  `0022` and the existing `console.data.read` permission. Config version list/diff/rollback and the
+  per-Detail audit tab are the next G2 slices.
+- **The rest of the console's write surface now records to the audit trail** (roadmap v2, Track G,
+  G2 slice 3; [ADR-0069](docs/adr/0069-audit-trail.md)). Extending slice 2 beyond the org registry,
+  every remaining `/admin` mutation now appends one `audit_log` entry on success: API-key issue and
+  revoke, webhook register/delete/re-enable, config publish, rollup reset, admin invite/role/status
+  and invite revoke, device-proposal approve/reject (the `resolved_by` is the acting admin), the
+  translation-grid save, and the whole catalog authoring surface (item, tax class, item and display
+  categories/sub-categories, modifier group, menu, section, layout button, placement — create,
+  update, and remove) plus the menu publish. The recorder reaches the sub-routers (device,
+  translation, catalog, catalog-publish) as the same object-safe `Arc<dyn AuditRecorder>` carried on
+  their state. **Secrets are never recorded:** an API-key entry captures the granted scopes and
+  expiry and a webhook entry the endpoint URL, but the key token and HMAC signing secret are
+  excluded; admin-management entries carry the target admin's id and the role/status set, not an
+  email. Idempotent no-ops (revoking an already-gone key, resolving an already-resolved proposal)
+  record nothing. Recording stays best-effort after the write. **Upgrade note:** no schema,
+  `PROTOCOL_VERSION`, or permission-identifier change; reuses migration `0022`. No customer or
+  employee personal data is recorded. The break-glass reset tombstone (written from the `reset_admin`
+  binary, not an `/admin` route) and the audit read API + screen are the next G2 slices.
+- **The org-registry write routes now record to the audit trail** (roadmap v2, Track G, G2 slice 2;
+  [ADR-0069](docs/adr/0069-audit-trail.md)). Building on the slice-1 store, every successful
+  tenant/brand/store/device create or update under `/admin` now appends one `audit_log` entry — the
+  acting admin snapshotted from the session, the `resource.verb` action (`tenant.create`,
+  `store.update`, `device.create`, …), the affected entity's id, and the new value as `after`. The
+  recorder is carried as an object-safe `Arc<dyn AuditRecorder>` shared across the router and the
+  registry sub-router, so a handler emits without threading a store generic through the router types;
+  a create scopes its entry to the entity's owning tenant (a tenant create to the *new* tenant's id,
+  so a tenant's audit tab opens with its own creation). Recording is **best-effort after the write**:
+  an audit-store failure is logged, never surfaced, so a mutation the operator asked for and that
+  succeeded is never failed by its audit write. Reading the mutation's prior value into `before` and
+  covering the remaining `/admin` write surfaces (keys, webhooks, config, catalog, admin management,
+  the break-glass reset) are the next G2 slices. **Upgrade note:** no schema, `PROTOCOL_VERSION`, or
+  permission-identifier change; reuses migration `0022`. No customer or employee personal data is
+  recorded — entries capture administrative actions on business metadata, keyed to console operators.
+- **The foundation for a console audit trail — an append-only record of who changed what** (roadmap
+  v2, Track G, G2 slice 1; [ADR-0069](docs/adr/0069-audit-trail.md)). Until now none of the ~60
+  console write routes recorded anything; G1 gave every operator a distinct identity, and this lands
+  the store that finally makes an accountable trail possible. A new append-only `audit_log` table
+  (migration `0022`) holds one row per console mutation — the acting admin *snapshotted* at action
+  time (id, email, role, so renaming or deleting an admin later never rewrites history), the action
+  (`resource.verb`), the affected entity, the before/after as `jsonb`, and the instant — with a new
+  `AuditStore` seam (`append` + a recent-first, tenant-scoped `list`). Append-only is enforced at the
+  grant (`SELECT`/`INSERT` only, never `UPDATE`/`DELETE`) and rows are RLS-isolated by tenant, with
+  tenant-global actions (console admin management, the break-glass reset) carried as `NULL`-tenant
+  rows visible only to the trusted connection. This slice is the seam and table; threading the actor
+  through the write routes and emitting entries are the next G2 slices. **Upgrade note:** one additive,
+  forward-only,
+  append-only migration `0022_audit_log`; no `PROTOCOL_VERSION` or permission-identifier change. No
+  customer or employee personal data is recorded — the log captures administrative actions on business
+  metadata (store names, config, keys), keyed to console operators.
 - **The console has a Fleet screen: every store's liveness and the background workers' health at a
   glance** (roadmap v2, Track O, O1 slice 5; [ADR-0068](docs/adr/0068-fleet-liveness.md)). A new
   tenant-scoped `/fleet` screen presents the two O1 reads in one operational view: a system-health

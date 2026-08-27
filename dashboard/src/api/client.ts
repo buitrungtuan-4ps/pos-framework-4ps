@@ -12,10 +12,13 @@ import type {
   AdminSessionView,
   AdminStatus,
   ApiKeySummary,
+  AuditEntry,
+  AuditFilter,
   Brand,
   CatalogItem,
   ChannelPrice,
   ConfigLevel,
+  ConfigVersion,
   CreateApiKeyResponse,
   DailyRollup,
   Device,
@@ -203,6 +206,24 @@ export const api = {
       "PUT",
       `/admin/stores/${encodeURIComponent(storeId)}/config/${level}?${tenantQuery(tenantId)}`,
       document,
+    ),
+  // Config version history (ADR-0069 G2): list the append-only versions, read one's effective
+  // document for the diff view, and roll back (which appends a new current version).
+  configVersions: (tenantId: string, storeId: string) =>
+    requestJson<ConfigVersion[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/versions?${tenantQuery(tenantId)}`,
+    ),
+  configVersionEffective: (tenantId: string, storeId: string, versionId: string) =>
+    requestJson<Json>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/versions/${encodeURIComponent(versionId)}?${tenantQuery(tenantId)}`,
+    ),
+  rollbackConfig: (tenantId: string, storeId: string, versionId: string) =>
+    requestJson<PublishedConfig>(
+      "POST",
+      `/admin/stores/${encodeURIComponent(storeId)}/config/rollback?${tenantQuery(tenantId)}`,
+      { version_id: versionId },
     ),
 
   // --- rollups (ADR-0060 admin read) ---
@@ -602,4 +623,19 @@ export const api = {
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
     ),
   taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
+
+  // --- console audit trail (ADR-0069, Track G2) ---
+  // A fleet-wide, filterable read of who changed what, behind console.data.read. Every filter is
+  // optional; an absent `tenantId` reads across every tenant (including tenant-global entries).
+  listAudit: (filter: AuditFilter = {}) => {
+    const params = new URLSearchParams();
+    if (filter.tenantId) params.set("tenant_id", filter.tenantId);
+    if (filter.entityType) params.set("entity_type", filter.entityType);
+    if (filter.entityId) params.set("entity_id", filter.entityId);
+    if (filter.action) params.set("action", filter.action);
+    if (filter.actorAdminId) params.set("actor_admin_id", filter.actorAdminId);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return requestJson<AuditEntry[]>("GET", query ? `/admin/audit?${query}` : "/admin/audit");
+  },
 };

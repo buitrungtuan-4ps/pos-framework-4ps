@@ -22,6 +22,7 @@
 mod activation;
 mod admin;
 mod apikeys;
+mod audit;
 mod catalog;
 mod config_trees;
 mod devices;
@@ -41,6 +42,7 @@ pub use admin::{
     AdminCredentialRow, AdminInviteRow, AdminSessionRow, AdminUserRow, NewSessionRow, PostgresAdmin,
 };
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
+pub use audit::{AuditLogRow, PostgresAudit};
 pub use catalog::{
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
