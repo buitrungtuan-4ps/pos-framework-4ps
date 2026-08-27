@@ -111,6 +111,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console can read the capability catalogue** (roadmap v2, Track M8, slice 2;
+  [ADR-0071](docs/adr/0071-config-without-json.md)). A new `GET /admin/capabilities` serves the §10
+  capability flags (key, default, one-line description), the three presets (full-service / counter /
+  retail, each as its set of enabled flag keys), and the inter-flag rules (id + description) — all from
+  `pos-core`'s own catalogue, behind `console.data.read`. This is what the Config screen's form editor
+  (slice 3) renders toggles and previews conflicts from, so the console never hard-codes a flag list or
+  a rule. **Upgrade note:** additive read-only route; no schema or `PROTOCOL_VERSION` change.
 - **The edge now applies published capability flags (a fixed silent no-op)** (roadmap v2, Track M8,
   slice 1; [ADR-0071](docs/adr/0071-config-without-json.md)). Publishing a store's capability profile
   (§10 — `tables_enabled`, `pay_first_enabled`, `kds_enabled`, …) from the console had no effect on the

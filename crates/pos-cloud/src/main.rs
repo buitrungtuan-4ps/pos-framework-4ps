@@ -290,6 +290,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Capability catalogue (ADR-0071): the §10 flags, presets, and inter-flag rules the Config
+        // screen's form editor renders toggles and conflict previews from — static framework data
+        // behind the session guard.
+        .merge(http::capabilities_router(store.admin(), SystemClock))
         // Background-task health (ADR-0068 slice 4): the read-only console view of whether the
         // off-request loops are alive and keeping up. `expected_tasks` names the loops this
         // deployment actually turned on, so a loop dead since boot reads as unhealthy, not missing.

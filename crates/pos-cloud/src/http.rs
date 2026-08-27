@@ -1884,6 +1884,142 @@ where
     }
 }
 
+// --- Capability catalogue (`/admin/capabilities`, ADR-0071) -------------------------------------
+
+/// One capability flag as the console's form editor reads it: its config key, default, and the
+/// one-line description (§10 catalogue). Mirrors `pos-core`'s `CapabilityMeta` so the console renders
+/// toggles from the framework's own source of truth rather than a hand-kept list.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityFlagView {
+    key: &'static str,
+    default_on: bool,
+    description: &'static str,
+}
+
+/// One capability preset (§10) — a named starting profile the console offers as a button, given as the
+/// set of flag keys it turns on.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityPresetView {
+    id: &'static str,
+    keys: Vec<&'static str>,
+}
+
+/// One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
+/// created rather than as a `422` on publish.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityRuleView {
+    id: &'static str,
+    description: &'static str,
+}
+
+/// The whole capability catalogue the form editor needs: the flags, the presets, and the inter-flag
+/// rules — all §10 data, tenant-independent.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CapabilityCatalogueView {
+    flags: Vec<CapabilityFlagView>,
+    presets: Vec<CapabilityPresetView>,
+    rules: Vec<CapabilityRuleView>,
+}
+
+/// The collaborators the capability-catalogue read needs: just the admin and clock its session guard
+/// uses. The catalogue itself is static `pos-core` data, so there is no store to carry.
+#[derive(Clone)]
+struct CapabilitiesState<A, C> {
+    admin: A,
+    clock: C,
+}
+
+/// The keys a preset turns on, in catalogue order.
+fn preset_keys(context: pos_core::capability::CapabilityContext) -> Vec<&'static str> {
+    pos_core::capability::Capability::ALL
+        .iter()
+        .copied()
+        .filter(|capability| context.enabled(*capability))
+        .map(|capability| capability.meta().key)
+        .collect()
+}
+
+/// Builds the capability-catalogue sub-router ([ADR-0071](../../../docs/adr/0071-config-without-json.md)).
+///
+/// One read, behind [`ConsolePermission::Read`] (every console role): the §10 capability flags, the
+/// presets, and the inter-flag rules, so the Config screen's form editor renders toggles and previews
+/// conflicts from the framework's own catalogue. Tenant-independent — the catalogue is the same for
+/// every store.
+pub fn capabilities_router<A, C>(admin: A, clock: C) -> Router
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/capabilities", get(admin_list_capabilities::<A, C>))
+        .with_state(CapabilitiesState { admin, clock })
+}
+
+/// Serves the §10 capability catalogue for the console's form editor.
+async fn admin_list_capabilities<A, C>(
+    State(state): State<CapabilitiesState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    use pos_core::capability::{Capability, CapabilityContext, RULES};
+
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let flags = Capability::ALL
+        .iter()
+        .copied()
+        .map(|capability| {
+            let meta = capability.meta();
+            CapabilityFlagView {
+                key: meta.key,
+                default_on: meta.default_on,
+                description: meta.description,
+            }
+        })
+        .collect();
+    let presets = vec![
+        CapabilityPresetView {
+            id: "full_service",
+            keys: preset_keys(CapabilityContext::full_service()),
+        },
+        CapabilityPresetView {
+            id: "counter",
+            keys: preset_keys(CapabilityContext::counter()),
+        },
+        CapabilityPresetView {
+            id: "retail",
+            keys: preset_keys(CapabilityContext::retail()),
+        },
+    ];
+    let rules = RULES
+        .iter()
+        .map(|rule| CapabilityRuleView {
+            id: rule.id,
+            description: rule.description,
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(CapabilityCatalogueView {
+            flags,
+            presets,
+            rules,
+        }),
+    )
+        .into_response()
+}
+
 // --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------
 
 /// A store is **online** if its most recent contact is within this window of now. Liveness is captured

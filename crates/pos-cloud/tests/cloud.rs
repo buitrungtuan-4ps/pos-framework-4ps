@@ -7758,3 +7758,67 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
         "no PIN hash in the audit trail"
     );
 }
+
+/// The main app merged with the capability-catalogue router.
+fn capabilities_app(admin: FakeAdmin) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::capabilities_router(admin, clock()))
+}
+
+#[tokio::test]
+async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
+    let admin = provisioned_admin();
+    let router = capabilities_app(admin.clone());
+
+    // Read is open to every console role — a Viewer may load the catalogue.
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/capabilities", &viewer))
+        .await
+        .expect("route the catalogue");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+
+    // Flags carry key/default/description; the well-known ones are present.
+    let flags = body["flags"].as_array().expect("flags array");
+    assert!(!flags.is_empty());
+    let keys: Vec<&str> = flags
+        .iter()
+        .map(|flag| flag["key"].as_str().expect("a key"))
+        .collect();
+    assert!(keys.contains(&"tables_enabled"));
+    assert!(keys.contains(&"pay_first_enabled"));
+    let tables = flags
+        .iter()
+        .find(|flag| flag["key"] == serde_json::json!("tables_enabled"))
+        .expect("the tables flag");
+    assert_eq!(tables["default_on"], serde_json::json!(true));
+    assert!(tables["description"].as_str().expect("a description").len() > 5);
+
+    // The three presets are offered, each as a set of keys.
+    let presets = body["presets"].as_array().expect("presets array");
+    let preset_ids: Vec<&str> = presets
+        .iter()
+        .map(|preset| preset["id"].as_str().expect("an id"))
+        .collect();
+    assert!(preset_ids.contains(&"full_service"));
+    assert!(preset_ids.contains(&"counter"));
+    assert!(preset_ids.contains(&"retail"));
+
+    // The inter-flag rules are served for the console's conflict preview.
+    let rules = body["rules"].as_array().expect("rules array");
+    let rule_ids: Vec<&str> = rules
+        .iter()
+        .map(|rule| rule["id"].as_str().expect("an id"))
+        .collect();
+    assert!(rule_ids.contains(&"pay_first.excludes.tables"));
+    assert!(rule_ids.contains(&"seats.requires.tables"));
+}
