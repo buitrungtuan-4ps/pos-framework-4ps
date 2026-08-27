@@ -21,6 +21,7 @@
 
 mod activation;
 mod admin;
+mod alerts;
 mod apikeys;
 mod audit;
 mod catalog;
@@ -43,6 +44,7 @@ pub use activation::{ActivationCodeRow, PostgresActivationCodes};
 pub use admin::{
     AdminCredentialRow, AdminInviteRow, AdminSessionRow, AdminUserRow, NewSessionRow, PostgresAdmin,
 };
+pub use alerts::{AlertRow, PostgresAlerts};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use audit::{AuditLogRow, PostgresAudit};
 pub use catalog::{

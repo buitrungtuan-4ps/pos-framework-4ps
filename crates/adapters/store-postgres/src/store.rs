@@ -90,6 +90,8 @@ const MIGRATION_0025: &str = include_str!("../migrations/0025_floor_areas_and_ta
 
 /// Kitchen master data — `kitchen_stations` + `station_routing_rules` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
 const MIGRATION_0026: &str = include_str!("../migrations/0026_kitchen_stations_and_routing.sql");
+/// Operational alerts ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+const MIGRATION_0027: &str = include_str!("../migrations/0027_alerts.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -254,6 +256,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0026)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0027)
+            .await
             .map_err(unavailable)
     }
 
@@ -391,6 +397,15 @@ impl PostgresStore {
     #[must_use]
     pub fn audit(&self) -> crate::audit::PostgresAudit {
         crate::audit::PostgresAudit::new(self.pool.clone())
+    }
+
+    /// The operational-alert store over this pool ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AlertStore` seam over it. The
+    /// alert evaluator opens/refreshes/resolves alerts here; the `/admin` alerts route reads them.
+    #[must_use]
+    pub fn alerts(&self) -> crate::alerts::PostgresAlerts {
+        crate::alerts::PostgresAlerts::new(self.pool.clone())
     }
 
     /// The employee store over this pool (Track M1, [ADR-0070](../../../docs/adr/0070-people-and-access.md)).

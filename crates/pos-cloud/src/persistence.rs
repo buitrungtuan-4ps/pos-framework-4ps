@@ -23,16 +23,16 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminInviteRow, AdminSessionRow, AdminUserRow, AreaRow, AssignmentRow, AuditLogRow, BrandRow,
-    CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
+    AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
+    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
     DeviceRow, EmployeeRow, FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow,
-    PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresAudit, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresOrderQueue,
-    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
-    PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow, TableRow,
-    TaskHealthRow, TenantRow,
+    PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
+    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor,
+    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
+    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth,
+    PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
+    TableRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -49,6 +49,7 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
+use crate::alerts::{AlertKind, AlertRecord, AlertSeverity, AlertStore, AlertStoreError};
 use crate::audit::{AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore, AuditStoreError};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
@@ -1389,6 +1390,100 @@ impl TaskHealthStore for PostgresTaskHealth {
             .await
             .map_err(|error| TaskHealthError::new(error.to_string()))?;
         Ok(rows.into_iter().map(task_health).collect())
+    }
+}
+
+// --- Operational alerts (ADR-0073, Track O2) --------------------------------------------------
+
+/// Converts one stored `alerts` row into the cloud's [`AlertRecord`]. A malformed id-tenant or an
+/// unknown kind is store corruption (this cloud wrote well-formed values) and fails loudly; an
+/// undecodable detail or an out-of-range instant fails safe (empty object / epoch) rather than
+/// dropping the whole listing, since this is operational telemetry.
+fn alert_record(row: AlertRow) -> Result<AlertRecord, AlertStoreError> {
+    let tenant_id = match row.tenant_id {
+        Some(text) => Some(
+            text.parse::<Ulid>()
+                .map(TenantId::new)
+                .map_err(|_ignored| AlertStoreError::new("an alert tenant id is not a ULID"))?,
+        ),
+        None => None,
+    };
+    let kind = AlertKind::parse(&row.kind)
+        .ok_or_else(|| AlertStoreError::new(format!("unknown alert kind: {}", row.kind)))?;
+    let detail = serde_json::from_str(&row.detail_json)
+        .unwrap_or_else(|_ignored| serde_json::Value::Object(serde_json::Map::new()));
+    Ok(AlertRecord {
+        id: row.id,
+        tenant_id,
+        kind,
+        dedup_key: row.dedup_key,
+        severity: AlertSeverity::parse(&row.severity),
+        summary: row.summary,
+        detail,
+        first_seen_at: Timestamp::from_milliseconds_since_epoch(row.first_seen_at_ms)
+            .unwrap_or(Timestamp::EPOCH),
+        last_seen_at: Timestamp::from_milliseconds_since_epoch(row.last_seen_at_ms)
+            .unwrap_or(Timestamp::EPOCH),
+        resolved_at: row
+            .resolved_at_ms
+            .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok()),
+        acknowledged_at: row
+            .acknowledged_at_ms
+            .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok()),
+    })
+}
+
+impl AlertStore for PostgresAlerts {
+    async fn upsert(&self, record: &AlertRecord) -> Result<(), AlertStoreError> {
+        let tenant = record.tenant_id.map(|tenant| tenant.to_string());
+        let detail_json = serde_json::to_string(&record.detail).map_err(|error| {
+            AlertStoreError::new(format!("encoding an alert detail failed: {error}"))
+        })?;
+        self.upsert(
+            &record.id,
+            tenant.as_deref(),
+            record.kind.as_str(),
+            &record.dedup_key,
+            record.severity.as_str(),
+            &record.summary,
+            &detail_json,
+            record.first_seen_at.as_milliseconds_since_epoch(),
+            record.last_seen_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| AlertStoreError::new(error.to_string()))
+    }
+
+    async fn resolve(&self, id: &str, resolved_at: Timestamp) -> Result<(), AlertStoreError> {
+        self.resolve(id, resolved_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AlertStoreError::new(error.to_string()))
+    }
+
+    async fn acknowledge(
+        &self,
+        id: &str,
+        acknowledged_at: Timestamp,
+    ) -> Result<(), AlertStoreError> {
+        self.acknowledge(id, acknowledged_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AlertStoreError::new(error.to_string()))
+    }
+
+    async fn list_active(&self) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        let rows = self
+            .list_active()
+            .await
+            .map_err(|error| AlertStoreError::new(error.to_string()))?;
+        rows.into_iter().map(alert_record).collect()
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        let rows = self
+            .list_recent(i64::from(limit))
+            .await
+            .map_err(|error| AlertStoreError::new(error.to_string()))?;
+        rows.into_iter().map(alert_record).collect()
     }
 }
 

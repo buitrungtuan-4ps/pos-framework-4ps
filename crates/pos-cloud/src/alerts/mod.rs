@@ -11,6 +11,8 @@
 
 pub mod eval;
 pub mod model;
+pub mod store;
 
 pub use eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
 pub use model::{AlertKind, AlertSeverity, FiringAlert};
+pub use store::{AlertRecord, AlertStore, AlertStoreError};

@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Alert store: the `alerts` table and its seam** (roadmap v2, Track O2, slice 2;
+  [ADR-0073](docs/adr/0073-alerting.md)). Persists operational alerts with an open→resolved lifecycle.
+  Migration `0027_alerts.sql` adds the `alerts` table — nullable `tenant_id` (server-wide alerts carry
+  none), RLS-isolated like `audit_log`, with a **partial unique index** (`coalesce(tenant_id,''), kind,
+  dedup_key WHERE resolved_at IS NULL`) that enforces one *open* alert per condition while letting a
+  resolved one remain as history. The new `AlertStore` seam upserts (opens or refreshes in place,
+  keeping the original id and `first_seen_at`), resolves, acknowledges, and lists the active and recent
+  alerts; a `store-postgres` `PostgresAlerts` adapter implements it (the upsert's `ON CONFLICT` targets
+  the partial index), with an in-memory fake proving the lifecycle contract and a real-Postgres
+  integration test covering dedup, resolve→history, and reopen. An alert stores a condition and a small
+  JSON detail, never a payload or PII. **Upgrade note:** additive migration `0027` (rollback-safe); no
+  protocol or permission change; nothing writes to the table until the evaluator loop lands (slice 3).
 - **Alerting foundations: the alert model and a pure evaluator** (roadmap v2, Track O2, slice 1;
   [ADR-0073](docs/adr/0073-alerting.md)). Begins Track **O2 (Alerting)** — the cloud finally *watches*
   the read models O1 built instead of only serving them on demand. This first slice lays the type
