@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console has a Fleet screen: every store's liveness and the background workers' health at a
+  glance** (roadmap v2, Track O, O1 slice 5; [ADR-0068](docs/adr/0068-fleet-liveness.md)). A new
+  tenant-scoped `/fleet` screen presents the two O1 reads in one operational view: a system-health
+  strip (the rollup projector, retention sweep, and webhook dispatcher, each healthy or not, with when
+  it last ran) above a table of the tenant's stores — online/offline, last seen, config in-sync or
+  behind, and relay backlog with the oldest pending order's age — plus a per-store detail drawer. It
+  polls every 15 seconds so "online" and "last seen" stay current without a manual refresh, hides the
+  store ULID behind a Technical-details disclosure, and is fully localized (en/vi). Built on the F2
+  CRUD kit; read-only. **Upgrade note:** none — a frontend screen over the existing `/admin/fleet` and
+  `/admin/health/tasks` reads; no API, migration, or permission change.
 - **The console can see whether the background workers are alive and keeping up** (roadmap v2, Track
   O, O1 slice 4; [ADR-0068](docs/adr/0068-fleet-liveness.md)). The cloud's off-request loops — the
   rollup projector, the retention/PII sweep, the webhook dispatcher — now record a heartbeat at the

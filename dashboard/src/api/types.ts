@@ -324,3 +324,38 @@ export interface RecoveryCodesResponse {
 export interface RecoveryCodesStatus {
   readonly remaining: number;
 }
+
+/**
+ * One store's fleet row from `GET /admin/fleet` (ADR-0068 slice 3): identity + status joined with
+ * liveness, config drift, and relay backlog. `online` and `config_current` are the server's read-time
+ * verdicts; the raw instants are Unix ms (or `null` for a store never seen / never configured).
+ */
+export interface FleetStore {
+  readonly store_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+  readonly online: boolean;
+  readonly last_seen_at_ms: number | null;
+  readonly last_config_pull_at_ms: number | null;
+  readonly config_version_held: string | null;
+  readonly config_version_published: string | null;
+  readonly config_current: boolean;
+  readonly relay_backlog: number;
+  readonly relay_oldest_pending_at_ms: number | null;
+}
+
+/** One background loop's health from `GET /admin/health/tasks` (ADR-0068 slice 4). */
+export interface TaskHealthEntry {
+  readonly task: string;
+  readonly expected: boolean;
+  readonly healthy: boolean;
+  readonly last_tick_at_ms: number | null;
+  readonly seconds_since: number | null;
+  readonly detail: Json;
+}
+
+/** The whole-fleet-of-loops report: an overall verdict plus per-loop entries. */
+export interface TaskHealthReport {
+  readonly healthy: boolean;
+  readonly tasks: readonly TaskHealthEntry[];
+}

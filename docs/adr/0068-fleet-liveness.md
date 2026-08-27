@@ -77,6 +77,18 @@ answers it, captured from the signal the edge already sends.
   backlog is a useful signal but does not distinguish "caught up" from "stopped," which the heartbeat
   does directly; per-loop backlog gauges can layer on later.
 
+- **The Fleet dashboard (slice 5) is one read-only operational screen.** A new console screen
+  (`/fleet`, tenant-scoped in the nav) reads both O1 endpoints and shows them in one glance: a
+  system-health strip across the top (the background loops from slice 4, each with a healthy/unhealthy
+  badge and its last-tick age) above a table of the tenant's stores (online/offline, last seen,
+  config in-sync/behind, relay backlog with oldest-pending age), with a per-store detail drawer. It
+  polls on a fixed interval so "online" and "last seen" stay current without a manual refresh, reuses
+  the F2 kit (`DataTable`/`StatusBadge`/`Drawer`/`TechnicalDetails`) and the F0 context gate, and adds
+  no new client capability — the verdicts (`online`, `config_current`, per-loop `healthy`) are already
+  computed server-side, so the screen only presents them. Relative times are formatted with
+  `Intl.RelativeTimeFormat`, so no per-unit catalogue string is added; the ULID stays behind a
+  Technical-details disclosure as elsewhere.
+
 **Rejected.**
 
 - **Columns on `config_trees` or on the registry `stores` row** — rejected: liveness must exist for a
