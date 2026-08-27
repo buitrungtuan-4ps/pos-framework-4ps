@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Floor & kitchen `/admin` CRUD routes** (roadmap v2, Track M2, slice 3;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). `GET/POST /admin/floor/areas`,
+  `GET/PATCH /admin/floor/areas/{id}`, the same for `/admin/floor/tables`, `/admin/kitchen/stations`,
+  and `GET/POST /admin/kitchen/routing` + `DELETE /admin/kitchen/routing/{id}`. Reads are behind
+  `console.data.read`; every write is behind a new **`console.floor.manage`** permission (Owner/Admin)
+  and is audited (`floor.area.*`, `floor.table.*`, `kitchen.station.*`, `kitchen.routing.*`; floor data
+  is not PII). A routing rule is rejected unless it matches exactly one of an item or a course — the
+  same §10 rule the publish validator enforces, surfaced early as a `400`. The typed dashboard client
+  gains the matching `Area`/`FloorTable`/`Station`/`RoutingRule` types and list/create/update/remove
+  methods. **Upgrade note:** additive routes + one new console permission; no schema or protocol change.
 - **Kitchen master-data store: stations & routing rules** (roadmap v2, Track M2, slice 2b;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Migration `0026_kitchen_stations_and_routing.sql`
   adds the per-store `kitchen_stations` (name, optional backup station for printer failover, an

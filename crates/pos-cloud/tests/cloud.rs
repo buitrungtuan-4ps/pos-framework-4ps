@@ -7805,6 +7805,186 @@ fn people_app_with_audit(
     http::router(app).merge(http::people_router(people, admin, clock(), audit))
 }
 
+/// The main app merged with the floor & kitchen router, wired to a caller-supplied audit recorder
+/// (Track M2, ADR-0072).
+fn floor_app_with_audit(
+    admin: FakeAdmin,
+    floor: FakeFloor,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::floor_router(floor, admin, clock(), audit))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end lifecycle over the floor & kitchen routes — create an area, a table, a \
+              station, and a routing rule; reject a rule matching neither item nor course; list each; \
+              archive the area; remove the rule — kept together against the same data"
+)]
+async fn floor_routes_crud_lifecycle_audited() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_app_with_audit(
+        admin,
+        FakeFloor::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Create an area.
+    let area = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/areas",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Terrace" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create area");
+    assert_eq!(area.status(), StatusCode::CREATED);
+    let area_id = json_body(area).await["id"].as_str().expect("id").to_owned();
+
+    // Create a table in that area, placed on the grid.
+    let table = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/tables",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "area_id": area_id,
+                "name": "T1",
+                "seats": 4,
+                "grid_column": 0,
+                "grid_row": 0,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create table");
+    assert_eq!(table.status(), StatusCode::CREATED);
+
+    // Create a station.
+    let station = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "name": "Oven",
+                "is_default": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create station");
+    assert_eq!(station.status(), StatusCode::CREATED);
+    let station_id = json_body(station).await["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    // A routing rule that matches neither an item nor a course is refused.
+    let bad_rule = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "station_id": station_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad rule");
+    assert_eq!(bad_rule.status(), StatusCode::BAD_REQUEST);
+
+    // A well-formed item rule is accepted.
+    let item_ulid = Ulid::from_u128(0xB0B).to_string();
+    let rule = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "station_id": station_id,
+                "menu_item_id": item_ulid,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create rule");
+    assert_eq!(rule.status(), StatusCode::CREATED);
+    let rule_id = json_body(rule).await["id"].as_str().expect("id").to_owned();
+
+    // Each list reads back one row.
+    for path in [
+        format!("/admin/floor/areas?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/floor/tables?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/kitchen/stations?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/kitchen/routing?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+    ] {
+        let listed = router
+            .clone()
+            .oneshot(get_with_cookie(&path, &cookie))
+            .await
+            .expect("route list");
+        assert_eq!(listed.status(), StatusCode::OK, "{path}");
+        assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1, "{path}");
+    }
+
+    // Archive the area.
+    let archived = router
+        .clone()
+        .oneshot(patch_with_cookie(
+            &format!("/admin/floor/areas/{area_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Terrace", "status": "archived" }),
+            &cookie,
+        ))
+        .await
+        .expect("route archive area");
+    assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+
+    // Remove the routing rule.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/kitchen/routing/{rule_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route remove rule");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    // The write path is audited: the actions were recorded (floor data is not PII).
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let actions: Vec<&str> = recorded.iter().map(|entry| entry.action.as_str()).collect();
+    for action in [
+        "floor.area.create",
+        "floor.table.create",
+        "kitchen.station.create",
+        "kitchen.routing.create",
+        "floor.area.update",
+        "kitchen.routing.remove",
+    ] {
+        assert!(actions.contains(&action), "missing audit {action}");
+    }
+}
+
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,

@@ -444,6 +444,54 @@ export interface CreatedId {
   readonly id: string;
 }
 
+// --- Floor & kitchen (ADR-0072, Track M2): per-store areas/tables and kitchen stations/routing ---
+
+/** A floor area from `GET /admin/floor/areas` — a named region of one store's floor. */
+export interface Area {
+  readonly area_id: string;
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+}
+
+/** A floor table — belongs to an area, optionally placed on the visual editor's grid (`position` is
+ *  omitted by the server when the table is unplaced, so it arrives as `null` here). */
+export interface FloorTable {
+  readonly table_id: string;
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly area_id: string;
+  readonly label: string;
+  readonly seats: number;
+  readonly position: GridPosition | null;
+  readonly status: EntityStatus;
+}
+
+/** A kitchen station from `GET /admin/kitchen/stations` — with an optional backup (printer failover)
+ *  and a catch-all `is_default` flag. */
+export interface Station {
+  readonly station_id: string;
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly name: string;
+  readonly backup_station_id: string | null;
+  readonly is_default: boolean;
+  readonly status: EntityStatus;
+}
+
+/** An item→station routing rule (ADR-0072) — matches a fired line by item or by course (exactly one).
+ *  `sort` orders rules within their tier. */
+export interface RoutingRule {
+  readonly rule_id: string;
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly station_id: string;
+  readonly menu_item_id: string | null;
+  readonly course_id: string | null;
+  readonly sort: number;
+}
+
 // --- Capabilities (ADR-0071, Track M8): the §10 flag catalogue the Config screen's form editor reads ---
 
 /**
