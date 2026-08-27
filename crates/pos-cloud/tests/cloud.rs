@@ -23,7 +23,8 @@ use pos_cloud::activation::{
 };
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
-    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, NewAdminUser,
+    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, LiveSession,
+    NewAdminUser, hash_session_token,
 };
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
@@ -222,11 +223,15 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
 }
 
 /// The super-admin store the `/admin` login and session guard consult, keyed to the one super-admin.
+/// A stored session row: its expiry and the id of the admin it belongs to (`None` for a legacy
+/// session), keyed in the table by `SHA-256(token)`.
+type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
+
 #[derive(Clone, Default)]
 struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
     last_used_totp_step: Arc<Mutex<Option<u64>>>,
-    sessions: Arc<Mutex<HashMap<[u8; 32], Timestamp>>>,
+    sessions: Arc<Mutex<SessionRows>>,
     admin_users: Arc<Mutex<Vec<AdminUser>>>,
 }
 
@@ -280,11 +285,12 @@ impl AdminStore for FakeAdmin {
         &self,
         token_hash: [u8; 32],
         expires_at: Timestamp,
+        admin_id: Option<&str>,
     ) -> Result<(), AdminStoreError> {
         self.sessions
             .lock()
             .expect("lock")
-            .insert(token_hash, expires_at);
+            .insert(token_hash, (expires_at, admin_id.map(str::to_owned)));
         Ok(())
     }
 
@@ -298,7 +304,23 @@ impl AdminStore for FakeAdmin {
             .lock()
             .expect("lock")
             .get(&token_hash)
-            .is_some_and(|expires_at| *expires_at > now))
+            .is_some_and(|(expires_at, _)| *expires_at > now))
+    }
+
+    async fn session_admin(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<LiveSession>, AdminStoreError> {
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock")
+            .get(&token_hash)
+            .filter(|(expires_at, _)| *expires_at > now)
+            .map(|(_, admin_id)| LiveSession {
+                admin_id: admin_id.clone(),
+            }))
     }
 
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
@@ -3263,6 +3285,105 @@ async fn registry_is_behind_the_session_guard() {
         .await
         .expect("route unauthenticated");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Seeds a console admin of `role` and a live session bound to it, returning the `name=value` cookie
+/// that names that session — the way a specific-role caller is simulated end-to-end (ADR-0067).
+async fn role_session_cookie(admin: &FakeAdmin, role: AdminRole, token: &str) -> String {
+    let id = format!("id-{}", role.as_token());
+    admin
+        .create_admin_user(NewAdminUser {
+            id: id.clone(),
+            email: format!("{}@example.test", role.as_token()),
+            name: "N".to_owned(),
+            role,
+            password_phc: "$argon2id$not-a-real-hash".to_owned(),
+            totp_secret: b"not-a-real-totp-secret".to_vec(),
+        })
+        .await
+        .expect("seed admin");
+    let expiry = Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid");
+    admin
+        .create_session(hash_session_token(token), expiry, Some(&id))
+        .await
+        .expect("seed session");
+    format!("__Host-pos_admin_session={token}")
+}
+
+#[tokio::test]
+async fn a_viewer_may_read_the_registry_but_not_create() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    // `console.data.read` is granted to every role, so a viewer's listing succeeds.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/tenants", &cookie))
+        .await
+        .expect("route list");
+    assert_eq!(
+        listed.status(),
+        StatusCode::OK,
+        "a viewer may read the registry"
+    );
+
+    // Creating a tenant needs `console.orgs.manage`, which a viewer lacks — a 403, distinct from the
+    // 401 an unauthenticated caller gets: the viewer is signed in, only under-privileged.
+    let denied = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "X" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "a viewer cannot create a tenant"
+    );
+}
+
+#[tokio::test]
+async fn an_ops_admin_cannot_create_in_the_registry() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let denied = router
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "X" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "ops has no tenant/brand creation"
+    );
+}
+
+#[tokio::test]
+async fn an_owner_session_may_create_in_the_registry() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+    let created = router
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    assert_eq!(
+        created.status(),
+        StatusCode::CREATED,
+        "an owner may create a tenant"
+    );
 }
 
 // --- Catalog authoring admin routes (ADR-0066) --------------------------------------------------

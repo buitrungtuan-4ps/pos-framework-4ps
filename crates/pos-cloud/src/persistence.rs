@@ -48,7 +48,8 @@ use pos_core::activation::CodeStatus;
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
-    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, NewAdminUser,
+    AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser, LiveSession,
+    NewAdminUser,
 };
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
@@ -371,10 +372,15 @@ impl AdminStore for PostgresAdmin {
         &self,
         token_hash: [u8; 32],
         expires_at: Timestamp,
+        admin_id: Option<&str>,
     ) -> Result<(), AdminStoreError> {
-        self.insert_session(&token_hash, expires_at.as_milliseconds_since_epoch())
-            .await
-            .map_err(|error| AdminStoreError::new(error.to_string()))
+        self.insert_session(
+            &token_hash,
+            expires_at.as_milliseconds_since_epoch(),
+            admin_id,
+        )
+        .await
+        .map_err(|error| AdminStoreError::new(error.to_string()))
     }
 
     async fn session_is_valid(
@@ -385,6 +391,18 @@ impl AdminStore for PostgresAdmin {
         self.session_valid(&token_hash, now.as_milliseconds_since_epoch())
             .await
             .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn session_admin(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> Result<Option<LiveSession>, AdminStoreError> {
+        let found = self
+            .fetch_session_admin(&token_hash, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        Ok(found.map(|admin_id| LiveSession { admin_id }))
     }
 
     async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {

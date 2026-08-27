@@ -65,6 +65,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Console role-based access control is now enforced on every `/admin` route** (roadmap v2, Track G,
+  G1 slice 2; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). A fixed console permission
+  catalogue and the four role templates (`owner`/`admin`/`ops`/`viewer`) are declared with the same
+  compile-forced registry pattern `pos-core` uses for store permissions (`docs/pos-spec.md` §9): a
+  permission cannot be added without deciding which roles receive it, and the default is deny. The
+  `/admin` session guard is now **role-aware** — it resolves the admin a session belongs to and each
+  route declares the permission it requires, so a signed-in but under-privileged admin gets a `403`
+  (distinct from the `401` an unauthenticated caller gets). Login stays password + TOTP for now and
+  binds the session to the sole `owner`; a session minted before this change (or on a not-yet-seeded
+  install) resolves to the owner, so no one is locked out across the upgrade. First-boot enrolment
+  now also mirrors the super-admin into `admin_users` as that owner. Owner and admin retain full
+  reach (owner alone manages admins); `ops` gets the day-to-day surface (devices, webhooks, config
+  publish) but not API keys, org/store creation, catalog authoring, or translations; `viewer` is
+  read-only. **Upgrade note:** no visible change yet for a single-owner install (the owner holds every
+  permission); the role distinctions take effect once additional admins are invited (a later G1
+  slice). Per-admin email-based login also arrives with invitations. No `PROTOCOL_VERSION` change.
 - **Multi-admin console identities — schema and storage foundation** (roadmap v2, Track G, G1 slice 1;
   [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md), superseding ADR-0034). The cloud console is
   moving from a single shared super-admin to multiple named admins with least-privilege roles. This

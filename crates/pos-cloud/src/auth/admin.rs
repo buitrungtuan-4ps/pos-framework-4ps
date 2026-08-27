@@ -192,6 +192,23 @@ impl fmt::Debug for NewAdminUser {
     }
 }
 
+/// A live admin session, as the role-aware guard reads it: the id of the admin it belongs to, or
+/// `None` for a legacy session minted before multi-admin
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSession {
+    /// The [`AdminUser`] id the session belongs to, or `None` for a pre-multi-admin session.
+    pub admin_id: Option<String>,
+}
+
+/// The acting admin behind an authenticated `/admin` request — the identity a role-gated route
+/// checks its required [`ConsolePermission`](super::console_rbac::ConsolePermission) against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminContext {
+    /// The signed-in admin.
+    pub admin: AdminUser,
+}
+
 /// The super-admin store: the one credential, and the server-side session table
 /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)). A table in `store-postgres`; a fake in
 /// tests.
@@ -241,7 +258,11 @@ pub trait AdminStore {
         step: u64,
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
 
-    /// Persists a session by `token_hash`, valid until `expires_at`.
+    /// Persists a session by `token_hash`, valid until `expires_at`, owned by `admin_id`.
+    ///
+    /// `admin_id` is the [`AdminUser`] the session belongs to, or `None` for a legacy session minted
+    /// before multi-admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)); a
+    /// `None`-owned session is still valid but resolves to no specific admin.
     ///
     /// # Errors
     ///
@@ -250,6 +271,7 @@ pub trait AdminStore {
         &self,
         token_hash: [u8; 32],
         expires_at: Timestamp,
+        admin_id: Option<&str>,
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
 
     /// Whether a session with `token_hash` exists and has not expired as of `now`.
@@ -262,6 +284,20 @@ pub trait AdminStore {
         token_hash: [u8; 32],
         now: Timestamp,
     ) -> impl Future<Output = Result<bool, AdminStoreError>> + Send;
+
+    /// The live session for `token_hash` as of `now`, with the id of the admin it belongs to — or
+    /// `None` if there is no live session. The role-aware guard's lookup
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)): a `Some(LiveSession)` whose
+    /// `admin_id` is `None` is a legacy session (minted before multi-admin).
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be read.
+    fn session_admin(
+        &self,
+        token_hash: [u8; 32],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Option<LiveSession>, AdminStoreError>> + Send;
 
     /// Revokes the session with `token_hash`. Idempotent: revoking an absent session is `Ok(())`.
     ///
@@ -487,11 +523,38 @@ where
         .record_totp_step(authenticated.totp_step)
         .await
         .map_err(|_| LoginDenied::StoreUnavailable)?;
+    // Bind the session to the acting admin. The single-super-admin credential maps to the one `owner`
+    // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)), so during the transition the
+    // session belongs to the first active owner; a store with no owner row yet (the pure-credential
+    // fakes, or a not-yet-seeded install) binds `None`, still a valid session. Email-based per-admin
+    // login replaces this owner lookup in a later slice.
+    let owner_id = acting_owner_id(store).await?;
     store
-        .create_session(hash_token(session_token), expiry(now, ttl_secs))
+        .create_session(
+            hash_token(session_token),
+            expiry(now, ttl_secs),
+            owner_id.as_deref(),
+        )
         .await
         .map_err(|_| LoginDenied::StoreUnavailable)?;
     Ok(())
+}
+
+/// The id of the admin a freshly-authenticated super-admin login belongs to: the first active
+/// `owner`, or `None` if the store holds no admin rows yet. Transitional — a later slice authenticates
+/// each admin by email and no longer infers the owner.
+async fn acting_owner_id<A>(store: &A) -> Result<Option<String>, LoginDenied>
+where
+    A: AdminStore,
+{
+    let admins = store
+        .list_admin_users()
+        .await
+        .map_err(|_| LoginDenied::StoreUnavailable)?;
+    Ok(admins
+        .into_iter()
+        .find(|admin| admin.role == AdminRole::Owner && admin.status == AdminStatus::Active)
+        .map(|admin| admin.id))
 }
 
 /// Verifies the session cookie on an incoming admin request, as of the clock's current instant.
@@ -523,6 +586,99 @@ where
         Err(SessionDenied::Unauthorized)
     }
 }
+
+/// Resolves the acting admin behind an incoming `/admin` request — the role-aware guard the
+/// permission-gated routes stand behind ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+///
+/// It reads the session cookie, confirms the session is live, and resolves the [`AdminUser`] it
+/// belongs to. A session owned by a specific admin resolves to that admin — refused if the admin is
+/// suspended or gone, so revoking access takes effect at once. A live legacy session (one minted
+/// before multi-admin, with no `admin_id`) resolves to the first active `owner`, so an operator's
+/// existing session keeps working across the upgrade. The returned [`AdminContext`] is what a route
+/// checks its required [`ConsolePermission`](super::console_rbac::ConsolePermission) against.
+///
+/// # Errors
+///
+/// [`SessionDenied::Unauthorized`] if the cookie is absent, names no live session, or the session's
+/// admin is suspended or gone; [`SessionDenied::StoreUnavailable`] if the store could not be read.
+pub async fn authenticated_admin<A, C>(
+    store: &A,
+    clock: &C,
+    headers: &HeaderMap,
+) -> Result<AdminContext, SessionDenied>
+where
+    A: AdminStore,
+    C: ClockSource,
+{
+    let token = session_token_from_cookies(headers).ok_or(SessionDenied::Unauthorized)?;
+    let session = store
+        .session_admin(hash_token(token), clock.now())
+        .await
+        .map_err(|_| SessionDenied::StoreUnavailable)?
+        .ok_or(SessionDenied::Unauthorized)?;
+    let admin = match session.admin_id {
+        // A session bound to a specific admin resolves to that admin — and only while they are still
+        // active, so a suspended or deleted admin's live sessions stop authorising at once.
+        Some(id) => {
+            let admin = store
+                .get_admin_user(&id)
+                .await
+                .map_err(|_| SessionDenied::StoreUnavailable)?
+                .ok_or(SessionDenied::Unauthorized)?;
+            if admin.status != AdminStatus::Active {
+                return Err(SessionDenied::Unauthorized);
+            }
+            admin
+        }
+        // A legacy session (minted before multi-admin) belongs to the sole owner.
+        None => legacy_session_owner(store).await?,
+    };
+    Ok(AdminContext { admin })
+}
+
+/// Resolves the owner a legacy (pre-multi-admin) session belongs to. The first active `owner` if the
+/// table has one; otherwise, only when there are **no admin rows at all** (a pristine install whose
+/// `super_admin` was enrolled but not yet mirrored into `admin_users`), a synthetic implicit owner —
+/// which is exactly who the single super-admin was, so a valid session is never locked out during the
+/// upgrade. A populated table with no active owner is anomalous and refused rather than escalated.
+async fn legacy_session_owner<A>(store: &A) -> Result<AdminUser, SessionDenied>
+where
+    A: AdminStore,
+{
+    let admins = store
+        .list_admin_users()
+        .await
+        .map_err(|_| SessionDenied::StoreUnavailable)?;
+    if let Some(owner) = admins
+        .iter()
+        .find(|admin| admin.role == AdminRole::Owner && admin.status == AdminStatus::Active)
+    {
+        Ok(owner.clone())
+    } else if admins.is_empty() {
+        Ok(implicit_owner())
+    } else {
+        Err(SessionDenied::Unauthorized)
+    }
+}
+
+/// The synthetic owner a pristine install falls back to before its `super_admin` is mirrored into
+/// `admin_users` — the same identity (id, placeholder email) the migration seeds, so the two agree.
+fn implicit_owner() -> AdminUser {
+    AdminUser {
+        id: IMPLICIT_OWNER_ID.to_owned(),
+        email: IMPLICIT_OWNER_EMAIL.to_owned(),
+        name: "Owner".to_owned(),
+        role: AdminRole::Owner,
+        status: AdminStatus::Active,
+    }
+}
+
+/// The stable sentinel id the migration gives the migrated `owner`, reused by [`implicit_owner`] so a
+/// pristine install and a migrated one name the owner identically.
+pub const IMPLICIT_OWNER_ID: &str = "00000000000000000000000000";
+/// The synthetic, non-routable placeholder email the migrated/implicit owner carries until it is
+/// replaced from the console.
+pub const IMPLICIT_OWNER_EMAIL: &str = "owner@super-admin.invalid";
 
 /// Revokes the session named by the request's cookie, for logout.
 ///
@@ -560,6 +716,13 @@ fn hash_token(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
+/// The stored form of a session token — `SHA-256(token)` — for callers that seed a session directly
+/// (tests, or a future admin-tooling path) with the same transform the guard applies to the cookie.
+#[must_use]
+pub fn hash_session_token(token: &str) -> [u8; 32] {
+    hash_token(token)
+}
+
 /// The Unix-seconds value TOTP verification consumes, from a millisecond [`Timestamp`]. Clamped at the
 /// epoch — a pre-epoch clock is nonsensical here and would only ever fail to verify.
 fn unix_seconds(now: Timestamp) -> u64 {
@@ -590,8 +753,8 @@ mod tests {
 
     use super::{
         AdminCredential, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-        LoginDenied, LoginRequest, NewAdminUser, SessionDenied, authenticate_session, hash_token,
-        login, logout,
+        IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminUser, SessionDenied,
+        authenticate_session, authenticated_admin, hash_token, login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -640,13 +803,17 @@ mod tests {
         headers
     }
 
+    /// A stored session row: its expiry and the id of the admin it belongs to (`None` for a legacy
+    /// session), keyed in the table by `SHA-256(token)`.
+    type SessionRows = HashMap<[u8; 32], (Timestamp, Option<String>)>;
+
     /// An in-memory admin store: at most one legacy credential, the multi-admin `admin_users`
     /// table, a session table, and a down switch.
     #[derive(Default)]
     struct FakeAdmin {
         credential: Mutex<Option<SuperAdminCredential>>,
         last_used_totp_step: Mutex<Option<u64>>,
-        sessions: Mutex<HashMap<[u8; 32], Timestamp>>,
+        sessions: Mutex<SessionRows>,
         admin_users: Mutex<Vec<AdminUser>>,
         down: bool,
     }
@@ -722,6 +889,7 @@ mod tests {
             &self,
             token_hash: [u8; 32],
             expires_at: Timestamp,
+            admin_id: Option<&str>,
         ) -> Result<(), AdminStoreError> {
             if self.down {
                 return Err(AdminStoreError::new("down"));
@@ -729,7 +897,7 @@ mod tests {
             self.sessions
                 .lock()
                 .expect("lock")
-                .insert(token_hash, expires_at);
+                .insert(token_hash, (expires_at, admin_id.map(str::to_owned)));
             Ok(())
         }
 
@@ -746,7 +914,26 @@ mod tests {
                 .lock()
                 .expect("lock")
                 .get(&token_hash)
-                .is_some_and(|expires_at| *expires_at > now))
+                .is_some_and(|(expires_at, _)| *expires_at > now))
+        }
+
+        async fn session_admin(
+            &self,
+            token_hash: [u8; 32],
+            now: Timestamp,
+        ) -> Result<Option<super::LiveSession>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            Ok(self
+                .sessions
+                .lock()
+                .expect("lock")
+                .get(&token_hash)
+                .filter(|(expires_at, _)| *expires_at > now)
+                .map(|(_, admin_id)| super::LiveSession {
+                    admin_id: admin_id.clone(),
+                }))
         }
 
         async fn revoke_session(&self, token_hash: [u8; 32]) -> Result<(), AdminStoreError> {
@@ -1318,5 +1505,135 @@ mod tests {
             "a secret leaked into Debug: {rendered}"
         );
         assert!(rendered.contains("<redacted>"));
+    }
+
+    // ---- The role-aware guard ([ADR-0067]) ----
+
+    /// A live expiry an hour past `NOW_MS`, so a seeded session is valid at `clock()`.
+    fn live_expiry() -> Timestamp {
+        Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_600_000).expect("valid")
+    }
+
+    async fn seed_admin(store: &FakeAdmin, id: &str, email: &str, role: AdminRole) {
+        store
+            .create_admin_user(new_admin(id, email, "N", role))
+            .await
+            .expect("seed admin");
+    }
+
+    #[tokio::test]
+    async fn a_session_resolves_to_its_own_admins_role() {
+        let store = FakeAdmin::default();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        seed_admin(
+            &store,
+            "id-viewer",
+            "viewer@example.test",
+            AdminRole::Viewer,
+        )
+        .await;
+        store
+            .create_session(hash_token("tok-viewer"), live_expiry(), Some("id-viewer"))
+            .await
+            .expect("seed session");
+
+        let context = authenticated_admin(&store, &clock(), &cookie_header("tok-viewer"))
+            .await
+            .expect("a live session for an active admin resolves");
+        assert_eq!(context.admin.id, "id-viewer");
+        assert_eq!(context.admin.role, AdminRole::Viewer);
+    }
+
+    #[tokio::test]
+    async fn a_session_for_a_suspended_admin_is_refused() {
+        let store = FakeAdmin::default();
+        seed_admin(&store, "id-1", "a@example.test", AdminRole::Admin).await;
+        store
+            .set_admin_user_status("id-1", AdminStatus::Suspended)
+            .await
+            .expect("suspend");
+        store
+            .create_session(hash_token("tok"), live_expiry(), Some("id-1"))
+            .await
+            .expect("seed session");
+        assert_eq!(
+            authenticated_admin(&store, &clock(), &cookie_header("tok")).await,
+            Err(SessionDenied::Unauthorized),
+            "a suspended admin's live session no longer authorises"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_for_a_missing_admin_is_refused() {
+        let store = FakeAdmin::default();
+        store
+            .create_session(hash_token("tok"), live_expiry(), Some("ghost"))
+            .await
+            .expect("seed session");
+        assert_eq!(
+            authenticated_admin(&store, &clock(), &cookie_header("tok")).await,
+            Err(SessionDenied::Unauthorized)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_legacy_session_resolves_to_the_active_owner() {
+        let store = FakeAdmin::default();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // A legacy session carries no admin_id.
+        store
+            .create_session(hash_token("legacy"), live_expiry(), None)
+            .await
+            .expect("seed session");
+        let context = authenticated_admin(&store, &clock(), &cookie_header("legacy"))
+            .await
+            .expect("a legacy session resolves to the owner");
+        assert_eq!(context.admin.id, "id-owner");
+        assert_eq!(context.admin.role, AdminRole::Owner);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_session_on_a_pristine_store_resolves_to_the_implicit_owner() {
+        let store = FakeAdmin::default(); // no admin_users rows at all
+        store
+            .create_session(hash_token("legacy"), live_expiry(), None)
+            .await
+            .expect("seed session");
+        let context = authenticated_admin(&store, &clock(), &cookie_header("legacy"))
+            .await
+            .expect("a pristine store falls back to the implicit owner");
+        assert_eq!(context.admin.id, IMPLICIT_OWNER_ID);
+        assert_eq!(context.admin.role, AdminRole::Owner);
+    }
+
+    #[tokio::test]
+    async fn an_absent_session_is_unauthorised() {
+        let store = FakeAdmin::default();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        assert_eq!(
+            authenticated_admin(&store, &clock(), &cookie_header("never-issued")).await,
+            Err(SessionDenied::Unauthorized)
+        );
+    }
+
+    #[tokio::test]
+    async fn login_binds_the_new_session_to_the_owner() {
+        let store = FakeAdmin::provisioned();
+        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        login(
+            &store,
+            &clock(),
+            &request("a-strong-passphrase", &current_code()),
+            "fresh-token",
+            TTL,
+        )
+        .await
+        .expect("login");
+        // The guard resolves the freshly-minted session straight to the owner it was bound to.
+        let context = authenticated_admin(&store, &clock(), &cookie_header("fresh-token"))
+            .await
+            .expect("the issued session authorises");
+        assert_eq!(context.admin.id, "id-owner");
+        assert_eq!(context.admin.role, AdminRole::Owner);
     }
 }

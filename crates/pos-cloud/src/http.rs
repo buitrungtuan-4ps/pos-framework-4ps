@@ -74,9 +74,13 @@ use pos_proto::wire_enum::Open;
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
-use crate::auth::admin::{AdminStore, LoginRequest, authenticate_session, login, logout};
+use crate::auth::admin::{
+    AdminContext, AdminRole, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID, LoginRequest,
+    NewAdminUser, SessionDenied, authenticate_session, authenticated_admin, login, logout,
+};
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
 };
@@ -560,8 +564,15 @@ where
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -625,8 +636,15 @@ where
     A: AdminStore,
     C: ClockSource,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -818,8 +836,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     match state.registry.list_tenants().await {
         Ok(tenants) => (StatusCode::OK, Json::<Vec<TenantRecord>>(tenants)).into_response(),
@@ -838,8 +863,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Some(tenant_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TenantId::new)
@@ -869,8 +901,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "the tenant id is not a ULID").into_response();
@@ -901,8 +940,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -924,8 +970,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -959,8 +1012,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageOrgs,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(brand_id), Ok(tenant_id)) = (
         brand_id.parse::<Ulid>().map(BrandId::new),
@@ -999,8 +1059,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1034,8 +1101,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1073,8 +1147,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(store_id), Ok(tenant_id)) = (
         store_id.parse::<Ulid>().map(StoreId::new),
@@ -1118,8 +1199,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1149,8 +1237,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1193,8 +1288,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1637,8 +1739,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1660,8 +1769,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(tax_class_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -1715,8 +1831,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(menu_item_id), Ok(tenant_id), Ok(tax_class_id)) = (
         menu_item_id.parse::<Ulid>().map(MenuItemId::new),
@@ -1769,8 +1892,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1792,8 +1922,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1827,8 +1964,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tax_class_id), Ok(tenant_id)) = (
         tax_class_id.parse::<Ulid>().map(TaxClassId::new),
@@ -1867,8 +2011,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1890,8 +2041,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1925,8 +2083,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(item_category_id), Ok(tenant_id)) = (
         item_category_id.parse::<Ulid>().map(ItemCategoryId::new),
@@ -1965,8 +2130,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -1988,8 +2160,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(item_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2034,8 +2213,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(item_subcategory_id), Ok(tenant_id), Ok(item_category_id)) = (
         item_subcategory_id
@@ -2081,8 +2267,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2104,8 +2297,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2139,8 +2339,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(display_category_id), Ok(tenant_id)) = (
         display_category_id
@@ -2181,8 +2388,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2204,8 +2418,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(display_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2250,8 +2471,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(display_subcategory_id), Ok(tenant_id), Ok(display_category_id)) = (
         display_subcategory_id
@@ -2297,8 +2525,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2322,8 +2557,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_item_id), Ok(display_category_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2381,8 +2623,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_item_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2420,8 +2669,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2443,8 +2699,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2492,8 +2755,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(modifier_group_id), Ok(tenant_id)) = (
         modifier_group_id.parse::<Ulid>().map(ModifierGroupId::new),
@@ -2546,8 +2816,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2569,8 +2846,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -2607,8 +2891,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(menu_id), Ok(tenant_id)) = (
         menu_id.parse::<Ulid>().map(MenuId::new),
@@ -2652,8 +2943,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2683,8 +2981,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2727,8 +3032,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_section_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2771,8 +3083,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2802,8 +3121,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2846,8 +3172,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -2951,8 +3284,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(menu_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3192,8 +3532,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3241,8 +3588,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -3408,8 +3762,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3434,8 +3795,15 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&state.admin, &state.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageTranslations,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3729,8 +4097,34 @@ where
         )
             .into_response();
     };
-    match app.admin.provision_credential(phc, secret.to_vec()).await {
-        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+    match app
+        .admin
+        .provision_credential(phc.clone(), secret.to_vec())
+        .await
+    {
+        Ok(true) => {
+            // Mirror the freshly-enrolled super-admin into `admin_users` as the first `owner`
+            // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)) — the same identity the
+            // migration seeds on an upgraded install. Best-effort: the session guard falls back to an
+            // implicit owner when this row is absent, so a store blip here never locks the operator
+            // out; it only means the owner is missing from the admins list until reconciled.
+            let owner = NewAdminUser {
+                id: IMPLICIT_OWNER_ID.to_owned(),
+                email: IMPLICIT_OWNER_EMAIL.to_owned(),
+                name: "Owner".to_owned(),
+                role: AdminRole::Owner,
+                password_phc: phc,
+                totp_secret: secret.to_vec(),
+            };
+            if let Err(error) = app.admin.create_admin_user(owner).await {
+                tracing::warn!(
+                    %error,
+                    "super-admin enrolled but mirroring it into admin_users failed; the guard's \
+                     implicit-owner fallback keeps sign-in working"
+                );
+            }
+            (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response()
+        }
         Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3787,6 +4181,34 @@ where
     }
 }
 
+/// The role-aware `/admin` guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)):
+/// authenticates the session, resolves the acting admin, and checks that their role grants
+/// `permission`. Every permission-gated `/admin` route calls this in place of the bare session check.
+///
+/// On success the acting [`AdminContext`] is returned (routes that only gate can ignore it). On
+/// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
+/// session, or the store down), or a `403` when the session is valid but the role lacks the
+/// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
+async fn require_permission<A, C>(
+    admin_store: &A,
+    clock: &C,
+    headers: &HeaderMap,
+    permission: ConsolePermission,
+) -> Result<AdminContext, Response>
+where
+    A: AdminStore,
+    C: ClockSource,
+{
+    let context = authenticated_admin(admin_store, clock, headers)
+        .await
+        .map_err(|denied: SessionDenied| denied.into_response())?;
+    if role_grants(context.admin.role, permission) {
+        Ok(context)
+    } else {
+        Err((StatusCode::FORBIDDEN, "insufficient permissions").into_response())
+    }
+}
+
 /// A super-admin request to provision a new API key for a tenant.
 #[derive(Debug, Clone, Deserialize)]
 struct CreateApiKeyRequest {
@@ -3835,8 +4257,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageApiKeys,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3901,8 +4330,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -3936,8 +4367,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageApiKeys,
+    )
+    .await
+    {
+        return denied;
     }
     let Ok(id) = id.parse::<Ulid>().map(ApiKeyId::new) else {
         return (StatusCode::BAD_REQUEST, "the key id is not a ULID").into_response();
@@ -4000,8 +4438,15 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4077,8 +4522,10 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4132,8 +4579,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4173,8 +4622,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4252,8 +4708,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4346,8 +4809,10 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
     }
     let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
         return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
@@ -4383,8 +4848,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -4433,8 +4905,15 @@ where
     T: Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticate_session(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageWebhooks,
+    )
+    .await
+    {
+        return denied;
     }
     let (Ok(tenant_id), Ok(endpoint_id)) = (
         query.tenant_id.parse::<Ulid>().map(TenantId::new),

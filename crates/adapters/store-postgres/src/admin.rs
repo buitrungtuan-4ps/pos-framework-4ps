@@ -113,7 +113,8 @@ impl PostgresAdmin {
         Ok(())
     }
 
-    /// Inserts a session keyed by `token_hash`, valid until `expires_at_ms` (Unix milliseconds).
+    /// Inserts a session keyed by `token_hash`, valid until `expires_at_ms` (Unix milliseconds) and
+    /// owned by `admin_id` (an `admin_users` id, or `None` for a legacy session).
     ///
     /// `ON CONFLICT DO NOTHING` makes it idempotent — a 256-bit random token never collides in
     /// practice, and if it somehow did the incumbent wins rather than being overwritten.
@@ -125,13 +126,14 @@ impl PostgresAdmin {
         &self,
         token_hash: &[u8],
         expires_at_ms: i64,
+        admin_id: Option<&str>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO admin_sessions (token_hash, expires_at) VALUES ($1, $2) \
+                "INSERT INTO admin_sessions (token_hash, expires_at, admin_id) VALUES ($1, $2, $3) \
                  ON CONFLICT (token_hash) DO NOTHING",
-                &[&token_hash, &expires_at_ms],
+                &[&token_hash, &expires_at_ms, &admin_id],
             )
             .await
             .map_err(unavailable)?;
@@ -154,6 +156,31 @@ impl PostgresAdmin {
             .await
             .map_err(unavailable)?;
         Ok(row.get(0))
+    }
+
+    /// The `admin_id` of a live session (`token_hash`, not expired as of `now_ms`), if there is one.
+    ///
+    /// The outer `Option` distinguishes "no live session" (`None`) from "a live session" (`Some`);
+    /// the inner `Option<String>` is the owning admin's id, or `None` for a legacy session minted
+    /// before multi-admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_session_admin(
+        &self,
+        token_hash: &[u8],
+        now_ms: i64,
+    ) -> Result<Option<Option<String>>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT admin_id FROM admin_sessions WHERE token_hash = $1 AND expires_at > $2",
+                &[&token_hash, &now_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
     }
 
     /// Deletes the session with `token_hash`. Idempotent — deleting an absent session is a no-op.
