@@ -391,6 +391,7 @@ export interface AuditEntry {
 export interface AuditFilter {
   readonly tenantId?: string;
   readonly entityType?: string;
+  readonly entityId?: string;
   readonly action?: string;
   readonly actorAdminId?: string;
   readonly limit?: number;

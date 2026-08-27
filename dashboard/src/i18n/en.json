@@ -530,5 +530,12 @@
   "audit.filter.action": "Action",
   "audit.filter.actionHint": "e.g. store.update",
   "audit.filter.actor": "Acting admin id",
-  "audit.filter.actorHint": "an admin ULID"
+  "audit.filter.actorHint": "an admin ULID",
+  "audit.history": "History",
+  "audit.byAt": "{who}, {age}",
+  "audit.created": "Created",
+  "audit.updated": "Last changed",
+  "audit.noHistory": "No recorded changes yet.",
+  "devices.resolved": "Recently resolved",
+  "devices.resolvedHint": "Who approved or rejected proposals recently."
 }

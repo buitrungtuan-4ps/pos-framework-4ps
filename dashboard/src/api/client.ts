@@ -631,6 +631,7 @@ export const api = {
     const params = new URLSearchParams();
     if (filter.tenantId) params.set("tenant_id", filter.tenantId);
     if (filter.entityType) params.set("entity_type", filter.entityType);
+    if (filter.entityId) params.set("entity_id", filter.entityId);
     if (filter.action) params.set("action", filter.action);
     if (filter.actorAdminId) params.set("actor_admin_id", filter.actorAdminId);
     if (filter.limit !== undefined) params.set("limit", String(filter.limit));

@@ -111,6 +111,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Detail views now show the entity's own audit history, and who resolved device proposals**
+  (roadmap v2, Track G, G2 slice 6; [ADR-0069](docs/adr/0069-audit-trail.md)). A reusable
+  `AuditTrail` panel reads an entity's history from the same `GET /admin/audit` (filtered by entity
+  type and id) and shows who created it, who last changed it, and the entries between — surfacing
+  `created/updated at·by` straight from the trail rather than from denormalized columns. It is wired
+  into the Fleet store drawer (a store's change history) and the Devices screen (a "recently
+  resolved" panel naming who approved or rejected each proposal — the `resolved_by` the roadmap
+  calls for). The panel drops into any Detail view. **Upgrade note:** no schema, API, or permission
+  change — it reuses the slice-4 read and `console.data.read`.
 - **A store's config now has a version history you can view, diff, and roll back** (roadmap v2,
   Track G, G2 slice 5; [ADR-0033](docs/adr/0033-config-tree.md),
   [ADR-0069](docs/adr/0069-audit-trail.md)). The config tree already kept every published version;

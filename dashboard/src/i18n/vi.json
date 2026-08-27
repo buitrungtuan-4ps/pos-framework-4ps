@@ -530,5 +530,12 @@
   "audit.filter.action": "Hành động",
   "audit.filter.actionHint": "vd: store.update",
   "audit.filter.actor": "Mã quản trị viên",
-  "audit.filter.actorHint": "một ULID quản trị viên"
+  "audit.filter.actorHint": "một ULID quản trị viên",
+  "audit.history": "Lịch sử",
+  "audit.byAt": "{who}, {age}",
+  "audit.created": "Tạo lúc",
+  "audit.updated": "Thay đổi gần nhất",
+  "audit.noHistory": "Chưa có thay đổi nào được ghi.",
+  "devices.resolved": "Đã xử lý gần đây",
+  "devices.resolvedHint": "Ai đã duyệt hoặc từ chối đề xuất gần đây."
 }
