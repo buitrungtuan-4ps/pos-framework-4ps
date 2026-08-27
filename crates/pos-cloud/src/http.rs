@@ -75,8 +75,9 @@ use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::auth::admin::{
-    AdminContext, AdminRole, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID, LoginRequest,
-    NewAdminUser, SessionDenied, authenticate_session, authenticated_admin, login, logout,
+    AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
+    LoginRequest, NewAdminInvite, NewAdminUser, SessionDenied, authenticate_session,
+    authenticated_admin, hash_session_token, login, logout,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope};
@@ -119,6 +120,11 @@ use utoipa::OpenApi as _;
 /// [`CloudApp::with_admin_session_ttl_secs`].
 const DEFAULT_ADMIN_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 
+/// How long a console-admin invitation stays acceptable when the binary does not override it — three
+/// days, long enough to hand the copy-invite-link over out-of-band without leaving a stale
+/// credential-granting token valid indefinitely ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+const DEFAULT_ADMIN_INVITE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
+
 /// Everything a request handler needs, bundled so the router carries one state type: the event
 /// store's application layer, the materialised rollup read model, the API-key store the `/v1` bearer
 /// check consults, the super-admin store the `/admin` login and session guard use, the config-tree
@@ -136,6 +142,7 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     config_trees: T,
     webhooks: W,
     admin_session_ttl_secs: u64,
+    admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
 }
 
@@ -167,6 +174,7 @@ where
             config_trees: self.config_trees.clone(),
             webhooks: self.webhooks.clone(),
             admin_session_ttl_secs: self.admin_session_ttl_secs,
+            admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
         }
     }
@@ -193,6 +201,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             config_trees,
             webhooks,
             admin_session_ttl_secs: DEFAULT_ADMIN_SESSION_TTL_SECS,
+            admin_invite_ttl_secs: DEFAULT_ADMIN_INVITE_TTL_SECS,
             admin_setup_token: None,
         }
     }
@@ -202,6 +211,14 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_admin_session_ttl_secs(mut self, secs: u64) -> Self {
         self.admin_session_ttl_secs = secs;
+        self
+    }
+
+    /// Sets how long a console-admin invitation stays acceptable, in seconds — the binary threads the
+    /// configured value in ([`crate::config::CloudConfig::admin_invite_ttl_secs`]).
+    #[must_use]
+    pub const fn with_admin_invite_ttl_secs(mut self, secs: u64) -> Self {
+        self.admin_invite_ttl_secs = secs;
         self
     }
 
@@ -252,6 +269,31 @@ where
         .route(
             "/admin/api-keys/{id}",
             delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins",
+            get(admin_list_admins::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins/{id}/role",
+            axum::routing::patch(admin_set_admin_role::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/admins/{id}/status",
+            axum::routing::patch(admin_set_admin_status::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites",
+            post(admin_invite_admin::<S, R, K, C, A, T, W>)
+                .get(admin_list_invites::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites/accept",
+            post(admin_accept_invite::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/invites/{id}",
+            delete(admin_revoke_invite::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/config",
@@ -4389,6 +4431,496 @@ where
                 "the provisioning service is unavailable",
             )
                 .into_response()
+        }
+    }
+}
+
+// --- Console admin management and invitations ([ADR-0067]) --------------------------------------
+
+/// A `503` when the admin store is unreachable — the transient, retryable failure for the admin
+/// surface, with the detail kept to the server's log rather than the client.
+fn admin_service_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the admin service is unavailable",
+    )
+        .into_response()
+}
+
+/// Refuses a change that would remove the **last active owner** — a demotion or a suspension of the
+/// sole remaining `owner` ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). `removes_owner`
+/// is true when the pending change would stop the target being an active owner; otherwise the guard
+/// is a no-op. An absent target passes through, so the caller's own update returns the `404`.
+async fn guard_last_owner_change<A>(
+    admin: &A,
+    id: &str,
+    removes_owner: bool,
+) -> Result<(), Response>
+where
+    A: AdminStore,
+{
+    if !removes_owner {
+        return Ok(());
+    }
+    let target = match admin.get_admin_user(id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            tracing::error!(%error, "reading an admin failed");
+            return Err(admin_service_unavailable());
+        }
+    };
+    if target.role == AdminRole::Owner && target.status == AdminStatus::Active {
+        let owners = admin.count_active_owners().await.map_err(|error| {
+            tracing::error!(%error, "counting owners failed");
+            admin_service_unavailable()
+        })?;
+        if owners <= 1 {
+            return Err(
+                (StatusCode::CONFLICT, "cannot remove the last active owner").into_response(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A request to invite a new console admin.
+#[derive(Debug, Clone, Deserialize)]
+struct InviteAdminRequest {
+    /// The invitee's email — the address they will sign in with (normalised server-side).
+    email: String,
+    /// The invitee's display name.
+    name: String,
+    /// The role to grant on acceptance: `owner`/`admin`/`ops`/`viewer`.
+    role: String,
+}
+
+/// The one-time response to an invitation: the id, the single-use token (shown once) the inviter
+/// copies into the invite link, and the expiry. Only the token's hash is stored.
+#[derive(Debug, Clone, serde::Serialize)]
+struct InviteAdminResponse {
+    /// The invite's id (a ULID).
+    invite_id: String,
+    /// The single-use invite token. **Shown once** — only its hash is stored, so it cannot be
+    /// recovered later; the inviter hands the link carrying it to the invitee out-of-band.
+    token: String,
+    /// When the invite stops being acceptable (Unix milliseconds).
+    expires_at_ms: i64,
+}
+
+/// Invites a new console admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Needs
+/// `console.admins.invite` (owner or admin); only an owner may invite another owner, so an admin
+/// cannot escalate. Refuses an address that is already an admin. Returns the single-use token once.
+async fn admin_invite_admin<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Json(request): Json<InviteAdminRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Some(role) = AdminRole::from_token(&request.role) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "role must be owner, admin, ops, or viewer",
+        )
+            .into_response();
+    };
+    // No privilege escalation: only an owner may mint another owner.
+    if role == AdminRole::Owner && context.admin.role != AdminRole::Owner {
+        return (StatusCode::FORBIDDEN, "only an owner may invite an owner").into_response();
+    }
+    let email = request.email.trim().to_ascii_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return (StatusCode::BAD_REQUEST, "a valid email is required").into_response();
+    }
+    match app.admin.find_admin_user_by_email(&email).await {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                "an admin with that email already exists",
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(%error, "checking for an existing admin failed");
+            return admin_service_unavailable();
+        }
+    }
+    let now_ms = app.clock.now().as_milliseconds_since_epoch();
+    let (Some(id), Some(token)) = (mint_ulid(now_ms), random_hex_32()) else {
+        tracing::error!("could not read OS entropy to mint an invite");
+        return admin_service_unavailable();
+    };
+    let ttl_ms = i64::try_from(app.admin_invite_ttl_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
+    let Ok(expires_at) =
+        pos_proto::time::Timestamp::from_milliseconds_since_epoch(now_ms.saturating_add(ttl_ms))
+    else {
+        return admin_service_unavailable();
+    };
+    let invite = NewAdminInvite {
+        id: id.to_string(),
+        email,
+        name: request.name,
+        role,
+        token_hash: hash_session_token(&token),
+        invited_by: context.admin.id,
+        expires_at,
+    };
+    match app.admin.create_invite(invite).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(InviteAdminResponse {
+                invite_id: id.to_string(),
+                token,
+                expires_at_ms: expires_at.as_milliseconds_since_epoch(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "creating an invite failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Lists the pending (not accepted, not expired) invitations. Needs `console.admins.invite`.
+async fn admin_list_invites<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.list_pending_invites(app.clock.now()).await {
+        Ok(invites) => (StatusCode::OK, Json(invites)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing invites failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Revokes a pending invitation by id. `204` whether or not one was pending — revoking is idempotent.
+/// Needs `console.admins.invite`.
+async fn admin_revoke_invite<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.revoke_invite(&id).await {
+        Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "revoking an invite failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A self-enrolment request: the single-use invite token and the password the invitee chooses.
+///
+/// [`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.
+#[derive(Clone, Deserialize)]
+struct AcceptInviteRequest {
+    /// The single-use invite token from the invite link.
+    token: String,
+    /// The password the invitee is choosing.
+    password: String,
+}
+
+impl fmt::Debug for AcceptInviteRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcceptInviteRequest")
+            .field("token", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Accepts an invitation and self-enrols the new admin — **pre-auth**: the invite token is the
+/// authorisation, so there is no session guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// Mints the admin's own Argon2id password hash and TOTP secret exactly as first-boot enrolment does,
+/// claims the invite single-use, creates the admin, and returns the one-time TOTP enrolment. A bad or
+/// expired token is a generic `401`.
+async fn admin_accept_invite<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    Json(request): Json<AcceptInviteRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if request.password.len() < MIN_PASSWORD_LEN {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the password is too short",
+        )
+            .into_response();
+    }
+    let now = app.clock.now();
+    let invite = match app
+        .admin
+        .find_pending_invite_by_token(hash_session_token(&request.token), now)
+        .await
+    {
+        Ok(Some(invite)) => invite,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "the invite is invalid or has expired",
+            )
+                .into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "looking up an invite failed");
+            return admin_service_unavailable();
+        }
+    };
+    let Some((secret, phc)) = mint_credential(&request.password) else {
+        tracing::error!("could not mint a credential for invite acceptance");
+        return admin_service_unavailable();
+    };
+    // Claim the invite before creating the admin, so a replayed acceptance cannot enrol twice.
+    match app.admin.mark_invite_accepted(&invite.id, now).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "the invite is invalid or has expired",
+            )
+                .into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "claiming an invite failed");
+            return admin_service_unavailable();
+        }
+    }
+    let Some(admin_id) = mint_ulid(now.as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint an admin id");
+        return admin_service_unavailable();
+    };
+    let user = NewAdminUser {
+        id: admin_id.to_string(),
+        email: invite.email,
+        name: invite.name,
+        role: invite.role,
+        password_phc: phc,
+        totp_secret: secret.to_vec(),
+    };
+    match app.admin.create_admin_user(user).await {
+        Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            "an admin with that email already exists",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "creating the admin failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// Lists the console admins — identity and role only, never a credential. Needs
+/// `console.admins.invite` (owner or admin may view the roster).
+async fn admin_list_admins<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::InviteAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    match app.admin.list_admin_users().await {
+        Ok(admins) => (StatusCode::OK, Json(admins)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing admins failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A request to change an admin's role.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAdminRoleRequest {
+    /// The new role: `owner`/`admin`/`ops`/`viewer`.
+    role: String,
+}
+
+/// Changes an admin's role. Needs `console.admins.manage` (owner). Refuses demoting the last active
+/// owner. `404` if there is no admin with that id.
+async fn admin_set_admin_role<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateAdminRoleRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Some(role) = AdminRole::from_token(&request.role) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "role must be owner, admin, ops, or viewer",
+        )
+            .into_response();
+    };
+    if let Err(response) = guard_last_owner_change(&app.admin, &id, role != AdminRole::Owner).await
+    {
+        return response;
+    }
+    match app.admin.set_admin_user_role(&id, role).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Err(error) => {
+            tracing::error!(%error, "setting an admin role failed");
+            admin_service_unavailable()
+        }
+    }
+}
+
+/// A request to change an admin's status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAdminStatusRequest {
+    /// The new status: `active` or `suspended`.
+    status: String,
+}
+
+/// Suspends or reactivates an admin. Needs `console.admins.manage` (owner). Refuses suspending the
+/// last active owner. `404` if there is no admin with that id.
+async fn admin_set_admin_status<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateAdminStatusRequest>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ManageAdmins,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Some(status) = AdminStatus::from_token(&request.status) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "status must be active or suspended",
+        )
+            .into_response();
+    };
+    if let Err(response) =
+        guard_last_owner_change(&app.admin, &id, status == AdminStatus::Suspended).await
+    {
+        return response;
+    }
+    match app.admin.set_admin_user_status(&id, status).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Err(error) => {
+            tracing::error!(%error, "setting an admin status failed");
+            admin_service_unavailable()
         }
     }
 }

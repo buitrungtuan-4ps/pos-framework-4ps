@@ -33,6 +33,12 @@ const fn default_admin_session_ttl_secs() -> u64 {
     8 * 60 * 60
 }
 
+/// How long a console-admin invitation stays acceptable, in seconds, when the config does not say —
+/// three days, ample to hand the invite link over out-of-band ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+const fn default_admin_invite_ttl_secs() -> u64 {
+    3 * 24 * 60 * 60
+}
+
 /// How often the retention cron sweeps for records past their period, in seconds, when the config
 /// does not say — daily, ample for a period measured in months ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
 const fn default_retention_sweep_interval_secs() -> u64 {
@@ -79,6 +85,10 @@ pub struct CloudConfig {
     /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
     #[serde(default = "default_admin_session_ttl_secs")]
     pub admin_session_ttl_secs: u64,
+    /// How long a console-admin invitation stays acceptable, in seconds
+    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+    #[serde(default = "default_admin_invite_ttl_secs")]
+    pub admin_invite_ttl_secs: u64,
     /// The one-time super-admin setup token that gates first-boot enrolment
     /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). **No default**: when it is
     /// absent the `/admin/setup` route is off (a `404`). `bootstrap.sh` mints it into this file on the

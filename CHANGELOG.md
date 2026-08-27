@@ -65,6 +65,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Console admins can now be invited, self-enrol, and be managed** (roadmap v2, Track G, G1 slice 3;
+  [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). An owner or admin invites by email and role
+  (`POST /admin/invites`); the server mints a single-use, TTL-bounded token and returns it once as a
+  **copy-invite-link** the inviter hands over out-of-band — no email is sent, and only the token's
+  `SHA-256` is stored. The invitee self-enrols (`POST /admin/invites/accept`, token-authenticated, no
+  session): they choose their own password and receive a one-time TOTP enrolment, exactly as first-boot
+  does, so no one else ever learns their credential. Pending invites list and revoke
+  (`GET`/`DELETE /admin/invites`); the admin roster lists (`GET /admin/admins`) and an owner changes a
+  role or suspends/reactivates an admin (`PATCH /admin/admins/{id}/role|status`). Guardrails: only an
+  owner may invite or create another owner (an admin cannot escalate); the **last active owner** can
+  never be demoted or suspended; an address that is already an admin cannot be re-invited; an invite is
+  single-use and cannot be replayed. Invite acceptance is invite-token-gated, not session-gated. New
+  config `admin_invite_ttl_secs` (default 3 days). **PDPD note:** an admin's email is personal data —
+  it is stored and handled **internally only** (no external send under the copy-link model); confirm
+  the lawful basis (employment/legitimate interest) and retention for admin records. **Upgrade note:**
+  additive — no schema migration (the `admin_invites` table shipped in `0018`); no `PROTOCOL_VERSION`
+  change; a new optional config key with a safe default.
 - **Console role-based access control is now enforced on every `/admin` route** (roadmap v2, Track G,
   G1 slice 2; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). A fixed console permission
   catalogue and the four role templates (`owner`/`admin`/`ops`/`viewer`) are declared with the same
