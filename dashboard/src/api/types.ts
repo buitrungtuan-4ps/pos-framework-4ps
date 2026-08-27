@@ -542,3 +542,29 @@ export interface CapabilityCatalogue {
   readonly presets: readonly CapabilityPreset[];
   readonly rules: readonly CapabilityRule[];
 }
+
+// --- Operational alerts (ADR-0073, Track O2): the alert engine's read model ---
+
+/** How serious an alert is (ADR-0073), ordered least-to-most in the console. */
+export type AlertSeverity = "info" | "warning" | "critical";
+
+/**
+ * One operational alert from `GET /admin/alerts` (ADR-0073, Track O2). `tenant_id` is null for a
+ * server-wide condition; timestamps are Unix ms; `kind` is the stable wire token the console localizes
+ * (`store_offline`, `relay_backlog`, `webhook_disabled`, `projector_unhealthy`, `jetstream_capacity`);
+ * `detail` is a small JSON object of the numbers behind the alert. `resolved_at_ms` is null while the
+ * alert is active; `acknowledged_at_ms` is null until an operator acknowledges it.
+ */
+export interface Alert {
+  readonly id: string;
+  readonly tenant_id: string | null;
+  readonly kind: string;
+  readonly dedup_key: string;
+  readonly severity: AlertSeverity;
+  readonly summary: string;
+  readonly detail: Json;
+  readonly first_seen_at_ms: number;
+  readonly last_seen_at_ms: number;
+  readonly resolved_at_ms: number | null;
+  readonly acknowledged_at_ms: number | null;
+}

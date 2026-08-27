@@ -145,6 +145,13 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author floor areas and tables, kitchen stations, and station routing rules",
     },
+    /// Acknowledge and resolve operational alerts (ADR-0073). Ops gets it — alerts are a day-to-day
+    /// operational concern — alongside owner and admin. Reading alerts needs only `Read`.
+    ManageAlerts {
+        id: "console.alerts.manage",
+        roles: [Owner, Admin, Ops],
+        description: "Acknowledge and resolve operational alerts",
+    },
     /// Read any tenant data — reports, registry, configuration, catalog, translations.
     Read {
         id: "console.data.read",
@@ -201,6 +208,7 @@ mod tests {
             ConsolePermission::ManageDevices,
             ConsolePermission::ManageWebhooks,
             ConsolePermission::PublishConfig,
+            ConsolePermission::ManageAlerts,
             ConsolePermission::Read,
         ] {
             assert!(

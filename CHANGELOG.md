@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console alert API — the in-console delivery channel** (roadmap v2, Track O2, slice 4;
+  [ADR-0073](docs/adr/0073-alerting.md)). The alerts the evaluator maintains are now readable and
+  actionable from the console: `GET /admin/alerts` lists the fleet-wide active set (or recent history,
+  active + resolved, with `?recent=true&limit=`) behind `console.data.read`; `POST /admin/alerts/{id}/ack`
+  and `POST /admin/alerts/{id}/resolve` acknowledge and hand-resolve an alert behind a new
+  **`console.alerts.manage`** permission (Owner/Admin/Ops — alerts are a day-to-day ops concern) and are
+  audited (`alert.acknowledge`, `alert.resolve`). Both writes are idempotent, and a condition still
+  firing simply reopens on the next evaluator tick. The typed dashboard client gains `listAlerts`,
+  `acknowledgeAlert`, and `resolveAlert`; route tests cover the active/recent split, the ack/resolve
+  lifecycle, and the session gate. The **in-console channel is the shipped delivery path**; the
+  off-console push channels (a webhook channel over the ADR-0032 transport, email, and a Zalo/Telegram
+  chat adapter) plug into an `AlertChannel` seam and are a flagged follow-up. **Upgrade note:** additive
+  read + two idempotent write routes and one new console permission; no schema or protocol change.
 - **The alert evaluator background loop** (roadmap v2, Track O2, slice 3;
   [ADR-0073](docs/adr/0073-alerting.md)). The cloud now *watches* its read models: a new background
   loop (in the mould of the rollup projector and webhook dispatcher) sweeps the fleet, task-health, and

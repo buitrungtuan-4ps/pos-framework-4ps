@@ -339,6 +339,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Operational alerts (ADR-0073, Track O2): the console reads the fleet-wide alert list the
+        // evaluator loop maintains, and acknowledges/resolves alerts. Reads are behind the session
+        // guard; acknowledge/resolve need console.alerts.manage and are audited.
+        .merge(http::alerts_router(
+            store.alerts(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Capability catalogue (ADR-0071): the §10 flags, presets, and inter-flag rules the Config
         // screen's form editor renders toggles and conflict previews from — static framework data
         // behind the session guard.

@@ -45,13 +45,16 @@ signal is invented where one already exists — the engine is the missing *watch
   nullable `tenant_id` (server-wide alerts carry none), RLS-isolated, written and read fleet-wide by the
   trusted pool connection. Nothing sensitive is stored — an alert is a condition and a small JSON
   detail (counts, ages, a version string), never a payload or PII.
-- **Delivery over a channel abstraction.** A newly-opened alert is pushed to the tenant's configured
-  channels. The **in-console channel is the table itself** (the notification bell and the Alerts screen
-  read `GET /admin/alerts`). The **webhook channel reuses the ADR-0032 `WebhookTransport`** (SSRF-safe,
-  TLS, HMAC-signed) — an alert is just another signed JSON body to a vetted URL. **Email and a
-  Zalo/Telegram chat channel are defined as seams (traits) but ship without a live adapter** — the
-  engine and the console are useful today over the console + webhook channels, and a chat/email adapter
-  is a self-contained follow-up that needs no re-architecture.
+- **The in-console channel ships; off-console push is a flagged follow-up.** The **in-console channel
+  is the table itself**: the evaluator persists every firing alert, and the notification bell and the
+  Alerts screen read them through `GET /admin/alerts`. That is the primary, immediately-useful delivery
+  path and it ships in this track (the loop, the read API, and the screen). The **off-console push
+  channels are a separable follow-up**: a webhook channel reusing the ADR-0032 `WebhookTransport`
+  (SSRF-safe, TLS, HMAC-signed — an alert is just another signed JSON body to a vetted URL), and email
+  and a Zalo/Telegram chat channel as further adapters. They plug into an `AlertChannel` seam that
+  delivers the newly-opened set the reconcile already returns, and none of them re-architect the
+  engine; keeping them out of the first cut lets the detection-and-surfacing path land complete and
+  reviewed before the push transports are wired.
 - **The evaluator runs as one more background loop**, recording its own `task_health` row exactly like
   the projector/retention/dispatcher loops (so the watcher is itself watched). Its cadence and every
   threshold (offline seconds, backlog limits, JetStream percent) are `CloudConfig` tunables with
