@@ -24,6 +24,7 @@ import { Login } from "./screens/Login";
 import { MySecurity } from "./screens/MySecurity";
 import { MySessions } from "./screens/MySessions";
 import { NewStore } from "./screens/NewStore";
+import { People } from "./screens/People";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
 import { Stores } from "./screens/Stores";
@@ -79,6 +80,7 @@ export function App() {
           <Route path="/devices" component={Devices} />
           <Route path="/webhooks" component={Webhooks} />
           <Route path="/translations" component={Translations} />
+          <Route path="/people" component={People} />
           <Route path="/activation" component={Activation} />
           <Route path="/admins" component={Admins} />
           <Route path="/my-sessions" component={MySessions} />

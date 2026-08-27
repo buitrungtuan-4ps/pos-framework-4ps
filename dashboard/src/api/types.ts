@@ -396,3 +396,50 @@ export interface AuditFilter {
   readonly actorAdminId?: string;
   readonly limit?: number;
 }
+
+// --- People & access (ADR-0070, Track M1) ---
+
+/**
+ * An employee as `GET /admin/employees` lists it: identity, code, status, and whether a sign-in PIN
+ * is set — never the PIN or its hash. This is the console's first T1 Restricted data (ADR-0070).
+ */
+export interface Employee {
+  readonly employee_id: string;
+  readonly tenant_id: string;
+  readonly code: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+  readonly has_pin: boolean;
+}
+
+/** A tenant's named role — a stored subset of the pos-core permission catalogue (§9, ADR-0070). */
+export interface RoleTemplate {
+  readonly role_template_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly permissions: readonly string[];
+  readonly status: EntityStatus;
+}
+
+/** An employee's assignment to a store with a role (ADR-0070) — three ids, no PII. */
+export interface Assignment {
+  readonly assignment_id: string;
+  readonly tenant_id: string;
+  readonly employee_id: string;
+  readonly store_id: string;
+  readonly role_template_id: string;
+}
+
+/** One entry of the pos-core permission catalogue the role editor offers (ADR-0070, §9). */
+export interface PermissionInfo {
+  readonly id: string;
+  readonly group: string;
+  readonly risk: string;
+  readonly pin_required: boolean;
+  readonly description: string;
+}
+
+/** The `201 { id }` body a people create returns (employee / role / assignment). */
+export interface CreatedId {
+  readonly id: string;
+}

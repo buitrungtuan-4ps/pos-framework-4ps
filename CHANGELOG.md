@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A People console screen — manage employees, roles, PINs, and store assignments** (roadmap v2,
+  Track M1, slice 4; [ADR-0070](docs/adr/0070-people-and-access.md)). A new tenant-scoped `/people`
+  screen on the F2 CRUD kit: an employee roster (with create, archive/restore, and a set/reset-PIN
+  dialog whose digits are sent once and never shown again — the list shows only whether a PIN is
+  *set*); a role editor (a drawer of the `pos-core` permission catalogue grouped by area, so the
+  operator picks capabilities, never types a permission string); and per-store assignments (assign a
+  person to the store chosen in the top bar, with a role, and remove to offboard). All write
+  affordances are gated on the operator holding `console.people.manage` (owner/admin); reads open to
+  any admin (the server re-checks every route). Wired into the nav under Master data and the typed
+  API client. **Upgrade note:** dashboard-only; no API or schema change beyond slice 3's routes.
 - **`/admin` console API for employees, roles, and assignments — every write audited** (roadmap v2,
   Track M1, slice 3; [ADR-0070](docs/adr/0070-people-and-access.md)). The write and read surface the
   People console will use: `GET/POST /admin/employees`, `GET/PATCH /admin/employees/{id}`,
