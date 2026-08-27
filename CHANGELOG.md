@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Alerts console screen — the operator's live view of the alert engine** (roadmap v2, Track O2,
+  slice 6; [ADR-0073](docs/adr/0073-alerting.md)). A new fleet-wide `/alerts` screen (grouped under
+  *Overview*, beside Audit, no working context required) reads the alerts the evaluator maintains: the
+  active set by default, with a toggle to *Recent* history (active + resolved). Each row shows the
+  severity (Critical rides a `danger` pill; the label always accompanies the hue), the localized
+  condition kind, the server's summary, the scope (a tenant or *Fleet-wide*), the last-seen age, and
+  the lifecycle state (firing / acknowledged / resolved); a details drawer opens the full timestamps
+  and the alert's `detail` numbers, with the ULID and dedup key tucked behind *Technical details*. An
+  operator holding `console.alerts.manage` (Owner/Admin/Ops) gets **Acknowledge** and **Resolve**
+  actions inline and in the drawer — hidden for read-only roles, exactly as the server gates them; both
+  are idempotent, so a stale click is harmless. Built on the F2 kit (`DataTable` search/sort/paginate,
+  `Drawer`, `StatusBadge`, `EmptyState`, `TechnicalDetails`), with `StatusBadge` gaining a `danger`
+  tone (`text-danger`, which clears WCAG-AA on the card surface) for an active fault. The
+  notification-bell → live-alert-count wiring is a small, separable follow-up. **Upgrade note:**
+  dashboard-only; no protocol, schema, or permission change.
 - **The console alert API — the in-console delivery channel** (roadmap v2, Track O2, slice 4;
   [ADR-0073](docs/adr/0073-alerting.md)). The alerts the evaluator maintains are now readable and
   actionable from the console: `GET /admin/alerts` lists the fleet-wide active set (or recent history,

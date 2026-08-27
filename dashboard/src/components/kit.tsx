@@ -370,15 +370,19 @@ export function ConfirmDialog(props: {
 
 // --- Small display primitives ---------------------------------------------------------------------
 
-/** A coloured status pill. `label` is already-translated text. */
+/** A coloured status pill. `label` is already-translated text. `danger` is for an active fault
+ *  (a firing alert, a critical severity): `text-danger` clears AA on the card surface, and the label
+ *  always rides with the hue, so meaning is never carried by colour alone. */
 export function StatusBadge(props: {
   label: string;
-  tone: "active" | "archived" | "disabled" | "neutral";
+  tone: "active" | "archived" | "disabled" | "neutral" | "danger";
 }) {
   const palette = () => {
     switch (props.tone) {
       case "active":
         return "border-ok text-ok";
+      case "danger":
+        return "border-danger text-danger";
       case "archived":
       case "disabled":
         return "border-ink-muted text-ink-muted";

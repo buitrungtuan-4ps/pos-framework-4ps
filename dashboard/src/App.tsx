@@ -13,6 +13,7 @@ import { authed, setAuthed } from "./state/session";
 import { AcceptInvite } from "./screens/AcceptInvite";
 import { Activation } from "./screens/Activation";
 import { Admins } from "./screens/Admins";
+import { Alerts } from "./screens/Alerts";
 import { Audit } from "./screens/Audit";
 import { ApiKeys } from "./screens/ApiKeys";
 import { Catalog } from "./screens/Catalog";
@@ -73,6 +74,7 @@ export function App() {
           <Route path="/" component={Reports} />
           <Route path="/fleet" component={Fleet} />
           <Route path="/audit" component={Audit} />
+          <Route path="/alerts" component={Alerts} />
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
