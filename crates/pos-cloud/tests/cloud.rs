@@ -4035,6 +4035,39 @@ async fn the_self_service_security_routes_require_a_session() {
     }
 }
 
+// --- Console identity: whoami (G1 slice 7, ADR-0067) --------------------------------------------
+
+#[tokio::test]
+async fn whoami_needs_a_session() {
+    let router = security_router().await;
+    let denied = router
+        .oneshot(get("/admin/whoami", None))
+        .await
+        .expect("route whoami");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn whoami_reports_the_acting_admins_identity_and_role() {
+    let router = security_router().await;
+    let cookie = admin_cookie(&router).await;
+    let me = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/whoami", &cookie))
+            .await
+            .expect("route whoami"),
+    )
+    .await;
+    // The session bound to the one active owner, so whoami names that owner — role included, and
+    // never a credential (no password hash, no TOTP secret in the safe listing shape).
+    assert_eq!(me["id"], "id-owner");
+    assert_eq!(me["email"], "owner@example.test");
+    assert_eq!(me["role"], "owner");
+    assert_eq!(me["status"], "active");
+    assert!(me.get("password_phc").is_none());
+    assert!(me.get("totp_secret").is_none());
+}
+
 // --- Invitations and admin management (G1 slice 3, ADR-0067) ------------------------------------
 
 #[tokio::test]

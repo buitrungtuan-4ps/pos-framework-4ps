@@ -101,6 +101,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The back office now has screens for admins, invitations, sessions, and account security**
+  (roadmap v2, Track G, G1 slice 7 — the last G1 slice; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)).
+  Three console screens put the multi-admin surface built in slices 3–6 in front of an operator, on
+  the F2 CRUD kit: **Admins** (owner/admin) lists the roster, invites by email and role — showing the
+  single-use copy-invite-link once — lists and revokes pending invites, and (owner only) changes a
+  role or suspends/reactivates an admin, with the last-active-owner and no-self-management guardrails
+  reflected in the UI; **My sessions** (every admin) lists the caller's own live sessions with the
+  current one flagged and protected, revokes one, or signs out everywhere else; **My security** (every
+  admin) re-enrols the authenticator after re-confirming the password and (re)generates the one-time
+  recovery codes, each shown once. A new **`GET /admin/whoami`** returns the acting admin's own
+  identity (id, email, name, role, status — never a credential) so the nav gates the roster to
+  owner/admin; the gating is a convenience only, as the server re-checks every route's permission. A
+  public **`/invite`** page lets an invitee redeem their link and self-enrol (choose a password, add
+  the returned TOTP secret) with no prior session, mirroring first-boot `/setup`. **Upgrade note:**
+  none — one additive read-only endpoint (`/admin/whoami`) and console UI only; no schema, protocol,
+  or permission-identifier change.
 - **A console admin can now see and revoke their own sign-ins, and idle sessions time out** (roadmap
   v2, Track G, G1 slice 4; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `GET
   /admin/sessions` lists the acting admin's live sessions — each with the client IP and user-agent it

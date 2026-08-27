@@ -3,24 +3,33 @@
 // and a version footer. The context inputs persist per browser (state/session.ts) and are a
 // convenience, not an authorisation — the server's session cookie is what gates every call.
 
-import { For, type ParentProps, Show } from "solid-js";
+import { For, onMount, type ParentProps, Show } from "solid-js";
 import { A, useLocation, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
+import type { AdminRole } from "../api/types";
 import { LOCALES, type Locale, type MessageKey, locale, localeName, setLocale, t } from "../i18n";
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
-import { setAuthed, storeName, tenantName } from "../state/session";
+import { actingAdmin, setActingAdmin, setAuthed, storeName, tenantName } from "../state/session";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { ContextPicker } from "./ContextPicker";
 import { NotificationBell, ToastHost } from "./Toast";
 
-type NavItem = { href: string; key: MessageKey; scope: Scope };
+// A nav entry. `scope` (when set) tags the working context the screen needs, so the nav shows at a
+// glance whether it is ready to open; a console-level screen omits it (no context, always openable).
+// `roles` (when set) limits the entry to those admin roles — the server enforces the same gate, so
+// this only hides what a role cannot use (ADR-0067).
+type NavItem = { href: string; key: MessageKey; scope?: Scope; roles?: readonly AdminRole[] };
 type NavGroup = { key: MessageKey; items: readonly NavItem[] };
+
+// The roles that may reach the admin roster: owner and admin can view and invite (the server gates
+// role/status *changes* to owner alone).
+const ADMIN_MANAGERS: readonly AdminRole[] = ["owner", "admin"];
 
 // The admin areas, grouped and each tagged with the working context it needs — so the nav shows at a
 // glance whether a screen is ready to open (its tenant, or tenant *and* store, is set) or is waiting
-// on a choice in the top bar.
+// on a choice in the top bar. The console-identity screens carry no scope and are always reachable.
 const NAV_GROUPS: readonly NavGroup[] = [
   { key: "nav.group.overview", items: [{ href: "/", key: "nav.reports", scope: "store" }] },
   {
@@ -44,11 +53,19 @@ const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/api-keys", key: "nav.apiKeys", scope: "tenant" },
       { href: "/devices", key: "nav.devices", scope: "tenant" },
       { href: "/activation", key: "nav.activation", scope: "store" },
+      { href: "/admins", key: "nav.admins", roles: ADMIN_MANAGERS },
     ],
   },
   {
     key: "nav.group.integrations",
     items: [{ href: "/webhooks", key: "nav.webhooks", scope: "tenant" }],
+  },
+  {
+    key: "nav.group.account",
+    items: [
+      { href: "/my-sessions", key: "nav.mySessions" },
+      { href: "/my-security", key: "nav.mySecurity" },
+    ],
   },
 ];
 
@@ -65,7 +82,21 @@ const CRUMB_KEY: Record<string, MessageKey> = {
   "/webhooks": "nav.webhooks",
   "/translations": "nav.translations",
   "/activation": "nav.activation",
+  "/admins": "nav.admins",
+  "/my-sessions": "nav.mySessions",
+  "/my-security": "nav.mySecurity",
 };
+
+// Whether the signed-in admin's role clears a nav entry's role gate. An entry with no `roles` is open
+// to all; a role-gated entry stays hidden until whoami loads (a brief, safe absence rather than a
+// flash of an area the role cannot use).
+function navItemVisible(item: NavItem): boolean {
+  if (!item.roles) {
+    return true;
+  }
+  const role = actingAdmin()?.role;
+  return role !== undefined && item.roles.includes(role);
+}
 
 // The nav dot's tooltip/aria: whether the item's context is ready, or which piece it is waiting on.
 function scopeHint(scope: Scope): string {
@@ -79,9 +110,21 @@ export function Shell(props: ParentProps) {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Learn who is signed in once the authenticated frame mounts, so the nav can gate the roster to
+  // the roles that may reach it and the screens can greet the operator. A failure here is not fatal:
+  // the session is already proven live (the Shell only renders when authed), so we simply leave the
+  // role-gated entries hidden rather than blocking the console.
+  onMount(() => {
+    void api
+      .whoami()
+      .then(setActingAdmin)
+      .catch(() => setActingAdmin(null));
+  });
+
   const logout = async () => {
     await api.logout().catch(() => undefined);
     setAuthed(false);
+    setActingAdmin(null);
     navigate("/login", { replace: true });
   };
 
@@ -138,38 +181,47 @@ export function Shell(props: ParentProps) {
         <nav class="border-b border-line bg-surface md:w-60 md:border-b-0 md:border-r">
           <div class="flex flex-col gap-4 p-2">
             <For each={NAV_GROUPS}>
-              {(group) => (
-                <div>
-                  <p class="px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    {t(group.key)}
-                  </p>
-                  <ul class="flex flex-wrap gap-1 md:flex-col">
-                    <For each={group.items}>
-                      {(item) => (
-                        <li>
-                          <A
-                            href={item.href}
-                            end={item.href === "/"}
-                            class="flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base text-ink hover:bg-surface-raised"
-                            activeClass="bg-surface-raised font-semibold"
-                          >
-                            <span>{t(item.key)}</span>
-                            <span
-                              aria-label={scopeHint(item.scope)}
-                              title={scopeHint(item.scope)}
-                              class={`h-2 w-2 shrink-0 rounded-full border ${
-                                contextReady(item.scope)
-                                  ? "border-accent bg-accent"
-                                  : "border-line bg-transparent"
-                              }`}
-                            />
-                          </A>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </div>
-              )}
+              {(group) => {
+                const items = () => group.items.filter(navItemVisible);
+                return (
+                  <Show when={items().length > 0}>
+                    <div>
+                      <p class="px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted">
+                        {t(group.key)}
+                      </p>
+                      <ul class="flex flex-wrap gap-1 md:flex-col">
+                        <For each={items()}>
+                          {(item) => (
+                            <li>
+                              <A
+                                href={item.href}
+                                end={item.href === "/"}
+                                class="flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base text-ink hover:bg-surface-raised"
+                                activeClass="bg-surface-raised font-semibold"
+                              >
+                                <span>{t(item.key)}</span>
+                                <Show when={item.scope}>
+                                  {(scope) => (
+                                    <span
+                                      aria-label={scopeHint(scope())}
+                                      title={scopeHint(scope())}
+                                      class={`h-2 w-2 shrink-0 rounded-full border ${
+                                        contextReady(scope())
+                                          ? "border-accent bg-accent"
+                                          : "border-line bg-transparent"
+                                      }`}
+                                    />
+                                  )}
+                                </Show>
+                              </A>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
+                );
+              }}
             </For>
           </div>
         </nav>

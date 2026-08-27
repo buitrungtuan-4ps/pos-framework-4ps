@@ -339,6 +339,7 @@ where
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
+        .route("/admin/whoami", get(admin_whoami::<S, R, K, C, A, T, W>))
         .route(
             "/admin/sessions",
             get(admin_list_sessions::<S, R, K, C, A, T, W>),
@@ -4399,6 +4400,32 @@ where
 {
     match authenticate_session(&app.admin, &app.clock, &headers).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(denied) => denied.into_response(),
+    }
+}
+
+/// `GET /admin/whoami` — the acting admin's own identity (id, email, name, role, status), so the
+/// console can label the signed-in operator and show only the areas their role grants
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available
+/// to any authenticated admin regardless of role, so it is gated by the plain session guard rather
+/// than a [`ConsolePermission`]. It returns the same credential-free [`AdminUser`] shape the roster
+/// lists — never a password hash or a TOTP secret — and role gating in the console is only a UX
+/// convenience; the server re-checks every route's required permission regardless.
+async fn admin_whoami<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => (StatusCode::OK, Json(context.admin)).into_response(),
         Err(denied) => denied.into_response(),
     }
 }

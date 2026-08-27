@@ -115,3 +115,14 @@ them, it does not revisit them).
   seam + fake; (2) role/permission registry + role-aware guard; (3) invitation + self-enrol; (4)
   session listing/revocation + sliding/idle TTL; (5) rate-limit + security headers; (6) TOTP
   re-enrol + recovery codes; (7) the console UI (admins list, invite, my-sessions, my-security).
+  Concretely (slice 7): the console UI puts slices 3–6 in front of an operator as three screens on
+  the F2 CRUD kit — **Admins** (owner/admin: roster, invite-with-copy-link, pending-invite revoke,
+  and owner-only role/status changes, with the last-active-owner and no-self-management guardrails
+  mirrored in the UI), **My sessions** and **My security** (every admin, self-service). A new
+  read-only **`GET /admin/whoami`** returns the acting admin's credential-free identity (the same
+  `AdminUser` shape the roster lists) so the nav can gate the roster to owner/admin — a UX
+  convenience only, since the server re-checks every route's permission regardless. The invitee's
+  self-enrolment gets a **public `/invite` page** (no session — the invite token is the
+  authorisation, mirroring first-boot `/setup`), so the copy-invite-link works end-to-end. This slice
+  adds one additive read-only endpoint and UI; no schema, protocol, or permission change. With it G1
+  is complete.

@@ -6,6 +6,8 @@
 
 import { createSignal } from "solid-js";
 
+import type { AdminIdentity } from "../api/types";
+
 const TENANT_KEY = "pos.dashboard.tenant";
 const STORE_KEY = "pos.dashboard.store";
 const TENANT_NAME_KEY = "pos.dashboard.tenantName";
@@ -30,6 +32,12 @@ function save(key: string, value: string): void {
 
 const [authed, setAuthed] = createSignal(false);
 export { authed, setAuthed };
+
+// The signed-in admin's own identity (id/email/name/role/status), fetched from `/admin/whoami` once
+// the Shell mounts (ADR-0067, Track G1). It is a display and nav-gating convenience — `null` until it
+// loads, and cleared on sign-out — never an authorisation; the server re-checks every route's role.
+const [actingAdmin, setActingAdmin] = createSignal<AdminIdentity | null>(null);
+export { actingAdmin, setActingAdmin };
 
 const [tenantId, setTenantIdSignal] = createSignal(load(TENANT_KEY));
 export { tenantId };

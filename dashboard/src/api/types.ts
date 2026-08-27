@@ -262,3 +262,65 @@ export interface MenuPlacement {
   readonly prices: ChannelPrice[];
   readonly available: boolean;
 }
+
+/** A console admin's least-privilege tier (ADR-0067). `owner` manages other admins; `viewer` is read-only. */
+export type AdminRole = "owner" | "admin" | "ops" | "viewer";
+
+/** The roles, in privilege order, for the console's role pickers. */
+export const ADMIN_ROLES: readonly AdminRole[] = ["owner", "admin", "ops", "viewer"];
+
+/** Whether a console admin can sign in (ADR-0067). A suspended admin keeps its history but cannot. */
+export type AdminStatus = "active" | "suspended";
+
+/**
+ * A console admin as `GET /admin/whoami` and `GET /admin/admins` list it (ADR-0067): identity and
+ * role only — never a password hash or a TOTP secret.
+ */
+export interface AdminIdentity {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly role: AdminRole;
+  readonly status: AdminStatus;
+}
+
+/** A pending invitation from `GET /admin/invites` (ADR-0067) — carries no token, only what it grants. */
+export interface AdminInvite {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly role: AdminRole;
+  readonly invited_by: string;
+  readonly accepted: boolean;
+}
+
+/** The one-time response to `POST /admin/invites` — the single-use token is shown exactly once. */
+export interface InviteAdminResponse {
+  readonly invite_id: string;
+  readonly token: string;
+  readonly expires_at_ms: number;
+}
+
+/**
+ * One of the acting admin's live sessions from `GET /admin/sessions` (ADR-0067). `id` is the opaque
+ * revocation handle (a hash, never the token); `current` marks the session making the request.
+ */
+export interface AdminSessionView {
+  readonly id: string;
+  readonly ip: string | null;
+  readonly user_agent: string | null;
+  readonly created_at_ms: number;
+  readonly expires_at_ms: number;
+  readonly current: boolean;
+}
+
+/** The freshly-generated recovery codes from `POST /admin/recovery-codes` — returned exactly once. */
+export interface RecoveryCodesResponse {
+  readonly codes: string[];
+  readonly remaining: number;
+}
+
+/** How many unused recovery codes remain, from `GET /admin/recovery-codes` (never the codes). */
+export interface RecoveryCodesStatus {
+  readonly remaining: number;
+}
