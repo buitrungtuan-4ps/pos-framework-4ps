@@ -32,6 +32,54 @@ export interface FireRequest {
   station_id: string;
 }
 
+// The store's published floor plan and kitchen stations from `GET /api/floor` (ADR-0072). The edge
+// serves the live `EdgeSession` plans; the shapes mirror `pos_proto::floor`, with the optional-field
+// keys (`position`, `default_station_id`, …) omitted from the wire when absent.
+export interface FloorGridPosition {
+  column: number;
+  row: number;
+}
+
+export interface FloorTable {
+  table_id: string;
+  label: string;
+  seats?: number;
+  position?: FloorGridPosition | null;
+}
+
+export interface FloorArea {
+  area_id: string;
+  name: string;
+  tables?: FloorTable[];
+}
+
+export interface FloorPlan {
+  areas?: FloorArea[];
+}
+
+export interface KitchenStation {
+  station_id: string;
+  name: string;
+  backup_station_id?: string | null;
+}
+
+export interface StationRoutingRule {
+  station_id: string;
+  menu_item_id?: string | null;
+  course_id?: string | null;
+}
+
+export interface StationPlan {
+  stations?: KitchenStation[];
+  routing?: StationRoutingRule[];
+  default_station_id?: string | null;
+}
+
+export interface FloorResponse {
+  floor: FloorPlan;
+  stations: StationPlan;
+}
+
 export interface BumpRequest {
   order_id: string;
   station_id: string;

@@ -60,10 +60,13 @@ impl From<LineRequest> for LineDraft {
     }
 }
 
-/// Which station a fire goes to.
+/// Which station a fire goes to. Optional: the edge derives the station from the published routing
+/// (ADR-0072), and this is only the fallback for a store with no station plan yet — an absent field
+/// lets the plan decide entirely.
 #[derive(Debug, Deserialize)]
 pub(crate) struct FireRequest {
-    station_id: StationId,
+    #[serde(default)]
+    station_id: Option<StationId>,
 }
 
 /// A line as returned to a device after a command.

@@ -76,7 +76,7 @@ fn a_restart_rebuilds_the_projection_from_the_log() {
                 .expect("opens a shift");
             edge.seat_table(actor(), table).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
-            edge.fire_line(actor(), line.order_line_id, station)
+            edge.fire_line(actor(), line.order_line_id, Some(station))
                 .await
                 .expect("fires");
             let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
@@ -167,7 +167,7 @@ fn a_bump_survives_a_restart() {
             let edge = edge_over(store.clone());
             edge.seat_table(actor(), table).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
-            edge.fire_line(actor(), line.order_line_id, station)
+            edge.fire_line(actor(), line.order_line_id, Some(station))
                 .await
                 .expect("fires");
             edge.bump_ticket(actor(), line.order_id, station, vec![line.order_line_id])

@@ -114,6 +114,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         AppError::Domain(inner) => (StatusCode::CONFLICT, inner.to_string()).into_response(),
         AppError::NoOpenOrder
         | AppError::UnknownLine
+        | AppError::UnroutableLine
         | AppError::UnknownBill
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen => (StatusCode::CONFLICT, error.to_string()).into_response(),

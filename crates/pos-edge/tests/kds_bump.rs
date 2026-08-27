@@ -69,10 +69,10 @@ fn a_bump_is_durable_fanned_out_and_read_back_by_a_late_kds() {
             .add_line(device(), table, a_pizza(501))
             .await
             .expect("adds a second line");
-        edge.fire_line(device(), line_a.order_line_id, station)
+        edge.fire_line(device(), line_a.order_line_id, Some(station))
             .await
             .expect("fires line a");
-        edge.fire_line(device(), line_b.order_line_id, station)
+        edge.fire_line(device(), line_b.order_line_id, Some(station))
             .await
             .expect("fires line b");
 

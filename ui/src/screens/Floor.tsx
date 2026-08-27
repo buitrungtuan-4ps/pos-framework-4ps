@@ -5,7 +5,7 @@ import { ApiError } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { FLOOR, clean, seat, tableState } from "../state/store";
+import { clean, floorTables, seat, tableState } from "../state/store";
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -50,7 +50,7 @@ export function Floor() {
         )}
       </Show>
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        <For each={FLOOR}>
+        <For each={floorTables()}>
           {(table) => {
             const currentState = () => tableState(table.id);
             return (

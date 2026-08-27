@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The in-store app draws the store's real floor and routes fires by the published plan** (roadmap
+  v2, Track M2, slice 8; [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). The in-store `ui/` now reads
+  `GET /api/floor` at start and renders the store's published areas and tables instead of a hardcoded
+  eight, keeping a never-blank fallback (the default grid stays until a plan syncs, and if a store has
+  none published). Firing and bumping route to the store's published default station rather than the
+  old fixed `S01` — and the edge now **derives a fired line's station from the published routing**
+  (wiring `EdgeSession::resolve_station`, previously defined but unused): `fire_line` resolves the
+  station from the line's item/course rules and falls back to the caller's station only when the store
+  has no station plan yet, so a device fires a line without needing to know the kitchen's stations. The
+  edge's `POST /api/lines/{id}/fire` accepts an optional `station_id` (absent lets the plan decide),
+  and a fire that resolves to no station at all is a `409` (`UnroutableLine`) rather than a blank
+  route. **Upgrade note:** edge + in-store-UI only; `FireRequest.station_id` is now optional (an absent
+  field is accepted); no schema or `PROTOCOL_VERSION` change.
 - **Floor & kitchen console screens** (roadmap v2, Track M2, slice 7;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Two new master-data screens on the F2 CRUD kit,
   both per-store and behind the working store in the top bar. **Floor** manages a store's areas and
