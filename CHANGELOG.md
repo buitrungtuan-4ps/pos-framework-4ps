@@ -111,6 +111,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The rest of the console's write surface now records to the audit trail** (roadmap v2, Track G,
+  G2 slice 3; [ADR-0069](docs/adr/0069-audit-trail.md)). Extending slice 2 beyond the org registry,
+  every remaining `/admin` mutation now appends one `audit_log` entry on success: API-key issue and
+  revoke, webhook register/delete/re-enable, config publish, rollup reset, admin invite/role/status
+  and invite revoke, device-proposal approve/reject (the `resolved_by` is the acting admin), the
+  translation-grid save, and the whole catalog authoring surface (item, tax class, item and display
+  categories/sub-categories, modifier group, menu, section, layout button, placement — create,
+  update, and remove) plus the menu publish. The recorder reaches the sub-routers (device,
+  translation, catalog, catalog-publish) as the same object-safe `Arc<dyn AuditRecorder>` carried on
+  their state. **Secrets are never recorded:** an API-key entry captures the granted scopes and
+  expiry and a webhook entry the endpoint URL, but the key token and HMAC signing secret are
+  excluded; admin-management entries carry the target admin's id and the role/status set, not an
+  email. Idempotent no-ops (revoking an already-gone key, resolving an already-resolved proposal)
+  record nothing. Recording stays best-effort after the write. **Upgrade note:** no schema,
+  `PROTOCOL_VERSION`, or permission-identifier change; reuses migration `0022`. No customer or
+  employee personal data is recorded. The break-glass reset tombstone (written from the `reset_admin`
+  binary, not an `/admin` route) and the audit read API + screen are the next G2 slices.
 - **The org-registry write routes now record to the audit trail** (roadmap v2, Track G, G2 slice 2;
   [ADR-0069](docs/adr/0069-audit-trail.md)). Building on the slice-1 store, every successful
   tenant/brand/store/device create or update under `/admin` now appends one `audit_log` entry — the

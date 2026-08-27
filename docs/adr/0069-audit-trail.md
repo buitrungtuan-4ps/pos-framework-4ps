@@ -80,12 +80,18 @@ price used to be?", and no basis for the accountability a multi-admin, complianc
 - A new `AuditStore` seam with a store-postgres adapter and an in-memory fake, exercised by the
   real-PostgreSQL integration suite. Later slices thread the actor through the write routes and emit
   entries; this slice is the foundation they build on.
-- Landed in slices under Track G2: (1) foundation (this) → (2) registry-route auditing → (3) the
-  remaining `/admin` writes + break-glass tombstone → (4) audit read API + screen → (5) config
-  version list/diff/rollback → (6) `created/updated at·by` surfacing + per-Detail audit tab.
+- Landed in slices under Track G2: (1) foundation → (2) registry-route auditing → (3) the remaining
+  `/admin` write surfaces (api-keys, webhooks, config publish, admin management, rollup reset, device
+  proposals, translations, catalog authoring + publish) → (4) audit read API + screen → (5) config
+  version list/diff/rollback → (6) `created/updated at·by` surfacing + per-Detail audit tab. The
+  break-glass reset writes its tombstone from the `reset_admin` binary, not an `/admin` route, so it
+  is recorded when that path grows an audit-store handle rather than in slice 3.
 - **PDPD/GDPR:** the log records *administrative* actions on business metadata (store names, config,
   keys), keyed to console operators — not customer or employee personal data, and not behavioural
   monitoring. `before`/`after` capture the entity's own fields (e.g. a store name, a config document),
   which are T2/T3 business data; a route whose entity carries personal data must redact it before
-  writing the audit `before`/`after` (none in slices 1–3 do). The log is subject to the same retention
-  policy decision as other cloud data (ADR-0035).
+  writing the audit `before`/`after` (none in slices 1–3 do). Secrets are never written: an API-key
+  entry records the granted scopes and expiry, and a webhook entry records the endpoint URL, but the
+  key token and the HMAC signing secret — shown once to the caller — are excluded from `after`. An
+  admin-management entry records the target admin's id (a ULID) and the role/status set, not an
+  email. The log is subject to the same retention policy decision as other cloud data (ADR-0035).

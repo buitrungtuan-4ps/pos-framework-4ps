@@ -2361,7 +2361,13 @@ fn device_app(admin: FakeAdmin, keys: FakeKeys, devices: FakeDevices) -> axum::R
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::device_router(devices, admin, keys, clock()))
+    http::router(app).merge(http::device_router(
+        devices,
+        admin,
+        keys,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 #[tokio::test]
@@ -2432,6 +2438,83 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approved = json_body(after).await;
     assert_eq!(approved.as_array().expect("array").len(), 1);
     assert_eq!(approved[0]["address"], "192.168.1.50:9100");
+}
+
+#[tokio::test]
+async fn approving_a_device_proposal_records_to_the_audit_trail() {
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let sink: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(audit.clone()));
+    let router = http::router(app).merge(http::device_router(
+        devices,
+        admin,
+        keys.clone(),
+        clock(),
+        sink,
+    ));
+    let cookie = admin_cookie(&router).await;
+    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &serde_json::json!({ "kind": "printer", "name": "Kitchen 1", "address": "192.168.1.50:9100" }),
+            &token,
+        ))
+        .await
+        .expect("route the proposal");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let approve = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approve.status(), StatusCode::NO_CONTENT);
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.entity_type == "device_proposal")
+        .expect("the resolve was recorded");
+    assert_eq!(
+        entry.action, "device_proposal.approve",
+        "approve is distinguished from reject"
+    );
+    assert_eq!(
+        entry.entity_id, id,
+        "the resolved proposal's id is recorded"
+    );
+    assert_eq!(
+        entry.tenant_id.map(|id| id.to_string()),
+        Some(tenant_ulid),
+        "the entry is scoped to the tenant"
+    );
+    assert!(
+        !entry.actor.email.is_empty(),
+        "the resolving admin is snapshotted onto the entry"
+    );
 }
 
 #[tokio::test]
@@ -2507,7 +2590,12 @@ fn translation_app(admin: FakeAdmin, translations: FakeTranslations) -> axum::Ro
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::translation_router(translations, admin, clock()))
+    http::router(app).merge(http::translation_router(
+        translations,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 #[tokio::test]
@@ -5526,7 +5614,12 @@ fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::catalog_router(catalog, admin, clock()))
+    http::router(app).merge(http::catalog_router(
+        catalog,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
 }
 
 /// A ULID string an operator never types — the routes accept it in the body/path, the fake scopes by
@@ -6113,12 +6206,14 @@ fn catalog_publish_app(
             catalog.clone(),
             admin.clone(),
             clock(),
+            Arc::new(NoopAuditRecorder),
         ))
         .merge(http::catalog_publish_router(
             catalog,
             config_trees,
             admin,
             clock(),
+            Arc::new(NoopAuditRecorder),
         ))
 }
 

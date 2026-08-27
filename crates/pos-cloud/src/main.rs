@@ -233,11 +233,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             store.api_keys(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         .merge(http::translation_router(
             store.translations(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         .merge(http::activation_router(
             store.activation_codes(),
@@ -276,6 +278,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.catalog(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
         // config node, so it rides the config tree to the store like every other config change.
@@ -284,6 +287,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.config_trees(),
             store.admin(),
             SystemClock,
+            Arc::clone(&audit),
         ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
