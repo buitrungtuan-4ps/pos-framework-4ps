@@ -23,23 +23,23 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminInviteRow, AdminSessionRow, AdminUserRow, AssignmentRow, AuditLogRow, BrandRow,
+    AdminInviteRow, AdminSessionRow, AdminUserRow, AreaRow, AssignmentRow, AuditLogRow, BrandRow,
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
     DeviceRow, EmployeeRow, FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow,
     PostgresActivationCodes, PostgresAdmin, PostgresApiKeys, PostgresAudit, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresOrderQueue,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresOrderQueue,
     PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
-    PostgresWebhooks, RoleTemplateRow, StoreRow, TaskHealthRow, TenantRow,
+    PostgresWebhooks, RoleTemplateRow, StoreRow, TableRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId, MenuItemId,
-    StoreId, SubjectId, TaxClassId, TenantId,
+    AreaId, ConfigVersionId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
+    MenuItemId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -72,6 +72,9 @@ use crate::devices::{
     DeviceProposalSummary, PersistedDeviceProposal,
 };
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::floorplan::{
+    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewTable, Table, TableStore, TableUpdate,
+};
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
 use crate::people::{
@@ -1784,6 +1787,151 @@ impl AssignmentStore for PostgresPeople {
         self.delete_assignment(&tenant.to_string(), &assignment_id.to_string())
             .await
             .map_err(|error| AssignmentStoreError::new(error.to_string()))
+    }
+}
+
+// --- floor (Track M2, ADR-0072): store-postgres rows converted to the AreaStore/TableStore domain ---
+
+/// Parses a stored ULID string, naming the field in the error for the server log.
+fn parse_floor_ulid(text: &str, what: &str) -> Result<Ulid, FloorStoreError> {
+    text.parse::<Ulid>()
+        .map_err(|error| FloorStoreError::new(format!("stored {what} id is not a ULID: {error}")))
+}
+
+/// Reads one queried row into an [`Area`].
+fn area_record(row: &AreaRow) -> Result<Area, FloorStoreError> {
+    Ok(Area {
+        area_id: AreaId::new(parse_floor_ulid(&row.id, "area")?),
+        tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
+        store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
+        name: row.name.clone(),
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+/// Reads one queried row into a [`Table`], folding the two nullable grid columns into an optional
+/// [`GridPosition`] (a table is placed only when both are set).
+fn table_record(row: &TableRow) -> Result<Table, FloorStoreError> {
+    let position = match (row.grid_column, row.grid_row) {
+        (Some(column), Some(grid_row)) => Some(GridPosition {
+            column: u16::try_from(column).unwrap_or(0),
+            row: u16::try_from(grid_row).unwrap_or(0),
+        }),
+        _ => None,
+    };
+    Ok(Table {
+        table_id: TableId::new(parse_floor_ulid(&row.id, "table")?),
+        tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
+        store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
+        area_id: AreaId::new(parse_floor_ulid(&row.area_id, "area")?),
+        label: row.label.clone(),
+        seats: u16::try_from(row.seats).unwrap_or(0),
+        position,
+        status: EntityStatus::from_db(&row.status),
+    })
+}
+
+impl AreaStore for PostgresFloor {
+    async fn create(&self, area: &NewArea) -> Result<(), FloorStoreError> {
+        self.insert_area(
+            &area.area_id.to_string(),
+            &area.tenant_id.to_string(),
+            &area.store_id.to_string(),
+            &area.name,
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Area>, FloorStoreError> {
+        let rows = self
+            .fetch_areas(&tenant.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        rows.iter().map(area_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        area_id: AreaId,
+    ) -> Result<Option<Area>, FloorStoreError> {
+        let row = self
+            .fetch_area(&tenant.to_string(), &area_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        row.as_ref().map(area_record).transpose()
+    }
+
+    async fn update(&self, area: &AreaUpdate) -> Result<bool, FloorStoreError> {
+        self.set_area(
+            &area.tenant_id.to_string(),
+            &area.area_id.to_string(),
+            &area.name,
+            area.status.as_str(),
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+}
+
+impl TableStore for PostgresFloor {
+    async fn create(&self, table: &NewTable) -> Result<(), FloorStoreError> {
+        self.insert_table(
+            &table.table_id.to_string(),
+            &table.tenant_id.to_string(),
+            &table.store_id.to_string(),
+            &table.area_id.to_string(),
+            &table.label,
+            i32::from(table.seats),
+            table.position.map(|position| i32::from(position.column)),
+            table.position.map(|position| i32::from(position.row)),
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Table>, FloorStoreError> {
+        let rows = self
+            .fetch_tables(&tenant.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        rows.iter().map(table_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        table_id: TableId,
+    ) -> Result<Option<Table>, FloorStoreError> {
+        let row = self
+            .fetch_table(&tenant.to_string(), &table_id.to_string())
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        row.as_ref().map(table_record).transpose()
+    }
+
+    async fn update(&self, table: &TableUpdate) -> Result<bool, FloorStoreError> {
+        self.set_table(
+            &table.tenant_id.to_string(),
+            &table.table_id.to_string(),
+            &table.area_id.to_string(),
+            &table.label,
+            i32::from(table.seats),
+            table.position.map(|position| i32::from(position.column)),
+            table.position.map(|position| i32::from(position.row)),
+            table.status.as_str(),
+        )
+        .await
+        .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 }
 

@@ -49,6 +49,9 @@ use pos_cloud::devices::{
     DeviceProposalSummary, PersistedDeviceProposal,
 };
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
+use pos_cloud::floorplan::{
+    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewTable, Table, TableStore, TableUpdate,
+};
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::orders::{StoreDirectory, orders_router};
@@ -80,9 +83,12 @@ use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_proto::BusinessDate;
+use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId};
+use pos_proto::ids::{
+    AreaId, ConfigVersionId, DeviceId, EventId, MenuItemId, StoreId, TableId, TenantId,
+};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -6905,6 +6911,263 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
             .await
             .expect("set pin across tenant"),
         "a PIN set is scoped to the tenant — no row matched"
+    );
+}
+
+/// The floor master-data store as two in-memory lists — the same `AreaStore`/`TableStore` seams the
+/// binary implements over the tenant-and-store-scoped `floor_areas`/`floor_tables` tables. Areas and
+/// tables are archived, never removed (Track M2, ADR-0072).
+#[derive(Clone, Default)]
+struct FakeFloor {
+    areas: Arc<Mutex<Vec<Area>>>,
+    tables: Arc<Mutex<Vec<Table>>>,
+}
+
+impl AreaStore for FakeFloor {
+    async fn create(&self, area: &NewArea) -> Result<(), FloorStoreError> {
+        self.areas.lock().expect("lock").push(Area {
+            area_id: area.area_id,
+            tenant_id: area.tenant_id,
+            store_id: area.store_id,
+            name: area.name.clone(),
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Area>, FloorStoreError> {
+        let mut rows: Vec<Area> = self
+            .areas
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|area| area.tenant_id == tenant && area.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse(); // stored oldest-first; the read is newest-first.
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        area_id: AreaId,
+    ) -> Result<Option<Area>, FloorStoreError> {
+        Ok(self
+            .areas
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|area| area.tenant_id == tenant && area.area_id == area_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &AreaUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.areas.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|area| area.tenant_id == update.tenant_id && area.area_id == update.area_id)
+        else {
+            return Ok(false);
+        };
+        row.name.clone_from(&update.name);
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+impl TableStore for FakeFloor {
+    async fn create(&self, table: &NewTable) -> Result<(), FloorStoreError> {
+        self.tables.lock().expect("lock").push(Table {
+            table_id: table.table_id,
+            tenant_id: table.tenant_id,
+            store_id: table.store_id,
+            area_id: table.area_id,
+            label: table.label.clone(),
+            seats: table.seats,
+            position: table.position,
+            status: EntityStatus::Active,
+        });
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<Table>, FloorStoreError> {
+        let mut rows: Vec<Table> = self
+            .tables
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|table| table.tenant_id == tenant && table.store_id == store_id)
+            .cloned()
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        table_id: TableId,
+    ) -> Result<Option<Table>, FloorStoreError> {
+        Ok(self
+            .tables
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|table| table.tenant_id == tenant && table.table_id == table_id)
+            .cloned())
+    }
+
+    async fn update(&self, update: &TableUpdate) -> Result<bool, FloorStoreError> {
+        let mut rows = self.tables.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|table| table.tenant_id == update.tenant_id && table.table_id == update.table_id)
+        else {
+            return Ok(false);
+        };
+        row.area_id = update.area_id;
+        row.label.clone_from(&update.label);
+        row.seats = update.seats;
+        row.position = update.position;
+        row.status = update.status;
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end exercise of both floor seams (area + table CRUD, placement, and \
+              tenant/store isolation) reads better as a single narrative than split fixtures"
+)]
+async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
+    let store = FakeFloor::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    let front = StoreId::new(Ulid::from_u128(0x5701));
+    let back = StoreId::new(Ulid::from_u128(0x5702));
+    let terrace = AreaId::new(Ulid::from_u128(1));
+    let hall = AreaId::new(Ulid::from_u128(2));
+
+    AreaStore::create(
+        &store,
+        &NewArea {
+            area_id: terrace,
+            tenant_id: mine,
+            store_id: front,
+            name: "Terrace".to_owned(),
+        },
+    )
+    .await
+    .expect("create terrace");
+    // A same-id area in another tenant/store must not leak into `mine`'s front-store list.
+    AreaStore::create(
+        &store,
+        &NewArea {
+            area_id: hall,
+            tenant_id: other,
+            store_id: back,
+            name: "Hall".to_owned(),
+        },
+    )
+    .await
+    .expect("create hall");
+
+    let areas = AreaStore::list(&store, mine, front)
+        .await
+        .expect("list areas");
+    assert_eq!(areas.len(), 1);
+    assert_eq!(areas[0].name, "Terrace");
+
+    // Rename + archive the area.
+    assert!(
+        AreaStore::update(
+            &store,
+            &AreaUpdate {
+                area_id: terrace,
+                tenant_id: mine,
+                name: "Front terrace".to_owned(),
+                status: EntityStatus::Archived,
+            },
+        )
+        .await
+        .expect("update area")
+    );
+    let terrace_view = AreaStore::get(&store, mine, terrace)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(terrace_view.name, "Front terrace");
+    assert_eq!(terrace_view.status, EntityStatus::Archived);
+
+    // A table carries an optional grid position; create one placed, then move + reseat it.
+    let table_one = TableId::new(Ulid::from_u128(10));
+    TableStore::create(
+        &store,
+        &NewTable {
+            table_id: table_one,
+            tenant_id: mine,
+            store_id: front,
+            area_id: terrace,
+            label: "T1".to_owned(),
+            seats: 4,
+            position: Some(GridPosition { column: 0, row: 0 }),
+        },
+    )
+    .await
+    .expect("create table");
+
+    let tables = TableStore::list(&store, mine, front)
+        .await
+        .expect("list tables");
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].seats, 4);
+    assert_eq!(tables[0].position, Some(GridPosition { column: 0, row: 0 }));
+
+    assert!(
+        TableStore::update(
+            &store,
+            &TableUpdate {
+                table_id: table_one,
+                tenant_id: mine,
+                area_id: terrace,
+                label: "T1".to_owned(),
+                seats: 6,
+                position: None,
+                status: EntityStatus::Active,
+            },
+        )
+        .await
+        .expect("update table")
+    );
+    let table_view = TableStore::get(&store, mine, table_one)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(table_view.seats, 6);
+    assert_eq!(table_view.position, None, "the table was unplaced");
+
+    // Cross-tenant/store isolation: mine's back store and the other tenant see none of mine's front.
+    assert!(
+        AreaStore::list(&store, mine, back)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+    assert!(
+        AreaStore::get(&store, other, terrace)
+            .await
+            .expect("get")
+            .is_none()
     );
 }
 

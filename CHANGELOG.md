@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Floor master-data store: areas & tables** (roadmap v2, Track M2, slice 2a;
+  [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). A store's floor is now persisted master data:
+  migration `0025_floor_areas_and_tables.sql` adds the `floor_areas` and `floor_tables` tables —
+  per-store (a floor is a physical room, so both carry `store_id` beside `tenant_id`), RLS-isolated on
+  `app.tenant_id`, and archived-never-deleted like every other registry entity. New `AreaStore` /
+  `TableStore` seams (with an in-memory fake for tests and a `store-postgres` `PostgresFloor` adapter)
+  create/list/get/update areas and tables; a table carries a label, seat count, and an optional grid
+  position for the visual editor. Not PII. Seams and storage only in this slice; the CRUD routes,
+  publish, and console follow. **Upgrade note:** additive migration `0025` (rollback-safe); no protocol
+  change.
 - **Floor & kitchen master-data types** (roadmap v2, Track M2, slice 1;
   [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). Foundations for a store's floor plan and kitchen
   routing: a new `AreaId` (a named region of the floor), and two shared `pos-proto` config shapes the
