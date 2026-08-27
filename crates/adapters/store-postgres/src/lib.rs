@@ -32,6 +32,7 @@ mod registry;
 mod rollups;
 mod store;
 mod subjects;
+mod task_health;
 mod translations;
 mod webhooks;
 
@@ -54,5 +55,6 @@ pub use registry::{BrandRow, DeviceRow, PostgresRegistry, StoreRow, TenantRow};
 pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};
 pub use subjects::{PostgresSubjects, SubjectRow};
+pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use translations::PostgresTranslations;
 pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};

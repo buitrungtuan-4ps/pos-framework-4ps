@@ -73,6 +73,9 @@ const MIGRATION_0019: &str = include_str!("../migrations/0019_admin_session_slid
 /// Fleet liveness read model — last-seen + config-version-held per store ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
 const MIGRATION_0020: &str = include_str!("../migrations/0020_store_liveness.sql");
 
+/// Background-task health — last-tick per loop ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
+const MIGRATION_0021: &str = include_str!("../migrations/0021_task_health.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -207,6 +210,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0020)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0021)
+            .await
             .map_err(unavailable)
     }
 
@@ -326,6 +333,15 @@ impl PostgresStore {
     #[must_use]
     pub fn fleet(&self) -> crate::fleet::PostgresFleet {
         crate::fleet::PostgresFleet::new(self.pool.clone())
+    }
+
+    /// The background-task health store over this pool ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `TaskHealthStore` seam over
+    /// it. Each background loop records its tick here; the `/admin` health route reads it.
+    #[must_use]
+    pub fn task_health(&self) -> crate::task_health::PostgresTaskHealth {
+        crate::task_health::PostgresTaskHealth::new(self.pool.clone())
     }
 
     /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).

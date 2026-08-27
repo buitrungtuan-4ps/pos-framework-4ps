@@ -38,11 +38,12 @@ const MAX_PAGES_PER_TICK: u32 = 20;
 ///
 /// A sweep error (the store is unreachable) is logged and retried next tick rather than crashing the
 /// cloud — webhooks falling a tick behind is a far smaller problem than a cloud that will not start.
-pub async fn run<S, W, T, C>(
+pub async fn run<S, W, T, C, H>(
     events: S,
     webhooks: W,
     transport: T,
     clock: C,
+    health: H,
     interval: Duration,
     shutdown: impl Future<Output = ()>,
 ) where
@@ -50,12 +51,29 @@ pub async fn run<S, W, T, C>(
     W: WebhookEndpointStore,
     T: WebhookTransport,
     C: ClockSource,
+    H: crate::health::TaskHealthStore,
 {
     let mut live: HashMap<WebhookEndpointId, WebhookEndpoint> = HashMap::new();
     tokio::pin!(shutdown);
     loop {
-        if let Err(error) = sweep(&events, &webhooks, &transport, clock.now(), &mut live).await {
-            tracing::error!(%error, "a webhook dispatch sweep failed; will retry next interval");
+        let ok = match sweep(&events, &webhooks, &transport, clock.now(), &mut live).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(%error, "a webhook dispatch sweep failed; will retry next interval");
+                false
+            }
+        };
+        let detail = crate::health::tick_detail(
+            ok,
+            interval.as_secs(),
+            serde_json::json!({ "live_endpoints": live.len() }),
+        );
+        // Best-effort health telemetry: a failure to record must never crash the dispatch loop.
+        if let Err(error) = health
+            .record_tick(crate::health::WEBHOOK_DISPATCHER, clock.now(), &detail)
+            .await
+        {
+            tracing::warn!(%error, "recording webhook task health failed");
         }
         tokio::select! {
             biased;

@@ -29,8 +29,8 @@ use store_postgres::{
     NewSessionRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
     PostgresApiKeys, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
     PostgresOrderQueue, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTranslations, PostgresWebhooks, StoreRow,
-    TenantRow,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTranslations,
+    PostgresWebhooks, StoreRow, TaskHealthRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -70,6 +70,7 @@ use crate::devices::{
     DeviceProposalSummary, PersistedDeviceProposal,
 };
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::orders::StoreDirectory;
 use crate::reconcile::{ReconcileError, ReconcileStore};
 use crate::registry::{
@@ -1333,6 +1334,48 @@ impl FleetStore for PostgresFleet {
             .await
             .map_err(|error| FleetStoreError::new(error.to_string()))?;
         row.map(fleet_row).transpose()
+    }
+}
+
+// --- Background-task health (ADR-0068 slice 4) --------------------------------------------------
+
+/// Converts one `store-postgres` task-health row into the cloud's [`TaskHealth`]. A tick instant out
+/// of range (impossible for values this cloud wrote) or a detail that will not parse fails safe — the
+/// instant to the epoch, the detail to an empty object — rather than dropping the whole listing, since
+/// this is health telemetry and a decode fault must not itself read as "no health data".
+fn task_health(row: TaskHealthRow) -> TaskHealth {
+    let last_tick_at =
+        Timestamp::from_milliseconds_since_epoch(row.last_tick_at_ms).unwrap_or(Timestamp::EPOCH);
+    let detail = serde_json::from_str(&row.detail_json)
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    TaskHealth {
+        task: row.task,
+        last_tick_at,
+        detail,
+    }
+}
+
+impl TaskHealthStore for PostgresTaskHealth {
+    async fn record_tick(
+        &self,
+        task: &str,
+        at: Timestamp,
+        detail: &serde_json::Value,
+    ) -> Result<(), TaskHealthError> {
+        let detail_json = serde_json::to_string(detail).map_err(|error| {
+            TaskHealthError::new(format!("encoding a task-health detail failed: {error}"))
+        })?;
+        self.record(task, at.as_milliseconds_since_epoch(), &detail_json)
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))
+    }
+
+    async fn list_health(&self) -> Result<Vec<TaskHealth>, TaskHealthError> {
+        let rows = self
+            .fetch_all()
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))?;
+        Ok(rows.into_iter().map(task_health).collect())
     }
 }
 

@@ -61,6 +61,22 @@ answers it, captured from the signal the edge already sends.
   published) at read time, so the answer needs no background sweep. `/admin` is absent from the gated
   OpenAPI (like `/internal` and `/sync`), so the fleet routes add no drift-gate surface.
 
+- **Background-task health (slice 4) is a heartbeat, not a backlog scrape.** The cloud's off-request
+  loops — the rollup projector, the retention/PII sweep, the webhook dispatcher — each upsert one row
+  into a `task_health` table at the end of every tick, carrying the instant and a small
+  self-describing `detail` (`{"ok":…,"interval_secs":…,…}`). `GET /admin/health/tasks` (its own
+  sub-router, behind `console.data.read`) reports each *expected* loop plus any extra that ticked, and
+  derives `healthy` at read time from `now − last_tick_at` against the interval the tick itself
+  recorded (times a slack of a few cycles) **and** the tick's `ok` — so a loop that has gone quiet, a
+  loop dead since boot (no row → reported unhealthy, not hidden), and a loop that is alive but whose
+  work is failing are all distinguishable. This mirrors the liveness read: the producer writes the
+  raw facts, the reader derives the verdict, and `task_health` is fleet-wide server state — no
+  `tenant_id`, no RLS — because these loops run once per cloud, not per tenant. A recording failure is
+  swallowed (a loop must never crash because its telemetry write failed). Rejected for this slice:
+  scraping each loop's *backlog* (rollup-cursor lag, order-queue depth) to infer health — a growing
+  backlog is a useful signal but does not distinguish "caught up" from "stopped," which the heartbeat
+  does directly; per-loop backlog gauges can layer on later.
+
 **Rejected.**
 
 - **Columns on `config_trees` or on the registry `stores` row** — rejected: liveness must exist for a

@@ -20,6 +20,7 @@ use core::time::Duration;
 
 use pos_ports::PortError;
 use pos_ports::event_store::EventStore;
+use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
 use super::projection::{RollupStore, project};
@@ -92,20 +93,25 @@ where
 ///
 /// A listing failure is logged and retried on the next tick rather than crashing the cloud — a
 /// dashboard one interval stale is a far smaller problem than a cloud that will not stay up.
-pub async fn run<E, R, Cat>(
+pub async fn run<E, R, Cat, C, H>(
     events: E,
     rollups: R,
     catalog: Cat,
+    clock: C,
+    health: H,
     interval: Duration,
     shutdown: impl Future<Output = ()>,
 ) where
     E: EventStore,
     R: RollupStore,
     Cat: StoreCatalog,
+    C: ClockSource,
+    H: crate::health::TaskHealthStore,
 {
     tokio::pin!(shutdown);
     loop {
-        match project_fleet(&events, &rollups, &catalog).await {
+        let pass = project_fleet(&events, &rollups, &catalog).await;
+        let detail = match &pass {
             Ok(report) if report.folded > 0 || report.failed > 0 => {
                 tracing::info!(
                     stores = report.stores,
@@ -113,11 +119,35 @@ pub async fn run<E, R, Cat>(
                     failed = report.failed,
                     "rollup projector pass"
                 );
+                crate::health::tick_detail(
+                    report.failed == 0,
+                    interval.as_secs(),
+                    serde_json::json!({
+                        "stores": report.stores,
+                        "folded": report.folded,
+                        "failed": report.failed,
+                    }),
+                )
             }
-            Ok(_) => tracing::debug!("rollup projector found no new events"),
+            Ok(report) => {
+                tracing::debug!("rollup projector found no new events");
+                crate::health::tick_detail(
+                    true,
+                    interval.as_secs(),
+                    serde_json::json!({ "stores": report.stores, "folded": 0, "failed": 0 }),
+                )
+            }
             Err(error) => {
                 tracing::error!(%error, "listing the fleet for projection failed; will retry");
+                crate::health::tick_detail(false, interval.as_secs(), serde_json::json!({}))
             }
+        };
+        // Best-effort health telemetry: a failure to record must never crash the projector loop.
+        if let Err(error) = health
+            .record_tick(crate::health::ROLLUP_PROJECTOR, clock.now(), &detail)
+            .await
+        {
+            tracing::warn!(%error, "recording projector task health failed");
         }
         tokio::select! {
             biased;

@@ -64,6 +64,7 @@ pub mod cursor;
 pub mod dashboard;
 pub mod devices;
 pub mod fleet;
+pub mod health;
 pub mod http;
 pub mod images;
 pub mod metrics;

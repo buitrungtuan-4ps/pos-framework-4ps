@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console can see whether the background workers are alive and keeping up** (roadmap v2, Track
+  O, O1 slice 4; [ADR-0068](docs/adr/0068-fleet-liveness.md)). The cloud's off-request loops — the
+  rollup projector, the retention/PII sweep, the webhook dispatcher — now record a heartbeat at the
+  end of every tick (a `task_health` row with the instant and a small detail: whether the tick's work
+  succeeded, its configured interval, a count or two). `GET /admin/health/tasks` reports each loop the
+  deployment turned on, deriving a health verdict at read time — a loop is unhealthy if it has gone
+  quiet (last tick older than its interval times a few cycles of slack), never ticked at all (dead
+  since boot, surfaced rather than hidden), or ticked recently but its last pass failed. Behind the
+  existing `console.data.read` permission (every console role). **Upgrade note:** one additive,
+  forward-only migration `0021_task_health` (fleet-wide server state — no `tenant_id`, no RLS, like
+  `super_admin`); no `PROTOCOL_VERSION` or permission-identifier change, and `/admin` stays absent
+  from the public OpenAPI.
 - **The console can read the fleet: which stores are online, in sync, and how deep their order
   backlog is** (roadmap v2, Track O, O1 slice 3; [ADR-0068](docs/adr/0068-fleet-liveness.md)).
   `GET /admin/fleet?tenant_id=…` lists every store of a tenant, and `GET /admin/fleet/{store_id}`
