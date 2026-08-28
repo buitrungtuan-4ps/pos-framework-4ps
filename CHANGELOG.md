@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Catalog & Layout rebuild gets an architecture** (roadmap v2, Track F3;
+  [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). Frames the last Track-F work: the two
+  remaining pre-F2 dashboard screens are rebuilt on the F2 CRUD kit. The 1,898-line Catalog monolith
+  becomes five tabbed, searchable sub-screens under one `/catalog` route — Items, Taxonomy, Tax
+  classes, Modifiers, and Menus — each on `DataTable`/`Drawer`/`ConfirmDialog`/`StatusBadge`/
+  `TechnicalDetails`; a new `MoneyField` gives currency-aware price fields (locale-grouped, storing
+  minor units) and the Menus sub-screen gains bulk price editing. Layout becomes a visual per-channel
+  grid with a device-shaped preview, client-side collision detection, copy-between-channels, and
+  drag-to-reorder (the kit's `ReorderList` gains pointer drag over its keyboard fallback). Behaviour-
+  preserving and frontend-only — the Phase 2a backend and the ADR-0066 authoring model are untouched.
+  Deliberately deferred and flagged: reading the store's published currency to prefill the price field
+  (no such read exists yet), full free-form grid pointer-drag polish, and the Fork-A shared-web-kit
+  extraction. **Upgrade note:** none — an ADR; the sub-screens and Layout rebuild land in the following
+  slices, all frontend and additive.
 - **Reports & analytics gets an architecture: windowed rollups, revenue, and X/Z close semantics**
   (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Frames the reporting
   track additively over the one materialised-rollup projector (ADR-0036): date-range/windowed reads
