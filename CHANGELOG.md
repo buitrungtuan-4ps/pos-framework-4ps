@@ -111,6 +111,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The translation grid gains dynamic locales, per-locale completion %, and a missing-only filter**
+  (roadmap v2, Track M4, slice 7; [ADR-0074](docs/adr/0074-localization-and-tax.md)). The grid's
+  columns are no longer the app's own UI locales (`en`/`vi`): they are the union of the platform's
+  content locales (`GET /admin/locales`, driven by the country modules), the enforced `en` fallback,
+  and any locale the stored grid already carries — so a value authored in a locale the UI does not yet
+  ship (`ja`, `ko`) is visible and editable. Each column header shows that locale's completion
+  percentage (non-empty cells ÷ keys), and a *show only keys with a missing translation* toggle filters
+  the grid to the gaps. No schema or wire change — the persisted grid was already locale-agnostic and
+  `en` stays the enforced floor. **Upgrade note:** dashboard-only.
 - **The Tax rates console screen — author the (class × channel) grid and publish it** (roadmap v2,
   Track M4, slice 6; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new tenant-scoped
   `/tax-rates` screen (under *Settings*) edits the tenant's tax rates as a grid — rows are the tenant's

@@ -259,6 +259,7 @@
   "translations.newKeyPlaceholder": "ví dụ: receipt.footer",
   "translations.saved": "Đã lưu.",
   "translations.missingEn": "Mọi khóa đều cần giá trị tiếng Anh không rỗng.",
+  "translations.missingOnly": "Chỉ hiện các khóa còn thiếu bản dịch",
   "taxRates.title": "Thuế suất",
   "taxRates.description": "Thuế suất mỗi hạng thuế áp cho từng kênh bán. Sửa bảng, lưu, rồi phát hành đến cửa hàng — cửa hàng tính thuế theo các mức này.",
   "taxRates.grid": "Thuế suất",

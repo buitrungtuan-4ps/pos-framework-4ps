@@ -259,6 +259,7 @@
   "translations.newKeyPlaceholder": "e.g. receipt.footer",
   "translations.saved": "Saved.",
   "translations.missingEn": "Every key needs a non-empty English value.",
+  "translations.missingOnly": "Show only keys with a missing translation",
   "taxRates.title": "Tax rates",
   "taxRates.description": "The rate each tax class charges on each sales channel. Edit the grid, save, then publish to a store — the store bills these rates.",
   "taxRates.grid": "Rates",
