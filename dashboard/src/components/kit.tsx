@@ -441,9 +441,10 @@ export function FormField(props: ParentProps<{ label: string; error?: string }>)
 }
 
 /**
- * A minimal, keyboard-accessible reorder list: each row carries up/down controls that call
- * `onReorder(from, to)`. This is the dnd primitive's first cut — native pointer drag is layered on
- * with the Layout rebuild (F3); the button controls stay as the accessible fallback.
+ * A reorder list with two equivalent controls: each row carries up/down buttons (the keyboard-
+ * accessible path), and the whole row is a native drag source (the pointer path, layered on with the
+ * Layout rebuild, F3). Both call `onReorder(from, to)`. The buttons stay as the guaranteed fallback,
+ * so a keyboard-only or assistive-tech user is never dependent on the drag gesture.
  */
 export function ReorderList<T>(props: {
   items: readonly T[];
@@ -453,11 +454,46 @@ export function ReorderList<T>(props: {
   upLabel: string;
   downLabel: string;
 }) {
+  const [dragIndex, setDragIndex] = createSignal<number | null>(null);
+  const [overIndex, setOverIndex] = createSignal<number | null>(null);
+
+  const drop = (to: number) => {
+    const from = dragIndex();
+    if (from !== null && from !== to) {
+      props.onReorder(from, to);
+    }
+    setDragIndex(null);
+    setOverIndex(null);
+  };
+
   return (
     <ul class="flex flex-col gap-1">
       <For each={props.items}>
         {(item, index) => (
-          <li class="flex items-center gap-2 rounded-token border border-line bg-surface-raised px-2 py-1">
+          <li
+            draggable={true}
+            onDragStart={(event) => {
+              setDragIndex(index());
+              if (event.dataTransfer) {
+                event.dataTransfer.effectAllowed = "move";
+              }
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setOverIndex(index());
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              drop(index());
+            }}
+            onDragEnd={() => {
+              setDragIndex(null);
+              setOverIndex(null);
+            }}
+            class={`flex items-center gap-2 rounded-token border bg-surface-raised px-2 py-1 ${
+              dragIndex() === index() ? "opacity-50" : ""
+            } ${overIndex() === index() && dragIndex() !== null && dragIndex() !== index() ? "border-accent" : "border-line"}`}
+          >
             <div class="flex flex-col">
               <button
                 type="button"

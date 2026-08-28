@@ -129,7 +129,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   their `(column, row)` (click a tile to edit it), a client-side **collision check** flags — and
   stacks, never hides — two buttons sharing a cell, **copy-between-channels** clones a channel's
   buttons to another (behind a confirm), and the flowing buttons (no grid slot) reorder through the
-  kit's `ReorderList` — F3 is its first consumer — writing each button's order. The button editor and
+  kit's `ReorderList` — F3 is its first consumer, which now gains **pointer drag layered over its
+  keyboard up/down** (the arrows stay the accessible fallback) — writing each button's order. The button editor and
   the display-taxonomy (display categories + sub-categories) move into kit `DataTable`s, a `Drawer`,
   and a `ConfirmDialog`, and the `channel`/`StatusCell`/error helpers are now shared with the Catalog
   sub-screens. **Upgrade note:** none — frontend-only; the `layout` config node, the compile/publish
