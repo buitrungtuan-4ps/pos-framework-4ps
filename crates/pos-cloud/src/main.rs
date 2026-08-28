@@ -475,6 +475,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // OTA rollout levers (ADR-0078, Track O3): publish a `fleet_update` rollout or engage its
+        // kill switch from typed fields, instead of hand-editing the config node.
+        .merge(http::ota_config_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(

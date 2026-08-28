@@ -123,6 +123,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **First-class OTA rollout levers replace hand-editing a config node** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). Publishing a fleet update used to mean typing a
+  raw `fleet_update` JSON node into the generic config-tree editor; a fat-fingered ring or ramp went
+  live with no affordance to stop it. Three typed routes now stand in front of that node.
+  `PUT /admin/config/ota` publishes a rollout from named fields — target version, minimum ring,
+  ramp percent, signing key, and revoked keys — composing the `fleet_update` node and running it
+  through the same `CapabilityValidator` the generic publish used, so a malformed rollout is still a
+  `422` with the exact violations and nothing changes. `POST /admin/config/ota/halt` is the kill
+  switch: it loads the store's published rollout, flips `halted`, and re-publishes — an operator
+  pauses (or resumes) a bad rollout without re-typing the target, ring, and key, and it is a `400`
+  when there is nothing published to halt. `GET /admin/config/ota` reads the currently-published
+  rollout. All three preserve the store's other Store-level keys (`menu`, `tax`, `campaigns`, …) the
+  way every node publish does. The writes are behind a new **`console.ota.publish`** permission
+  (Owner/Admin only — above the `PublishConfig` norm that includes Ops, because pushing a binary to
+  the fleet is not a day-to-day publish) and are audited (`config.ota.publish` / `config.ota.halt`
+  record the target and ring, never a customer identifier); the read is behind `console.data.read`.
+  The dashboard OTA view that drives these follows in the same track. **Upgrade note:** one new
+  console permission (`console.ota.publish`, granted to Owner and Admin); no schema or protocol
+  change, and the generic config editor still works, so an existing `fleet_update` node keeps
+  publishing exactly as before.
 - **The cloud ingests OTA reports and shows each store's running version** (roadmap v2, Track O3;
   [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting half of the OTA loop now lands
   somewhere: `POST /internal/ota/report` (a trusted-network `/internal` route, the reporting partner
