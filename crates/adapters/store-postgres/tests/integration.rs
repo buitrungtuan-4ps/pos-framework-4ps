@@ -1694,9 +1694,12 @@ mod media {
                 )
                 .await
                 .expect("insert ours");
-            // A neighbour tenant's asset with the same id must never leak across the boundary.
+            // A neighbour tenant owns a different asset. Media ids are globally-unique ULIDs in
+            // production (a minted id is never shared across tenants — `media_id` is the table's primary
+            // key), so isolation is what the `tenant_id` predicate on every read enforces: a tenant
+            // cannot reach another's asset by id, and a listing shows only its own.
             media
-                .insert("asset-1", TENANT_B, "image/jpeg", &[0x01], &[0x02], 1)
+                .insert("asset-2", TENANT_B, "image/jpeg", &[0x01], &[0x02], 1)
                 .await
                 .expect("insert neighbour");
 
@@ -1727,14 +1730,31 @@ mod media {
                 detail.len()
             );
 
-            // Another tenant cannot read this asset by id.
+            // A tenant cannot read another tenant's asset by id — the read is `None`, not a leak —
+            // while the neighbour reads its own, and neither can reach across.
             assert_eq!(
                 media
                     .fetch_rendition(TENANT_B, "asset-1", true)
                     .await
+                    .expect("neighbour read"),
+                None,
+                "a tenant cannot read another tenant's asset by id"
+            );
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_B, "asset-2", true)
+                    .await
                     .expect("neighbour detail"),
                 Some(vec![0x02]),
-                "the neighbour sees only its own bytes for the shared id"
+                "the neighbour reads its own asset"
+            );
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_A, "asset-2", true)
+                    .await
+                    .expect("cross read"),
+                None,
+                "and cannot reach the neighbour's asset"
             );
 
             // Delete removes only the named asset and reports it.
