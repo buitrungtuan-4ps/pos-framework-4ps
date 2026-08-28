@@ -111,6 +111,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Tax rates console screen — author the (class × channel) grid and publish it** (roadmap v2,
+  Track M4, slice 6; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new tenant-scoped
+  `/tax-rates` screen (under *Settings*) edits the tenant's tax rates as a grid — rows are the tenant's
+  tax classes, columns the sales channels, each cell a rate in percent. A blank cell means the class is
+  not sold on that channel (the edge refuses such a sale rather than charging no tax), stated inline so
+  the meaning is not a surprise. **Save** writes the whole table (`setTaxRates`); **Publish to store**
+  pushes it to the store in the top-bar context as the `tax` config node (`publishTax`), enabled only
+  when a store is selected. Loads on the scoped tenant context (F0 gate), reuses the shared channel
+  labels. **Upgrade note:** dashboard-only; no protocol, schema, or permission change.
 - **Store locale settings — currency, timezone, and business-date cutoff, published and applied**
   (roadmap v2, Track M4, slice 5; [ADR-0074](docs/adr/0074-localization-and-tax.md)). `PUT
   /admin/config/locale` (behind `console.config.publish`, audited `config.locale.publish`) validates a
