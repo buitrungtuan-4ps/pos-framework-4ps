@@ -66,6 +66,7 @@ pub mod countries;
 pub mod cursor;
 pub mod dashboard;
 pub mod devices;
+pub mod export;
 pub mod fleet;
 pub mod floor_compiler;
 pub mod floorplan;

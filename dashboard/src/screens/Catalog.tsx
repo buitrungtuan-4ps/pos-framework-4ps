@@ -433,10 +433,19 @@ export function Catalog() {
   };
 
   // console.media.manage → owner/admin (mirrors the backend role set; the server re-checks). Gates the
-  // per-item image widget's write affordances.
+  // per-item image widget's write affordances. The same role set holds console.catalog.manage, so it
+  // also gates the CSV export button below.
   const canManageMedia = () => {
     const role = actingAdmin()?.role;
     return role === "owner" || role === "admin";
+  };
+
+  const exportItems = async () => {
+    try {
+      await api.exportItemsCsv(tenantId());
+    } catch (caught) {
+      fail(caught);
+    }
   };
 
   const setItemFields = async (
@@ -716,9 +725,16 @@ export function Catalog() {
           <Card
             title={t("catalog.items")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <div class="flex flex-wrap gap-2">
+                <Show when={canManageMedia()}>
+                  <Button variant="secondary" disabled={busy()} onClick={() => void exportItems()}>
+                    {t("catalog.exportCsv")}
+                  </Button>
+                </Show>
+                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+                  {t("action.refresh")}
+                </Button>
+              </div>
             }
           >
             <Show

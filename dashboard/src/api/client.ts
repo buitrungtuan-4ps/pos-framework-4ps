@@ -161,6 +161,28 @@ async function requestUpload<T>(path: string, file: Blob): Promise<T> {
   return (await response.json()) as T;
 }
 
+// Fetches a CSV export (ADR-0075) and hands it to the browser as a file download. The session cookie
+// rides the same-origin request, so a viewer without the domain's manage permission gets a `403` that
+// surfaces as an `ApiError` for the caller to toast — no partial file is saved.
+async function downloadCsv(path: string, filename: string): Promise<void> {
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
 
 export const api = {
@@ -647,6 +669,13 @@ export const api = {
       "DELETE",
       `/admin/media/${encodeURIComponent(mediaId)}?${tenantQuery(tenantId)}`,
     ),
+  // --- CSV export rail (ADR-0075, Track M5) ---
+  // Each export is permission-gated and audited server-side; the download carries the session cookie.
+  exportItemsCsv: (tenantId: string) =>
+    downloadCsv(`/admin/catalog/export/items?${tenantQuery(tenantId)}`, "items.csv"),
+  exportTranslationsCsv: (tenantId: string) =>
+    downloadCsv(`/admin/translations/export?${tenantQuery(tenantId)}`, "translations.csv"),
+
   // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
   mediaThumbnailUrl: (tenantId: string, mediaId: string) =>
     `/admin/media/${encodeURIComponent(mediaId)}/thumbnail?${tenantQuery(tenantId)}`,

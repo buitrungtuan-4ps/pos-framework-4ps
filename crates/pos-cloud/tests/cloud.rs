@@ -1062,6 +1062,17 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("parse the body as JSON")
 }
 
+/// The response body as a UTF-8 string — for the CSV export routes (ADR-0075).
+async fn text_body(response: axum::response::Response) -> String {
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    String::from_utf8(bytes.to_vec()).expect("body is valid UTF-8")
+}
+
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
 
 #[tokio::test]
@@ -2805,6 +2816,57 @@ async fn translation_routes_require_a_session() {
         .await
         .expect("route");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// The CSV export streams the grid as `text/csv` with a union-of-locales header and a row per key
+/// (ADR-0075, Track M5); unauthenticated it is a 401.
+#[tokio::test]
+async fn translation_export_streams_csv_and_needs_a_session() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let grid = serde_json::json!({
+        "menu.pho": { "en": "Pho", "vi": "Phở" },
+        "menu.tea": { "en": "Tea" },
+    });
+    let put = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/translations?tenant_id={tenant_ulid}"),
+            &grid,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    let export_uri = format!("/admin/translations/export?tenant_id={tenant_ulid}");
+    let unauth = router
+        .clone()
+        .oneshot(get(&export_uri, None))
+        .await
+        .expect("route");
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let exported = router
+        .oneshot(get_with_cookie(&export_uri, &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let content_type = exported
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/csv"), "served as CSV");
+    let csv = text_body(exported).await;
+    let mut lines = csv.lines();
+    assert_eq!(lines.next().unwrap(), "key,en,vi");
+    assert_eq!(lines.next().unwrap(), "menu.pho,Pho,Phở");
+    // The tea key has no vi value, so its vi cell is an empty trailing field.
+    assert_eq!(lines.next().unwrap(), "menu.tea,Tea,");
 }
 
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
@@ -6535,6 +6597,30 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     assert_eq!(items.as_array().expect("array").len(), 1);
     assert_eq!(items[0]["menu_item_id"], item_id);
     assert_eq!(items[0]["name_translations"]["vi"], "Bánh Margherita");
+
+    // The CSV export (ADR-0075, Track M5): the item master as text/csv, no price column.
+    let exported = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/export/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route export items");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let csv = text_body(exported).await;
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "menu_item_id,name,status,tax_class_id,item_category_id,item_subcategory_id,image_ref"
+    );
+    let row = lines.next().expect("one item row");
+    assert!(row.contains("Margherita") && row.contains(&item_id));
+    assert!(row.contains(&ulid_text(42)), "the image ref is a column");
+    assert!(
+        !csv.to_lowercase().contains("price"),
+        "no price is exported"
+    );
 
     // A menu, optionally with a parent — created by name, id minted server-side.
     let created = router

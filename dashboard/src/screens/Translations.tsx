@@ -121,6 +121,14 @@ export function Translations() {
     }
   };
 
+  const exportGrid = async () => {
+    try {
+      await api.exportTranslationsCsv(tenantId());
+    } catch (caught) {
+      fail(caught);
+    }
+  };
+
   return (
     <div>
       <PageHeader title={t("translations.title")} description={t("translations.description")} />
@@ -128,9 +136,14 @@ export function Translations() {
         <Card
           title={t("translations.grid")}
           actions={
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="secondary" disabled={busy()} onClick={() => void exportGrid()}>
+                {t("translations.exportCsv")}
+              </Button>
+              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+                {t("action.refresh")}
+              </Button>
+            </div>
           }
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>

@@ -36,6 +36,13 @@ impl TranslationGrid {
         self.0.is_empty()
     }
 
+    /// The grid as a read-only `key → { locale → string }` map — for the CSV export (ADR-0075), which
+    /// needs to walk keys and the union of locales the transparent serde wrapper does not expose.
+    #[must_use]
+    pub fn as_map(&self) -> &BTreeMap<String, BTreeMap<String, String>> {
+        &self.0
+    }
+
     /// The keys that lack a non-empty [`FALLBACK_LOCALE`] value — the violations of the always-present
     /// fallback rule. Empty means the grid is valid to publish.
     #[must_use]

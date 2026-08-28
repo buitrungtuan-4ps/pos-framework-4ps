@@ -111,6 +111,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A CSV export rail — download the catalog items and the translation grid**
+  (roadmap v2, Track M5, slice 5; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A reusable, pure CSV
+  serialiser (`pos_cloud::export`, buying the `csv` crate for RFC-4180 quoting per ADR-0007) behind two
+  authenticated routes: `GET /admin/catalog/export/items` (behind `console.catalog.manage`) streams the
+  item master as `items.csv` — id, name, status, tax class, category/sub-category, image ref, **never a
+  price** — and `GET /admin/translations/export` (behind `console.translations.manage`) streams the
+  translation grid as `translations.csv` (a `key` column plus one column per locale). Each is audited —
+  the entry records who exported which domain and how many rows, never the row contents — and is
+  tenant-scoped by RLS, so it is not a cross-tenant path. The dashboard adds an **Export CSV** button to
+  the Menu (items) and Translations screens. Per the data-classification guardrails (ADR-0075 decision
+  5), the **employee roster (T1)**, **per-channel prices (T2 verbatim)**, and the rollup report export
+  are deliberately **not** shipped here — they await a human-reviewed design/DPIA. **Upgrade note:**
+  additive read-only routes; adds the `csv` dependency; no schema, wire, or edge change.
 - **A Media library screen and an image picker on the item editor**
   (roadmap v2, Track M5, slice 4; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A new **Media**
   screen (Master data, owner/admin) lists the tenant's uploaded images as a thumbnail grid with size

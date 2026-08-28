@@ -49,22 +49,26 @@ The gaps this closes:
    ahead of a caller (flagged below).
 
 4. **A CSV import/export rail, dry-run-first.** Buy the `csv` crate ([ADR-0007](0007-in-house-vs-dependency.md):
-   RFC-4180 quoting/escaping is fiddly-but-bounded, the wrong thing to hand-roll). **Export** (slice 5):
-   an authenticated route builds a CSV for a domain (items, placements/prices, translations, employees,
-   a report) and the dashboard downloads it with the existing `Blob`-download pattern. **Import** (slice
-   6): the operator uploads a CSV; the server parses and validates it and returns a **dry-run report**
-   (row-by-row: would-create / would-update / rejected-with-reason) **without writing**; a second,
-   explicit confirm applies it. Each domain's import/export reuses that domain's existing permission
-   (items → `ManageCatalog`, employees → `ManagePeople`, translations → `ManageTranslations`) and is
-   audited. XLSX is **deferred** — CSV is the interoperable floor; XLSX pulls a heavier dependency and
-   buys little over CSV for the import case.
+   RFC-4180 quoting/escaping is fiddly-but-bounded, the wrong thing to hand-roll). **Export** (slice 5)
+   ships as a reusable serialiser (`pos_cloud::export`, pure and unit-tested) behind two authenticated
+   routes — **catalog items** (`ManageCatalog`) and the **translation grid** (`ManageTranslations`) — and
+   the dashboard downloads each with a `Blob` download. Each is audited (who exported which domain and how
+   many rows, never the contents). The **employee** (T1) and per-channel **price/placement** (T2-verbatim)
+   exports, and the rollup **report** export, are **deferred to a human-reviewed slice** — see decision 5.
+   **Import** (slice 6): the operator uploads a CSV; the server parses and validates it and returns a
+   **dry-run report** (row-by-row: would-create / would-update / rejected-with-reason) **without writing**;
+   a second, explicit confirm applies it — scoped to the same non-personal domains. XLSX is **deferred** —
+   CSV is the interoperable floor; XLSX pulls a heavier dependency and buys little over CSV.
 
 5. **Data-classification guardrails are part of the design, not an afterthought.** Employee and subject
-   data are T1; prices are T2. Therefore: every export is permission-gated and audited (the audit entry
-   records who exported which domain and how many rows, never the row contents); an employee/subject
-   export is **per the domain's manage permission**, not the broad `Read`; and the rail is *tenant-scoped
-   by construction* (RLS), so it cannot become a cross-tenant bulk-profiling path. An unbounded
-   cross-tenant T1 export is out of scope here and remains an escalation, not a feature.
+   data are T1; prices are T2. Therefore the export rail ships **only the non-personal domains** (items,
+   translations) autonomously: every export is permission-gated and audited (the audit entry records who
+   exported which domain and how many rows, never the row contents), and the rail is *tenant-scoped by
+   construction* (RLS), so it cannot become a cross-tenant profiling path. A **T1 export (the employee
+   roster) is a bulk-T1-export path the organisation's data-classification policy escalates**, and a
+   **verbatim T2 export (per-channel prices) reproduces a protected pricing model** — so both, and any
+   subject-data export, wait on a human-approved design/DPIA rather than shipping here. An unbounded
+   cross-tenant T1 export is out of scope and remains an escalation, never a feature.
 
 **Rejected.**
 
@@ -92,6 +96,9 @@ The gaps this closes:
 
 - Images to the edge (item thumbnails in the compiled `MenuBook` / POS UI) — a wire change deferred to a
   later track; this track keeps images to cloud authoring/display.
+- **T1/T2 CSV export & import — the employee roster (T1), per-channel prices/placements (T2 verbatim),
+  and the rollup report.** Deferred to a human-approved design/DPIA per decision 5, not shipped in the
+  autonomous slices; the rail's serialiser and dry-run shape are built so adding them later is additive.
 - XLSX import/export.
 - Receipt templates + brand logo/footer rendering — depend on this track's media rail and land with the
   receipt work (M4 flagged them here); the `BrandRecord.image_ref` column lands there, beside its

@@ -117,6 +117,7 @@ use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
 };
+use crate::export;
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
@@ -5287,6 +5288,10 @@ where
             axum::routing::patch(admin_update_item::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/export/items",
+            get(admin_export_items::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/tax-classes",
             get(admin_list_tax_classes::<Cat, A, C>).post(admin_create_tax_class::<Cat, A, C>),
         )
@@ -6405,6 +6410,76 @@ where
         Ok(items) => (StatusCode::OK, Json::<Vec<CatalogItem>>(items)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
+}
+
+/// A CSV download response ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5): the
+/// bytes with `text/csv` and a `content-disposition` naming the file so the browser saves it. `filename`
+/// is a fixed, server-chosen literal per domain — never tenant-supplied — so it needs no escaping.
+fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_owned(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
+/// Track M5). Behind [`ConsolePermission::ManageCatalog`] and audited — the entry records who exported
+/// which domain and how many rows, never the row contents. No price is exported (prices are per-channel
+/// placements, a deferred T2 export); this is the item master only.
+async fn admin_export_items<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let items = match state.catalog.list_items(tenant_id).await {
+        Ok(items) => items,
+        Err(error) => return catalog_error_response(&error),
+    };
+    let Ok(body) = export::items_csv(&items) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+    };
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "catalog.export_items",
+        "catalog_export",
+        &tenant_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "items", "rows": items.len() })),
+    )
+    .await;
+    csv_download_response("items.csv", body)
 }
 
 /// A super-admin creates an item; the id is minted here and returned once in the created record.
@@ -8979,6 +9054,10 @@ where
             "/admin/translations",
             get(get_translations::<Tr, A, C>).put(put_translations::<Tr, A, C>),
         )
+        .route(
+            "/admin/translations/export",
+            get(export_translations::<Tr, A, C>),
+        )
         .with_state(TranslationState {
             translations,
             admin,
@@ -9076,6 +9155,56 @@ where
         }
         Err(error) => translation_error_response(&error),
     }
+}
+
+/// A super-admin exports a tenant's translation grid as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
+/// Track M5). Behind [`ConsolePermission::ManageTranslations`] and audited (who exported which domain
+/// and how many rows, never the row contents). The grid is business copy (menu/UI strings), not
+/// personal data.
+async fn export_translations<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageTranslations,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let grid = match state.translations.load(tenant_id).await {
+        Ok(grid) => grid.unwrap_or_default(),
+        Err(error) => return translation_error_response(&error),
+    };
+    let Ok(body) = export::translations_csv(&grid) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+    };
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "translations.export",
+        "translation_export",
+        &tenant_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "translations", "rows": grid.as_map().len() })),
+    )
+    .await;
+    csv_download_response("translations.csv", body)
 }
 
 /// Maps a translation-store failure to a retryable `503`, logging the detail rather than leaking it.
