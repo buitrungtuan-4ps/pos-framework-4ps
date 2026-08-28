@@ -105,6 +105,9 @@ const MIGRATION_0030: &str = include_str!("../migrations/0030_media_assets.sql")
 /// An image reference on a catalog item ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
 const MIGRATION_0031: &str = include_str!("../migrations/0031_catalog_item_image_ref.sql");
 
+/// The campaign authoring table ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+const MIGRATION_0032: &str = include_str!("../migrations/0032_campaigns.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -287,6 +290,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0031)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0032)
             .await
             .map_err(unavailable)
     }
@@ -477,6 +484,14 @@ impl PostgresStore {
     #[must_use]
     pub fn media(&self) -> crate::media::PostgresMedia {
         crate::media::PostgresMedia::new(self.pool.clone())
+    }
+
+    /// The campaign authoring store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `CampaignStore` seam over it.
+    #[must_use]
+    pub fn campaigns(&self) -> crate::campaigns::PostgresCampaigns {
+        crate::campaigns::PostgresCampaigns::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

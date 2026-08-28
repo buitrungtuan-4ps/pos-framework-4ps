@@ -56,6 +56,7 @@ pub mod alerts;
 pub mod assets;
 pub mod audit;
 pub mod auth;
+pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
 pub mod clock;

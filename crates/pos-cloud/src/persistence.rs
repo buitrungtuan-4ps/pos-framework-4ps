@@ -28,19 +28,22 @@ use store_postgres::{
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
     DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, OrderQueueRow,
     PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
-    PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
-    PostgresFloor, PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile,
-    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresWebhooks, RoleTemplateRow,
-    RoutingRuleRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
+    PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia, PostgresOrderQueue,
+    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
+    PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
+    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
+use pos_proto::campaign::PublishedCampaign;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
-    MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
+    TenantId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
@@ -61,6 +64,7 @@ use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
 use crate::auth::totp::TotpSecret;
+use crate::campaigns::{CampaignStore, CampaignStoreError};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
@@ -1589,6 +1593,65 @@ impl TaxRateStore for PostgresTaxRates {
             .await
             .map_err(|error| TaxRateStoreError::new(error.to_string()))
     }
+}
+
+impl CampaignStore for PostgresCampaigns {
+    async fn list_campaigns(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PublishedCampaign>, CampaignStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))?;
+        rows.iter()
+            .map(|row| decode_campaign(&row.campaign_json))
+            .collect()
+    }
+
+    async fn get_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<Option<PublishedCampaign>, CampaignStoreError> {
+        let row = self
+            .fetch_one(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))?;
+        row.map(|row| decode_campaign(&row.campaign_json))
+            .transpose()
+    }
+
+    async fn upsert_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign: &PublishedCampaign,
+    ) -> Result<(), CampaignStoreError> {
+        let json = serde_json::to_string(campaign).map_err(|error| {
+            CampaignStoreError::new(format!("could not serialize a campaign: {error}"))
+        })?;
+        self.upsert(&tenant_id.to_string(), &campaign.id.to_string(), &json)
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))
+    }
+
+    async fn delete_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<(), CampaignStoreError> {
+        self.delete(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))
+    }
+}
+
+/// Decodes one stored campaign document, failing loudly on JSON this cloud wrote that no longer
+/// parses — that is store corruption, not an absence.
+fn decode_campaign(json: &str) -> Result<PublishedCampaign, CampaignStoreError> {
+    serde_json::from_str(json).map_err(|error| {
+        CampaignStoreError::new(format!("a stored campaign is not valid: {error}"))
+    })
 }
 
 // --- Media renditions (ADR-0075) --------------------------------------------------------------

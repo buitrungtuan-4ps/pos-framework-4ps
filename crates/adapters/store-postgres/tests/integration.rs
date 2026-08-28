@@ -1669,6 +1669,103 @@ mod tax_rates {
 }
 
 // ---------------------------------------------------------------------------
+// Campaign authoring: jsonb upsert/list/get/delete, id ordering, tenant isolation (ADR-0077).
+// ---------------------------------------------------------------------------
+
+mod campaigns {
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    fn doc(name: &str) -> String {
+        format!("{{\"name\":\"{name}\"}}")
+    }
+
+    /// Per-campaign upsert/get/delete over the jsonb column: rows read back id-ordered, an upsert of an
+    /// existing id replaces rather than appends, a tenant cannot read another's campaign by id, and a
+    /// neighbour tenant's rows are never touched.
+    #[test]
+    fn upsert_get_delete_stay_tenant_scoped() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let campaigns = store.campaigns();
+
+            // A neighbour's campaign must survive our writes.
+            campaigns
+                .upsert(TENANT_B, "camp-z", &doc("Neighbour"))
+                .await
+                .expect("neighbour");
+
+            // Insert out of id order to prove the read sorts.
+            campaigns
+                .upsert(TENANT_A, "camp-2", &doc("Dinner"))
+                .await
+                .expect("create 2");
+            campaigns
+                .upsert(TENANT_A, "camp-1", &doc("Lunch"))
+                .await
+                .expect("create 1");
+            let listed = campaigns.fetch(TENANT_A).await.expect("fetch ours");
+            assert_eq!(listed.len(), 2);
+            assert_eq!(
+                listed.first().expect("first row").campaign_id,
+                "camp-1",
+                "rows read back id-ordered"
+            );
+
+            // Upsert of an existing id replaces the document rather than adding a row.
+            campaigns
+                .upsert(TENANT_A, "camp-1", &doc("Lunch (renamed)"))
+                .await
+                .expect("update");
+            let after = campaigns.fetch(TENANT_A).await.expect("fetch again");
+            assert_eq!(
+                after.len(),
+                2,
+                "upsert of an existing id does not add a row"
+            );
+            let one = campaigns
+                .fetch_one(TENANT_A, "camp-1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert!(
+                one.campaign_json.contains("Lunch (renamed)"),
+                "the replaced document is what reads back"
+            );
+
+            // A tenant cannot read another tenant's campaign by id.
+            assert!(
+                campaigns
+                    .fetch_one(TENANT_A, "camp-z")
+                    .await
+                    .expect("cross-tenant read")
+                    .is_none(),
+                "camp-z belongs to the neighbour, not us"
+            );
+
+            campaigns.delete(TENANT_A, "camp-1").await.expect("delete");
+            assert_eq!(
+                campaigns
+                    .fetch(TENANT_A)
+                    .await
+                    .expect("fetch after delete")
+                    .len(),
+                1
+            );
+
+            // The neighbour is untouched throughout.
+            assert_eq!(
+                campaigns
+                    .fetch(TENANT_B)
+                    .await
+                    .expect("fetch neighbour")
+                    .len(),
+                1
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Media renditions: bytea round-trip, single-rendition read, tenant isolation, delete (ADR-0075).
 // ---------------------------------------------------------------------------
 
