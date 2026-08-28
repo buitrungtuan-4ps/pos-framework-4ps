@@ -159,6 +159,16 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Upload and delete media assets (item photos, brand logos)",
     },
+    /// Look up, export, and erase a data subject's personal data by id — the PDPD/GDPR subject-request
+    /// tooling ([ADR-0076](../adr/0076-subject-request-tooling.md)). Owner-only: this is the console's
+    /// most sensitive T1 surface (it can read and irreversibly erase a person's data), narrower than the
+    /// Owner/Admin norm the other manage permissions use, and the tool is the Data Protection contact's
+    /// deliberate instrument — never an autonomous or bulk path.
+    ManageSubjects {
+        id: "console.subjects.manage",
+        roles: [Owner],
+        description: "Look up, export, and erase a data subject's personal data (PDPD/GDPR requests)",
+    },
     /// Read any tenant data — reports, registry, configuration, catalog, translations.
     Read {
         id: "console.data.read",
@@ -191,13 +201,22 @@ mod tests {
     }
 
     #[test]
-    fn admin_has_everything_except_managing_admins() {
+    fn admin_has_everything_except_managing_admins_and_subjects() {
+        // Admin is denied managing other admins, and — the one manage permission narrower than the
+        // Owner/Admin norm — the PDPD/GDPR subject-request tooling (owner-only, ADR-0076).
         assert!(!role_grants(
             AdminRole::Admin,
             ConsolePermission::ManageAdmins
         ));
+        assert!(!role_grants(
+            AdminRole::Admin,
+            ConsolePermission::ManageSubjects
+        ));
         for permission in ConsolePermission::ALL {
-            if *permission == ConsolePermission::ManageAdmins {
+            if matches!(
+                *permission,
+                ConsolePermission::ManageAdmins | ConsolePermission::ManageSubjects
+            ) {
                 continue;
             }
             assert!(

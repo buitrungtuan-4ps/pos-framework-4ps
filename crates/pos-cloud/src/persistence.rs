@@ -209,6 +209,46 @@ impl SubjectStore for PostgresSubjects {
         }
         Ok(saved)
     }
+
+    async fn fetch(
+        &self,
+        tenant: TenantId,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, RetentionError> {
+        let Some(row) = self
+            .fetch_one(&subject_id.to_string(), &tenant.to_string())
+            .await
+            .map_err(|error| RetentionError::new(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let subject_id = row
+            .subject_id
+            .parse::<Ulid>()
+            .map(SubjectId::new)
+            .map_err(|_| {
+                RetentionError::new(format!("subject id is not a ULID: {}", row.subject_id))
+            })?;
+        let collected_at = Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
+            .map_err(|_| RetentionError::new("a subject's collected_at is out of range"))?;
+        let masked_at = match row.masked_at_ms {
+            Some(ms) => Some(
+                Timestamp::from_milliseconds_since_epoch(ms)
+                    .map_err(|_| RetentionError::new("a subject's masked_at is out of range"))?,
+            ),
+            None => None,
+        };
+        let fields: BTreeMap<String, String> =
+            serde_json::from_str(&row.fields_json).map_err(|error| {
+                RetentionError::new(format!("decoding a subject's fields failed: {error}"))
+            })?;
+        Ok(Some(SubjectRecord {
+            subject_id,
+            collected_at,
+            fields,
+            masked_at,
+        }))
+    }
 }
 
 impl WebhookEndpointStore for PostgresWebhooks {

@@ -59,6 +59,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/store-settings", key: "nav.storeSettings", scope: "store" },
       { href: "/tax-rates", key: "nav.taxRates", scope: "tenant" },
       { href: "/translations", key: "nav.translations", scope: "tenant" },
+      { href: "/subjects", key: "nav.subjects", scope: "tenant", roles: ["owner"] },
     ],
   },
   {
@@ -103,6 +104,7 @@ const CRUMB_KEY: Record<string, MessageKey> = {
   "/devices": "nav.devices",
   "/webhooks": "nav.webhooks",
   "/translations": "nav.translations",
+  "/subjects": "nav.subjects",
   "/activation": "nav.activation",
   "/admins": "nav.admins",
   "/my-sessions": "nav.mySessions",

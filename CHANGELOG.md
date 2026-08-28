@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
+  (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
+  Protection contact's instrument for an individual rights request, over the existing subject store
+  ([ADR-0035](docs/adr/0035-retention-and-pii-masking.md)). `GET /admin/subjects/{id}` looks a subject
+  up — existence, whether it is masked, and the field count, **without** returning the values; `GET
+  .../export` returns the record with its field values (the portability/access payload); `POST
+  .../erase` masks every field permanently, keeping the id so records still reconcile. All three are
+  **per-subject and tenant-scoped** (there is no list-all or bulk route), behind a new **owner-only**
+  `console.subjects.manage` permission, and audited — the entry records who acted on which subject and
+  what action, the export records the field count, **never the field values**. The dashboard adds an
+  owner-only **Subject requests** screen with a standing reminder to confirm the lawful basis and
+  identity and to escalate EU-resident requests to the Data Protection contact; erase requires typing
+  the subject id to confirm. The `SubjectStore` seam gains a per-subject `fetch`; erase reuses the
+  retention masking. **Upgrade note:** additive routes + one owner-only permission; no schema (reuses
+  the `subjects` table), wire, or edge change.
 - **A CSV import rail for the translation grid — dry-run first, apply on confirm**
   (roadmap v2, Track M5, slice 6; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST
   /admin/translations/import/dry-run` parses an uploaded CSV and returns a **row-by-row report**

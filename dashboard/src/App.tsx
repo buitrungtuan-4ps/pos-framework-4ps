@@ -33,6 +33,7 @@ import { Setup } from "./screens/Setup";
 import { Stations } from "./screens/Stations";
 import { StoreSettings } from "./screens/StoreSettings";
 import { Stores } from "./screens/Stores";
+import { Subjects } from "./screens/Subjects";
 import { TaxRates } from "./screens/TaxRates";
 import { Translations } from "./screens/Translations";
 import { Webhooks } from "./screens/Webhooks";
@@ -93,6 +94,7 @@ export function App() {
           <Route path="/tax-rates" component={TaxRates} />
           <Route path="/store-settings" component={StoreSettings} />
           <Route path="/people" component={People} />
+          <Route path="/subjects" component={Subjects} />
           <Route path="/activation" component={Activation} />
           <Route path="/admins" component={Admins} />
           <Route path="/my-sessions" component={MySessions} />

@@ -299,6 +299,23 @@ export interface UploadedMedia {
   readonly detail_bytes: number;
 }
 
+/** A data subject as looked up (ADR-0076): existence and status, without the personal field values. */
+export interface SubjectMeta {
+  readonly subject_id: string;
+  readonly collected_at_ms: number;
+  /** Whether the personal data has already been masked (erased). */
+  readonly masked: boolean;
+  readonly field_count: number;
+}
+
+/** A data subject's exported record (ADR-0076) — the portability/access payload, with field values. */
+export interface SubjectExport {
+  readonly subject_id: string;
+  readonly collected_at_ms: number;
+  readonly masked: boolean;
+  readonly fields: Record<string, string>;
+}
+
 /** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
 export interface Menu {
   readonly menu_id: string;

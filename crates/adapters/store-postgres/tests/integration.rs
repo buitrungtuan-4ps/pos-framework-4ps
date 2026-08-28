@@ -2473,6 +2473,65 @@ mod subjects_store {
             );
         });
     }
+
+    /// `fetch_one` is the subject-request tooling's read (ADR-0076): it returns one row scoped to its
+    /// tenant, reports the real `masked_at`, and returns `None` for a wrong tenant or unknown id.
+    #[test]
+    fn fetch_one_is_tenant_scoped_and_reports_masked_at() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let subjects = store.subjects();
+
+            let id: &str = "SUBJECT0000000000000000BB";
+            let tenant: &str = "TENANT000000000000000000AA";
+            let other_tenant: &str = "TENANT000000000000000000BB";
+            let fields: &str = r#"{"name":"name-placeholder"}"#;
+            admin
+                .execute(
+                    "INSERT INTO subjects (subject_id, tenant_id, collected_at, fields) \
+                     VALUES ($1, $2, $3, $4::text::jsonb)",
+                    &[&id, &tenant, &1000_i64, &fields],
+                )
+                .await
+                .expect("seed a subject");
+
+            // The owning tenant sees it, unmasked (masked_at is None).
+            let row = subjects
+                .fetch_one(id, tenant)
+                .await
+                .expect("fetch")
+                .expect("the subject exists for its tenant");
+            assert_eq!(row.subject_id, id);
+            assert_eq!(row.masked_at_ms, None);
+
+            // A different tenant cannot reach it, and an unknown id is None.
+            assert!(
+                subjects
+                    .fetch_one(id, other_tenant)
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "a subject is not visible to another tenant"
+            );
+            assert!(
+                subjects
+                    .fetch_one("SUBJECT0000000000000000ZZ", tenant)
+                    .await
+                    .expect("fetch")
+                    .is_none()
+            );
+
+            // After masking, fetch_one reports the masked_at stamp.
+            let redacted: &str = r#"{"name":"[REDACTED]"}"#;
+            assert!(subjects.mask(id, redacted, 7000).await.expect("mask"));
+            let masked = subjects
+                .fetch_one(id, tenant)
+                .await
+                .expect("fetch")
+                .expect("still present after masking");
+            assert_eq!(masked.masked_at_ms, Some(7000));
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

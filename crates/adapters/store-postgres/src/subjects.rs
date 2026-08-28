@@ -28,6 +28,10 @@ pub struct SubjectRow {
     pub collected_at_ms: i64,
     /// The personal fields as a JSON object (`{name: …, phone: …}`).
     pub fields_json: String,
+    /// When the row was masked, in milliseconds since the Unix epoch, or `None` while it still holds
+    /// personal data. The sweep's [`fetch_due`](PostgresSubjects::fetch_due) leaves this `None` (it
+    /// returns only unmasked rows); [`fetch_one`](PostgresSubjects::fetch_one) reports the real stamp.
+    pub masked_at_ms: Option<i64>,
 }
 
 /// The subject store over a shared pool. Built by [`PostgresStore::subjects`](crate::PostgresStore::subjects).
@@ -70,8 +74,41 @@ impl PostgresSubjects {
                 subject_id: row.get(0),
                 collected_at_ms: row.get(1),
                 fields_json: row.get(2),
+                // `fetch_due` selects only `masked_at IS NULL` rows.
+                masked_at_ms: None,
             })
             .collect())
+    }
+
+    /// One subject row by id, scoped to the tenant that owns it — the read behind the PDPD/GDPR
+    /// subject-request tooling ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)). Returns
+    /// `None` when no such subject belongs to `tenant_id`, so an operator acting for one tenant can
+    /// never read another's personal data even though `subject_id` is globally unique. Reports the real
+    /// `masked_at` so the caller knows whether the row still holds data.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_one(
+        &self,
+        subject_id: &str,
+        tenant_id: &str,
+    ) -> Result<Option<SubjectRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT subject_id, collected_at, fields::text, masked_at FROM subjects \
+                 WHERE subject_id = $1 AND tenant_id = $2",
+                &[&subject_id, &tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| SubjectRow {
+            subject_id: row.get(0),
+            collected_at_ms: row.get(1),
+            fields_json: row.get(2),
+            masked_at_ms: row.get(3),
+        }))
     }
 
     /// Writes one masked record back: the redacted `fields_json` and the `masked_at_ms` stamp, only

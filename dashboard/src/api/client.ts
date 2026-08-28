@@ -58,6 +58,8 @@ import type {
   Store,
   TaskHealthReport,
   MediaSummary,
+  SubjectExport,
+  SubjectMeta,
   TaxClass,
   TaxRate,
   Tenant,
@@ -686,6 +688,24 @@ export const api = {
     requestUpload<TranslationImportReport>(
       `/admin/translations/import/apply?${tenantQuery(tenantId)}`,
       file,
+    ),
+
+  // --- subject-request tooling (ADR-0076, owner-only, per-subject, audited) ---
+  // A 404 (no such subject for this tenant) surfaces as an ApiError the caller distinguishes by status.
+  lookupSubject: (tenantId: string, subjectId: string) =>
+    requestJson<SubjectMeta>(
+      "GET",
+      `/admin/subjects/${encodeURIComponent(subjectId)}?${tenantQuery(tenantId)}`,
+    ),
+  exportSubject: (tenantId: string, subjectId: string) =>
+    requestJson<SubjectExport>(
+      "GET",
+      `/admin/subjects/${encodeURIComponent(subjectId)}/export?${tenantQuery(tenantId)}`,
+    ),
+  eraseSubject: (tenantId: string, subjectId: string) =>
+    requestJson<{ readonly erased: boolean; readonly already_masked: boolean }>(
+      "POST",
+      `/admin/subjects/${encodeURIComponent(subjectId)}/erase?${tenantQuery(tenantId)}`,
     ),
 
   // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
