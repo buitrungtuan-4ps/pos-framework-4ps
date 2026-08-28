@@ -116,7 +116,9 @@ use crate::catalog::{
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
-    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
+    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
+    ConfigValidator, SyncOutcome,
+    merge::{diff, merge_layers},
 };
 use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
 use crate::devices::{
@@ -6291,6 +6293,10 @@ where
             "/admin/config/campaigns",
             axum::routing::put(admin_publish_campaigns::<Camp, Cfg, A, C>),
         )
+        .route(
+            "/admin/config/campaigns/preview",
+            post(preview_publish_campaigns::<Camp, Cfg, A, C>),
+        )
         .with_state(ConfigCampaignsState {
             campaigns,
             config_trees,
@@ -6407,6 +6413,134 @@ where
                 .into_response()
         }
         Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// What publishing a candidate node *would* change, computed without minting a version or saving:
+/// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
+/// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigPreview {
+    /// The version the diff is computed against — the store's current version — or `null` when the
+    /// store has no published configuration yet (the candidate is then entirely new).
+    from_version_id: Option<String>,
+    /// The RFC 7386 merge patch a publish would apply to the effective document. An empty object
+    /// means the candidate composes to exactly today's effective document.
+    diff: serde_json::Value,
+    /// True when `diff` is empty — nothing would change, so there is nothing to publish.
+    unchanged: bool,
+}
+
+/// The dry-run behind a node publish: composes the store's effective document with `node_key` set to
+/// `node_value` on the Store layer (index 2) and returns the merge patch from the store's current
+/// effective document to that candidate. Mints no version and saves nothing — the tree is composed in
+/// memory and dropped.
+///
+/// The candidate is validated with exactly the [`CapabilityValidator`] a real publish uses, so
+/// `Err` carries the violations a publish would reject it with — the preview reports them verbatim
+/// rather than a bland "invalid". `diff` mirrors the delta an up-to-date store would receive on the
+/// next sync: current published effective → candidate effective.
+fn preview_config_node(
+    state_before: Option<&ConfigTreeState>,
+    node_key: &str,
+    node_value: serde_json::Value,
+) -> Result<ConfigPreview, Vec<String>> {
+    use serde_json::Value;
+    let empty = || Value::Object(serde_json::Map::new());
+    // The four authored layers as stored (all empty when the store has no tree yet).
+    let layers: [Value; 4] = state_before.map_or_else(
+        || [empty(), empty(), empty(), empty()],
+        |s| s.layers.clone(),
+    );
+    // The effective document the store currently holds — what a sync delta is computed against.
+    let (from_version_id, current) = state_before
+        .and_then(|s| s.history.last())
+        .map_or((None, empty()), |v| {
+            (Some(v.id.to_string()), v.effective.clone())
+        });
+
+    // Set `node_key` on the Store layer, leaving its other keys intact, exactly as the publish route
+    // does before composing.
+    let mut store_layer = layers[2].clone();
+    if !store_layer.is_object() {
+        store_layer = empty();
+    }
+    if let Value::Object(map) = &mut store_layer {
+        map.insert(node_key.to_owned(), node_value);
+    }
+
+    let candidate = merge_layers(&[&layers[0], &layers[1], &store_layer, &layers[3]]);
+    CapabilityValidator.validate(&candidate)?;
+
+    let patch = diff(&current, &candidate);
+    let unchanged = matches!(&patch, Value::Object(map) if map.is_empty());
+    Ok(ConfigPreview {
+        from_version_id,
+        diff: patch,
+        unchanged,
+    })
+}
+
+/// `POST /admin/config/campaigns/preview` — the dry-run of the campaigns publish. Assembles the
+/// tenant's authored campaigns into the `campaigns` node exactly as the publish route would, then
+/// returns the merge patch it would apply to the store's effective document — without minting a
+/// version, saving, or auditing (it changes nothing). `422` with the same violations a real publish
+/// would reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience
+/// that can actually publish.
+async fn preview_publish_campaigns<Camp, Cfg, A, C>(
+    State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishCampaignsRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
+        Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
+        Err(violations) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(ConfigViolations { violations }),
         )
@@ -13546,4 +13680,106 @@ fn rollup_error_response(error: &RollupError) -> Response {
         "the dashboard is temporarily unavailable",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod preview_diff_tests {
+    //! The pure dry-run behind the campaigns-publish preview ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)),
+    //! covered directly since it, not the thin route around it, holds the logic worth pinning.
+    use super::preview_config_node;
+    use crate::config_tree::{ConfigTreeState, PublishedVersion};
+    use pos_proto::ids::ConfigVersionId;
+    use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    fn version(raw: &str) -> ConfigVersionId {
+        ConfigVersionId::new(raw.parse::<Ulid>().expect("a valid test ULID"))
+    }
+
+    /// A store whose Store layer already carries a `tax` node and an old `campaigns` node, with a
+    /// single published version whose effective document is that Store layer composed alone.
+    fn state_with(store_layer: Value) -> ConfigTreeState {
+        let empty = || Value::Object(serde_json::Map::new());
+        ConfigTreeState {
+            layers: [empty(), empty(), store_layer.clone(), empty()],
+            history: vec![PublishedVersion {
+                id: version("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+                effective: store_layer,
+            }],
+            k: 8,
+        }
+    }
+
+    #[test]
+    fn a_changed_node_diffs_to_only_that_node_and_leaves_the_others_alone() {
+        let state = state_with(json!({
+            "tax": {"rate": 8},
+            "campaigns": {"campaigns": [{"id": "old"}]},
+        }));
+        let candidate = json!({"campaigns": [{"id": "new"}]});
+
+        let preview = preview_config_node(Some(&state), "campaigns", candidate)
+            .expect("the candidate validates");
+
+        assert!(!preview.unchanged);
+        assert_eq!(
+            preview.from_version_id.as_deref(),
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+        );
+        // Only the campaigns node moves; `tax` never appears in the patch.
+        assert_eq!(
+            preview.diff,
+            json!({"campaigns": {"campaigns": [{"id": "new"}]}}),
+            "the patch replaces just the campaigns node",
+        );
+    }
+
+    #[test]
+    fn republishing_the_same_node_is_an_empty_patch() {
+        let node = json!({"campaigns": [{"id": "keep"}]});
+        let state = state_with(json!({"campaigns": node}));
+
+        let preview =
+            preview_config_node(Some(&state), "campaigns", node).expect("the candidate validates");
+
+        assert!(preview.unchanged);
+        assert_eq!(preview.diff, json!({}), "nothing to publish");
+    }
+
+    #[test]
+    fn a_store_with_no_tree_yet_previews_the_whole_node_as_new() {
+        let candidate = json!({"campaigns": [{"id": "first"}]});
+
+        let preview =
+            preview_config_node(None, "campaigns", candidate).expect("the candidate validates");
+
+        assert!(!preview.unchanged);
+        assert!(
+            preview.from_version_id.is_none(),
+            "no version to diff against yet",
+        );
+        assert_eq!(
+            preview.diff,
+            json!({"campaigns": {"campaigns": [{"id": "first"}]}}),
+        );
+    }
+
+    #[test]
+    fn a_candidate_that_would_not_validate_reports_the_publish_time_violations() {
+        // Two mutually exclusive capability flags — the same conflict a real publish rejects (§10).
+        let candidate = json!(true);
+        let state = state_with(json!({
+            "pay_first_enabled": true,
+            "tables_enabled": true,
+        }));
+
+        let violations = preview_config_node(Some(&state), "unrelated", candidate)
+            .expect_err("the composed document must fail validation");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
+            "the preview surfaces the real conflict: {violations:?}",
+        );
+    }
 }

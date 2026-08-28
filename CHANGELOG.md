@@ -176,6 +176,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   activator reports its own task health like the retention and alert loops. **Upgrade note:** an
   additive migration (`0034_scheduled_publishes`, rollback safe) and a new config knob
   `scheduled_publish_interval_secs` (default 30); no protocol or permission change.
+- **Publish preview — see the exact diff before committing a campaigns publish** (roadmap v2, Track
+  M3; [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). Publishing the `campaigns` node was
+  all-or-nothing with no before/after. Now `POST /admin/config/campaigns/preview` runs the publish as
+  a dry-run — it assembles the same node, composes and validates it against the store's live config
+  exactly as the real publish would, and returns the **RFC 7386 merge patch** it would apply to the
+  effective document, plus the version it diffs against and an `unchanged` flag — **without minting a
+  version, saving, or auditing** (it changes nothing). A candidate that would fail validation comes
+  back `422` with the very violations a real publish would reject it with, so an author sees the
+  problem before committing. The dry-run helper is node-agnostic (it previews any Store-layer key),
+  so scheduled and other node publishes can reuse it. Behind `console.config.publish`, the same
+  audience that can publish. **Upgrade note:** none — a new read-only route, no migration, protocol,
+  or permission change.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store
