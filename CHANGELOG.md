@@ -53,6 +53,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `script-src`.
 
 ### Fixed
+- **The media isolation integration test no longer trips the global `media_id` primary key** (M5
+  follow-up; test-only). The merge-time `store-postgres` integration job went red after the M5 media
+  rail merged: `media::stores_reads_one_rendition_lists_and_stays_tenant_scoped` inserted the same
+  `media_id` for two tenants to probe isolation, but `media_assets.media_id` is a global `text`
+  primary key (migration `0030`), so the second insert violated the key and the adapter surfaced it as
+  `PortError::Unavailable`. It stayed hidden on the pull-request suite because the Postgres integration
+  tests run only on merge (behind the `integration` feature). Media ids are globally-unique ULIDs in
+  production, so the shared-id premise never occurs; the neighbour tenant now owns a distinct asset and
+  the test asserts the real guarantee — a tenant reading another tenant's asset by id gets `None`, each
+  tenant reads only its own, and delete/listing stay tenant-scoped. `PostgresMedia` already filters
+  every read by `tenant_id`, so no adapter change was needed. **Upgrade note:** none — test-only; no
+  adapter, schema, or migration change.
 - **Admin sign-in works on a real PostgreSQL deployment again** (Track G, G1 slice-4 regression
   caught by the merge-time integration job). The rewritten `insert_session` wrote `created_at` with
   `to_timestamp($2::double precision / 1000.0)`, which makes PostgreSQL infer the `$2` parameter as
