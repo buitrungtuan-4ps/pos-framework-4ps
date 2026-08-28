@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pos_ports::blob_store::{BlobKey, BlobStore};
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
 use pos_ports::metrics_sink::{MetricSample, MetricsSink};
 use pos_ports::signer::{KeyId, PublicKey, Signature, Signer};
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::DeviceId;
+use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::protocol::{Hello, HelloOutcome, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};
 use pos_proto::text::ReleaseTag;
 use pos_proto::{PROTOCOL_VERSION, Ulid};
@@ -429,6 +429,18 @@ impl FakeCloudSync {
     pub fn artifact_bytes() -> Vec<u8> {
         b"fake-update-artifact".to_vec()
     }
+
+    /// A well-formed update report the channel accepts — a store on [`Self::KNOWN_RELEASE`] whose
+    /// self-test passed.
+    #[must_use]
+    pub fn sample_report() -> UpdateReport {
+        UpdateReport {
+            tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
+            store: StoreId::new(Ulid::from_u128(0x570E)),
+            installed: ReleaseTag::new(Self::KNOWN_RELEASE),
+            self_test_passed: true,
+        }
+    }
 }
 
 impl CloudSync for FakeCloudSync {
@@ -456,5 +468,11 @@ impl CloudSync for FakeCloudSync {
                 "no such release is published",
             ))
         }
+    }
+
+    async fn report(&self, _report: &UpdateReport) -> Result<(), PortError> {
+        // A faithful sink: a well-formed report is accepted. The fake has no read model to inspect;
+        // the cloud adapter's contract test exercises the wire, and the store adapter its persistence.
+        Ok(())
     }
 }

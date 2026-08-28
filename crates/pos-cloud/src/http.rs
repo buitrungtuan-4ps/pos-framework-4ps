@@ -126,7 +126,7 @@ use crate::devices::{
     PersistedDeviceProposal,
 };
 use crate::export;
-use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, NewArea, NewRoutingRule, NewStation, NewTable, RoutingRule,
@@ -145,7 +145,7 @@ use crate::people::{
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
-use crate::reconcile::ReconcileStore;
+use crate::reconcile::{ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
@@ -504,21 +504,40 @@ where
         .layer(axum::middleware::from_fn(security_headers))
 }
 
+/// The collaborators the reconciliation routes share: the diff-and-history store, the admin store the
+/// admin read authenticates against, and the clock that stamps each recorded run and drives the
+/// session guard.
+#[derive(Clone)]
+struct ReconcileState<Rec, A, C> {
+    store: Rec,
+    admin: A,
+    clock: C,
+}
+
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
 ///
 /// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
 /// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
-/// the ids to re-push through `/internal/ingest`. It needs only the [`ReconcileStore`], so it carries
-/// its own state and is merged into the main router in `main`, rather than threading an extra
-/// collaborator through every `CloudApp` handler. Internal, private-network, and absent from the
-/// public OpenAPI, exactly like `/internal/ingest`.
-pub fn reconcile_router<Rec>(store: Rec) -> Router
+/// the ids to re-push through `/internal/ingest`. Every diff now also records a run into the history
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), so `GET /admin/reconcile` can show the
+/// console that reconciliation happened and what it caught. The internal route is private-network and
+/// unauthenticated (absent from the public OpenAPI, exactly like `/internal/ingest`); the admin read is
+/// behind [`ConsolePermission::Read`]. Stated independently and merged in `main`, rather than threading
+/// an extra collaborator through every `CloudApp` handler.
+pub fn reconcile_router<Rec, A, C>(store: Rec, admin: A, clock: C) -> Router
 where
-    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/internal/reconcile", post(reconcile::<Rec>))
-        .with_state(store)
+        .route("/internal/reconcile", post(reconcile::<Rec, A, C>))
+        .route("/admin/reconcile", get(admin_reconcile_runs::<Rec, A, C>))
+        .with_state(ReconcileState {
+            store,
+            admin,
+            clock,
+        })
 }
 
 /// Liveness: answers as soon as the process is serving.
@@ -545,11 +564,17 @@ struct ReconcileResponse {
 }
 
 /// Answers which of the edge's candidate ids the cloud is missing for a store
-/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)). Internal (the reconciliation partner of
+/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), and records the run into the history
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Internal (the reconciliation partner of
 /// `/internal/ingest`), so it carries no authentication and is absent from the public OpenAPI.
-async fn reconcile<Rec>(State(store): State<Rec>, Json(request): Json<ReconcileRequest>) -> Response
+async fn reconcile<Rec, A, C>(
+    State(state): State<ReconcileState<Rec, A, C>>,
+    Json(request): Json<ReconcileRequest>,
+) -> Response
 where
-    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
 {
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -570,22 +595,231 @@ where
             }
         }
     }
-    match store
+    match state
+        .store
         .absent_event_ids(tenant_id, store_id, &candidates)
         .await
     {
-        Ok(missing) => (
-            StatusCode::OK,
-            Json(ReconcileResponse {
-                missing: missing.iter().map(ToString::to_string).collect(),
-            }),
-        )
-            .into_response(),
+        Ok(missing) => {
+            // Record the run into the history — best-effort, so a recording failure never denies the
+            // edge the diff it is waiting on (the diff is the primary product; the history is a trail).
+            let now = state.clock.now();
+            if let Some(run_id) = mint_ulid(now.as_milliseconds_since_epoch()) {
+                let run = ReconcileRun {
+                    run_id: run_id.to_string(),
+                    store: store_id,
+                    candidates_offered: u32::try_from(candidates.len()).unwrap_or(u32::MAX),
+                    missing_found: u32::try_from(missing.len()).unwrap_or(u32::MAX),
+                    ran_at: now,
+                };
+                if let Err(error) = state.store.record_run(tenant_id, &run).await {
+                    tracing::warn!(%error, "recording a reconciliation run failed; the diff still answered");
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(ReconcileResponse {
+                    missing: missing.iter().map(ToString::to_string).collect(),
+                }),
+            )
+                .into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "a reconciliation diff failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The default and maximum page size for the reconciliation history read.
+const RECONCILE_HISTORY_DEFAULT_LIMIT: u32 = 100;
+const RECONCILE_HISTORY_MAX_LIMIT: u32 = 500;
+
+/// A `GET /admin/reconcile` query: the tenant whose runs to list, an optional store filter, and an
+/// optional page size.
+#[derive(Debug, Clone, Deserialize)]
+struct ReconcileHistoryQuery {
+    /// The tenant whose reconciliation history to read (a 26-character ULID).
+    tenant_id: String,
+    /// Narrow to one store (a ULID); absent reads across the tenant's stores.
+    #[serde(default)]
+    store_id: Option<String>,
+    /// Cap the number of runs returned; defaults to [`RECONCILE_HISTORY_DEFAULT_LIMIT`], clamped to
+    /// [`RECONCILE_HISTORY_MAX_LIMIT`].
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// One reconciliation run on the wire ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
+/// counts and a timestamp, never event contents or a customer identifier.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReconcileRunView {
+    /// The run's id (a ULID string; chronological).
+    run_id: String,
+    /// The store the diff was for (a ULID string).
+    store_id: String,
+    /// How many ids the edge offered in its manifest.
+    candidates_offered: u32,
+    /// How many of them the cloud was missing (asked the edge to re-push); zero means fully in sync.
+    missing_found: u32,
+    /// Unix ms of the diff.
+    ran_at_ms: i64,
+}
+
+impl ReconcileRunView {
+    fn from_run(run: ReconcileRun) -> Self {
+        Self {
+            run_id: run.run_id,
+            store_id: run.store.to_string(),
+            candidates_offered: run.candidates_offered,
+            missing_found: run.missing_found,
+            ran_at_ms: run.ran_at.as_milliseconds_since_epoch(),
+        }
+    }
+}
+
+/// Lists a tenant's most recent reconciliation runs, newest first
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
+/// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind
+/// [`ConsolePermission::Read`].
+async fn admin_reconcile_runs<Rec, A, C>(
+    State(state): State<ReconcileState<Rec, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ReconcileHistoryQuery>,
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let store = match query.store_id.as_deref() {
+        Some(raw) => match raw.parse::<Ulid>().map(StoreId::new) {
+            Ok(store) => Some(store),
+            Err(_) => return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response(),
+        },
+        None => None,
+    };
+    let limit = query
+        .limit
+        .unwrap_or(RECONCILE_HISTORY_DEFAULT_LIMIT)
+        .min(RECONCILE_HISTORY_MAX_LIMIT);
+    match state.store.list_runs(tenant_id, store, limit).await {
+        Ok(runs) => {
+            let view: Vec<ReconcileRunView> =
+                runs.into_iter().map(ReconcileRunView::from_run).collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "reading the reconciliation history failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
+/// report's arrival instant.
+#[derive(Clone)]
+struct OtaReportState<R, C> {
+    reports: R,
+    clock: C,
+}
+
+/// An edge's OTA report body ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)): which store
+/// reported, the version it is now running, and whether the post-install self-test passed. Identity is
+/// in the body because `/internal` is trusted-network and unauthenticated, exactly like `/internal/reconcile`.
+#[derive(Debug, Clone, Deserialize)]
+struct OtaReportRequest {
+    /// The tenant the store belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store reporting (a 26-character ULID).
+    store_id: String,
+    /// The release the store is now running (a version string, e.g. `v1.2.3`).
+    installed: String,
+    /// Whether the post-install self-test passed.
+    self_test_passed: bool,
+}
+
+/// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// stated independently of [`CloudApp`] like [`reconcile_router`].
+///
+/// `POST /internal/ota/report` records the version a store is running and its last self-test outcome
+/// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
+/// private-network, and absent from the public OpenAPI, exactly like `/internal/ingest` and
+/// `/internal/reconcile`; the server stamps the arrival instant from its own clock.
+pub fn ota_report_router<R, C>(reports: R, clock: C) -> Router
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/internal/ota/report", post(ingest_ota_report::<R, C>))
+        .with_state(OtaReportState { reports, clock })
+}
+
+/// Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+/// Internal (the reporting partner of `/internal/ingest`), so it carries no authentication and is
+/// absent from the public OpenAPI. A malformed id or an empty version is a `400`; a store failure is
+/// a retryable `503`; success is `204`.
+async fn ingest_ota_report<R, C>(
+    State(state): State<OtaReportState<R, C>>,
+    Json(request): Json<OtaReportRequest>,
+) -> Response
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let installed = request.installed.trim();
+    if installed.is_empty() {
+        return (StatusCode::BAD_REQUEST, "an installed version is required").into_response();
+    }
+    match state
+        .reports
+        .record_report(
+            tenant_id,
+            store_id,
+            installed,
+            request.self_test_passed,
+            state.clock.now(),
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "recording an OTA report failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the fleet service is unavailable",
             )
                 .into_response()
         }
@@ -4000,6 +4234,13 @@ struct FleetStoreView {
     config_current: bool,
     relay_backlog: u64,
     relay_oldest_pending_at_ms: Option<i64>,
+    /// The binary version the store last reported running (ADR-0078), or `null` if it has never
+    /// reported.
+    installed_version: Option<String>,
+    /// Whether the store's last post-install self-test passed, or `null`.
+    self_test_ok: Option<bool>,
+    /// Unix ms of the store's most recent OTA report, or `null`.
+    reported_at_ms: Option<i64>,
 }
 
 impl FleetStoreView {
@@ -4031,6 +4272,11 @@ impl FleetStoreView {
             relay_backlog: row.relay_backlog,
             relay_oldest_pending_at_ms: row
                 .relay_oldest_pending_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            installed_version: row.installed_version,
+            self_test_ok: row.self_test_ok,
+            reported_at_ms: row
+                .reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
         }
     }
@@ -6545,6 +6791,332 @@ where
             Json(ConfigViolations { violations }),
         )
             .into_response(),
+    }
+}
+
+// --- OTA rollout levers (`/admin/config/ota`, ADR-0078, Track O3) --------------------------------
+
+/// The collaborators the OTA rollout routes need: the config-tree store the `fleet_update` node is
+/// written onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct OtaConfigState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no
+/// `halted` field — a fresh publish is live; the kill switch is `POST /admin/config/ota/halt`.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishRolloutRequest {
+    tenant_id: String,
+    store_id: String,
+    target_version: String,
+    min_ring: String,
+    rollout_percent: u8,
+    signing_key_id: String,
+    #[serde(default)]
+    revoked_key_ids: Vec<String>,
+}
+
+/// A `POST /admin/config/ota/halt` body: the `(tenant, store)` whose rollout to halt (`true`) or
+/// resume (`false`) — the kill switch, without re-typing the whole rollout.
+#[derive(Debug, Clone, Deserialize)]
+struct HaltRolloutRequest {
+    tenant_id: String,
+    store_id: String,
+    halted: bool,
+}
+
+/// A `GET /admin/config/ota?tenant_id=&store_id=` query: which store's published rollout to read.
+#[derive(Debug, Clone, Deserialize)]
+struct OtaRolloutQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the OTA rollout sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), O3).
+///
+/// The first-class levers that replace hand-editing a `fleet_update` node: `PUT /admin/config/ota`
+/// publishes a rollout from typed fields, `POST /admin/config/ota/halt` flips its kill switch, and
+/// `GET /admin/config/ota` reads the currently-published rollout. The writes compose the `fleet_update`
+/// node through the same config tree and the same `CapabilityValidator` (its `ota_violations`) the
+/// generic publish used, so a malformed rollout is a `422` with the exact violations. Writes are behind
+/// [`ConsolePermission::PublishOta`] and audited; the read is behind [`ConsolePermission::Read`].
+pub fn ota_config_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/ota",
+            get(admin_get_rollout::<Cfg, A, C>).put(admin_publish_rollout::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/ota/halt",
+            post(admin_halt_rollout::<Cfg, A, C>),
+        )
+        .with_state(OtaConfigState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Composes a `fleet_update` node onto a store's Store layer and publishes it — the same
+/// load→merge→publish→version shape as the campaigns/tax node publishes, so the other Store-level keys
+/// survive. The node is validated by the config tree's `CapabilityValidator` before it commits.
+async fn admin_publish_rollout<Cfg, A, C>(
+    State(state): State<OtaConfigState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishRolloutRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishOta,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    // A fresh publish is live: `halted` is omitted so it defaults false in the node.
+    let node = serde_json::json!({
+        "target_version": request.target_version,
+        "min_ring": request.min_ring,
+        "rollout_percent": request.rollout_percent,
+        "signing_key_id": request.signing_key_id,
+        "revoked_key_ids": request.revoked_key_ids,
+    });
+    let audit_detail = serde_json::json!({
+        "target_version": request.target_version,
+        "min_ring": request.min_ring,
+        "rollout_percent": request.rollout_percent,
+    });
+    publish_ota_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        node,
+        "config.ota.publish",
+        audit_detail,
+    )
+    .await
+}
+
+/// Flips the kill switch on a store's published rollout: loads its authored `fleet_update`, sets
+/// `halted`, and re-publishes — preserving the rest of the rollout, so an operator halts a bad rollout
+/// (or resumes a paused one) without re-typing the target, ring, and key. `400` if the store has no
+/// rollout to halt.
+async fn admin_halt_rollout<Cfg, A, C>(
+    State(state): State<OtaConfigState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<HaltRolloutRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishOta,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let Some(mut node) = state_before
+        .as_ref()
+        .and_then(|s| s.layers[2].get("fleet_update"))
+        .cloned()
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the store has no published rollout to halt",
+        )
+            .into_response();
+    };
+    if let serde_json::Value::Object(map) = &mut node {
+        map.insert("halted".to_owned(), serde_json::Value::Bool(request.halted));
+    }
+    publish_ota_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        node,
+        "config.ota.halt",
+        serde_json::json!({ "halted": request.halted }),
+    )
+    .await
+}
+
+/// The shared load→set-`fleet_update`→publish→save→audit tail behind both the publish and the halt
+/// levers. `node` is the `fleet_update` value to set; `action`/`detail` are the audit record.
+async fn publish_ota_node<Cfg, A, C>(
+    state: &OtaConfigState<Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    node: serde_json::Value,
+    action: &str,
+    detail: serde_json::Value,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("fleet_update".to_owned(), node);
+    }
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                context,
+                Some(tenant_id),
+                action,
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(detail),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
+/// is published. Behind [`ConsolePermission::Read`].
+async fn admin_get_rollout<Cfg, A, C>(
+    State(state): State<OtaConfigState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<OtaRolloutQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state_before) => {
+            let rollout = state_before
+                .as_ref()
+                .and_then(|s| s.layers[2].get("fleet_update"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            (StatusCode::OK, Json(rollout)).into_response()
+        }
+        Err(error) => config_store_error_response(&error),
     }
 }
 

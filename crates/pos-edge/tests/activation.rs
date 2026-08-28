@@ -20,7 +20,7 @@ use pos_core::activation::{ActivationCode, PAYLOAD_LEN};
 use pos_edge::activation_router;
 use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::{FakeKeyVault, FakeStore};
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_ports::{PortError, PortName, Secret};
 use pos_proto::ids::{DeviceId, StoreId};
@@ -61,6 +61,11 @@ impl CloudSync for StubCloud {
             PortName::CloudSync,
             "the stub cloud publishes no releases",
         ))
+    }
+
+    async fn report(&self, _report: &UpdateReport) -> Result<(), PortError> {
+        // Activation tests never report; accept it so the stub satisfies the port.
+        Ok(())
     }
 }
 

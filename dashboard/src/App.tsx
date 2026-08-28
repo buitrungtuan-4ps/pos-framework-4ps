@@ -22,6 +22,8 @@ import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
 import { Fleet } from "./screens/Fleet";
+import { Ota } from "./screens/Ota";
+import { Reconcile } from "./screens/Reconcile";
 import { Floor } from "./screens/Floor";
 import { Login } from "./screens/Login";
 import { Media } from "./screens/Media";
@@ -78,6 +80,8 @@ export function App() {
         <Route path="/" component={Guarded}>
           <Route path="/" component={Reports} />
           <Route path="/fleet" component={Fleet} />
+          <Route path="/ota" component={Ota} />
+          <Route path="/reconcile" component={Reconcile} />
           <Route path="/audit" component={Audit} />
           <Route path="/alerts" component={Alerts} />
           <Route path="/stores" component={Stores} />

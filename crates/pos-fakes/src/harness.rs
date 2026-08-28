@@ -21,7 +21,7 @@ use pos_contract_tests::harness::{
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
-    VendorOrderRef,
+    UpdateReport, VendorOrderRef,
 };
 use pos_proto::{
     DeviceId, MenuItemId, Money, PaymentOutcome, ReleaseTag, StoreId, Timestamp, Ulid,
@@ -207,6 +207,10 @@ impl CloudSyncHarness for CloudHarness {
 
     fn update_bytes(&self) -> Vec<u8> {
         FakeCloudSync::artifact_bytes()
+    }
+
+    fn sample_report(&self) -> UpdateReport {
+        FakeCloudSync::sample_report()
     }
 }
 

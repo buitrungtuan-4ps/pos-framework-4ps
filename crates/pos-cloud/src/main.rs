@@ -274,7 +274,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
     let service = http::router(app)
-        .merge(http::reconcile_router(store.reconcile()))
+        .merge(http::reconcile_router(
+            store.reconcile(),
+            store.admin(),
+            SystemClock,
+        ))
+        .merge(http::ota_report_router(store.config_trees(), SystemClock))
         .merge(http::device_router(
             store.device_proposals(),
             store.admin(),
@@ -469,6 +474,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // store's `campaigns` config node, so the edge holds them for its pricing engine.
         .merge(http::config_campaigns_router(
             store.campaigns(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // OTA rollout levers (ADR-0078, Track O3): publish a `fleet_update` rollout or engage its
+        // kill switch from typed fields, instead of hand-editing the config node.
+        .merge(http::ota_config_router(
             store.config_trees(),
             store.admin(),
             SystemClock,

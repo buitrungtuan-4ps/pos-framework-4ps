@@ -58,7 +58,7 @@ pub mod signer;
 pub mod tx;
 
 pub use blob_store::{BlobKey, BlobKeyError, BlobStore};
-pub use cloud_sync::{ActivationGrant, CloudSync};
+pub use cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
 pub use config_store::{ConfigDelta, ConfigDocument, ConfigSnapshot, ConfigStore, ConfigUpdate};
 pub use delivery::{BusyMode, DeliveryVendor, PendingDecision, PrepTime, VendorOrderRef};
 pub use dynamic::{

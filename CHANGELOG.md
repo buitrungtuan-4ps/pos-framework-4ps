@@ -123,6 +123,102 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console shows reconciliation history and gives the rebuild lever a button** (roadmap v2,
+  Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). A new Reconciliation screen reads
+  `GET /admin/reconcile` and lists each store's recent reconciliation runs — store, ids offered, how
+  many were re-pushed (or "in sync" when none), and when — resolving store names from the registry so
+  no raw ULID is front-and-centre, and polling so a fresh run shows without a manual refresh. For the
+  store in context it also surfaces the rollup-**rebuild** lever (`POST .../rollups/reset`, ADR-0036)
+  that existed only as a route: a confirmed button that resets the cloud's materialised rollups so the
+  projector re-folds them from the event log — the recovery ADR-0078 §4 wanted behind a button rather
+  than `curl`. The rebuild is behind `console.config.publish` (the server enforces it — a viewer sees
+  the history but a rebuild returns `403`); the history read is behind `console.data.read`. Added to
+  the Overview nav, with en/vi strings. **Upgrade note:** none — a console-only screen over the
+  existing `/admin/reconcile` read and `rollups/reset` lever; no schema, protocol, or permission
+  change.
+- **Reconciliation now leaves a trail** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The `POST /internal/reconcile` diff
+  ([ADR-0040](docs/adr/0040-reconciliation.md)) answered "which of these ids am I missing?"
+  statelessly, so a gap it closed was invisible afterwards — nothing recorded that reconciliation
+  ran, for which store, or how much it caught. Every diff now appends one run to a history —
+  candidates offered, missing found, and when — into a new `reconcile_runs` table (migration `0036`,
+  RLS tenant-isolated like `store_liveness`), and `GET /admin/reconcile` lists a tenant's recent runs
+  (newest first, optional store filter, behind `console.data.read`). Recording is best-effort: a
+  history write that fails never denies the edge the diff it is waiting on. A run is operational
+  telemetry — counts and a timestamp, never event contents or a customer identifier — so it stays out
+  of the T1/T2 reproduction rules. Wiring the *edge* to send reconciliation manifests on a schedule
+  from the shipped `pos_edge` binary stays the flagged hardware/composition gate (ADR-0078 §Deferred,
+  ADR-0055); this slice delivers and tests the cloud-side recording and read that a real edge — or the
+  existing manual re-push flow — feeds. **Upgrade note:** an additive migration (`0036_reconcile_runs`,
+  rollback safe) and a new `/admin/reconcile` read; no protocol or permission change (the read reuses
+  `console.data.read`).
+- **The console has an OTA updates screen — rollout progress and the levers in one place** (roadmap
+  v2, Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting and lever backends
+  landed with no way to see or drive them from the console; this adds the screen. A tenant-scoped
+  **rollout progress** table shows, per store, the binary it last reported running, whether its
+  post-install self-test passed, when it last reported, and whether it is online — the rollout-ring
+  progress that was invisible — and polls so it stays current. For the store in context, a **manage
+  rollout** pane reads the store's published rollout and offers the first-class levers: a form that
+  publishes a rollout from typed fields (target version, ring, ramp percent, signing key, revoked
+  keys) and a kill switch that halts (or resumes) it without re-typing. Both writes go through the
+  server's `console.ota.publish` gate — a viewer sees the progress but a publish returns `403` — and
+  the publish is guarded by a confirmation that names the version, ring, and store. Added to the
+  Overview nav for Owner/Admin. **Upgrade note:** none — a console-only screen over the existing
+  `GET /admin/fleet` read and the `/admin/config/ota` levers; no schema, protocol, or permission
+  change (the `console.ota.publish` permission shipped with the levers).
+- **First-class OTA rollout levers replace hand-editing a config node** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). Publishing a fleet update used to mean typing a
+  raw `fleet_update` JSON node into the generic config-tree editor; a fat-fingered ring or ramp went
+  live with no affordance to stop it. Three typed routes now stand in front of that node.
+  `PUT /admin/config/ota` publishes a rollout from named fields — target version, minimum ring,
+  ramp percent, signing key, and revoked keys — composing the `fleet_update` node and running it
+  through the same `CapabilityValidator` the generic publish used, so a malformed rollout is still a
+  `422` with the exact violations and nothing changes. `POST /admin/config/ota/halt` is the kill
+  switch: it loads the store's published rollout, flips `halted`, and re-publishes — an operator
+  pauses (or resumes) a bad rollout without re-typing the target, ring, and key, and it is a `400`
+  when there is nothing published to halt. `GET /admin/config/ota` reads the currently-published
+  rollout. All three preserve the store's other Store-level keys (`menu`, `tax`, `campaigns`, …) the
+  way every node publish does. The writes are behind a new **`console.ota.publish`** permission
+  (Owner/Admin only — above the `PublishConfig` norm that includes Ops, because pushing a binary to
+  the fleet is not a day-to-day publish) and are audited (`config.ota.publish` / `config.ota.halt`
+  record the target and ring, never a customer identifier); the read is behind `console.data.read`.
+  The dashboard OTA view that drives these follows in the same track. **Upgrade note:** one new
+  console permission (`console.ota.publish`, granted to Owner and Admin); no schema or protocol
+  change, and the generic config editor still works, so an existing `fleet_update` node keeps
+  publishing exactly as before.
+- **The cloud ingests OTA reports and shows each store's running version** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting half of the OTA loop now lands
+  somewhere: `POST /internal/ota/report` (a trusted-network `/internal` route, the reporting partner
+  of `/internal/ingest`) records the version a store is running and its last self-test outcome onto
+  the O1 fleet-liveness read model — a report is another kind of liveness contact, so it extends
+  `store_liveness` (migration `0035`, additive columns) rather than opening a new table, and advances
+  the store's `last_seen_at` too. The fleet read (`GET /admin/fleet` and the per-store detail) now
+  carries `installed_version`, `self_test_ok`, and `reported_at`, so the console can finally show, per
+  store, what binary it is running and whether its self-test passed — the rollout-ring progress that
+  was invisible. A dedicated `OtaReportStore` write seam keeps this off the `ConfigTreeStore` trait;
+  the server stamps the report's arrival from its own clock. First-class OTA publish/kill-switch
+  levers and the dashboard OTA view follow in the same track. **Upgrade note:** an additive migration
+  (`0035_ota_report`, rollback safe) and a new `/internal` route; a store that never reports simply
+  leaves the new columns NULL, exactly as the fleet read tolerated before — no protocol or permission
+  change.
+- **The edge can report an update's outcome to the cloud (`CloudSync::report`)** (roadmap v2, Track
+  O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). OTA was a publish into silence: the cloud
+  pushed a rollout as config and the edge decided, installed, self-tested, and rolled back — and told
+  no one, so no one could see rollout-ring progress. This adds the reporting half of the loop. The
+  `CloudSync` port (ADR-0053) grows a third method, `report(&UpdateReport)` — a port-local struct
+  carrying which store reported, the version it is now running, and whether the post-install self-test
+  passed — in the port's existing style (like `ActivationGrant`, it names only ids the port already
+  uses plus the two facts the cloud needs, never a customer identifier). The `cloud-sync-http` adapter
+  posts it to `POST /internal/ota/report` (a trusted-network `/internal` route carrying the identity
+  in the body, exactly like `/internal/reconcile`); the fake accepts it; the shared contract suite
+  gains a fifth case, so every `CloudSync` implementation is held to it. A report is fire-and-forget:
+  one that does not reach the cloud is retried or dropped, never a reason to undo an install that
+  already happened. The cloud-side ingest, the OTA-progress read model, and first-class OTA
+  publish/kill-switch levers follow in the same track; wiring the edge OTA updater to *call*
+  `report()` inside the shipped binary stays the flagged hardware/OS composition gate ADR-0055 and
+  `docs/roadmap.md` P9 already hold behind a real box. **Upgrade note:** none — an additive port
+  method (`/internal/ota/report` is a new route; a store that never reports is simply unknown to the
+  new read model, exactly as before), no protocol, migration, or permission change in this slice.
 - **Campaigns are now authorable over the finished pricing engine** (roadmap v2, Track M3;
   [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The pricing engine (`pos_core::campaign`,
   `docs/pos-spec.md` §7) already evaluates all five campaign kinds with windows, quotas, and

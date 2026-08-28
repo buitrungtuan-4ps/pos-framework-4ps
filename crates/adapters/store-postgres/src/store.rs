@@ -114,6 +114,12 @@ const MIGRATION_0033: &str = include_str!("../migrations/0033_vouchers.sql");
 /// Scheduled, effective-dated config publishes ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0034: &str = include_str!("../migrations/0034_scheduled_publishes.sql");
 
+/// OTA report columns on the liveness read model ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
+const MIGRATION_0035: &str = include_str!("../migrations/0035_ota_report.sql");
+
+/// Reconciliation run history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
+const MIGRATION_0036: &str = include_str!("../migrations/0036_reconcile_runs.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -308,6 +314,14 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0034)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0035)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0036)
             .await
             .map_err(unavailable)
     }

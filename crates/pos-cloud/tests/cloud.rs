@@ -69,7 +69,7 @@ use pos_cloud::people::{
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
-use pos_cloud::reconcile::{ReconcileError, ReconcileStore};
+use pos_cloud::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use pos_cloud::registry::{
     BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError, StoreRecord,
     TenantRecord,
@@ -2347,10 +2347,25 @@ async fn rollups_reset_clears_the_cursor_so_the_projector_replays() {
 
 // --- Reconciliation diff (`POST /internal/reconcile`) -------------------------------------------
 
-/// A reconciliation store that "has" a fixed set of ids; the missing ones are the complement.
-#[derive(Clone)]
+/// A reconciliation store that "has" a fixed set of ids; the missing ones are the complement. It also
+/// records the runs it is asked to persist, so a test can assert the history was written.
+#[derive(Clone, Default)]
 struct FakeReconcile {
     present: HashSet<EventId>,
+    runs: Arc<Mutex<Vec<(TenantId, ReconcileRun)>>>,
+}
+
+impl FakeReconcile {
+    fn with_present(present: HashSet<EventId>) -> Self {
+        Self {
+            present,
+            runs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn recorded(&self) -> Vec<(TenantId, ReconcileRun)> {
+        self.runs.lock().expect("lock").clone()
+    }
 }
 
 impl ReconcileStore for FakeReconcile {
@@ -2368,6 +2383,48 @@ impl ReconcileStore for FakeReconcile {
     }
 }
 
+impl ReconcileRunStore for FakeReconcile {
+    async fn record_run(&self, tenant: TenantId, run: &ReconcileRun) -> Result<(), ReconcileError> {
+        self.runs.lock().expect("lock").push((tenant, run.clone()));
+        Ok(())
+    }
+
+    async fn list_runs(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        limit: u32,
+    ) -> Result<Vec<ReconcileRun>, ReconcileError> {
+        let mut runs: Vec<ReconcileRun> = self
+            .runs
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(row_tenant, run)| {
+                *row_tenant == tenant && store.is_none_or(|wanted| run.store == wanted)
+            })
+            .map(|(_, run)| run.clone())
+            .collect();
+        // Newest first, exactly as the SQL adapter orders by `ran_at DESC`.
+        runs.sort_by(|a, b| b.ran_at.cmp(&a.ran_at));
+        runs.truncate(limit as usize);
+        Ok(runs)
+    }
+}
+
+/// The main router (for `/admin/login`) merged with the reconcile sub-router, one shared admin store.
+fn reconcile_app(admin: FakeAdmin, store: FakeReconcile) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::reconcile_router(store, admin, clock()))
+}
+
 /// An event id ULID string for the small integer `n`.
 fn event_ulid(n: u128) -> String {
     Ulid::from_u128(n).to_string()
@@ -2380,7 +2437,8 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
         .into_iter()
         .map(|n| EventId::new(Ulid::from_u128(n)))
         .collect();
-    let router = http::reconcile_router(FakeReconcile { present });
+    let store = FakeReconcile::with_present(present);
+    let router = http::reconcile_router(store.clone(), provisioned_admin(), clock());
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
         "store_id": store_id().as_ulid().to_string(),
@@ -2402,13 +2460,20 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
         vec![event_ulid(2), event_ulid(4)],
         "only the ids the cloud lacks are returned, in the manifest's order"
     );
+    // The diff also recorded a run: four ids offered, two missing.
+    let recorded = store.recorded();
+    assert_eq!(recorded.len(), 1, "one run was recorded for the diff");
+    let (recorded_tenant, run) = &recorded[0];
+    assert_eq!(*recorded_tenant, tenant());
+    assert_eq!(run.store, store_id());
+    assert_eq!(run.candidates_offered, 4);
+    assert_eq!(run.missing_found, 2);
 }
 
 #[tokio::test]
 async fn reconcile_rejects_a_malformed_id() {
-    let router = http::reconcile_router(FakeReconcile {
-        present: HashSet::new(),
-    });
+    let store = FakeReconcile::default();
+    let router = http::reconcile_router(store.clone(), provisioned_admin(), clock());
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
         "store_id": store_id().as_ulid().to_string(),
@@ -2422,6 +2487,74 @@ async fn reconcile_rejects_a_malformed_id() {
         response.status(),
         StatusCode::BAD_REQUEST,
         "a manifest carrying a non-ULID id is rejected, not silently dropped"
+    );
+    assert!(
+        store.recorded().is_empty(),
+        "a rejected manifest records no run"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_history_lists_the_runs_a_diff_recorded() {
+    let store = FakeReconcile::with_present(HashSet::new());
+    let router = reconcile_app(provisioned_admin(), store);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Run a diff so there is a run to read back: two ids offered, both missing (empty cloud).
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "event_ids": [event_ulid(7), event_ulid(9)],
+    });
+    let diff = router
+        .clone()
+        .oneshot(post_json("/internal/reconcile", &body))
+        .await
+        .expect("route the reconcile");
+    assert_eq!(diff.status(), StatusCode::OK);
+
+    // The console read lists it.
+    let listed = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/admin/reconcile?tenant_id={tenant_ulid}"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the history read");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let runs = json_body(listed).await;
+    let runs = runs.as_array().expect("a runs array");
+    assert_eq!(runs.len(), 1, "the one recorded run is listed");
+    assert_eq!(runs[0]["store_id"], store_ulid);
+    assert_eq!(runs[0]["candidates_offered"], 2);
+    assert_eq!(runs[0]["missing_found"], 2);
+}
+
+#[tokio::test]
+async fn reconcile_history_needs_a_session() {
+    let router = reconcile_app(provisioned_admin(), FakeReconcile::default());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/admin/reconcile?tenant_id={tenant_ulid}"))
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the history read");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "the reconciliation history is behind a session"
     );
 }
 
@@ -4075,6 +4208,9 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 config_version_published: Some("v-current".to_owned()),
                 relay_backlog: 0,
                 relay_oldest_pending_at: None,
+                installed_version: Some("v1.2.3".to_owned()),
+                self_test_ok: Some(true),
+                reported_at: Some(seen_ago(1_000)),
             },
         )
         .with_row(
@@ -4089,6 +4225,9 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 config_version_published: Some("v-current".to_owned()),
                 relay_backlog: 3,
                 relay_oldest_pending_at: Some(seen_ago(120_000)),
+                installed_version: None,
+                self_test_ok: None,
+                reported_at: None,
             },
         );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -4116,6 +4255,11 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
         "held equals published, so it is current"
     );
     assert_eq!(online["relay_backlog"], 0);
+    assert_eq!(
+        online["installed_version"], "v1.2.3",
+        "the fleet read surfaces the reported OTA version"
+    );
+    assert_eq!(online["self_test_ok"], true, "and its self-test outcome");
 
     let offline = &rows[1];
     assert_eq!(
@@ -4147,6 +4291,9 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             config_version_published: Some("v-current".to_owned()),
             relay_backlog: 0,
             relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -4191,6 +4338,9 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             config_version_published: Some("v-current".to_owned()),
             relay_backlog: 0,
             relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

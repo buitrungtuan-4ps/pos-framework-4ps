@@ -65,7 +65,7 @@ pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
 pub use media::{MediaAssetRow, PostgresMedia};
 pub use order_queue::{OrderQueueRow, PendingOrderRow, PostgresOrderQueue, PostgresStoreDirectory};
 pub use people::{AssignmentRow, EmployeeRow, PostgresPeople, RoleTemplateRow};
-pub use reconcile::PostgresReconcile;
+pub use reconcile::{PostgresReconcile, ReconcileRunRow};
 pub use registry::{BrandRow, DeviceRow, PostgresRegistry, StoreRow, TenantRow};
 pub use rollups::PostgresRollups;
 pub use scheduling::{NewScheduledPublishRow, PostgresScheduledPublishes, ScheduledPublishRow};

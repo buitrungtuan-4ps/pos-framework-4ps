@@ -53,6 +53,14 @@ pub struct FleetRow {
     pub relay_backlog: u64,
     /// When the oldest still-pending queued order arrived, or `None` if the queue is empty.
     pub relay_oldest_pending_at: Option<Timestamp>,
+    /// The binary version the store last reported running ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+    /// or `None` if it has never reported. A raw string for the same reason the held config version is:
+    /// it is whatever the edge last said.
+    pub installed_version: Option<String>,
+    /// Whether the store's last post-install self-test passed, or `None` if it has never reported.
+    pub self_test_ok: Option<bool>,
+    /// When the store last reported an update outcome, or `None`.
+    pub reported_at: Option<Timestamp>,
 }
 
 /// Reads the fleet read model, per tenant.
@@ -79,8 +87,30 @@ pub trait FleetStore {
     ) -> impl Future<Output = Result<Option<FleetRow>, FleetStoreError>> + Send;
 }
 
-/// A failure of the fleet read model itself — one of the joined tables could not be read, or a stored
-/// value could not be decoded.
+/// Records a store's OTA report onto the liveness read model ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
+/// the version it is now running and whether its self-test passed. A report is also a liveness contact,
+/// so it advances the store's `last_seen_at`. The only *write* to the fleet read model besides the
+/// config-pull/heartbeat liveness capture; a trait so it runs against a fake in tests and a
+/// `store-postgres` upsert in the cloud.
+pub trait OtaReportStore {
+    /// Records that `store` (in `tenant`) is now running `installed` and whether its self-test passed,
+    /// at `reported_at`.
+    ///
+    /// # Errors
+    ///
+    /// [`FleetStoreError`] if the liveness row could not be written.
+    fn record_report(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        installed: &str,
+        self_test_passed: bool,
+        reported_at: Timestamp,
+    ) -> impl Future<Output = Result<(), FleetStoreError>> + Send;
+}
+
+/// A failure of the fleet read model itself — one of the joined tables could not be read, a stored
+/// value could not be decoded, or a report could not be written.
 #[derive(Debug, thiserror::Error)]
 #[error("the fleet store failed: {0}")]
 pub struct FleetStoreError(String);

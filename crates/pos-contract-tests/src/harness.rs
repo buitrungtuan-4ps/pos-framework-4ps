@@ -43,7 +43,7 @@ use core::future::Future;
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, ErpSink, EventStore, Fiscalization,
     KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver, ShippingDispatch,
-    Signer,
+    Signer, UpdateReport,
 };
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
@@ -224,6 +224,9 @@ pub trait CloudSyncHarness: Send + Sync {
 
     /// The artifact bytes that release returns.
     fn update_bytes(&self) -> Vec<u8>;
+
+    /// A well-formed update report the channel should accept.
+    fn sample_report(&self) -> UpdateReport;
 }
 
 /// Supplies a fresh [`PrinterDriver`], and can break the printer.

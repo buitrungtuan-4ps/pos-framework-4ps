@@ -26,7 +26,7 @@
 
 use core::future::Future;
 
-use pos_proto::ids::DeviceId;
+use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::text::ReleaseTag;
 
 use crate::error::PortError;
@@ -41,6 +41,26 @@ pub struct ActivationGrant {
     /// The long-lived device credential — redacted in [`core::fmt::Debug`]; store it in the
     /// [`crate::KeyVault`], never on disk.
     pub credential: Secret,
+}
+
+/// What the edge tells the cloud after applying (or rolling back) an update: which store is
+/// reporting, the version it is now running, and whether the post-install self-test passed.
+///
+/// This is how the cloud learns rollout-ring progress ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+/// A report is pure telemetry — it never changes what the edge runs — and carries only ids the port
+/// already names plus the two facts the cloud needs, never a customer identifier.
+#[derive(Debug, Clone)]
+pub struct UpdateReport {
+    /// The tenant the reporting store belongs to.
+    pub tenant: TenantId,
+    /// The store now running `installed`.
+    pub store: StoreId,
+    /// The release the store is running after the update cycle — the target on a successful install,
+    /// the prior version on a rollback.
+    pub installed: ReleaseTag,
+    /// Whether the post-install self-test passed. `false` is a rollback the cloud should surface, not
+    /// an error.
+    pub self_test_passed: bool,
 }
 
 /// The store's request/response channel to the cloud
@@ -72,4 +92,16 @@ pub trait CloudSync: Send + Sync {
         &self,
         release: &ReleaseTag,
     ) -> impl Future<Output = Result<Vec<u8>, PortError>> + Send;
+
+    /// Reports the outcome of an update the edge applied — the version now running and whether the
+    /// self-test passed — so the cloud can track rollout-ring progress
+    /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Fire-and-forget from the edge's
+    /// point of view: a report that does not reach the cloud is retried or dropped, never a reason to
+    /// undo an install that already happened.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::invalid_argument`] if the cloud rejected the report as malformed, and
+    /// [`PortError::unavailable`] if the cloud could not be reached.
+    fn report(&self, report: &UpdateReport) -> impl Future<Output = Result<(), PortError>> + Send;
 }

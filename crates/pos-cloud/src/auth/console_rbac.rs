@@ -167,6 +167,15 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author campaigns and promotions, and generate voucher batches",
     },
+    /// Publish an OTA rollout — target version, ring, ramp, signing key, revocations — or engage its
+    /// kill switch ([ADR-0078](../adr/0078-sync-and-ota-closure.md)). Owner/Admin only, above the
+    /// `PublishConfig` norm that includes Ops: pushing a binary rollout to the fleet is not a
+    /// day-to-day publish.
+    PublishOta {
+        id: "console.ota.publish",
+        roles: [Owner, Admin],
+        description: "Publish an OTA rollout or engage its kill switch",
+    },
     /// Look up, export, and erase a data subject's personal data by id — the PDPD/GDPR subject-request
     /// tooling ([ADR-0076](../adr/0076-subject-request-tooling.md)). Owner-only: this is the console's
     /// most sensitive T1 surface (it can read and irreversibly erase a person's data), narrower than the

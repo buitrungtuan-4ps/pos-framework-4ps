@@ -46,6 +46,13 @@ pub struct FleetStoreRow {
     pub relay_backlog: i64,
     /// Unix ms the oldest still-pending queued order arrived, or `None` if the queue is empty.
     pub oldest_pending_at_ms: Option<i64>,
+    /// The binary version the store last reported running (ADR-0078), or `None` if it has never
+    /// reported.
+    pub installed_version: Option<String>,
+    /// Whether the store's last post-install self-test passed, or `None`.
+    pub self_test_ok: Option<bool>,
+    /// Unix ms of the store's most recent OTA report, or `None`.
+    pub reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -62,7 +69,10 @@ const FLEET_SELECT: &str = "SELECT \
      l.config_version_held, \
      ct.state -> 'history' -> -1 ->> 'id' AS config_version_published, \
      COALESCE(b.pending_count, 0) AS relay_backlog, \
-     b.oldest_pending_ms \
+     b.oldest_pending_ms, \
+     l.installed_version, \
+     l.self_test_ok, \
+     l.reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN config_trees ct ON ct.tenant_id = s.tenant_id AND ct.store_id = s.store_id \
@@ -133,5 +143,8 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         config_version_published: row.get(6),
         relay_backlog: row.get(7),
         oldest_pending_at_ms: row.get(8),
+        installed_version: row.get(9),
+        self_test_ok: row.get(10),
+        reported_at_ms: row.get(11),
     }
 }
