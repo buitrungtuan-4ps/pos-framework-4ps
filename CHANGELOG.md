@@ -123,6 +123,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Ingredients, recipes, and suppliers can be authored over the API** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). New `/admin/inventory/*` routes give a tenant
+  per-record CRUD over its ingredients, per-item/modifier recipes (bill of materials + auto-86
+  threshold), and supplier references, over the `InventoryStore` seam. An ingredient's and a
+  supplier's id is server-minted, so a client never supplies or forges one; a recipe's key is the menu
+  item it makes, so a recipe is a `PUT` upsert keyed by that item id (`201` when the item had no recipe
+  before, `200` when it replaced one). Reads are behind `console.data.read`; every write is behind a
+  new `console.inventory.manage` permission (Owner/Admin — the manage norm, since recipes are
+  proprietary process; Ops publishes but does not author them) and is audited by summary. The audit
+  trail records an ingredient and a supplier in full (reference data) but a recipe only by its item,
+  line count, and threshold — never the per-ingredient amounts, which are T2 configuration and stay in
+  the inventory store. The typed dashboard client gains the matching methods and types. **Upgrade
+  note:** one new console permission (`console.inventory.manage`, granted to Owner and Admin); no
+  protocol or migration change in this slice. The composed `inventory` node publish, edge apply, and
+  console screens follow in the same track.
 - **Inventory authoring has somewhere to live** (roadmap v2, Track M6;
   [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `InventoryStore` seam persists a
   tenant's ingredients, per-item/modifier recipes (with their auto-86 thresholds), and supplier

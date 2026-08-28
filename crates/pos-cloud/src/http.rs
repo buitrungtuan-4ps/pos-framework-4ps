@@ -70,12 +70,15 @@ use pos_proto::campaign::{
 };
 use pos_proto::determinism::ClockSource;
 use pos_proto::display::GridPosition;
-use pos_proto::enums::SalesChannel;
+use pos_proto::enums::{SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
-    TenantId, VoucherId,
+    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, StationId, StoreId, SubjectId,
+    SupplierId, TableId, TaxClassId, TenantId, VoucherId,
+};
+use pos_proto::inventory::{
+    PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::money::CurrencyCode;
@@ -136,6 +139,7 @@ use crate::floorplan::{
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::images::{self, ImagePipelineError};
 use crate::import;
+use crate::inventory::{InventoryStore, InventoryStoreError};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::people::{
@@ -6489,6 +6493,951 @@ fn campaign_error_response(error: &CampaignStoreError) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the campaign service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Inventory authoring (`/admin/inventory/*`, ADR-0079, Track M6) ----------------------------
+
+/// The state the inventory routes share: the inventory store they read and write, and the
+/// admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct InventoryState<Inv, A, C> {
+    inventory: Inv,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A create/update body for an ingredient. The id is **server-owned** — minted on create, the path id
+/// on update — so a client never supplies or forges it. `name` and `unit` are the wire ingredient's own
+/// fields, reused rather than re-declared.
+#[derive(Debug, Clone, Deserialize)]
+struct IngredientRequest {
+    tenant_id: String,
+    name: String,
+    unit: Open<UnitOfMeasure>,
+}
+
+/// A create-or-replace body for a recipe. The item it makes is the URL key — a recipe references an
+/// existing menu item or modifier, so its id is client-owned, unlike an ingredient's server-minted id.
+/// `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's own fields.
+#[derive(Debug, Clone, Deserialize)]
+struct RecipeRequest {
+    tenant_id: String,
+    #[serde(default)]
+    lines: Vec<PublishedRecipeLine>,
+    #[serde(default)]
+    auto_86_threshold: i64,
+}
+
+/// A create/update body for a supplier. The id is **server-owned**, exactly like an ingredient's.
+#[derive(Debug, Clone, Deserialize)]
+struct SupplierRequest {
+    tenant_id: String,
+    name: String,
+}
+
+/// A compact audit summary of an ingredient — reference data (id, name, unit), never a T1 field.
+#[derive(Debug, Clone, serde::Serialize)]
+struct IngredientAuditSummary {
+    ingredient_id: String,
+    name: String,
+    unit: String,
+}
+
+impl IngredientAuditSummary {
+    fn of(ingredient: &PublishedIngredient) -> Self {
+        Self {
+            ingredient_id: ingredient.id.to_string(),
+            name: ingredient.name.as_str().to_owned(),
+            unit: ingredient.unit.as_wire().to_owned(),
+        }
+    }
+}
+
+/// A compact audit summary of a recipe: the item, how many BOM lines it has, and its threshold — enough
+/// to see *that* a recipe changed, without reproducing the per-ingredient amounts (the recipe itself is
+/// proprietary process, T2) in the queryable audit trail. The BOM lives in the inventory store; the
+/// trail records that it moved.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RecipeAuditSummary {
+    item: String,
+    line_count: usize,
+    auto_86_threshold: i64,
+}
+
+impl RecipeAuditSummary {
+    fn of(recipe: &PublishedRecipe) -> Self {
+        Self {
+            item: recipe.item.to_string(),
+            line_count: recipe.lines.len(),
+            auto_86_threshold: recipe.auto_86_threshold,
+        }
+    }
+}
+
+/// A compact audit summary of a supplier — reference data (id, name).
+#[derive(Debug, Clone, serde::Serialize)]
+struct SupplierAuditSummary {
+    supplier_id: String,
+    name: String,
+}
+
+impl SupplierAuditSummary {
+    fn of(supplier: &PublishedSupplier) -> Self {
+        Self {
+            supplier_id: supplier.id.to_string(),
+            name: supplier.name.as_str().to_owned(),
+        }
+    }
+}
+
+/// Builds the inventory sub-router ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6).
+///
+/// Per-record CRUD over a tenant's ingredients, recipes, and supplier references. `GET` (list and
+/// by-id) is behind [`ConsolePermission::Read`]; the writes are behind
+/// [`ConsolePermission::ManageInventory`] and audited by summary — the ingredient/supplier reference
+/// data in full, a recipe by its item, line count, and threshold only (never the BOM amounts, which are
+/// proprietary process). An ingredient's and a supplier's id is server-minted; a recipe's key is the
+/// menu item it makes, so a recipe is a `PUT` upsert keyed by the path id. Publishing the composed
+/// `inventory` node to a store is a separate route that reuses `PublishConfig` (a later slice).
+pub fn inventory_router<Inv, A, C>(
+    inventory: Inv,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/inventory/ingredients",
+            get(admin_list_ingredients::<Inv, A, C>).post(admin_create_ingredient::<Inv, A, C>),
+        )
+        .route(
+            "/admin/inventory/ingredients/{ingredient_id}",
+            get(admin_get_ingredient::<Inv, A, C>)
+                .put(admin_update_ingredient::<Inv, A, C>)
+                .delete(admin_delete_ingredient::<Inv, A, C>),
+        )
+        .route(
+            "/admin/inventory/recipes",
+            get(admin_list_recipes::<Inv, A, C>),
+        )
+        .route(
+            "/admin/inventory/recipes/{item_id}",
+            get(admin_get_recipe::<Inv, A, C>)
+                .put(admin_upsert_recipe::<Inv, A, C>)
+                .delete(admin_delete_recipe::<Inv, A, C>),
+        )
+        .route(
+            "/admin/inventory/suppliers",
+            get(admin_list_suppliers::<Inv, A, C>).post(admin_create_supplier::<Inv, A, C>),
+        )
+        .route(
+            "/admin/inventory/suppliers/{supplier_id}",
+            get(admin_get_supplier::<Inv, A, C>)
+                .put(admin_update_supplier::<Inv, A, C>)
+                .delete(admin_delete_supplier::<Inv, A, C>),
+        )
+        .with_state(InventoryState {
+            inventory,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Validates an ingredient request and builds the ingredient with the given (server-owned) id. Returns
+/// the fault message for a `400` rather than the whole response, so the error type stays small.
+fn build_ingredient(
+    request: &IngredientRequest,
+    id: IngredientId,
+) -> Result<PublishedIngredient, &'static str> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("an ingredient name is required");
+    }
+    if request.unit.is_unspecified() || request.unit.is_unrecognised() {
+        return Err("an ingredient names an unknown unit of measure");
+    }
+    Ok(PublishedIngredient {
+        id,
+        name: DisplayName::new(name),
+        unit: request.unit.clone(),
+    })
+}
+
+/// Validates a recipe request and builds the recipe for the given (client-owned, path) item.
+fn build_recipe(
+    request: &RecipeRequest,
+    item: MenuItemId,
+) -> Result<PublishedRecipe, &'static str> {
+    if request.auto_86_threshold < 0 {
+        return Err("an auto-86 threshold cannot be negative");
+    }
+    if request
+        .lines
+        .iter()
+        .any(|line| line.per_unit.as_milli() <= 0)
+    {
+        return Err("a recipe line must consume a positive amount");
+    }
+    Ok(PublishedRecipe {
+        item,
+        lines: request.lines.clone(),
+        auto_86_threshold: request.auto_86_threshold,
+    })
+}
+
+/// Validates a supplier request and builds the supplier with the given (server-owned) id.
+fn build_supplier(
+    request: &SupplierRequest,
+    id: SupplierId,
+) -> Result<PublishedSupplier, &'static str> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("a supplier name is required");
+    }
+    Ok(PublishedSupplier {
+        id,
+        name: DisplayName::new(name),
+    })
+}
+
+/// A super-admin lists a tenant's authored ingredients.
+async fn admin_list_ingredients<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.inventory.list_ingredients(tenant_id).await {
+        Ok(ingredients) => (StatusCode::OK, Json(ingredients)).into_response(),
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin reads one ingredient by id.
+async fn admin_get_ingredient<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(ingredient_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(ingredient_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or ingredient_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.inventory.list_ingredients(tenant_id).await {
+        Ok(ingredients) => match ingredients.into_iter().find(|i| i.id == ingredient_id) {
+            Some(ingredient) => (StatusCode::OK, Json(ingredient)).into_response(),
+            None => (StatusCode::NOT_FOUND, "no such ingredient").into_response(),
+        },
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin creates an ingredient; the server mints its id.
+async fn admin_create_ingredient<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<IngredientRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(ingredient_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(IngredientId::new)
+    else {
+        return inventory_entropy_unavailable();
+    };
+    let ingredient = match build_ingredient(&request, ingredient_id) {
+        Ok(ingredient) => ingredient,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state
+        .inventory
+        .upsert_ingredient(tenant_id, &ingredient)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.ingredient.create",
+                "ingredient",
+                &ingredient_id.to_string(),
+                None,
+                serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
+            )
+            .await;
+            (StatusCode::CREATED, Json(ingredient)).into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin updates an ingredient in place, by the path id.
+async fn admin_update_ingredient<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(ingredient_id): Path<String>,
+    Json(request): Json<IngredientRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(ingredient_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or ingredient_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_ingredients(tenant_id).await {
+        Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let Some(before) = before else {
+        return (StatusCode::NOT_FOUND, "no such ingredient").into_response();
+    };
+    let ingredient = match build_ingredient(&request, ingredient_id) {
+        Ok(ingredient) => ingredient,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state
+        .inventory
+        .upsert_ingredient(tenant_id, &ingredient)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.ingredient.update",
+                "ingredient",
+                &ingredient_id.to_string(),
+                serde_json::to_value(IngredientAuditSummary::of(&before)).ok(),
+                serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(ingredient)).into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin deletes an ingredient by id.
+async fn admin_delete_ingredient<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(ingredient_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(ingredient_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or ingredient_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_ingredients(tenant_id).await {
+        Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let Some(before) = before else {
+        return (StatusCode::NOT_FOUND, "no such ingredient").into_response();
+    };
+    match state
+        .inventory
+        .delete_ingredient(tenant_id, ingredient_id)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.ingredient.delete",
+                "ingredient",
+                &ingredient_id.to_string(),
+                serde_json::to_value(IngredientAuditSummary::of(&before)).ok(),
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's authored recipes.
+async fn admin_list_recipes<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.inventory.list_recipes(tenant_id).await {
+        Ok(recipes) => (StatusCode::OK, Json(recipes)).into_response(),
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin reads one recipe by the item it makes.
+async fn admin_get_recipe<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(item_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(item)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or item_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.inventory.list_recipes(tenant_id).await {
+        Ok(recipes) => match recipes.into_iter().find(|r| r.item == item) {
+            Some(recipe) => (StatusCode::OK, Json(recipe)).into_response(),
+            None => (StatusCode::NOT_FOUND, "no such recipe").into_response(),
+        },
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin creates or replaces the recipe for the path item (an upsert, since the item is the
+/// recipe's client-owned key). `201` when the item had no recipe before, `200` when it replaced one.
+async fn admin_upsert_recipe<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(item_id): Path<String>,
+    Json(request): Json<RecipeRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(item)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or item_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_recipes(tenant_id).await {
+        Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let recipe = match build_recipe(&request, item) {
+        Ok(recipe) => recipe,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.inventory.upsert_recipe(tenant_id, &recipe).await {
+        Ok(()) => {
+            let (action, status) = match &before {
+                Some(_) => ("inventory.recipe.update", StatusCode::OK),
+                None => ("inventory.recipe.create", StatusCode::CREATED),
+            };
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                action,
+                "recipe",
+                &item.to_string(),
+                before
+                    .as_ref()
+                    .and_then(|r| serde_json::to_value(RecipeAuditSummary::of(r)).ok()),
+                serde_json::to_value(RecipeAuditSummary::of(&recipe)).ok(),
+            )
+            .await;
+            (status, Json(recipe)).into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin deletes a recipe by the item it makes.
+async fn admin_delete_recipe<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(item_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(item)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or item_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_recipes(tenant_id).await {
+        Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let Some(before) = before else {
+        return (StatusCode::NOT_FOUND, "no such recipe").into_response();
+    };
+    match state.inventory.delete_recipe(tenant_id, item).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.recipe.delete",
+                "recipe",
+                &item.to_string(),
+                serde_json::to_value(RecipeAuditSummary::of(&before)).ok(),
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's authored suppliers.
+async fn admin_list_suppliers<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.inventory.list_suppliers(tenant_id).await {
+        Ok(suppliers) => (StatusCode::OK, Json(suppliers)).into_response(),
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin reads one supplier by id.
+async fn admin_get_supplier<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(supplier_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(supplier_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or supplier_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.inventory.list_suppliers(tenant_id).await {
+        Ok(suppliers) => match suppliers.into_iter().find(|s| s.id == supplier_id) {
+            Some(supplier) => (StatusCode::OK, Json(supplier)).into_response(),
+            None => (StatusCode::NOT_FOUND, "no such supplier").into_response(),
+        },
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin creates a supplier; the server mints its id.
+async fn admin_create_supplier<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<SupplierRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(supplier_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(SupplierId::new)
+    else {
+        return inventory_entropy_unavailable();
+    };
+    let supplier = match build_supplier(&request, supplier_id) {
+        Ok(supplier) => supplier,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.inventory.upsert_supplier(tenant_id, &supplier).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.supplier.create",
+                "supplier",
+                &supplier_id.to_string(),
+                None,
+                serde_json::to_value(SupplierAuditSummary::of(&supplier)).ok(),
+            )
+            .await;
+            (StatusCode::CREATED, Json(supplier)).into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin updates a supplier in place, by the path id.
+async fn admin_update_supplier<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(supplier_id): Path<String>,
+    Json(request): Json<SupplierRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(supplier_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or supplier_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_suppliers(tenant_id).await {
+        Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let Some(before) = before else {
+        return (StatusCode::NOT_FOUND, "no such supplier").into_response();
+    };
+    let supplier = match build_supplier(&request, supplier_id) {
+        Ok(supplier) => supplier,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.inventory.upsert_supplier(tenant_id, &supplier).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.supplier.update",
+                "supplier",
+                &supplier_id.to_string(),
+                serde_json::to_value(SupplierAuditSummary::of(&before)).ok(),
+                serde_json::to_value(SupplierAuditSummary::of(&supplier)).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(supplier)).into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin deletes a supplier by id.
+async fn admin_delete_supplier<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Path(supplier_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(supplier_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or supplier_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.inventory.list_suppliers(tenant_id).await {
+        Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
+        Err(error) => return inventory_error_response(&error),
+    };
+    let Some(before) = before else {
+        return (StatusCode::NOT_FOUND, "no such supplier").into_response();
+    };
+    match state
+        .inventory
+        .delete_supplier(tenant_id, supplier_id)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.supplier.delete",
+                "supplier",
+                &supplier_id.to_string(),
+                serde_json::to_value(SupplierAuditSummary::of(&before)).ok(),
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// The `503` for when the OS entropy needed to mint an inventory id is unavailable.
+fn inventory_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint an inventory id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the inventory service is unavailable",
+    )
+        .into_response()
+}
+
+/// Maps an inventory store failure to a retryable `503`, logging the detail rather than leaking it.
+fn inventory_error_response(error: &InventoryStoreError) -> Response {
+    tracing::error!(%error, "an inventory store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the inventory service is unavailable",
     )
         .into_response()
 }

@@ -417,6 +417,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Inventory (ADR-0079, Track M6): author a tenant's ingredients, per-item recipes (BOM), and
+        // supplier references (per-record CRUD, behind console.inventory.manage, audited by summary —
+        // never the recipe amounts). The composed `inventory` node publish is a separate route.
+        .merge(http::inventory_router(
+            store.inventory(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Vouchers (ADR-0077, Track M3): mint and list the distributable codes a voucher-kind
         // campaign redeems (behind console.campaigns.manage, audited by count only).
         .merge(http::voucher_router(

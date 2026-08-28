@@ -42,6 +42,8 @@ import type {
   EntityStatus,
   Enrolment,
   FleetStore,
+  Ingredient,
+  IngredientInput,
   InviteAdminResponse,
   ItemCategory,
   ItemSubcategory,
@@ -58,12 +60,16 @@ import type {
   OtaRollout,
   PublishRolloutRequest,
   ReconcileRun,
+  Recipe,
+  RecipeInput,
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
   ScheduledPublish,
   ScheduledPublishCreated,
   Store,
+  Supplier,
+  SupplierInput,
   TaskHealthReport,
   MediaSummary,
   SubjectExport,
@@ -706,6 +712,56 @@ export const api = {
     requestVoid(
       "DELETE",
       `/admin/config/scheduled/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
+  // Inventory & suppliers (ADR-0079, Track M6). Per-record CRUD behind console.inventory.manage (read
+  // behind console.data.read). An ingredient's and a supplier's id is server-owned, so create/update
+  // never send one; a recipe's key is the menu item it makes, so it is a `PUT` upsert keyed by that id.
+  listIngredients: (tenantId: string) =>
+    requestJson<Ingredient[]>("GET", `/admin/inventory/ingredients?${tenantQuery(tenantId)}`),
+  createIngredient: (tenantId: string, input: IngredientInput) =>
+    requestJson<Ingredient>("POST", "/admin/inventory/ingredients", {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  updateIngredient: (tenantId: string, id: string, input: IngredientInput) =>
+    requestJson<Ingredient>("PUT", `/admin/inventory/ingredients/${encodeURIComponent(id)}`, {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  deleteIngredient: (tenantId: string, id: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/inventory/ingredients/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
+  listRecipes: (tenantId: string) =>
+    requestJson<Recipe[]>("GET", `/admin/inventory/recipes?${tenantQuery(tenantId)}`),
+  // Create or replace the recipe for one item (the item is the URL key, not a body field).
+  upsertRecipe: (tenantId: string, item: string, input: RecipeInput) =>
+    requestJson<Recipe>("PUT", `/admin/inventory/recipes/${encodeURIComponent(item)}`, {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  deleteRecipe: (tenantId: string, item: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/inventory/recipes/${encodeURIComponent(item)}?${tenantQuery(tenantId)}`,
+    ),
+  listSuppliers: (tenantId: string) =>
+    requestJson<Supplier[]>("GET", `/admin/inventory/suppliers?${tenantQuery(tenantId)}`),
+  createSupplier: (tenantId: string, input: SupplierInput) =>
+    requestJson<Supplier>("POST", "/admin/inventory/suppliers", {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  updateSupplier: (tenantId: string, id: string, input: SupplierInput) =>
+    requestJson<Supplier>("PUT", `/admin/inventory/suppliers/${encodeURIComponent(id)}`, {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  deleteSupplier: (tenantId: string, id: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/inventory/suppliers/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
