@@ -62,6 +62,8 @@ import type {
   ReconcileRun,
   Recipe,
   RecipeInput,
+  QrGuardrails,
+  VendorPolicy,
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
@@ -713,6 +715,54 @@ export const api = {
       "DELETE",
       `/admin/config/scheduled/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
+  // Channels & payments (ADR-0080, Track M7). Per-store settings nodes read and published through the
+  // config tree behind console.config.publish; an absent node (null) means "no restriction". The edge
+  // applies channels/tender as gates and qr as its staff-confirmation source; vendor policy is
+  // authored here, its live marketplace loop deferred.
+  readChannels: (tenantId: string, storeId: string) =>
+    requestJson<{ enabled: SalesChannel[] } | null>(
+      "GET",
+      `/admin/config/channels?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishChannels: (tenantId: string, storeId: string, enabled: SalesChannel[]) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/channels", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      enabled,
+    }),
+  readTender: (tenantId: string, storeId: string) =>
+    requestJson<{ accepted: string[] } | null>(
+      "GET",
+      `/admin/config/tender?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishTender: (tenantId: string, storeId: string, accepted: string[]) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/tender", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      accepted,
+    }),
+  readQrGuardrails: (tenantId: string, storeId: string) =>
+    requestJson<QrGuardrails | null>(
+      "GET",
+      `/admin/config/qr?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishQrGuardrails: (tenantId: string, storeId: string, guardrails: QrGuardrails) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/qr", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      ...guardrails,
+    }),
+  readVendorPolicies: (tenantId: string, storeId: string) =>
+    requestJson<{ policies: VendorPolicy[] } | null>(
+      "GET",
+      `/admin/config/vendors?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishVendorPolicies: (tenantId: string, storeId: string, policies: VendorPolicy[]) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/vendors", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      policies,
+    }),
   // Inventory & suppliers (ADR-0079, Track M6). Per-record CRUD behind console.inventory.manage (read
   // behind console.data.read). An ingredient's and a supplier's id is server-owned, so create/update
   // never send one; a recipe's key is the menu item it makes, so it is a `PUT` upsert keyed by that id.

@@ -123,6 +123,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
+  Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
+  (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
+  sales channels it accepts, the payment methods it takes as tender, its QR ordering guardrails
+  (enabled, staff-confirmation, per-table limit, rate window, optional business hours), and its
+  per-marketplace vendor policies (add/remove rows of vendor, availability, prep minutes, enabled).
+  Each card publishes its own node and is store-scoped — an unpublished section stays never-blank, so
+  before publishing every channel and tender shows enabled and the QR defaults show through. Full
+  en/vi translations, and it reuses the existing `console.config.publish` permission. **Upgrade note:**
+  none — a console screen over the M7 publish routes; no protocol, migration, or permission change.
 - **Marketplace vendor policies can be authored per store** (roadmap v2, Track M7;
   [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/vendors` routes
   read and publish a store's per-marketplace policies as the `vendors` config node: per vendor, whether

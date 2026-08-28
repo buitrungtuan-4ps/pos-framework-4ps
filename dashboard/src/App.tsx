@@ -18,6 +18,7 @@ import { Audit } from "./screens/Audit";
 import { ApiKeys } from "./screens/ApiKeys";
 import { Campaigns } from "./screens/Campaigns";
 import { Catalog } from "./screens/Catalog";
+import { Channels } from "./screens/Channels";
 import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
@@ -90,6 +91,7 @@ export function App() {
           <Route path="/catalog" component={Catalog} />
           <Route path="/campaigns" component={Campaigns} />
           <Route path="/inventory" component={Inventory} />
+          <Route path="/channels" component={Channels} />
           <Route path="/media" component={Media} />
           <Route path="/layout" component={Layout} />
           <Route path="/floor" component={Floor} />
