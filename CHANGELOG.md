@@ -123,6 +123,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Layout screen becomes a visual per-channel editor** (roadmap v2, Track F3, F3 slice 4;
+  [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The 710-line hand-typed layout editor is
+  rebuilt on the F2 kit: per channel, positioned buttons render on a **device-shaped grid preview** at
+  their `(column, row)` (click a tile to edit it), a client-side **collision check** flags — and
+  stacks, never hides — two buttons sharing a cell, **copy-between-channels** clones a channel's
+  buttons to another (behind a confirm), and the flowing buttons (no grid slot) reorder through the
+  kit's `ReorderList` — F3 is its first consumer — writing each button's order. The button editor and
+  the display-taxonomy (display categories + sub-categories) move into kit `DataTable`s, a `Drawer`,
+  and a `ConfirmDialog`, and the `channel`/`StatusCell`/error helpers are now shared with the Catalog
+  sub-screens. **Upgrade note:** none — frontend-only; the `layout` config node, the compile/publish
+  path, and the backend contract are unchanged; moving a button still reprices nothing.
 - **The Menu screen is now a tabbed shell over its five kit sub-screens; the 1,898-line monolith is
   gone** (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)).
   `/catalog` now renders `CatalogShell` — one route, one nav entry, one breadcrumb, with a tab bar
