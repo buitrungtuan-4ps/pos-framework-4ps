@@ -17,6 +17,7 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::CatalogItem;
+use crate::cloud::{DailyRevenue, DailyRollup};
 use crate::registry::EntityStatus;
 use crate::translations::TranslationGrid;
 
@@ -110,11 +111,62 @@ pub fn translations_csv(grid: &TranslationGrid) -> Result<Vec<u8>, csv::Error> {
     finish(writer)
 }
 
+/// Serialises a store's daily activity rollups to CSV: one row per trading day with its total event
+/// count (ADR-0081, Track O4). Counts only — no money, no PII — so the route gates it on the ordinary
+/// read permission. `days` is expected oldest-first (as the windowed read returns them).
+///
+/// # Errors
+///
+/// A `csv::Error` if serialisation fails.
+pub fn rollups_csv(days: &[DailyRollup]) -> Result<Vec<u8>, csv::Error> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record(["business_date", "total_events"])?;
+    for day in days {
+        writer.write_record([day.business_date.clone(), day.total_events.to_string()])?;
+    }
+    finish(writer)
+}
+
+/// Serialises a store's daily revenue rollups to CSV: one row per trading day with the settled totals
+/// (ADR-0081, Track O4). Amounts are the store's currency's minor units. Revenue is **T2**, so the
+/// route gates this on `console.reports.revenue` and audits only the row count. The product mix
+/// (`by_item`) is two-dimensional and not flattened here — the daily totals are the export.
+///
+/// # Errors
+///
+/// A `csv::Error` if serialisation fails.
+pub fn revenue_csv(days: &[DailyRevenue]) -> Result<Vec<u8>, csv::Error> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record([
+        "business_date",
+        "currency_code",
+        "bills",
+        "gross",
+        "reductions",
+        "service_charge",
+        "tax",
+        "net",
+    ])?;
+    for day in days {
+        writer.write_record([
+            day.business_date.clone(),
+            day.currency_code.clone(),
+            day.bills.to_string(),
+            day.gross.to_string(),
+            day.reductions.to_string(),
+            day.service_charge.to_string(),
+            day.tax.to_string(),
+            day.net.to_string(),
+        ])?;
+    }
+    finish(writer)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{items_csv, translations_csv};
+    use super::{items_csv, revenue_csv, rollups_csv, translations_csv};
     use crate::catalog::{CatalogItem, ItemCategoryId};
     use crate::registry::EntityStatus;
     use crate::translations::TranslationGrid;
@@ -195,5 +247,43 @@ mod tests {
         // order.pay before order.void (BTreeMap order); the vi cell of order.void is an empty trailer.
         assert_eq!(lines.next().unwrap(), "order.pay,Pay,Trả");
         assert_eq!(lines.next().unwrap(), "order.void,Void,");
+    }
+
+    #[test]
+    fn rollups_csv_has_a_header_and_a_row_per_day() {
+        let day = crate::cloud::DailyRollup {
+            business_date: "2026-03-15".to_owned(),
+            total_events: 42,
+            by_type: BTreeMap::new(),
+        };
+        let csv = as_string(rollups_csv(&[day]).expect("serialise"));
+        let mut lines = csv.lines();
+        assert_eq!(lines.next().unwrap(), "business_date,total_events");
+        assert_eq!(lines.next().unwrap(), "2026-03-15,42");
+    }
+
+    #[test]
+    fn revenue_csv_carries_the_daily_totals() {
+        let day = crate::cloud::DailyRevenue {
+            business_date: "2026-03-15".to_owned(),
+            currency_code: "VND".to_owned(),
+            bills: 3,
+            gross: 300_000,
+            reductions: 20_000,
+            service_charge: 15_000,
+            tax: 24_000,
+            net: 319_000,
+            by_item: BTreeMap::new(),
+        };
+        let csv = as_string(revenue_csv(&[day]).expect("serialise"));
+        let mut lines = csv.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "business_date,currency_code,bills,gross,reductions,service_charge,tax,net"
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            "2026-03-15,VND,3,300000,20000,15000,24000,319000"
+        );
     }
 }

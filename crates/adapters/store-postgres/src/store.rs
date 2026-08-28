@@ -557,9 +557,17 @@ impl PostgresStore {
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
     /// current ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
     ///
-    /// Read as the trusted role, so it spans every tenant (RLS bypassed) — the projector maintains
-    /// the whole fleet's rollups, not one tenant's. A row whose ids are not ULIDs (impossible for
-    /// rows this adapter wrote) is skipped rather than failing the whole listing.
+    /// The fleet the rollup projector maintains: every **Active** store in the registry
+    /// ([ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)), read as the trusted role so it
+    /// spans every tenant (RLS bypassed).
+    ///
+    /// This reads the registry `stores` table rather than `SELECT DISTINCT … FROM events` (the O4
+    /// perf-wave-2 change, [ADR-0081](../../../../docs/adr/0081-reports-and-analytics.md)): a metadata
+    /// read instead of a full scan of the event log on every projector pass. A store is registered at
+    /// provisioning, so a store that has emitted events is registered; an archived store drops out of
+    /// the sweep (its stored rollup is left intact and still readable), and a registered store with no
+    /// events simply folds nothing. A row whose ids are not ULIDs (impossible for rows this adapter
+    /// wrote) is skipped rather than failing the whole listing.
     ///
     /// # Errors
     ///
@@ -567,7 +575,10 @@ impl PostgresStore {
     pub async fn list_active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {
         let connection = self.connection().await?;
         let rows = connection
-            .query("SELECT DISTINCT tenant_id, store_id FROM events", &[])
+            .query(
+                "SELECT tenant_id, store_id FROM stores WHERE status = 'active'",
+                &[],
+            )
             .await
             .map_err(unavailable)?;
         Ok(rows

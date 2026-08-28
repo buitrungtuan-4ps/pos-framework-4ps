@@ -33,7 +33,9 @@ import type {
   ConfigVersion,
   CreateApiKeyResponse,
   CreatedId,
+  DailyRevenue,
   DailyRollup,
+  XzReport,
   Device,
   DeviceProposalSummary,
   DisplayCategory,
@@ -205,6 +207,24 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
 
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
 
+/** `tenant_id` plus an optional rollup window (`from`/`to`/`limit`), as a query string. */
+const rollupWindowQuery = (
+  tenantId: string,
+  window?: { from?: string; to?: string; limit?: number },
+) => {
+  const params = new URLSearchParams(tenantQuery(tenantId));
+  if (window?.from) {
+    params.set("from", window.from);
+  }
+  if (window?.to) {
+    params.set("to", window.to);
+  }
+  if (window?.limit !== undefined) {
+    params.set("limit", String(window.limit));
+  }
+  return params.toString();
+};
+
 export const api = {
   // --- session / enrolment (ADR-0034) ---
   session: () => requestVoid("GET", "/admin/session"),
@@ -310,12 +330,30 @@ export const api = {
       flags,
     }),
 
-  // --- rollups (ADR-0060 admin read) ---
-  dailyRollups: (tenantId: string, storeId: string) =>
-    requestJson<DailyRollup[]>(
+  // --- rollups (ADR-0060 admin read; ADR-0081 windowing) ---
+  // A window is optional: absent, the server returns the most recent 90 trading days, never the
+  // store's entire history. `from`/`to` are inclusive YYYY-MM-DD business dates; `limit` caps the
+  // days returned (newest kept).
+  dailyRollups: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (window?.from) {
+      params.set("from", window.from);
+    }
+    if (window?.to) {
+      params.set("to", window.to);
+    }
+    if (window?.limit !== undefined) {
+      params.set("limit", String(window.limit));
+    }
+    return requestJson<DailyRollup[]>(
       "GET",
-      `/admin/stores/${encodeURIComponent(storeId)}/rollups/daily?${tenantQuery(tenantId)}`,
-    ),
+      `/admin/stores/${encodeURIComponent(storeId)}/rollups/daily?${params.toString()}`,
+    );
+  },
   // Reset a store's materialised rollup so the projector rebuilds it from the event log — the
   // "reset-cursor-and-replay" recovery lever (ADR-0036), behind console.config.publish. Idempotent.
   resetRollups: (tenantId: string, storeId: string) =>
@@ -323,6 +361,40 @@ export const api = {
       "POST",
       `/admin/stores/${encodeURIComponent(storeId)}/rollups/reset?${tenantQuery(tenantId)}`,
     ),
+  // Revenue & product-mix rollup (ADR-0081, Track O4) — prices are T2, so this is served only to
+  // Owner/Admin (console.reports.revenue) and a non-holder gets a 403. Same window as dailyRollups.
+  dailyRevenue: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (window?.from) {
+      params.set("from", window.from);
+    }
+    if (window?.to) {
+      params.set("to", window.to);
+    }
+    if (window?.limit !== undefined) {
+      params.set("limit", String(window.limit));
+    }
+    return requestJson<DailyRevenue[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/daily?${params.toString()}`,
+    );
+  },
+  // X/Z report (ADR-0081, spec gap D10) — omit businessDate for the current day (an X); pass a past
+  // day for its final Z. T2, so Owner/Admin only (console.reports.revenue); a non-holder gets 403.
+  xzReport: (tenantId: string, storeId: string, businessDate?: string) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (businessDate) {
+      params.set("business_date", businessDate);
+    }
+    return requestJson<XzReport>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/reports/xz?${params.toString()}`,
+    );
+  },
 
   // --- device onboarding (ADR-0041) ---
   listProposals: (tenantId: string) =>
@@ -862,6 +934,25 @@ export const api = {
     downloadCsv(`/admin/catalog/export/items?${tenantQuery(tenantId)}`, "items.csv"),
   exportTranslationsCsv: (tenantId: string) =>
     downloadCsv(`/admin/translations/export?${tenantQuery(tenantId)}`, "translations.csv"),
+  // Reports CSV exports (ADR-0081, Track O4), windowed like the reads. Revenue is T2 (Owner/Admin).
+  exportRollupsCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/rollups/export?${rollupWindowQuery(tenantId, window)}`,
+      "rollups.csv",
+    ),
+  exportRevenueCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/export?${rollupWindowQuery(tenantId, window)}`,
+      "revenue.csv",
+    ),
   // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
   dryRunTranslationsCsv: (tenantId: string, file: Blob) =>
     requestUpload<TranslationImportReport>(

@@ -202,6 +202,12 @@ console_permissions! {
         roles: [Owner, Admin, Ops, Viewer],
         description: "Read tenant data: reports, registry, configuration, catalog, translations",
     },
+    /// Read revenue and product-mix reports — prices are T2, so this is narrower than `Read`.
+    ReadRevenue {
+        id: "console.reports.revenue",
+        roles: [Owner, Admin],
+        description: "Read revenue and product-mix reports (prices are commercially sensitive, T2)",
+    },
 }
 
 /// Whether `role` is granted `permission`. The one authorisation question every `/admin` route asks;
@@ -280,6 +286,7 @@ mod tests {
             ConsolePermission::ManageTranslations,
             ConsolePermission::ManagePeople,
             ConsolePermission::ManageInventory,
+            ConsolePermission::ReadRevenue,
             ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
         ] {

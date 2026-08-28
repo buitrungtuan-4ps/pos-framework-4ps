@@ -123,6 +123,85 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Reports & analytics gets an architecture: windowed rollups, revenue, and X/Z close semantics**
+  (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Frames the reporting
+  track additively over the one materialised-rollup projector (ADR-0036): date-range/windowed reads
+  so the API stops shipping a store's entire history; a registry-driven projector that reads the
+  Active-store list instead of scanning `SELECT DISTINCT … FROM events` every pass (perf wave 2);
+  revenue and product-mix rollups decoded from the settlement and line-fired events the projector
+  already ingests, gated behind a new `console.reports.revenue` permission because prices are **T2**;
+  and a resolution of the long-open **D10** spec gap — an X report is a non-resetting on-demand read of
+  the current period, a Z report is a one-time immutable per-business-date close artefact served
+  verbatim thereafter. Deliberately out of scope and flagged: per-employee performance analytics (an
+  employee-monitoring boundary the org and the metrics port both draw), the scale-only perf reshapes
+  (dirty-marking, windowed storage blobs, config-blob delta, request-latency histograms), and the
+  country-specific statutory report layouts. **Upgrade note:** none — an ADR; the routes, permission,
+  and projector changes land in the following slices, all additive.
+- **Rollup reads take a date-range window, and no longer ship a store's whole history** (roadmap v2,
+  Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Both daily-rollup routes —
+  `GET /v1/stores/{store_id}/rollups/daily` and `GET /admin/stores/{store_id}/rollups/daily` — accept
+  `?from=&to=&limit=`: an inclusive `YYYY-MM-DD` business-date range and a cap on the days returned
+  (the newest kept, still oldest-first). A malformed date, `from` after `to`, or a zero `limit` is a
+  `400`; `limit` is clamped to a year. When a read names no window it now returns the **most recent 90
+  trading days** rather than every retained day. The dashboard's `dailyRollups` client takes an
+  optional window and is otherwise unchanged. **Upgrade note:** a rollups read with no query params
+  now returns at most the last 90 trading days instead of the full history — pass an explicit
+  `from`/`to`/`limit` (up to 366 days) to widen it. Counts only; no PII, no protocol/migration change.
+- **The rollup projector reads the registry instead of scanning the event log** (roadmap v2, Track O4
+  "perf wave 2"; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The background projector decided
+  which stores to fold from `SELECT DISTINCT tenant_id, store_id FROM events` — a full scan of the
+  event table on every 30-second pass. It now lists the registry's **Active** stores (ADR-0065), a
+  metadata read. "The fleet" the projector maintains is now the provisioned, active stores: a store is
+  registered at provisioning, so an event-bearing store is registered; an archived store drops out of
+  the sweep (its stored rollup is left intact and still readable), and a registered store with no
+  events folds nothing. **Upgrade note:** none for the API — the rollup contents and read routes are
+  unchanged; the only difference is which stores the projector visits. No protocol, migration, or
+  permission change.
+- **Revenue and product-mix rollups, behind a new revenue permission** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The projector now decodes the money-bearing
+  events it already ingests — `billing.bill.settled` (subtotal, reductions, service charge, tax,
+  total_due) and `sales.order_line.added` (per-item ordered quantity and value) — into a parallel
+  per-trading-day `DailyRevenue` rollup, served windowed at `GET /admin/stores/{store_id}/revenue/daily`.
+  Because prices are **T2**, the route and the rollup are gated behind a new **`console.reports.revenue`**
+  permission (Owner/Admin only — Ops and Viewer are refused), narrower than the counts read's
+  `console.data.read`. Revenue is recognised from settlement; the product mix is the **gross ordered**
+  mix (before voids/comps, which the line events do not carry back to a menu item), so it reads menu
+  popularity, not per-item recognised revenue. No customer or employee identifier enters the rollup.
+  **Upgrade note:** a new permission `console.reports.revenue` (granted to Owner and Admin by default);
+  no migration (the revenue rollup rides the existing `rollups` blob under a `#[serde(default)]` field)
+  and no protocol change. Revenue accrues from the projector's cursor forward; reset a store's rollup
+  (the ADR-0036 lever) to backfill its history.
+- **X and Z reports, resolving the long-open D10 spec gap** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). `GET /admin/stores/{store_id}/reports/xz`
+  returns a store trading day's report bundling its activity counts, revenue, and a new cash-drawer
+  summary (opening float, paid-in/out, shifts opened/closed, and the blind-close expected/counted/
+  variance totals, folded from the shift and drawer events). The **D10** questions are settled: an
+  **X** report is the current (open) day's running totals — non-resetting, recomputed each call; a
+  **Z** report is a **closed** day's totals — a past day that no longer receives events, so the same
+  read returns the same figures verbatim thereafter. `kind` is `"X"` for the latest day present and
+  `"Z"` for any earlier day; omit `business_date` for the current-day X. It is the operational
+  daily-close record, **not** the country module's legal invoice artefact. T2 (it exposes money), so
+  gated behind `console.reports.revenue`. Dashboard `XzReport`/`DailyCash` types + `xzReport` client.
+  **Upgrade note:** none beyond the `console.reports.revenue` permission already introduced with the
+  revenue rollup; the cash summary rides the same `#[serde(default)]` rollup blob (no migration).
+- **Reports export to CSV** (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md),
+  reusing the ADR-0075 rail). `GET /admin/stores/{store_id}/rollups/export` streams the windowed daily
+  activity counts as a CSV (behind `console.data.read`), and `GET
+  /admin/stores/{store_id}/revenue/export` streams the windowed daily revenue totals (behind
+  `console.reports.revenue`, because prices are **T2**). Both accept the same `?from=&to=&limit=`
+  window as the reads, set `content-disposition: attachment`, and are audited by **row count only** —
+  never the contents (`reports.export_rollups` / `reports.export_revenue`). **Upgrade note:** none —
+  additive read/export routes reusing existing permissions; no protocol or migration change.
+- **The Reports screen is rebuilt into a real analytics view** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The console's home screen gains a date-range
+  window (defaulting to the last 90 trading days), inline-SVG trend charts (no chart library — nothing
+  past the CSP to load), and a CSV export button on each section. For Owner/Admin (revenue is **T2**,
+  so the panels are hidden for Ops/Viewer, matching the server's `console.reports.revenue` gate) it
+  adds a revenue table and trend, a product-mix top-10 (by ordered value across the window), an X/Z
+  report card (today's X or a chosen closed day's Z, with the cash-drawer expected/counted/variance),
+  and a cross-store comparison of revenue across the tenant's active stores. Counts stay visible to
+  every role. Full en/vi. **Upgrade note:** none — a console screen over the O4 read/export routes; no
+  protocol, migration, or permission change.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the

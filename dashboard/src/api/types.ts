@@ -78,6 +78,58 @@ export interface DailyRollup {
   readonly by_type: Record<string, number>;
 }
 
+/** One menu item's gross ordered contribution on a trading day (part of `DailyRevenue`, ADR-0081). */
+export interface ItemMix {
+  readonly name: string;
+  /** Ordered quantity in thousandths of a unit. */
+  readonly ordered_qty_milli: number;
+  /** Ordered line total, minor units — gross, before voids/comps. */
+  readonly ordered_value: number;
+}
+
+/**
+ * One day's revenue rollup for a store (ADR-0081, Track O4). Amounts are the store's single
+ * currency's minor units. Revenue is **T2** — served only behind `console.reports.revenue`.
+ */
+export interface DailyRevenue {
+  readonly business_date: string;
+  readonly currency_code: string;
+  readonly bills: number;
+  readonly gross: number;
+  readonly reductions: number;
+  readonly service_charge: number;
+  readonly tax: number;
+  /** `total_due` summed — the headline revenue figure. */
+  readonly net: number;
+  readonly by_item: Record<string, ItemMix>;
+}
+
+/** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
+export interface DailyCash {
+  readonly business_date: string;
+  readonly currency_code: string;
+  readonly opening_float: number;
+  readonly paid_in: number;
+  readonly paid_out: number;
+  readonly shifts_opened: number;
+  readonly shifts_closed: number;
+  readonly expected: number;
+  readonly counted: number;
+  readonly variance: number;
+}
+
+/**
+ * An X or Z report for a store's trading day (ADR-0081, spec gap D10). `kind` is `"X"` (current,
+ * non-resetting) or `"Z"` (a closed day, immutable). Bundles activity, revenue, and cash; T2.
+ */
+export interface XzReport {
+  readonly kind: "X" | "Z";
+  readonly business_date: string;
+  readonly activity: DailyRollup;
+  readonly revenue: DailyRevenue;
+  readonly cash: DailyCash;
+}
+
 /** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
 export interface ActivationCode {
   readonly activation_code: string;

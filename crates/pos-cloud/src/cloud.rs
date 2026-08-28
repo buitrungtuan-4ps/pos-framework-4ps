@@ -52,6 +52,97 @@ pub struct DailyRollup {
     pub by_type: BTreeMap<String, u64>,
 }
 
+/// A day's **revenue** for one store, folded from the settlement and line events
+/// ([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4).
+///
+/// Revenue is recognised from `billing.bill.settled` (the settled totals); the product mix is the
+/// **gross ordered** mix from `sales.order_line.added` — units and value as ordered, **before** voids
+/// and comps are netted (which the line events do not carry back to a menu item), so it reads menu
+/// popularity, not per-item recognised revenue. All amounts are the store's single currency's minor
+/// units (`docs/pos-spec.md` §19). Prices are **T2**: this rollup, and every route that serves it, is
+/// gated behind `console.reports.revenue`. It carries no customer or employee identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DailyRevenue {
+    /// The store's trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// ISO 4217 code of the store's currency, or empty until the first settled bill sets it.
+    pub currency_code: String,
+    /// Settled bills on the day.
+    pub bills: u64,
+    /// Sum of settled subtotals (before reductions), minor units.
+    pub gross: i64,
+    /// Sum of reductions (discounts + comps), minor units.
+    pub reductions: i64,
+    /// Sum of service charge, minor units.
+    pub service_charge: i64,
+    /// Sum of tax, minor units.
+    pub tax: i64,
+    /// Sum of `total_due` — what guests owed — minor units. The headline "revenue" figure.
+    pub net: i64,
+    /// Gross ordered mix, keyed by `menu_item_id`, ordered by key for determinism.
+    pub by_item: BTreeMap<String, ItemMix>,
+}
+
+/// One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct ItemMix {
+    /// The most recent display name seen for the item, for a human-readable report.
+    pub name: String,
+    /// Sum of ordered quantity, in thousandths of a unit (`Quantity::milli`).
+    pub ordered_qty_milli: i64,
+    /// Sum of ordered line totals, minor units — gross, before voids/comps.
+    pub ordered_value: i64,
+}
+
+/// A day's **cash-drawer** summary for one store, folded from the shift and drawer events
+/// ([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4). Amounts are the store's
+/// single currency's minor units. Part of an X/Z report; T2 (it exposes money).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct DailyCash {
+    /// The store's trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// ISO 4217 code, or empty until a cash event on the day sets it.
+    pub currency_code: String,
+    /// Sum of opening floats across shifts opened on the day.
+    pub opening_float: i64,
+    /// Sum of paid-in movements.
+    pub paid_in: i64,
+    /// Sum of paid-out movements.
+    pub paid_out: i64,
+    /// Shifts opened on the day.
+    pub shifts_opened: u64,
+    /// Shifts closed on the day.
+    pub shifts_closed: u64,
+    /// Sum of expected drawer amounts across closes.
+    pub expected: i64,
+    /// Sum of counted amounts across closes (the blind counts).
+    pub counted: i64,
+    /// Sum of variance (counted − expected) across closes; negative is short.
+    pub variance: i64,
+}
+
+/// An **X or Z report** for one store's trading day (ADR-0081, Track O4, resolving spec gap D10).
+///
+/// An **X** report is the current (open) day's running totals — non-resetting, recomputed each call.
+/// A **Z** report is a closed day's totals — a day that no longer receives events, so the same read
+/// returns the same figures verbatim thereafter. `kind` is `"X"` for the latest day present and
+/// `"Z"` for any earlier (closed) day. It bundles the day's activity counts, revenue, and cash
+/// summary; T2, so it is served only behind `console.reports.revenue`. Not a legal fiscal document —
+/// that stays with the country module's invoice range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct XzReport {
+    /// `"X"` (current, interim) or `"Z"` (closed, final).
+    pub kind: String,
+    /// The trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// The day's event-activity counts.
+    pub activity: DailyRollup,
+    /// The day's recognised revenue and product mix.
+    pub revenue: DailyRevenue,
+    /// The day's cash-drawer summary.
+    pub cash: DailyCash,
+}
+
 /// The cloud's application layer over an [`EventStore`].
 ///
 /// Cloneable and shareable — every clone talks to the same store.
