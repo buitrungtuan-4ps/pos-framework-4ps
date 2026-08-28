@@ -27,8 +27,10 @@ use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
 use pos_core::business_date::{CutoffHour, StoreTimeZone};
+use pos_core::campaign::campaigns_from_published;
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
+use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
@@ -178,6 +180,18 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<TaxRateTable>(&text).ok())
     {
         session.tax_rates = tax_rates;
+    }
+    // The `campaigns` node the campaign publish writes (ADR-0077, Track M3): the store's authored
+    // promotions, converted to the runtime `Campaign`s the pricing engine (`pos_core::campaign`)
+    // evaluates. Absent or unparseable leaves the base list untouched — a bad publish never drops a
+    // trading store's promotions. (Applying them to a live bill — building the eval context, timing,
+    // and voucher redemption — is the flagged follow-up; this delivers the campaigns to the session.)
+    if let Some(published) = document
+        .get("campaigns")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedCampaigns>(&text).ok())
+    {
+        session.campaigns = campaigns_from_published(&published);
     }
     // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
@@ -606,6 +620,69 @@ mod tests {
         assert!(
             !no_node.tax_rates.is_empty(),
             "an absent tax node leaves the table"
+        );
+    }
+
+    #[test]
+    fn a_campaigns_document_rebuilds_the_session_and_the_engine_prices_it() {
+        use pos_core::campaign::{Connectivity, EvalContext, LocalTime, Timing, Weekday, evaluate};
+        use pos_proto::campaign::{
+            PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedCampaigns,
+            PublishedConditions,
+        };
+        use pos_proto::ids::CampaignId;
+        use pos_proto::money::{Money, Ratio, Rounding};
+
+        let node = PublishedCampaigns::new().with(PublishedCampaign {
+            id: CampaignId::new(Ulid::from_u128(0xC1)),
+            name: DisplayName::new("10% off the bill"),
+            kind: PublishedCampaignKind::BillLevel,
+            priority: 0,
+            exclusion_group: None,
+            action: PublishedAction::Percentage {
+                rate: Ratio::percent(10).expect("percent"),
+            },
+            conditions: PublishedConditions::default(),
+            quota_remaining: None,
+        });
+        let document =
+            serde_json::json!({ "campaigns": serde_json::to_value(&node).expect("campaigns") });
+
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(
+            rebuilt.campaigns.len(),
+            1,
+            "the published campaign reaches the session"
+        );
+
+        // The delivered campaign is a real runtime `Campaign`: the engine prices a bill against it —
+        // 10% off 100,000 = 10,000 — proving the wire→session→engine path end to end.
+        let money = Money::new(CurrencyCode::VND, 100_000);
+        let ctx = EvalContext {
+            base: money,
+            bill_total: money,
+            channel: SalesChannel::DineIn,
+            now: LocalTime {
+                weekday: Weekday::Monday,
+                minute_of_day: 12 * 60,
+            },
+            connectivity: Connectivity::Online,
+            rounding: Rounding::HalfUp,
+        };
+        let applied = evaluate(&rebuilt.campaigns, Timing::PaymentStart, &ctx).expect("evaluate");
+        assert_eq!(applied.len(), 1);
+        assert_eq!(
+            applied.first().map(|reduction| reduction.reduction),
+            Some(Money::new(CurrencyCode::VND, 10_000))
+        );
+
+        // No `campaigns` node: the base list survives (a bad publish never drops a store's promotions).
+        let seeded = EdgeSession::bootstrap().with_campaigns(rebuilt.campaigns.clone());
+        let no_node = session_from_config(&seeded, &serde_json::json!({ "other": true }));
+        assert_eq!(
+            no_node.campaigns.len(),
+            1,
+            "an absent campaigns node leaves the list"
         );
     }
 

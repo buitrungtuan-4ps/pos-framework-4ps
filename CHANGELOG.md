@@ -138,11 +138,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `console.data.read` and write behind a **new `console.campaigns.manage`** permission (Owner/Admin),
   validating each campaign's shape and auditing `campaign.create`/`update`/`delete` with a summary
   (id, name, kind, priority) that never reproduces the discount terms in the queryable trail. The id
-  is server-owned. Publishing the `campaigns` node to a store, edge apply, voucher batch generation,
-  effective-dated scheduling, and publish preview/diff follow in the same track. **Upgrade note:** an
-  additive migration (`0032_campaigns`, rollback safe) and one new permission
-  (`console.campaigns.manage`, granted to Owner and Admin); no protocol change, and a store with no
-  `campaigns` node published runs no promotions, exactly as today.
+  is server-owned. `PUT /admin/config/campaigns` (behind `console.config.publish`, like every other
+  node publish) assembles the tenant's campaigns into the `campaigns` config-tree node, and the edge's
+  `session_from_config` parses it into `EdgeSession.campaigns` under the never-blank rule — a bad or
+  absent publish never drops a trading store's promotions. Voucher batch generation, effective-dated
+  scheduling, publish preview/diff, and the dashboard screen follow in the same track. **Applying**
+  the delivered campaigns to a live bill (building the eval context, the timing split, and voucher
+  redemption) is a flagged follow-up — it is a runtime-pricing change distinct from authoring, and a
+  partial version would break §7's one-line-per-campaign rule. **Upgrade note:** an additive migration
+  (`0032_campaigns`, rollback safe) and one new permission (`console.campaigns.manage`, Owner/Admin);
+  no protocol change (the `campaigns` node is an additive Store-layer key), and a store with no node
+  published runs no promotions, exactly as today.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

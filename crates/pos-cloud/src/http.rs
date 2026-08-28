@@ -106,7 +106,7 @@ use crate::auth::enrol::{
 use crate::auth::password::hash_password;
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
-use crate::campaigns::{CampaignStore, CampaignStoreError};
+use crate::campaigns::{CampaignStore, CampaignStoreError, to_node as campaigns_to_node};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
@@ -6239,6 +6239,175 @@ fn campaign_error_response(error: &CampaignStoreError) -> Response {
         "the campaign service is unavailable",
     )
         .into_response()
+}
+
+// --- Campaign publish (`/admin/config/campaigns`, ADR-0077, Track M3) --------------------------
+
+/// The collaborators the campaign-publish route needs: the campaign store the promotions are read
+/// from, the config-tree store the `campaigns` node is written onto, plus the admin/clock/audit every
+/// write carries.
+#[derive(Clone)]
+struct ConfigCampaignsState<Camp, Cfg, A, C> {
+    campaigns: Camp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `PUT /admin/config/campaigns` body: the `(tenant, store)` to push the tenant's authored campaigns
+/// to. Like every other node publish, the campaigns come from what is authored, not the body.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishCampaignsRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the campaign-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// One route: assemble the tenant's authored campaigns into a `PublishedCampaigns`, write it as the
+/// store's `campaigns` config node, and version it through the config tree — the same node-merge the
+/// tax/floor/menu publishes use, so the other Store-level keys survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to `EdgeSession::campaigns`.
+pub fn config_campaigns_router<Camp, Cfg, A, C>(
+    campaigns: Camp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/campaigns",
+            axum::routing::put(admin_publish_campaigns::<Camp, Cfg, A, C>),
+        )
+        .with_state(ConfigCampaignsState {
+            campaigns,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
+/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
+async fn admin_publish_campaigns<Camp, Cfg, A, C>(
+    State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishCampaignsRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `campaigns` key on the store's Store layer (index 2) and re-publish it, preserving the
+    // other Store-level keys (`menu`, `tax`, `permissions`, `floor`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("campaigns".to_owned(), campaigns_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.campaigns.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(campaigns.len()).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
 }
 
 // --- Media (ADR-0075, Track M5): upload, serve, list, and delete image renditions -----------------

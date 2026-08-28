@@ -430,6 +430,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Campaign publish (ADR-0077, Track M3): assemble the tenant's authored campaigns into the
+        // store's `campaigns` config node, so the edge holds them for its pricing engine.
+        .merge(http::config_campaigns_router(
+            store.campaigns(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(

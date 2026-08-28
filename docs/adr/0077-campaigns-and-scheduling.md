@@ -107,6 +107,14 @@ and reads reuse `Read`. Deny-by-default and the role table are otherwise unchang
   already exist) better landed with the payment path than with authoring.
 
 **Deferred / flagged follow-ups.**
+- **Live bill-flow evaluation of campaigns.** This track *delivers* the `campaigns` node to
+  `EdgeSession.campaigns` (and proves the wire→session→engine path in a test), but wiring
+  `campaign::evaluate` into the edge's live sale — building the `EvalContext` from the bill and clock,
+  honouring the line-add vs payment-start timing split, and rendering each applied campaign as its own
+  bill line (§7) — is a runtime-pricing change distinct from authoring. It is deferred deliberately:
+  the edge bill assembly today carries a single scalar `bill_discount`, and a partial integration that
+  summed campaign reductions into it would violate §7's one-line-per-campaign rule, so this lands whole
+  with the sale flow rather than half-done here.
 - The online voucher **redemption** endpoint (atomic reserve→redeem consuming a minted code).
 - Combo-price and free-item campaign **actions**, and customer-group conditions — named in §7 but
   dependent on the menu/line model the `decide` orchestration carries (the engine already flags these).

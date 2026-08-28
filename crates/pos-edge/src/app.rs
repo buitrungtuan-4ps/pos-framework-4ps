@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::billing::{self, BillInput, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
-use pos_core::campaign::Connectivity;
+use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::CapabilityContext;
 use pos_core::decision::{
     Actor, BillCommand, DecisionCtx, Effect, LineCommand, ShiftCommand, TableCommand, decide_bill,
@@ -199,6 +199,13 @@ pub struct EdgeSession {
     /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
     /// own fallback.
     pub stations: StationPlan,
+    /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
+    /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
+    /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
+    /// promotions until the console publishes them, the same safe default as the menu. (The node is
+    /// delivered to the session here; wiring `evaluate` into the live bill flow is the flagged M3
+    /// follow-up.)
+    pub campaigns: Vec<Campaign>,
 }
 
 impl EdgeSession {
@@ -237,6 +244,7 @@ impl EdgeSession {
             staff: StaffRoster::new(),
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
+            campaigns: Vec::new(),
         }
     }
 
@@ -260,6 +268,15 @@ impl EdgeSession {
     #[must_use]
     pub fn with_tax_rates(mut self, tax_rates: TaxRateTable) -> Self {
         self.tax_rates = tax_rates;
+        self
+    }
+
+    /// Installs the store's campaigns, for a test or the example. The real store's promotions arrive
+    /// from the cloud config tree's `campaigns` node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md));
+    /// this builder seeds them without a cloud.
+    #[must_use]
+    pub fn with_campaigns(mut self, campaigns: Vec<Campaign>) -> Self {
+        self.campaigns = campaigns;
         self
     }
 
