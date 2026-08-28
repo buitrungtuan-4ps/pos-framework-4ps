@@ -98,6 +98,11 @@ where
     S: EventStore + IntakeLedger + Send + Sync,
     Q: QueueNumberAuthority,
 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear intake flow: validate, dedupe, channel-gate, reprice each line, then \
+                  open the order and allocate the queue number in one transaction"
+    )]
     async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
         if order.lines.is_empty() {
             return Err(PortError::invalid_argument(
@@ -130,6 +135,15 @@ where
 
         let session = self.edge.session();
         let channel = order.sales_channel.known();
+        // The store must accept this sales channel (ADR-0080, M7). A store with no `channels` node
+        // published has no restriction; once one is published, an order on a channel it does not list
+        // is refused up front rather than priced and opened.
+        if !session.channel_enabled(channel) {
+            return Err(PortError::failed_precondition(
+                PortName::OrderIn,
+                "this store does not accept orders on that sales channel",
+            ));
+        }
         let mut priced_lines: Vec<(PricedLine, bool)> = Vec::with_capacity(order.lines.len());
         let mut total = Money::zero(session.currency);
         let mut repriced = false;

@@ -118,6 +118,16 @@ where
     else {
         return bad_request("a payment method must be a known method");
     };
+    // The store must accept every tendered method (ADR-0080, M7). A store with no `tender` node
+    // published accepts any known method; once one is published, a payment by a method it does not
+    // list is refused before the bill is settled.
+    let session = edge.session();
+    if !payments
+        .iter()
+        .all(|payment| session.tender_accepted(payment.method))
+    {
+        return bad_request("this store does not accept one of those payment methods as tender");
+    }
     respond(
         edge.settle_bill(dev_actor(), bill_id, payments, request.tips)
             .await,

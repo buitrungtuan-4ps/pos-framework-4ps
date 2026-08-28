@@ -123,6 +123,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A store can now be told which channels and tenders it accepts, and the edge enforces it** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT
+  /admin/config/channels` and `.../tender` routes read and publish a store's enabled sales channels
+  and accepted payment methods as the `channels` and `tender` config nodes (behind
+  `console.config.publish`, audited; authoring rejects an unrecognised token up front). The edge
+  applies both in `session_from_config`: order intake refuses a sales channel the store does not list,
+  and bill settlement refuses a payment method it does not accept. Opt-in and never-blank — a store
+  that has published neither node trades on every channel and takes any known tender, exactly as before
+  M7. **Upgrade note:** none — additive settings routes and edge gates; no protocol, migration, or
+  permission change, and an absent node imposes no restriction.
 - **Channels and tender get authorable node types, so a store can be told which it accepts** (roadmap
   v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). Today a sales channel is enabled
   only implicitly (by the menu carrying a row for it) and the accepted payment methods are fixed in the

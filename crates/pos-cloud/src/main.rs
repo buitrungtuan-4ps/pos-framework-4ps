@@ -521,6 +521,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Channels & tender (ADR-0080, Track M7): author which sales channels a store accepts and
+        // which payment methods it takes, as the `channels` and `tender` settings nodes; the edge
+        // applies each as a policy gate. Publish behind console.config.publish, audited.
+        .merge(http::config_channels_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay

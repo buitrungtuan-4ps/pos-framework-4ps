@@ -16,7 +16,7 @@
 //! ([ADR-0013](../../../docs/adr/0013-async-strategy.md)). It wires the **table floor cycle** (seat,
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -213,6 +213,14 @@ pub struct EdgeSession {
     /// stock projection. The live projection that drives auto-86 arrives with the flagged
     /// goods-in/stocktake follow-up, so nothing 86s a trading store's menu on this slice alone.
     pub recipe_thresholds: BTreeMap<MenuItemId, i64>,
+    /// The sales channels this store accepts, from the `channels` config node
+    /// ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7). `None` means no restriction —
+    /// the bootstrap default and the behaviour of a store that has never published the node, so a
+    /// channel is enabled unless a published node says otherwise. `Some(set)` is authoritative.
+    pub enabled_channels: Option<BTreeSet<SalesChannel>>,
+    /// The payment methods this store accepts, from the `tender` config node (ADR-0080, M7). `None`
+    /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
+    pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
 }
 
 impl EdgeSession {
@@ -253,6 +261,8 @@ impl EdgeSession {
             stations: StationPlan::new(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
+            enabled_channels: None,
+            accepted_tender: None,
         }
     }
 
@@ -300,6 +310,25 @@ impl EdgeSession {
     pub fn item_sellable(&self, item: MenuItemId, stock: &StockProjection) -> bool {
         let threshold = self.recipe_thresholds.get(&item).copied().unwrap_or(0);
         stock.available(item, &self.recipes).is_sellable(threshold)
+    }
+
+    /// Whether this store accepts orders on `channel` ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md),
+    /// M7). A store with no `channels` node published has no restriction (every channel enabled), so
+    /// this is `true`; once a node is published only the channels it lists are accepted.
+    #[must_use]
+    pub fn channel_enabled(&self, channel: SalesChannel) -> bool {
+        self.enabled_channels
+            .as_ref()
+            .is_none_or(|set| set.contains(&channel))
+    }
+
+    /// Whether this store accepts `method` as tender (ADR-0080, M7). Same opt-in rule as
+    /// [`Self::channel_enabled`]: no `tender` node published means any known method is accepted.
+    #[must_use]
+    pub fn tender_accepted(&self, method: PaymentMethod) -> bool {
+        self.accepted_tender
+            .as_ref()
+            .is_none_or(|set| set.contains(&method))
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
