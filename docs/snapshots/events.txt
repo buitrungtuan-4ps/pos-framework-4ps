@@ -119,6 +119,7 @@ inventory.stock.received	field=ingredient_id
 inventory.stock.received	field=kind
 inventory.stock.received	field=quantity
 inventory.stock.received	field=stock_ledger_entry_id
+inventory.stock.received	field=supplier_id
 inventory.stock.received	schema_version=1
 inventory.stock.wasted	field=ingredient_id
 inventory.stock.wasted	field=kind

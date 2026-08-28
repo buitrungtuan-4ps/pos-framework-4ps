@@ -123,6 +123,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A goods receipt can name the supplier it came from** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `inventory.stock.received` event gains an
+  optional `supplier_id` field — a reference to a supplier authored in the `inventory` node — so a
+  goods receipt records who it came from. Additive and unversioned: a receipt that names no supplier,
+  or a producer that predates the field, decodes to `None`; it is a reference only, with the full
+  purchasing relationship staying in the ERP. The goods-in/stocktake operator flow that emits a receipt
+  remains the flagged edge follow-up. This completes Track M6 (inventory & suppliers): the finished §8
+  engine now has cloud authoring, a published node, an edge that applies it, and a console to drive it.
+  **Upgrade note:** none — one additive event field; no protocol-version bump.
 - **The console gets an Inventory screen to author recipes without touching JSON** (roadmap v2,
   Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new Inventory screen (under
   Master data, Owner/Admin) lists and edits a tenant's ingredients (name + unit), recipes, and

@@ -122,6 +122,7 @@ no_pii!(
     ids::StationId,
     ids::StoreId,
     ids::SubjectId,
+    ids::SupplierId,
     ids::TableId,
     ids::TaxClassId,
     ids::TenantId,

@@ -23,3 +23,14 @@
 - Additive throughout: a new `pos-proto` module and enum, a new config node key, one additive migration, one new console permission. No protocol-version bump — a store with no `inventory` node published behaves exactly as today (every item `Unlimited`), the never-blank config contract keeping whatever the edge holds if a publish is absent or unparseable.
 - Recipes, ingredients, thresholds, and supplier names are configuration and reference data — never a customer identifier or any T1 field. Recipe quantities and supplier terms are operational T2 configuration, worked in the console, not reproduced verbatim in shareable outputs.
 - Because the conversion lives in `pos_core` and the node is validated by the same `CapabilityValidator` the edge reads, the cloud and edge cannot disagree about what a legal recipe is.
+
+**Delivery note (M6 complete).** All six slices shipped:
+
+1. `pos_proto::inventory::PublishedInventory` + the `UnitOfMeasure` wire enum + `SupplierId`, and `pos_core::inventory::from_published`.
+2. The `InventoryStore` seam (`crates/pos-cloud/src/inventory.rs`), its `store-postgres` impl over the single `inventory_items` table discriminated by `kind`, and migration `0037_inventory.sql`.
+3. `/admin/inventory/*` per-record CRUD behind the new `console.inventory.manage` permission (Owner/Admin), audited by summary — an ingredient and supplier in full, a recipe by item/line-count/threshold only, never the BOM amounts.
+4. `PUT /admin/config/inventory` composing the node through the config tree; the edge's `session_from_config` applies it to build `session.recipes` and `session.recipe_thresholds`, with `EdgeSession::item_sellable` as the pure §8 auto-86 decision.
+5. The dashboard Inventory screen (ingredients, a per-item BOM editor, suppliers, thresholds, publish) on the F2 kit, en/vi.
+6. An optional `supplier_id` on the `inventory.stock.received` event, so a goods receipt names its supplier.
+
+The three deferrals above stand and are unstarted: the live auto-86 marketplace-notify loop, full purchasing (ERP), and the edge goods-in/stocktake operator UI (which is what would *emit* the receipt event slice 6 gave a supplier field). `item_sellable` is wired and tested but not yet driven from a live stock projection, because there is no on-hand stock source on the edge until that goods-in flow lands — so no trading store's menu is 86'd from M6 alone.
