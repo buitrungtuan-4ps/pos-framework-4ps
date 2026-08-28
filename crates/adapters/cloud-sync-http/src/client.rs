@@ -9,7 +9,7 @@
 //! — a caller branches on the status, so a refused code that surfaced as anything but
 //! [`PortError::permission_denied`] would be a wrong retry policy.
 
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
 use pos_ports::{PortError, PortName, Secret};
 use pos_proto::ids::DeviceId;
 use pos_proto::text::ReleaseTag;
@@ -24,6 +24,9 @@ const ACTIVATE_PATH: &str = "/activate";
 
 /// The cloud route the OTA artifact fetch posts to ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)).
 const ARTIFACT_PATH: &str = "/internal/ota/artifact";
+
+/// The cloud route an update report posts to ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+const REPORT_PATH: &str = "/internal/ota/report";
 
 /// The [`CloudSync`] adapter: the edge's request/response channel to its cloud, over an
 /// [`HttpTransport`].
@@ -59,6 +62,17 @@ struct FetchRequest<'a> {
     release: &'a str,
 }
 
+/// The update-report request body: which store, the version it now runs, and its self-test outcome
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). The `/internal` route is
+/// trusted-network, so the identity rides in the body as `/internal/reconcile` does.
+#[derive(serde::Serialize)]
+struct ReportRequest<'a> {
+    tenant_id: String,
+    store_id: String,
+    installed: &'a str,
+    self_test_passed: bool,
+}
+
 impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
     async fn activate(&self, activation_code: &str) -> Result<ActivationGrant, PortError> {
         let body = serde_json::to_vec(&ActivateRequest {
@@ -91,6 +105,24 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
             .await
             .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
         parse_fetch(response)
+    }
+
+    async fn report(&self, report: &UpdateReport) -> Result<(), PortError> {
+        let body = serde_json::to_vec(&ReportRequest {
+            tenant_id: report.tenant.to_string(),
+            store_id: report.store.to_string(),
+            installed: report.installed.as_str(),
+            self_test_passed: report.self_test_passed,
+        })
+        .map_err(|error| {
+            PortError::internal(PORT, format!("encoding the update report failed: {error}"))
+        })?;
+        let response = self
+            .transport
+            .post_json(REPORT_PATH, body)
+            .await
+            .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
+        parse_report(&response)
     }
 }
 
@@ -159,9 +191,29 @@ fn parse_fetch(response: HttpResponse) -> Result<Vec<u8>, PortError> {
     }
 }
 
+/// Maps an update-report response to acceptance, or the right refusal.
+///
+/// `2xx` is accepted (the report is telemetry, so an empty body is success); `400` is a malformed
+/// report ([`invalid_argument`](PortError::invalid_argument)); anything else is retryable
+/// ([`unavailable`](PortError::unavailable)) — a report the cloud never saw is dropped, never a
+/// reason to undo an install.
+fn parse_report(response: &HttpResponse) -> Result<(), PortError> {
+    match response.status {
+        200..=299 => Ok(()),
+        400 => Err(PortError::invalid_argument(
+            PORT,
+            "the cloud rejected the update report as malformed",
+        )),
+        other => Err(PortError::unavailable(
+            PORT,
+            format!("the cloud returned HTTP {other} for the update report"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HttpResponse, parse_activate, parse_fetch};
+    use super::{HttpResponse, parse_activate, parse_fetch, parse_report};
     use pos_proto::ids::DeviceId;
     use pos_proto::ulid::Ulid;
 
@@ -222,6 +274,23 @@ mod tests {
     #[test]
     fn a_502_artifact_is_unavailable() {
         let error = parse_fetch(response(502, b"bad gateway")).expect_err("bad gateway");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+    }
+
+    #[test]
+    fn a_2xx_report_is_accepted() {
+        parse_report(&response(204, b"")).expect("a well-formed report is accepted");
+    }
+
+    #[test]
+    fn a_400_report_is_invalid_argument() {
+        let error = parse_report(&response(400, b"malformed")).expect_err("malformed");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::InvalidArgument);
+    }
+
+    #[test]
+    fn a_503_report_is_unavailable() {
+        let error = parse_report(&response(503, b"down")).expect_err("down");
         assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
     }
 }

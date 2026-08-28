@@ -123,6 +123,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The edge can report an update's outcome to the cloud (`CloudSync::report`)** (roadmap v2, Track
+  O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). OTA was a publish into silence: the cloud
+  pushed a rollout as config and the edge decided, installed, self-tested, and rolled back — and told
+  no one, so no one could see rollout-ring progress. This adds the reporting half of the loop. The
+  `CloudSync` port (ADR-0053) grows a third method, `report(&UpdateReport)` — a port-local struct
+  carrying which store reported, the version it is now running, and whether the post-install self-test
+  passed — in the port's existing style (like `ActivationGrant`, it names only ids the port already
+  uses plus the two facts the cloud needs, never a customer identifier). The `cloud-sync-http` adapter
+  posts it to `POST /internal/ota/report` (a trusted-network `/internal` route carrying the identity
+  in the body, exactly like `/internal/reconcile`); the fake accepts it; the shared contract suite
+  gains a fifth case, so every `CloudSync` implementation is held to it. A report is fire-and-forget:
+  one that does not reach the cloud is retried or dropped, never a reason to undo an install that
+  already happened. The cloud-side ingest, the OTA-progress read model, and first-class OTA
+  publish/kill-switch levers follow in the same track; wiring the edge OTA updater to *call*
+  `report()` inside the shipped binary stays the flagged hardware/OS composition gate ADR-0055 and
+  `docs/roadmap.md` P9 already hold behind a real box. **Upgrade note:** none — an additive port
+  method (`/internal/ota/report` is a new route; a store that never reports is simply unknown to the
+  new read model, exactly as before), no protocol, migration, or permission change in this slice.
 - **Campaigns are now authorable over the finished pricing engine** (roadmap v2, Track M3;
   [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The pricing engine (`pos_core::campaign`,
   `docs/pos-spec.md` §7) already evaluates all five campaign kinds with windows, quotas, and

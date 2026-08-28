@@ -31,6 +31,7 @@ macro_rules! cloud_sync_suite {
                 an_unrecognised_code_is_refused,
                 fetch_update_returns_the_published_artifact,
                 an_unpublished_release_is_not_found,
+                a_well_formed_report_is_accepted,
             ]
         }
     };
@@ -116,5 +117,23 @@ pub async fn an_unpublished_release_is_not_found<H: CloudSyncHarness>(
         outcome,
         ErrorStatus::NotFound,
         "an unpublished release is a not-found error, so the caller does not install nothing",
+    )
+}
+
+/// A well-formed update report is accepted. The report is telemetry, not a command, so a faithful
+/// channel takes it — the closure that lets the cloud learn rollout progress
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_well_formed_report_is_accepted<H: CloudSyncHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let channel = harness.fresh().await?;
+    let outcome = channel.report(&harness.sample_report()).await;
+    obligation().require(
+        outcome.is_ok(),
+        "a well-formed update report is accepted, so the edge can tell the cloud what it is running",
     )
 }

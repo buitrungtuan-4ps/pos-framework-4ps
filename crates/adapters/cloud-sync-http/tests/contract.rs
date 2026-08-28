@@ -25,7 +25,8 @@ use core::future::Future;
 
 use cloud_sync_http::{HttpCloudSync, HttpResponse, HttpTransport, TransportError};
 use pos_contract_tests::harness::{CloudSyncHarness, Setup};
-use pos_proto::ids::DeviceId;
+use pos_ports::UpdateReport;
+use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
 
@@ -89,6 +90,17 @@ impl HttpTransport for StubCloud {
                     }
                 }
             }
+            "/internal/ota/report" => {
+                // A well-formed report is accepted; parsing proves the adapter sent the fields the
+                // cloud expects.
+                let has_fields = request.get("store_id").is_some()
+                    && request.get("installed").is_some()
+                    && request.get("self_test_passed").is_some();
+                HttpResponse {
+                    status: if has_fields { 204 } else { 400 },
+                    body: Vec::new(),
+                }
+            }
             other => HttpResponse {
                 status: 404,
                 body: format!("the stub cloud has no route {other}").into_bytes(),
@@ -122,6 +134,15 @@ impl CloudSyncHarness for HttpHarness {
 
     fn update_bytes(&self) -> Vec<u8> {
         ARTIFACT.to_vec()
+    }
+
+    fn sample_report(&self) -> UpdateReport {
+        UpdateReport {
+            tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
+            store: StoreId::new(Ulid::from_u128(0x570E)),
+            installed: ReleaseTag::new(KNOWN_RELEASE),
+            self_test_passed: true,
+        }
     }
 }
 
