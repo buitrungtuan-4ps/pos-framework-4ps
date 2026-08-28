@@ -45,6 +45,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
     items: [
       { href: "/stores", key: "nav.stores", scope: "tenant" },
       { href: "/catalog", key: "nav.catalog", scope: "tenant" },
+      { href: "/campaigns", key: "nav.campaigns", scope: "tenant", roles: ADMIN_MANAGERS },
       { href: "/media", key: "nav.media", scope: "tenant", roles: ADMIN_MANAGERS },
       { href: "/layout", key: "nav.layout", scope: "tenant" },
       { href: "/floor", key: "nav.floor", scope: "store", roles: ADMIN_MANAGERS },
@@ -92,6 +93,7 @@ const CRUMB_KEY: Record<string, MessageKey> = {
   "/stores": "nav.stores",
   "/stores/new": "wizard.title",
   "/catalog": "nav.catalog",
+  "/campaigns": "nav.campaigns",
   "/media": "nav.media",
   "/layout": "nav.layout",
   "/floor": "nav.floor",

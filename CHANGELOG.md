@@ -188,6 +188,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   so scheduled and other node publishes can reuse it. Behind `console.config.publish`, the same
   audience that can publish. **Upgrade note:** none — a new read-only route, no migration, protocol,
   or permission change.
+- **Campaigns console screen — author, publish, preview and schedule promotions without JSON**
+  (roadmap v2, Track M3; [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The dashboard gains a
+  **Campaigns** screen (on the F2 CRUD kit) that ties the whole track together: author the five kinds
+  with their discount (percentage or amount off), conditions (minimum bill, sales channels, a weekly
+  window), exclusion group and quota; mint voucher batches for a voucher-kind campaign (shown once,
+  with a copy-now note); and publish the tenant's campaigns to a store — immediately, after a
+  **preview** that shows the exact merge patch, or **scheduled** to a future instant, with the store's
+  pending schedule listed and cancellable. Campaigns are tenant-authored; publishing/previewing/
+  scheduling need a store chosen in the top bar (the F0 context gate), and the screen sits behind the
+  Owner/Admin nav gate that matches `console.campaigns.manage`. Full en + vi localisation.
+  **Upgrade note:** none — a console-only addition over the routes already shipped in this track; no
+  migration, protocol, or permission change.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

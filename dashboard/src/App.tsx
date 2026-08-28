@@ -16,6 +16,7 @@ import { Admins } from "./screens/Admins";
 import { Alerts } from "./screens/Alerts";
 import { Audit } from "./screens/Audit";
 import { ApiKeys } from "./screens/ApiKeys";
+import { Campaigns } from "./screens/Campaigns";
 import { Catalog } from "./screens/Catalog";
 import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
@@ -82,6 +83,7 @@ export function App() {
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
+          <Route path="/campaigns" component={Campaigns} />
           <Route path="/media" component={Media} />
           <Route path="/layout" component={Layout} />
           <Route path="/floor" component={Floor} />

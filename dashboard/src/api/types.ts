@@ -189,6 +189,102 @@ export interface TaxRate {
   readonly rate_bps: number;
 }
 
+// --- Campaigns & scheduling (ADR-0077, Track M3) --------------------------------------------------
+
+/** The five campaign kinds, in the §7 evaluation order. Wire mirror of `PublishedCampaignKind`. */
+export type CampaignKind = "item_level" | "combo" | "bill_level" | "voucher" | "manual";
+
+/** The kinds in authoring order, for the form's select. */
+export const CAMPAIGN_KINDS: readonly CampaignKind[] = [
+  "item_level",
+  "combo",
+  "bill_level",
+  "voucher",
+  "manual",
+];
+
+/** An exact rational rate (`pos-proto` `Ratio`): 10% is `{ numerator: 10, denominator: 100 }`. */
+export interface Ratio {
+  readonly numerator: number;
+  readonly denominator: number;
+}
+
+/** What a campaign takes off — a percentage of, or a fixed amount off, the base. Serde-tagged on `type`. */
+export type CampaignAction =
+  | { readonly type: "percentage"; readonly rate: Ratio }
+  | { readonly type: "amount_off"; readonly amount: Money };
+
+/**
+ * A weekly window (`PublishedSchedule`): a 7-bit weekday mask (Monday = bit 0) and a half-open
+ * minute-of-day range that may wrap past midnight (`start_minute > end_minute`).
+ */
+export interface CampaignSchedule {
+  readonly days: number;
+  readonly start_minute: number;
+  readonly end_minute: number;
+}
+
+/** The conditions a campaign requires before it applies; every field absent means unrestricted. */
+export interface CampaignConditions {
+  readonly min_bill?: Money;
+  readonly channels?: readonly SalesChannel[];
+  readonly schedule?: CampaignSchedule;
+}
+
+/** One authored campaign from `GET /admin/campaigns` (ADR-0077). The `id` is server-owned. */
+export interface Campaign {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: CampaignKind;
+  readonly priority: number;
+  readonly exclusion_group?: number;
+  readonly action: CampaignAction;
+  readonly conditions: CampaignConditions;
+  readonly quota_remaining?: number;
+}
+
+/** The authoring fields of a create/update — a `Campaign` without its server-owned id. */
+export type CampaignInput = Omit<Campaign, "id">;
+
+/** A voucher's lifecycle (`VoucherStatus`, snake_case on the wire). */
+export type VoucherStatus = "active" | "redeemed" | "void";
+
+/** One minted or listed voucher (`VoucherView`) — the id, the redeemable code, and its status. */
+export interface Voucher {
+  readonly voucher_id: string;
+  readonly code: string;
+  readonly status: VoucherStatus;
+}
+
+/** A scheduled publish's lifecycle (`ScheduledPublishStatus`, snake_case on the wire). */
+export type ScheduledPublishStatus = "pending" | "applied" | "cancelled";
+
+/** A pending/applied/cancelled scheduled publish (`ScheduledPublishView`) — metadata only, no payload. */
+export interface ScheduledPublish {
+  readonly id: string;
+  readonly node_key: string;
+  readonly effective_at_ms: number;
+  readonly status: ScheduledPublishStatus;
+  readonly created_at_ms: number;
+}
+
+/** The `201` response of a schedule request — the new row's id and when it fires. */
+export interface ScheduledPublishCreated {
+  readonly id: string;
+  readonly effective_at_ms: number;
+}
+
+/**
+ * A publish dry-run from `POST /admin/config/campaigns/preview` (ADR-0077): the RFC 7386 merge patch
+ * a publish would apply to the store's effective config, the version it diffs against (`null` if the
+ * store has none yet), and whether nothing would change.
+ */
+export interface CampaignPreview {
+  readonly from_version_id: string | null;
+  readonly diff: Json;
+  readonly unchanged: boolean;
+}
+
 /**
  * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
  * data: the code, human name, currency, preferred language, number format, and default retention
