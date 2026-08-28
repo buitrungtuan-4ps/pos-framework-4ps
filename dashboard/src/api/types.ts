@@ -89,6 +89,22 @@ export interface ActivationCode {
  */
 export type TranslationGrid = Record<string, Record<string, string>>;
 
+/** One row's fate in a CSV import dry-run (ADR-0075): create a new key, update an existing one, or
+ *  reject it with a reason (a missing `en`, an empty key). */
+export interface TranslationImportRow {
+  readonly key: string;
+  readonly action: "create" | "update" | "reject";
+  readonly reason?: string;
+}
+
+/** The dry-run (and post-apply) report for a translation-grid CSV import (ADR-0075). */
+export interface TranslationImportReport {
+  readonly rows: readonly TranslationImportRow[];
+  readonly create_count: number;
+  readonly update_count: number;
+  readonly reject_count: number;
+}
+
 /** Whether a registry entity is in use or retired (ADR-0065). Entities are archived, never deleted. */
 export type EntityStatus = "active" | "archived";
 

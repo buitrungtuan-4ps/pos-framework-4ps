@@ -127,6 +127,7 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::images::{self, ImagePipelineError};
+use crate::import;
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::people::{
@@ -9058,6 +9059,15 @@ where
             "/admin/translations/export",
             get(export_translations::<Tr, A, C>),
         )
+        .route(
+            "/admin/translations/import/dry-run",
+            post(import_translations_dry_run::<Tr, A, C>),
+        )
+        .route(
+            "/admin/translations/import/apply",
+            post(import_translations_apply::<Tr, A, C>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_CSV_IMPORT_BYTES))
         .with_state(TranslationState {
             translations,
             admin,
@@ -9205,6 +9215,110 @@ where
     )
     .await;
     csv_download_response("translations.csv", body)
+}
+
+/// The hard cap on a CSV import body ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)): a
+/// translation grid is small copy, so 4 MB is generous while bounding the parse.
+const MAX_CSV_IMPORT_BYTES: usize = 4 * 1024 * 1024;
+
+/// A super-admin dry-runs a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
+/// Track M5): the server parses and classifies every row (would-create / would-update / rejected) and
+/// returns the report, **writing nothing**. Behind [`ConsolePermission::ManageTranslations`]; not
+/// audited (it changes nothing). The confirm step (`.../apply`) does the write.
+async fn import_translations_dry_run<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageTranslations,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let existing = match state.translations.load(tenant_id).await {
+        Ok(grid) => grid.unwrap_or_default(),
+        Err(error) => return translation_error_response(&error),
+    };
+    match import::parse_translations_csv(&body, &existing) {
+        Ok((_, report)) => (StatusCode::OK, Json(report)).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+/// A super-admin applies a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
+/// Track M5) — the confirm after a dry-run. The valid rows are merged onto the tenant's grid (existing
+/// keys not in the file are preserved; rejected rows are skipped) and saved; rejected rows are reported,
+/// never written. Behind [`ConsolePermission::ManageTranslations`] and audited (the row counts, never
+/// the contents). The merged grid still satisfies the `en`-fallback rule by construction.
+async fn import_translations_apply<Tr, A, C>(
+    State(state): State<TranslationState<Tr, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<TranslationTenantQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    Tr: TranslationStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageTranslations,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let existing = match state.translations.load(tenant_id).await {
+        Ok(grid) => grid.unwrap_or_default(),
+        Err(error) => return translation_error_response(&error),
+    };
+    let (merged, report) = match import::parse_translations_csv(&body, &existing) {
+        Ok(parsed) => parsed,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    match state.translations.save(tenant_id, &merged).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "translations.import",
+                "translation_grid",
+                &tenant_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "created": report.create_count,
+                    "updated": report.update_count,
+                    "rejected": report.reject_count,
+                })),
+            )
+            .await;
+            (StatusCode::OK, Json(report)).into_response()
+        }
+        Err(error) => translation_error_response(&error),
+    }
 }
 
 /// Maps a translation-store failure to a retryable `503`, logging the detail rather than leaking it.

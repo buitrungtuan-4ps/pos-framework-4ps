@@ -62,6 +62,7 @@ import type {
   TaxRate,
   Tenant,
   TranslationGrid,
+  TranslationImportReport,
   UploadedMedia,
   WebhookSummary,
 } from "./types";
@@ -675,6 +676,17 @@ export const api = {
     downloadCsv(`/admin/catalog/export/items?${tenantQuery(tenantId)}`, "items.csv"),
   exportTranslationsCsv: (tenantId: string) =>
     downloadCsv(`/admin/translations/export?${tenantQuery(tenantId)}`, "translations.csv"),
+  // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
+  dryRunTranslationsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<TranslationImportReport>(
+      `/admin/translations/import/dry-run?${tenantQuery(tenantId)}`,
+      file,
+    ),
+  applyTranslationsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<TranslationImportReport>(
+      `/admin/translations/import/apply?${tenantQuery(tenantId)}`,
+      file,
+    ),
 
   // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
   mediaThumbnailUrl: (tenantId: string, mediaId: string) =>

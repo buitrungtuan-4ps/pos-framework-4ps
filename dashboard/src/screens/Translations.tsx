@@ -9,12 +9,12 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { TranslationGrid } from "../api/types";
+import type { TranslationGrid, TranslationImportReport } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
-import { EmptyState } from "../components/kit";
+import { EmptyState, Modal } from "../components/kit";
 import { toast } from "../components/Toast";
 
 /** The enforced fallback locale (ADR-0020) — always a column, even if the catalogue omits it. */
@@ -28,6 +28,11 @@ export function Translations() {
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [missingOnly, setMissingOnly] = createSignal(false);
+
+  // CSV import (ADR-0075): a dry-run report the operator confirms before anything is written. The file
+  // is held so the confirm re-sends the exact same bytes the dry-run classified.
+  const [importReport, setImportReport] = createSignal<TranslationImportReport | null>(null);
+  const [importFile, setImportFile] = createSignal<File | null>(null);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -129,6 +134,50 @@ export function Translations() {
     }
   };
 
+  // Step 1: the operator picks a file; dry-run it and show the report. Nothing is written yet.
+  const onImportFile = async (file: File) => {
+    setError("");
+    setBusy(true);
+    try {
+      const report = await api.dryRunTranslationsCsv(tenantId(), file);
+      setImportFile(file);
+      setImportReport(report);
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeImport = () => {
+    setImportReport(null);
+    setImportFile(null);
+  };
+
+  // Step 2: the operator confirms; re-send the same file to apply, then reload the grid.
+  const applyImport = async () => {
+    const file = importFile();
+    if (!file) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const report = await api.applyTranslationsCsv(tenantId(), file);
+      toast.ok(
+        t("translations.importApplied", {
+          created: report.create_count,
+          updated: report.update_count,
+        }),
+      );
+      closeImport();
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <PageHeader title={t("translations.title")} description={t("translations.description")} />
@@ -140,6 +189,22 @@ export function Translations() {
               <Button variant="secondary" disabled={busy()} onClick={() => void exportGrid()}>
                 {t("translations.exportCsv")}
               </Button>
+              <label class="inline-flex min-h-touch cursor-pointer items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink hover:brightness-95">
+                {t("translations.importCsv")}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  class="hidden"
+                  disabled={busy()}
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (file) {
+                      void onImportFile(file);
+                    }
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
                 {t("action.refresh")}
               </Button>
@@ -213,6 +278,55 @@ export function Translations() {
             </div>
           </Show>
         </Card>
+
+        <Modal
+          open={importReport() !== null}
+          title={t("translations.importReview")}
+          closeLabel={t("action.close")}
+          onClose={closeImport}
+          footer={
+            <>
+              <Button variant="secondary" onClick={closeImport}>
+                {t("action.cancel")}
+              </Button>
+              <Button
+                disabled={busy() || (importReport()?.create_count ?? 0) + (importReport()?.update_count ?? 0) === 0}
+                onClick={() => void applyImport()}
+              >
+                {t("translations.importApply")}
+              </Button>
+            </>
+          }
+        >
+          <Show when={importReport()}>
+            {(report) => (
+              <div class="flex flex-col gap-3 text-sm text-ink">
+                <p>
+                  {t("translations.importSummary", {
+                    created: report().create_count,
+                    updated: report().update_count,
+                    rejected: report().reject_count,
+                  })}
+                </p>
+                <Show when={report().reject_count > 0}>
+                  <div class="flex flex-col gap-1">
+                    <p class="font-medium">{t("translations.importRejected")}</p>
+                    <ul class="max-h-40 overflow-y-auto text-xs text-ink-muted">
+                      <For each={report().rows.filter((row) => row.action === "reject")}>
+                        {(row) => (
+                          <li>
+                            <span class="font-mono">{row.key || "—"}</span>
+                            {row.reason ? ` — ${row.reason}` : ""}
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </Show>
+        </Modal>
       </RequireContext>
     </div>
   );

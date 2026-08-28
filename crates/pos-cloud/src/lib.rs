@@ -73,6 +73,7 @@ pub mod floorplan;
 pub mod health;
 pub mod http;
 pub mod images;
+pub mod import;
 pub mod media;
 pub mod metrics;
 mod openapi;

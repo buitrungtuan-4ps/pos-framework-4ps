@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A CSV import rail for the translation grid — dry-run first, apply on confirm**
+  (roadmap v2, Track M5, slice 6; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST
+  /admin/translations/import/dry-run` parses an uploaded CSV and returns a **row-by-row report**
+  (would-create / would-update / rejected-with-reason) **without writing anything**; `POST
+  /admin/translations/import/apply` re-parses the same file and merges the valid rows onto the tenant's
+  grid — existing keys not in the file are preserved, rejected rows (empty key, or missing the `en`
+  fallback) are skipped — then saves and audits the row counts (never the contents). Both are behind
+  `console.translations.manage`, under a 4 MB body limit, and the merged grid satisfies the `en`-fallback
+  rule by construction. The Translations screen gains an **Import CSV** button that shows the dry-run
+  report in a review dialog before the operator confirms. Round-trips with the slice-5 translation export.
+  Item import (upsert with FK validation) and the T1/T2 domains are deferred (ADR-0075 decision 5).
+  **Upgrade note:** additive routes; no schema, wire, or edge change.
 - **A CSV export rail — download the catalog items and the translation grid**
   (roadmap v2, Track M5, slice 5; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A reusable, pure CSV
   serialiser (`pos_cloud::export`, buying the `csv` crate for RFC-4180 quoting per ADR-0007) behind two

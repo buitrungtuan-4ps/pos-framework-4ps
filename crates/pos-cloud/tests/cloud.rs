@@ -2869,6 +2869,75 @@ async fn translation_export_streams_csv_and_needs_a_session() {
     assert_eq!(lines.next().unwrap(), "menu.tea,Tea,");
 }
 
+/// A CSV import is dry-run-first (ADR-0075, Track M5): the dry-run classifies every row and writes
+/// nothing; the apply merges the valid rows onto the grid and skips the rejected ones.
+#[tokio::test]
+async fn translation_import_dry_runs_then_applies() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let grid_uri = format!("/admin/translations?tenant_id={tenant_ulid}");
+
+    // A starting grid with one key.
+    let base = serde_json::json!({ "menu.pho": { "en": "Pho" } });
+    let put = router
+        .clone()
+        .oneshot(put_with_cookie(&grid_uri, &base, &cookie))
+        .await
+        .expect("route the publish");
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    // A CSV that updates menu.pho, adds menu.tea, and has one row with no en (rejected).
+    let csv = "key,en,vi\nmenu.pho,Pho noodles,Phở\nmenu.tea,Tea,Trà\nmenu.rice,,Cơm\n";
+
+    // Dry-run: the report classifies the rows and the grid is untouched.
+    let dry = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/translations/import/dry-run?tenant_id={tenant_ulid}"),
+            csv.as_bytes().to_vec(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the dry-run");
+    assert_eq!(dry.status(), StatusCode::OK);
+    let report = json_body(dry).await;
+    assert_eq!(report["create_count"], 1);
+    assert_eq!(report["update_count"], 1);
+    assert_eq!(report["reject_count"], 1);
+    let after_dry = router
+        .clone()
+        .oneshot(get_with_cookie(&grid_uri, &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(json_body(after_dry).await, base, "a dry-run writes nothing");
+
+    // Apply: the valid rows merge in; the rejected row is skipped.
+    let apply = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/translations/import/apply?tenant_id={tenant_ulid}"),
+            csv.as_bytes().to_vec(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the apply");
+    assert_eq!(apply.status(), StatusCode::OK);
+    let applied = router
+        .oneshot(get_with_cookie(&grid_uri, &cookie))
+        .await
+        .expect("route the re-read");
+    let grid = json_body(applied).await;
+    assert_eq!(grid["menu.pho"]["en"], "Pho noodles", "the update landed");
+    assert_eq!(grid["menu.tea"]["vi"], "Trà", "the create landed");
+    assert!(
+        grid.get("menu.rice").is_none(),
+        "the rejected row was skipped"
+    );
+}
+
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
 
 /// Registering returns the signing secret once, the listing shows the endpoint without any secret,

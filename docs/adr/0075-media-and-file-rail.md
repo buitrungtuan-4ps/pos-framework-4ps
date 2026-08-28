@@ -55,10 +55,13 @@ The gaps this closes:
    the dashboard downloads each with a `Blob` download. Each is audited (who exported which domain and how
    many rows, never the contents). The **employee** (T1) and per-channel **price/placement** (T2-verbatim)
    exports, and the rollup **report** export, are **deferred to a human-reviewed slice** — see decision 5.
-   **Import** (slice 6): the operator uploads a CSV; the server parses and validates it and returns a
-   **dry-run report** (row-by-row: would-create / would-update / rejected-with-reason) **without writing**;
-   a second, explicit confirm applies it — scoped to the same non-personal domains. XLSX is **deferred** —
-   CSV is the interoperable floor; XLSX pulls a heavier dependency and buys little over CSV.
+   **Import** (slice 6, `pos_cloud::import`): the operator uploads a CSV; the server parses and validates
+   it and returns a **dry-run report** (row-by-row: would-create / would-update / rejected-with-reason)
+   **without writing**; a second, explicit confirm applies it (the valid rows are merged, rejected rows
+   skipped). It ships for the **translation grid** — the clean round-trip with the translation export.
+   **Item import** (upsert with FK validation and id minting) is deferred to its own slice, beside the
+   T1/T2 export domains. XLSX is **deferred** — CSV is the interoperable floor; XLSX pulls a heavier
+   dependency and buys little over CSV.
 
 5. **Data-classification guardrails are part of the design, not an afterthought.** Employee and subject
    data are T1; prices are T2. Therefore the export rail ships **only the non-personal domains** (items,
@@ -99,6 +102,8 @@ The gaps this closes:
 - **T1/T2 CSV export & import — the employee roster (T1), per-channel prices/placements (T2 verbatim),
   and the rollup report.** Deferred to a human-approved design/DPIA per decision 5, not shipped in the
   autonomous slices; the rail's serialiser and dry-run shape are built so adding them later is additive.
+- **Item CSV import** (upsert by id with tax-class/category FK validation and id minting) — the natural
+  round-trip with the item export, deferred to its own slice; the dry-run report shape carries over.
 - XLSX import/export.
 - Receipt templates + brand logo/footer rendering — depend on this track's media rail and land with the
   receipt work (M4 flagged them here); the `BrandRecord.image_ref` column lands there, beside its
