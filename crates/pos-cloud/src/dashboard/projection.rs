@@ -24,9 +24,11 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-use crate::cloud::{DailyRevenue, DailyRollup};
+use crate::cloud::{DailyCash, DailyRevenue, DailyRollup, XzReport};
 
-use super::rollup::{RollupWindow, fold_event, fold_revenue, render_revenue_window, render_window};
+use super::rollup::{
+    RollupWindow, fold_cash, fold_event, fold_revenue, render_revenue_window, render_window,
+};
 
 /// How many events one projection page reads and folds.
 const PROJECT_PAGE: u32 = 512;
@@ -49,6 +51,10 @@ pub struct StoredRollups {
     /// (the ADR-0036 reset-cursor-and-replay lever) so the projector re-folds the whole log.
     #[serde(default)]
     pub revenue: BTreeMap<String, DailyRevenue>,
+    /// The materialised per-trading-day **cash-drawer** summaries, keyed by `YYYY-MM-DD` (ADR-0081,
+    /// O4). `#[serde(default)]` for the same forward-compatible reason as `revenue`.
+    #[serde(default)]
+    pub cash: BTreeMap<String, DailyCash>,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -141,6 +147,7 @@ where
         for event in &batch {
             fold_event(&mut state.days, event);
             fold_revenue(&mut state.revenue, event);
+            fold_cash(&mut state.cash, event);
             folded = folded.saturating_add(1);
         }
         let short = batch.len() < page_len;
@@ -196,6 +203,58 @@ where
 {
     let state = rollups.load(tenant, store_id).await?;
     Ok(render_revenue_window(state.revenue, window))
+}
+
+/// Builds an **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10).
+///
+/// `business_date` picks the day; absent, it is the latest day present (the current, open day). The
+/// report is an **X** when the chosen day is that latest day (still accruing, non-resetting), and a
+/// **Z** when it is an earlier — closed — day, whose rollup no longer changes and so reads the same
+/// verbatim thereafter. It bundles the day's activity, revenue, and cash summaries; T2 (the caller
+/// must hold `console.reports.revenue`, enforced at the route). A day with no data reads back as an
+/// empty X.
+///
+/// # Errors
+///
+/// [`RollupError::Store`] if the rollup store cannot be read.
+pub async fn xz_report<R>(
+    rollups: &R,
+    tenant: TenantId,
+    store_id: StoreId,
+    business_date: Option<String>,
+) -> Result<XzReport, RollupError>
+where
+    R: RollupStore,
+{
+    use super::rollup::{empty_activity, empty_cash, empty_revenue};
+    let state = rollups.load(tenant, store_id).await?;
+    // The latest trading day with any activity is the current (open) day.
+    let latest = state.days.keys().next_back().cloned();
+    let day = business_date.or_else(|| latest.clone()).unwrap_or_default();
+    // Z for a day strictly before the latest (closed); X for the latest, a future date, or no data.
+    let kind = match latest.as_deref() {
+        Some(latest_day) if day.as_str() < latest_day => "Z",
+        _ => "X",
+    };
+    Ok(XzReport {
+        kind: kind.to_owned(),
+        activity: state
+            .days
+            .get(&day)
+            .cloned()
+            .unwrap_or_else(|| empty_activity(&day)),
+        revenue: state
+            .revenue
+            .get(&day)
+            .cloned()
+            .unwrap_or_else(|| empty_revenue(&day)),
+        cash: state
+            .cash
+            .get(&day)
+            .cloned()
+            .unwrap_or_else(|| empty_cash(&day)),
+        business_date: day,
+    })
 }
 
 #[cfg(test)]
@@ -378,5 +437,37 @@ mod tests {
             .expect("read");
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].business_date, "2026-03-15");
+    }
+
+    #[tokio::test]
+    async fn xz_report_is_x_for_the_current_day_and_z_for_a_closed_one() {
+        let rollups = FakeRollups::default();
+        let mut state = StoredRollups::default();
+        // Two trading days of activity; the later one is the current (open) day.
+        crate::dashboard::rollup::fold_event(&mut state.days, &dated(1, 1, 2026, 3, 14)[0]);
+        crate::dashboard::rollup::fold_event(&mut state.days, &dated(2, 1, 2026, 3, 15)[0]);
+        rollups
+            .save(tenant(), store_id(), &state)
+            .await
+            .expect("save");
+
+        // No date → the latest day, reported as X (still open).
+        let current = super::xz_report(&rollups, tenant(), store_id(), None)
+            .await
+            .expect("x report");
+        assert_eq!(current.business_date, "2026-03-15");
+        assert_eq!(current.kind, "X");
+
+        // An earlier day → Z (closed, immutable).
+        let closed = super::xz_report(
+            &rollups,
+            tenant(),
+            store_id(),
+            Some("2026-03-14".to_owned()),
+        )
+        .await
+        .expect("z report");
+        assert_eq!(closed.business_date, "2026-03-14");
+        assert_eq!(closed.kind, "Z");
     }
 }

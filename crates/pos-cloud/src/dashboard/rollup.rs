@@ -13,9 +13,12 @@
 use std::collections::BTreeMap;
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::events::{BillingBillSettled, SalesOrderLineAdded};
+use pos_proto::events::{
+    BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftOpened,
+    SalesOrderLineAdded,
+};
 
-use crate::cloud::{DailyRevenue, DailyRollup};
+use crate::cloud::{DailyCash, DailyRevenue, DailyRollup};
 
 /// Folds one event into `days`, creating the trading day's rollup if absent and counting the event
 /// against its total and its type.
@@ -97,8 +100,99 @@ pub fn fold_revenue(
     }
 }
 
+/// Folds one event's **cash movement** into `cash` (ADR-0081, Track O4): shift open/close (float,
+/// expected/counted/variance) and drawer paid-in/paid-out. `cash.shift.counted` is deliberately not
+/// folded — the blind count is recorded on the close, and folding the pre-close count would blur the
+/// blindness the control depends on. A payload that fails to decode is skipped.
+pub fn fold_cash(cash: &mut BTreeMap<String, DailyCash>, event: &EventEnvelope<RawPayload>) {
+    let date = event.business_date.to_string();
+    match event.event_type.as_str() {
+        "cash.shift.opened" => {
+            let Ok(ev) = event.data.decode::<CashShiftOpened>() else {
+                return;
+            };
+            let day = cash
+                .entry(date.clone())
+                .or_insert_with(|| empty_cash(&date));
+            set_currency(
+                &mut day.currency_code,
+                ev.opening_float.currency_code.to_string(),
+            );
+            day.opening_float = day
+                .opening_float
+                .saturating_add(ev.opening_float.amount_minor);
+            day.shifts_opened = day.shifts_opened.saturating_add(1);
+        }
+        "cash.shift.closed" => {
+            let Ok(ev) = event.data.decode::<CashShiftClosed>() else {
+                return;
+            };
+            let day = cash
+                .entry(date.clone())
+                .or_insert_with(|| empty_cash(&date));
+            set_currency(
+                &mut day.currency_code,
+                ev.expected_amount.currency_code.to_string(),
+            );
+            day.shifts_closed = day.shifts_closed.saturating_add(1);
+            day.expected = day.expected.saturating_add(ev.expected_amount.amount_minor);
+            day.counted = day.counted.saturating_add(ev.counted_amount.amount_minor);
+            day.variance = day.variance.saturating_add(ev.variance.amount_minor);
+        }
+        "cash.drawer.paid_in" => {
+            let Ok(ev) = event.data.decode::<CashDrawerPaidIn>() else {
+                return;
+            };
+            let day = cash
+                .entry(date.clone())
+                .or_insert_with(|| empty_cash(&date));
+            set_currency(&mut day.currency_code, ev.amount.currency_code.to_string());
+            day.paid_in = day.paid_in.saturating_add(ev.amount.amount_minor);
+        }
+        "cash.drawer.paid_out" => {
+            let Ok(ev) = event.data.decode::<CashDrawerPaidOut>() else {
+                return;
+            };
+            let day = cash
+                .entry(date.clone())
+                .or_insert_with(|| empty_cash(&date));
+            set_currency(&mut day.currency_code, ev.amount.currency_code.to_string());
+            day.paid_out = day.paid_out.saturating_add(ev.amount.amount_minor);
+        }
+        _ => {}
+    }
+}
+
+/// Sets `slot` to `code` only if it is still empty — the first cash event of the day fixes the
+/// currency, and a store is single-currency (`docs/pos-spec.md` §19).
+fn set_currency(slot: &mut String, code: String) {
+    if slot.is_empty() {
+        *slot = code;
+    }
+}
+
+/// An empty cash summary for a trading day.
+#[must_use]
+pub fn empty_cash(business_date: &str) -> DailyCash {
+    DailyCash {
+        business_date: business_date.to_owned(),
+        ..DailyCash::default()
+    }
+}
+
+/// An empty activity rollup for a trading day.
+#[must_use]
+pub fn empty_activity(business_date: &str) -> DailyRollup {
+    DailyRollup {
+        business_date: business_date.to_owned(),
+        total_events: 0,
+        by_type: BTreeMap::new(),
+    }
+}
+
 /// An empty revenue rollup for a trading day.
-fn empty_revenue(business_date: &str) -> DailyRevenue {
+#[must_use]
+pub fn empty_revenue(business_date: &str) -> DailyRevenue {
     DailyRevenue {
         business_date: business_date.to_owned(),
         currency_code: String::new(),

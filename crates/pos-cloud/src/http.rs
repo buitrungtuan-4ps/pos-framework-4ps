@@ -126,7 +126,9 @@ use crate::config_tree::{
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
-use crate::dashboard::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, revenue};
+use crate::dashboard::{
+    RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, revenue, xz_report,
+};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
@@ -493,6 +495,10 @@ where
         .route(
             "/admin/stores/{store_id}/revenue/daily",
             get(admin_revenue_daily::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/reports/xz",
+            get(admin_xz_report::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/webhooks",
@@ -15640,6 +15646,59 @@ where
         Ok(revenue) => (StatusCode::OK, Json(revenue)).into_response(),
         Err(error) => rollup_error_response(&error),
     }
+}
+
+/// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
+/// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
+/// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`.
+async fn admin_xz_report<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<XzReportQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match xz_report(&app.rollups, tenant_id, store_id, query.business_date).await {
+        Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+        Err(error) => rollup_error_response(&error),
+    }
+}
+
+/// The X/Z report query: the explicit `tenant_id` plus an optional `business_date` (`YYYY-MM-DD`);
+/// absent, the current day is reported.
+#[derive(Debug, Clone, Deserialize)]
+struct XzReportQuery {
+    tenant_id: String,
+    #[serde(default)]
+    business_date: Option<String>,
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log

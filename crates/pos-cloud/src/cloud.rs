@@ -94,6 +94,55 @@ pub struct ItemMix {
     pub ordered_value: i64,
 }
 
+/// A day's **cash-drawer** summary for one store, folded from the shift and drawer events
+/// ([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4). Amounts are the store's
+/// single currency's minor units. Part of an X/Z report; T2 (it exposes money).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct DailyCash {
+    /// The store's trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// ISO 4217 code, or empty until a cash event on the day sets it.
+    pub currency_code: String,
+    /// Sum of opening floats across shifts opened on the day.
+    pub opening_float: i64,
+    /// Sum of paid-in movements.
+    pub paid_in: i64,
+    /// Sum of paid-out movements.
+    pub paid_out: i64,
+    /// Shifts opened on the day.
+    pub shifts_opened: u64,
+    /// Shifts closed on the day.
+    pub shifts_closed: u64,
+    /// Sum of expected drawer amounts across closes.
+    pub expected: i64,
+    /// Sum of counted amounts across closes (the blind counts).
+    pub counted: i64,
+    /// Sum of variance (counted − expected) across closes; negative is short.
+    pub variance: i64,
+}
+
+/// An **X or Z report** for one store's trading day (ADR-0081, Track O4, resolving spec gap D10).
+///
+/// An **X** report is the current (open) day's running totals — non-resetting, recomputed each call.
+/// A **Z** report is a closed day's totals — a day that no longer receives events, so the same read
+/// returns the same figures verbatim thereafter. `kind` is `"X"` for the latest day present and
+/// `"Z"` for any earlier (closed) day. It bundles the day's activity counts, revenue, and cash
+/// summary; T2, so it is served only behind `console.reports.revenue`. Not a legal fiscal document —
+/// that stays with the country module's invoice range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct XzReport {
+    /// `"X"` (current, interim) or `"Z"` (closed, final).
+    pub kind: String,
+    /// The trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// The day's event-activity counts.
+    pub activity: DailyRollup,
+    /// The day's recognised revenue and product mix.
+    pub revenue: DailyRevenue,
+    /// The day's cash-drawer summary.
+    pub cash: DailyCash,
+}
+
 /// The cloud's application layer over an [`EventStore`].
 ///
 /// Cloneable and shareable — every clone talks to the same store.

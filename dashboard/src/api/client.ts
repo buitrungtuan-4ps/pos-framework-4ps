@@ -35,6 +35,7 @@ import type {
   CreatedId,
   DailyRevenue,
   DailyRollup,
+  XzReport,
   Device,
   DeviceProposalSummary,
   DisplayCategory,
@@ -362,6 +363,18 @@ export const api = {
     return requestJson<DailyRevenue[]>(
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/revenue/daily?${params.toString()}`,
+    );
+  },
+  // X/Z report (ADR-0081, spec gap D10) — omit businessDate for the current day (an X); pass a past
+  // day for its final Z. T2, so Owner/Admin only (console.reports.revenue); a non-holder gets 403.
+  xzReport: (tenantId: string, storeId: string, businessDate?: string) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (businessDate) {
+      params.set("business_date", businessDate);
+    }
+    return requestJson<XzReport>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/reports/xz?${params.toString()}`,
     );
   },
 

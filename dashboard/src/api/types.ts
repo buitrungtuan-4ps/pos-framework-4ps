@@ -104,6 +104,32 @@ export interface DailyRevenue {
   readonly by_item: Record<string, ItemMix>;
 }
 
+/** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
+export interface DailyCash {
+  readonly business_date: string;
+  readonly currency_code: string;
+  readonly opening_float: number;
+  readonly paid_in: number;
+  readonly paid_out: number;
+  readonly shifts_opened: number;
+  readonly shifts_closed: number;
+  readonly expected: number;
+  readonly counted: number;
+  readonly variance: number;
+}
+
+/**
+ * An X or Z report for a store's trading day (ADR-0081, spec gap D10). `kind` is `"X"` (current,
+ * non-resetting) or `"Z"` (a closed day, immutable). Bundles activity, revenue, and cash; T2.
+ */
+export interface XzReport {
+  readonly kind: "X" | "Z";
+  readonly business_date: string;
+  readonly activity: DailyRollup;
+  readonly revenue: DailyRevenue;
+  readonly cash: DailyCash;
+}
+
 /** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
 export interface ActivationCode {
   readonly activation_code: string;

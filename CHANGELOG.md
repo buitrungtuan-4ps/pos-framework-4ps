@@ -171,6 +171,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   no migration (the revenue rollup rides the existing `rollups` blob under a `#[serde(default)]` field)
   and no protocol change. Revenue accrues from the projector's cursor forward; reset a store's rollup
   (the ADR-0036 lever) to backfill its history.
+- **X and Z reports, resolving the long-open D10 spec gap** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). `GET /admin/stores/{store_id}/reports/xz`
+  returns a store trading day's report bundling its activity counts, revenue, and a new cash-drawer
+  summary (opening float, paid-in/out, shifts opened/closed, and the blind-close expected/counted/
+  variance totals, folded from the shift and drawer events). The **D10** questions are settled: an
+  **X** report is the current (open) day's running totals — non-resetting, recomputed each call; a
+  **Z** report is a **closed** day's totals — a past day that no longer receives events, so the same
+  read returns the same figures verbatim thereafter. `kind` is `"X"` for the latest day present and
+  `"Z"` for any earlier day; omit `business_date` for the current-day X. It is the operational
+  daily-close record, **not** the country module's legal invoice artefact. T2 (it exposes money), so
+  gated behind `console.reports.revenue`. Dashboard `XzReport`/`DailyCash` types + `xzReport` client.
+  **Upgrade note:** none beyond the `console.reports.revenue` permission already introduced with the
+  revenue rollup; the cash summary rides the same `#[serde(default)]` rollup blob (no migration).
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
