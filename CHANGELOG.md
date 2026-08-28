@@ -123,6 +123,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console shows reconciliation history and gives the rebuild lever a button** (roadmap v2,
+  Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). A new Reconciliation screen reads
+  `GET /admin/reconcile` and lists each store's recent reconciliation runs — store, ids offered, how
+  many were re-pushed (or "in sync" when none), and when — resolving store names from the registry so
+  no raw ULID is front-and-centre, and polling so a fresh run shows without a manual refresh. For the
+  store in context it also surfaces the rollup-**rebuild** lever (`POST .../rollups/reset`, ADR-0036)
+  that existed only as a route: a confirmed button that resets the cloud's materialised rollups so the
+  projector re-folds them from the event log — the recovery ADR-0078 §4 wanted behind a button rather
+  than `curl`. The rebuild is behind `console.config.publish` (the server enforces it — a viewer sees
+  the history but a rebuild returns `403`); the history read is behind `console.data.read`. Added to
+  the Overview nav, with en/vi strings. **Upgrade note:** none — a console-only screen over the
+  existing `/admin/reconcile` read and `rollups/reset` lever; no schema, protocol, or permission
+  change.
 - **Reconciliation now leaves a trail** (roadmap v2, Track O3;
   [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The `POST /internal/reconcile` diff
   ([ADR-0040](docs/adr/0040-reconciliation.md)) answered "which of these ids am I missing?"

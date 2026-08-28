@@ -57,6 +57,7 @@ import type {
   SalesChannel,
   OtaRollout,
   PublishRolloutRequest,
+  ReconcileRun,
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
@@ -306,6 +307,13 @@ export const api = {
     requestJson<DailyRollup[]>(
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/rollups/daily?${tenantQuery(tenantId)}`,
+    ),
+  // Reset a store's materialised rollup so the projector rebuilds it from the event log — the
+  // "reset-cursor-and-replay" recovery lever (ADR-0036), behind console.config.publish. Idempotent.
+  resetRollups: (tenantId: string, storeId: string) =>
+    requestVoid(
+      "POST",
+      `/admin/stores/${encodeURIComponent(storeId)}/rollups/reset?${tenantQuery(tenantId)}`,
     ),
 
   // --- device onboarding (ADR-0041) ---
@@ -1097,6 +1105,15 @@ export const api = {
       store_id: storeId,
       halted,
     }),
+
+  // --- reconciliation run history (ADR-0078, Track O3) ---
+  // The trail of reconciliation diffs (ADR-0040): counts and a timestamp per run, newest first,
+  // behind console.data.read. Tenant-scoped; an optional storeId narrows to one store.
+  listReconcileRuns: (tenantId: string, storeId?: string) => {
+    const params = new URLSearchParams({ tenant_id: tenantId });
+    if (storeId) params.set("store_id", storeId);
+    return requestJson<ReconcileRun[]>("GET", `/admin/reconcile?${params.toString()}`);
+  },
 
   // --- console audit trail (ADR-0069, Track G2) ---
   // A fleet-wide, filterable read of who changed what, behind console.data.read. Every filter is

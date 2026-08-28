@@ -560,6 +560,18 @@ export interface PublishRolloutRequest {
   readonly revoked_key_ids: readonly string[];
 }
 
+/**
+ * One reconciliation run from `GET /admin/reconcile` (ADR-0078, Track O3): counts and a timestamp per
+ * diff (ADR-0040), never event contents. `missing_found` of zero means the store was fully in sync.
+ */
+export interface ReconcileRun {
+  readonly run_id: string;
+  readonly store_id: string;
+  readonly candidates_offered: number;
+  readonly missing_found: number;
+  readonly ran_at_ms: number;
+}
+
 /** One background loop's health from `GET /admin/health/tasks` (ADR-0068 slice 4). */
 export interface TaskHealthEntry {
   readonly task: string;
