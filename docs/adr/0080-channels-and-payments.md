@@ -23,3 +23,14 @@
 - Additive throughout: new `pos-proto` and `pos-core` modules, new/extended config-node keys (`channels`, `tender`, `vendors`; `qr` extended in place), publish routes reusing `console.config.publish`. No protocol-version bump, no migration, no new permission. A store that never publishes a channels/tender/qr/vendors node behaves exactly as before M7 — the never-blank config contract keeps whatever the edge holds when a node is absent or unparseable.
 - Channel and tender enablement, QR guardrails, and vendor policy are operational configuration (T2 where they touch commercial terms — vendor commission/policy — worked in the console, not reproduced verbatim). None carries a customer identifier or any T1 field.
 - Because the domain sets and guardrail decision live in `pos_core`/the QR module and the nodes go through the same `CapabilityValidator` publish path, the cloud and edge cannot disagree about what a legal channels/tender/qr/vendors node is.
+
+**Delivery note (M7 complete).** All six slices shipped:
+
+1. `pos_proto::channels::{PublishedChannels, PublishedTender, PublishedVendorPolicy, PublishedVendorPolicies}` + the `VendorAvailability` wire enum, and `pos_core::channels::{enabled_channels, accepted_tender}` building the domain sets (dropping unspecified/unrecognised tokens).
+2. `GET`/`PUT /admin/config/channels` and `.../tender` composing the `channels`/`tender` nodes through the config tree (behind `console.config.publish`, audited; unrecognised tokens refused). The edge's `session_from_config` applies both: order intake refuses a channel the store does not list, bill settlement refuses a tender it does not accept.
+3. `GET`/`PUT /admin/config/qr` composing the existing `qr` node from typed fields (hours validated to `0..=23`); the edge now reads `staff_confirmation_required` from the node so an operator can turn the hardcoded hold off, and the cloud QR path stops discarding `require_staff_confirmation`.
+4. `GET`/`PUT /admin/config/vendors` composing per-marketplace policies (enabled, availability, busy-case prep time, per-vendor 86 list) as the `vendors` node.
+5. The dashboard Channels & payments screen (channels, tender, QR guardrails, vendor policies — one publish per card), store-scoped and never-blank, on the F2 kit, en/vi.
+6. This delivery note; exit sweep.
+
+The three deferrals above stand and are unstarted: live vendor-policy enforcement (the runtime loop that pushes busy-mode/86 to a marketplace from the authored policy), card-terminal/hardware tender configuration (Track A A1), and a durable cross-restart QR rate limiter. M7 delivers the authored channels/tender/qr/vendors surface, its edge/cloud read-back, and the two live gates (channel on intake, tender on settlement) that were the point of the track.
