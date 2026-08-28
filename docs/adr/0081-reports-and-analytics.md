@@ -35,3 +35,16 @@ Track O4 (roadmap) is: date-range/windowed rollups API (stop shipping all histor
 - The registry swap changes what "the fleet" means (provisioned-active, not ever-seen-in-events). Because provisioning registers every store, this is a superset in practice; the one behavioural edge — a store that emitted events but was never registered — cannot occur through the supported provisioning path, and its stored rollup would remain readable regardless.
 - Revenue and product mix are **T2**. They are a tenant's own commercial figures, shown to that tenant's Owner/Admin for the legitimate internal purpose, role-gated, export-audited by row count, and never aggregated across tenants or shared externally by the tooling. No T1 (customer/employee) field enters a rollup. A revenue CSV export is the point to re-confirm retention and the DPIA posture before it leaves the console.
 - Because the counts fold, the revenue fold, and the X/Z aggregation all run in `pos-cloud/src/dashboard/**` over the same event log through the same `RollupStore`/`StoreCatalog` seams, a full re-scan and the maintained rollup cannot drift, exactly as ADR-0036 guarantees for the counts today.
+
+**Delivery note (O4 complete).** All eight slices shipped:
+
+1. This ADR.
+2. Windowed reads — `?from=&to=&limit=` on both daily-rollup routes, defaulting to the last 90 trading days (`dashboard::rollup::RollupWindow`); the API stops shipping a store's whole history.
+3. Perf wave 2 — the projector's `StoreCatalog::active_stores` reads the registry's Active stores instead of `SELECT DISTINCT … FROM events`.
+4. Revenue & product-mix rollups — `fold_revenue` decodes `billing.bill.settled` and `sales.order_line.added`; `DailyRevenue`/`ItemMix`; new `console.reports.revenue` (Owner/Admin) gating `GET /admin/stores/{id}/revenue/daily`.
+5. X/Z reports (D10) — `fold_cash` over the shift/drawer events, `DailyCash`, and `XzReport` (X = current day, Z = a closed day, served verbatim) at `GET /admin/stores/{id}/reports/xz`.
+6. CSV export — `export::{rollups_csv, revenue_csv}` and `.../rollups/export` + `.../revenue/export`, audited by row count.
+7. The rebuilt Reports console screen — window, inline-SVG charts, revenue/product-mix/X-Z/cross-store panels (revenue T2-gated), CSV buttons, en/vi.
+8. This delivery note; exit sweep.
+
+The revenue/cash rollups ride the existing `rollups` blob under `#[serde(default)]` fields, so no migration; revenue accrues from the projector's cursor forward, and a `rollups/reset` backfills a store's history. The deferrals above stand and are unstarted: **per-employee performance analytics** (an employee-monitoring boundary the org and the metrics port both draw), the **scale-only perf reshapes** (dirty-marking, windowed storage blobs, config-blob delta, request-latency histogram aggregation), and the **country-specific statutory report layouts** (the substrate — revenue, tax, shift hours — is here; the fiscal formats sequence with the invoice-range work). This completes Track O4 (reports & analytics + perf wave 2).
