@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Tax-rate authoring, foundations — a home for the per-(tax class × channel) rate** (roadmap v2,
+  Track M4, slice 1; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Begins Track **M4
+  (Localization & tax)**. Tax *calculation* has been built and applied on the edge since ADR-0028
+  (`pos_proto::TaxRateTable`, `pos_core::billing`, `EdgeSession::tax_rates`) — but the rate a tax class
+  resolves to was only ever the hardcoded bootstrap default, with no storage, editor, or publish path.
+  This slice adds the store: migration `0028_catalog_tax_rates.sql` (one tenant-scoped, RLS-isolated row
+  per `(tenant, tax class, sales channel)`, the rate in basis points bounded `[0, 10000]`); a
+  `TaxRateStore` seam (`list` / wholesale `set`) with an in-memory fake and a `store-postgres`
+  `PostgresTaxRates` adapter that replaces a tenant's whole table in one transaction; and a `to_table`
+  helper that assembles authored rows into the wire `TaxRateTable` the edge reprices from (a missing
+  rate stays a visible `None`, never a silent zero-tax sale). ADR-0074 (added here) records the M4
+  design and its deferred items (receipt templates depend on M5; production country modules with
+  fiscalization). The routes, publish, and editor land in the following slices. **Upgrade note:**
+  additive migration only; nothing authors or reads these rows yet.
 - **The Alerts console screen — the operator's live view of the alert engine** (roadmap v2, Track O2,
   slice 6; [ADR-0073](docs/adr/0073-alerting.md)). A new fleet-wide `/alerts` screen (grouped under
   *Overview*, beside Audit, no working context required) reads the alerts the evaluator maintains: the

@@ -30,9 +30,9 @@ use store_postgres::{
     PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
     PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor,
     PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth,
+    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
     PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TenantRow,
+    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -42,9 +42,10 @@ use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
     MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::Open;
+use pos_proto::wire_enum::{Open, WireEnum};
 
 use pos_core::activation::CodeStatus;
 
@@ -96,6 +97,7 @@ use crate::relay::{
     StoreOutcome,
 };
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
+use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
@@ -1484,6 +1486,67 @@ impl AlertStore for PostgresAlerts {
             .await
             .map_err(|error| AlertStoreError::new(error.to_string()))?;
         rows.into_iter().map(alert_record).collect()
+    }
+}
+
+// --- Tax rates (ADR-0074, Track M4) -----------------------------------------------------------
+
+/// Converts one stored `catalog_tax_rates` row into a [`TaxRateEntry`], failing loudly on a malformed
+/// class id (store corruption — this cloud wrote a well-formed ULID) but **skipping** an unrecognised
+/// channel token: the seam speaks the closed `SalesChannel`, and a token from a future vocabulary is
+/// dropped from the authoring view rather than failing the whole read (`None` from `filter_map`).
+fn tax_rate_entry(row: &TaxRateRow) -> Result<Option<TaxRateEntry>, TaxRateStoreError> {
+    let tax_class_id = row
+        .tax_class_id
+        .parse::<Ulid>()
+        .map(TaxClassId::new)
+        .map_err(|_ignored| {
+            TaxRateStoreError::new(format!(
+                "a tax-rate class id is not a ULID: {}",
+                row.tax_class_id
+            ))
+        })?;
+    let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
+        return Ok(None);
+    };
+    let rate = TaxRate::from_basis_points(u32::try_from(row.rate_bps).unwrap_or(0));
+    Ok(Some(TaxRateEntry {
+        tax_class_id,
+        sales_channel,
+        rate,
+    }))
+}
+
+impl TaxRateStore for PostgresTaxRates {
+    async fn list_tax_rates(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxRateEntry>, TaxRateStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| TaxRateStoreError::new(error.to_string()))?;
+        rows.iter()
+            .filter_map(|row| tax_rate_entry(row).transpose())
+            .collect()
+    }
+
+    async fn set_tax_rates(
+        &self,
+        tenant_id: TenantId,
+        entries: &[TaxRateEntry],
+    ) -> Result<(), TaxRateStoreError> {
+        let rows: Vec<TaxRateRow> = entries
+            .iter()
+            .map(|entry| TaxRateRow {
+                tax_class_id: entry.tax_class_id.to_string(),
+                sales_channel: entry.sales_channel.as_wire().to_string(),
+                rate_bps: i32::try_from(entry.rate.basis_points()).unwrap_or(i32::MAX),
+            })
+            .collect();
+        self.replace(&tenant_id.to_string(), &rows)
+            .await
+            .map_err(|error| TaxRateStoreError::new(error.to_string()))
     }
 }
 

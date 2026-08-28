@@ -37,6 +37,7 @@ mod rollups;
 mod store;
 mod subjects;
 mod task_health;
+mod tax_rates;
 mod translations;
 mod webhooks;
 
@@ -64,5 +65,6 @@ pub use rollups::PostgresRollups;
 pub use store::{PgTx, PostgresStore};
 pub use subjects::{PostgresSubjects, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
+pub use tax_rates::{PostgresTaxRates, TaxRateRow};
 pub use translations::PostgresTranslations;
 pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};

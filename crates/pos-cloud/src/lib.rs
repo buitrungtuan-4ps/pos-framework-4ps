@@ -83,6 +83,7 @@ pub mod reconcile;
 pub mod registry;
 pub mod relay;
 pub mod retention;
+pub mod tax;
 pub mod translations;
 pub mod webhook;
 
