@@ -6,6 +6,8 @@
 import type { JSX, ParentProps } from "solid-js";
 import { Show, splitProps } from "solid-js";
 
+import { locale } from "../i18n";
+
 /** A titled panel. `title` is already-translated text; `actions` sits on the header's right. */
 export function Card(props: ParentProps<{ title: string; actions?: JSX.Element }>) {
   return (
@@ -77,6 +79,43 @@ export function TextField(
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
+    </label>
+  );
+}
+
+/**
+ * A money input (ADR-0082) that edits an integer amount in a currency's smallest unit — the exact
+ * `amount_minor` it stores — grouping the digits for the active locale as the operator types and
+ * showing the (separately chosen) currency code as a static adornment. Only digits are accepted; an
+ * empty field emits `null` (not priced). It carries no currency conversion or fractional handling —
+ * VND (v1) has no minor part, and other currencies are authored in their minor units, the same
+ * convention `formatMoney` reads back.
+ */
+export function MoneyField(props: {
+  label: string;
+  currencyCode: string;
+  value: number | null;
+  onChange: (minor: number | null) => void;
+  placeholder?: string;
+}) {
+  const grouped = () =>
+    props.value === null ? "" : new Intl.NumberFormat(locale()).format(props.value);
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <div class="flex items-center gap-2">
+        <input
+          class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+          inputmode="numeric"
+          placeholder={props.placeholder}
+          value={grouped()}
+          onInput={(event) => {
+            const digits = event.currentTarget.value.replace(/\D/g, "");
+            props.onChange(digits === "" ? null : Number(digits));
+          }}
+        />
+        <span class="shrink-0 text-sm text-ink-muted">{props.currencyCode}</span>
+      </div>
     </label>
   );
 }

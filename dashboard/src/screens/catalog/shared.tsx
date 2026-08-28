@@ -21,9 +21,13 @@ export const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
   SALES_CHANNEL_API: "channel.api",
 };
 
-/** A blank per-channel price sheet: every channel maps to an empty amount string (not priced). */
-export const emptyPriceSheet = (): Record<SalesChannel, string> =>
-  Object.fromEntries(SALES_CHANNELS.map((channel) => [channel, ""])) as Record<SalesChannel, string>;
+/** A blank per-channel price sheet: every channel maps to `null` (not priced). Amounts are integer
+ *  minor units (what `MoneyField` edits and `amount_minor` stores). */
+export const emptyPriceSheet = (): Record<SalesChannel, number | null> =>
+  Object.fromEntries(SALES_CHANNELS.map((channel) => [channel, null])) as Record<
+    SalesChannel,
+    number | null
+  >;
 
 // Drops blank-key or blank-value entries from an edited per-locale name map and trims both sides, so a
 // row the operator left empty never ships as a `""` translation (ADR-0074). The server cleans too;

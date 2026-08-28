@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Menus sub-screen lands on the kit with a currency-aware money field and bulk price editing**
+  (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The
+  priced heart of the catalog — menus (with inheritance), authoring sections, per-channel placements,
+  and publish-to-store — becomes `screens/catalog/Menus.tsx` on the kit: menus, sections, and
+  placements are each a `DataTable`, and create/edit move into `Drawer`s. Two F3 additions ride along:
+  a new **`MoneyField`** (in `components/ui.tsx`) edits a price as an integer in a currency's smallest
+  unit (the exact `amount_minor` stored), grouped for the active locale as the operator types, with
+  the currency now **chosen from the country registry** (`GET /admin/countries`) instead of a free-text
+  box; and a **bulk price editor** sets one channel's price across a section's placements (or the whole
+  menu) at once — or clears it — over the same audited `setPlacement` path, leaving the other channels
+  untouched. Removing a placement now runs through a `ConfirmDialog`. Built unrouted alongside the
+  monolith; the shell and route swap follow. **Upgrade note:** none — frontend-only, no `/admin`
+  route, permission, or migration change; prices remain **T2**, authored in the console and shipped in
+  config, never logged.
 - **The Menu screen's Items, Tax classes, Taxonomy, and Modifiers move onto the F2 CRUD kit**
   (roadmap v2, Track F3, F3 slice 2; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The
   first four entities split out of the 1,898-line Catalog monolith: `screens/catalog/Items.tsx`,
