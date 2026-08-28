@@ -1470,6 +1470,13 @@ mod alerts {
     /// index dedups the one *open* alert per key), acknowledge, resolve (drops from active, stays in
     /// recent), and reopen the same key past a resolved row.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end lifecycle: it opens a tenant-scoped and a server-wide alert, \
+                  refreshes each in place through the partial-unique dedup, acknowledges, resolves \
+                  (drops from active, stays in recent), and reopens the same key past the resolved \
+                  row — splitting it would duplicate the multi-alert setup"
+    )]
     fn upserts_refreshes_resolves_and_lists_alerts() {
         block_on(async {
             let (store, admin) = prepared().await.expect("prepare the database");
