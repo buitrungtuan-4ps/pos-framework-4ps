@@ -26,11 +26,13 @@ use core::future::Future;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
+use pos_core::business_date::{CutoffHour, StoreTimeZone};
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
+use pos_proto::money::CurrencyCode;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 
@@ -55,6 +57,16 @@ struct PublishedStaff {
 struct PublishedPermissions {
     #[serde(default)]
     staff: Vec<PublishedStaff>,
+}
+
+/// The published `locale` node: the store's currency, IANA timezone, and business-date cutoff hour
+/// (ADR-0074, Track M4). Each field is applied only if it parses, so a bad value leaves that setting
+/// as the base has it rather than blanking it.
+#[derive(serde::Deserialize)]
+struct PublishedLocale {
+    currency_code: String,
+    timezone: String,
+    cutoff_hour: u8,
 }
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
@@ -149,6 +161,25 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<TaxRateTable>(&text).ok())
     {
         session.tax_rates = tax_rates;
+    }
+    // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
+    // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
+    // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
+    // rather than resetting the store's business date to UTC (the never-blank rule, per field).
+    if let Some(locale) = document
+        .get("locale")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedLocale>(&text).ok())
+    {
+        if let Ok(currency) = CurrencyCode::parse(&locale.currency_code) {
+            session.currency = currency;
+        }
+        if let Ok(timezone) = StoreTimeZone::from_iana_name(&locale.timezone) {
+            session.timezone = timezone;
+        }
+        if let Ok(cutoff) = CutoffHour::new(locale.cutoff_hour) {
+            session.cutoff = cutoff;
+        }
     }
     session
 }
@@ -558,6 +589,43 @@ mod tests {
         assert!(
             !no_node.tax_rates.is_empty(),
             "an absent tax node leaves the table"
+        );
+    }
+
+    #[test]
+    fn a_locale_document_rebuilds_currency_timezone_and_cutoff() {
+        use pos_core::business_date::CutoffHour;
+
+        let document = serde_json::json!({ "locale": {
+            "currency_code": "JPY",
+            "timezone": "Asia/Tokyo",
+            "cutoff_hour": 6,
+        }});
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(rebuilt.currency.as_str(), "JPY");
+        assert_eq!(rebuilt.timezone.iana_name(), Some("Asia/Tokyo"));
+        assert_eq!(rebuilt.cutoff, CutoffHour::new(6).expect("cutoff"));
+
+        // A malformed timezone leaves the base clock unchanged, but the valid currency still applies —
+        // the never-blank rule holds per field.
+        let base = EdgeSession::bootstrap();
+        let bad = session_from_config(
+            &base,
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Not/AZone",
+                "cutoff_hour": 4,
+            }}),
+        );
+        assert_eq!(
+            bad.timezone.iana_name(),
+            base.timezone.iana_name(),
+            "a bad timezone leaves the running clock"
+        );
+        assert_eq!(
+            bad.currency.as_str(),
+            "VND",
+            "the valid currency still applied"
         );
     }
 

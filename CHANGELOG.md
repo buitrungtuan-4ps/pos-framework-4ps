@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Store locale settings — currency, timezone, and business-date cutoff, published and applied**
+  (roadmap v2, Track M4, slice 5; [ADR-0074](docs/adr/0074-localization-and-tax.md)). `PUT
+  /admin/config/locale` (behind `console.config.publish`, audited `config.locale.publish`) validates a
+  store's currency (3-letter code), **IANA timezone** (against the tz database), and business-date
+  cutoff hour (`0..=23`) with the domain constructors — a bad value is a `400` naming it — then writes
+  them as the store's **`locale`** config node, preserving sibling nodes. The edge's
+  `session_from_config` gains a `locale` branch that applies each field to `EdgeSession`'s currency,
+  timezone, and cutoff **independently** — a malformed field leaves that one setting as-is rather than
+  resetting a trading store's clock to UTC — killing the hardcoded VND/UTC/04:00 bootstrap so business
+  dates derive in the store's real timezone (ADR-0014). The typed client gains `publishLocale`.
+  **Upgrade note:** additive Store-layer node and route; a store with no `locale` node keeps today's
+  behaviour; no protocol change.
 - **Countries & locale packs surfaced as master data** (roadmap v2, Track M4, slice 4;
   [ADR-0074](docs/adr/0074-localization-and-tax.md)). `pos-cloud` now builds a `CountryRegistry` from
   the country modules compiled into it — a country is a Cargo feature like the edge (ADR-0027), and the

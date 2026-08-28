@@ -6193,6 +6193,73 @@ async fn countries_and_locales_are_read_only_master_data() {
     assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
 }
 
+fn locale_publish_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_locale_router(
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn locale_publish_validates_and_writes_the_locale_node() {
+    let config_trees = FakeConfigTrees::default();
+    let router = locale_publish_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let ok = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route locale publish");
+    assert_eq!(ok.status(), StatusCode::OK);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(state.layers[2]["locale"]["timezone"], "Asia/Ho_Chi_Minh");
+    assert_eq!(state.layers[2]["locale"]["currency_code"], "VND");
+
+    // A malformed IANA timezone is a 400, validated before anything is written.
+    let bad = router
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "currency_code": "VND",
+                "timezone": "Nowhere/Nope",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad timezone");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());

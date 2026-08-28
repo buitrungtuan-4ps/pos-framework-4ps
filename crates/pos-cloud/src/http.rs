@@ -74,12 +74,14 @@ use pos_proto::ids::{
     MenuItemId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::TaxRate;
+use pos_proto::money::CurrencyCode;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
 
 use pos_country::CountryRegistry;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
+use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
@@ -2352,6 +2354,186 @@ where
                 &store_id.to_string(),
                 None,
                 serde_json::to_value(entries.len()).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Locale publish (`/admin/config/locale`, ADR-0074, Track M4) --------------------------------
+
+/// The collaborators the locale-publish route needs: the config-tree store the `locale` node is
+/// written onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigLocaleState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA
+/// timezone, and business-date cutoff hour. These drive money display and business-date derivation on
+/// the edge (ADR-0014); until M4 they were hardcoded to VND/UTC/04:00 in the edge bootstrap.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishLocaleRequest {
+    tenant_id: String,
+    store_id: String,
+    currency_code: String,
+    timezone: String,
+    cutoff_hour: u8,
+}
+
+/// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One route: validate a store's currency / IANA timezone / cutoff hour with the domain constructors,
+/// write them as the store's `locale` config node, and version it through the config tree — the
+/// node-merge the other publishes use, so sibling nodes survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to its session's currency, timezone,
+/// and cutoff.
+pub fn config_locale_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/locale",
+            axum::routing::put(admin_publish_locale::<Cfg, A, C>),
+        )
+        .with_state(ConfigLocaleState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
+/// load→merge→publish→version shape as the other node publishes. Each field is checked with its domain
+/// constructor before anything is written (a real IANA timezone against the tz database, a 3-letter
+/// currency, an hour in `0..=23`), so a bad value is a `400` naming it rather than a stored error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish scenario: validate three fields with their domain constructors, then the \
+              load→merge→version→save→audit shape shared with the other node publishes"
+)]
+async fn admin_publish_locale<Cfg, A, C>(
+    State(state): State<ConfigLocaleState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishLocaleRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if CurrencyCode::parse(&request.currency_code).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "currency_code is not a 3-letter code",
+        )
+            .into_response();
+    }
+    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
+        return (StatusCode::BAD_REQUEST, "timezone is not a valid IANA name").into_response();
+    }
+    if CutoffHour::new(request.cutoff_hour).is_err() {
+        return (StatusCode::BAD_REQUEST, "cutoff_hour must be in 0..=23").into_response();
+    }
+    let locale_value = serde_json::json!({
+        "currency_code": request.currency_code,
+        "timezone": request.timezone,
+        "cutoff_hour": request.cutoff_hour,
+    });
+
+    // Set the `locale` key on the store's Store layer (index 2) and re-publish it, preserving the
+    // other Store-level keys.
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("locale".to_owned(), locale_value.clone());
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.locale.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(locale_value),
             )
             .await;
             (

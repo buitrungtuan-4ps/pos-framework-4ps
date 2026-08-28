@@ -413,6 +413,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // Locale publish (ADR-0074, Track M4): a store's currency, timezone, and business-date cutoff
+        // as the `locale` config node the edge applies (killing the hardcoded UTC/04:00 bootstrap).
+        .merge(http::config_locale_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay

@@ -599,6 +599,20 @@ export const api = {
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
   listLocales: () => requestJson<string[]>("GET", "/admin/locales"),
+  // Publish a store's locale settings (ADR-0074) as its `locale` config node, behind
+  // console.config.publish; the edge applies the currency, timezone, and business-date cutoff.
+  publishLocale: (
+    tenantId: string,
+    storeId: string,
+    settings: { currency_code: string; timezone: string; cutoff_hour: number },
+  ) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      currency_code: settings.currency_code,
+      timezone: settings.timezone,
+      cutoff_hour: settings.cutoff_hour,
+    }),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>
