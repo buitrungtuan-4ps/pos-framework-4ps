@@ -52,6 +52,48 @@ pub struct DailyRollup {
     pub by_type: BTreeMap<String, u64>,
 }
 
+/// A day's **revenue** for one store, folded from the settlement and line events
+/// ([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4).
+///
+/// Revenue is recognised from `billing.bill.settled` (the settled totals); the product mix is the
+/// **gross ordered** mix from `sales.order_line.added` — units and value as ordered, **before** voids
+/// and comps are netted (which the line events do not carry back to a menu item), so it reads menu
+/// popularity, not per-item recognised revenue. All amounts are the store's single currency's minor
+/// units (`docs/pos-spec.md` §19). Prices are **T2**: this rollup, and every route that serves it, is
+/// gated behind `console.reports.revenue`. It carries no customer or employee identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DailyRevenue {
+    /// The store's trading day, `YYYY-MM-DD`.
+    pub business_date: String,
+    /// ISO 4217 code of the store's currency, or empty until the first settled bill sets it.
+    pub currency_code: String,
+    /// Settled bills on the day.
+    pub bills: u64,
+    /// Sum of settled subtotals (before reductions), minor units.
+    pub gross: i64,
+    /// Sum of reductions (discounts + comps), minor units.
+    pub reductions: i64,
+    /// Sum of service charge, minor units.
+    pub service_charge: i64,
+    /// Sum of tax, minor units.
+    pub tax: i64,
+    /// Sum of `total_due` — what guests owed — minor units. The headline "revenue" figure.
+    pub net: i64,
+    /// Gross ordered mix, keyed by `menu_item_id`, ordered by key for determinism.
+    pub by_item: BTreeMap<String, ItemMix>,
+}
+
+/// One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct ItemMix {
+    /// The most recent display name seen for the item, for a human-readable report.
+    pub name: String,
+    /// Sum of ordered quantity, in thousandths of a unit (`Quantity::milli`).
+    pub ordered_qty_milli: i64,
+    /// Sum of ordered line totals, minor units — gross, before voids/comps.
+    pub ordered_value: i64,
+}
+
 /// The cloud's application layer over an [`EventStore`].
 ///
 /// Cloneable and shareable — every clone talks to the same store.

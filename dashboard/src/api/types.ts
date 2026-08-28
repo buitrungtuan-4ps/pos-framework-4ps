@@ -78,6 +78,32 @@ export interface DailyRollup {
   readonly by_type: Record<string, number>;
 }
 
+/** One menu item's gross ordered contribution on a trading day (part of `DailyRevenue`, ADR-0081). */
+export interface ItemMix {
+  readonly name: string;
+  /** Ordered quantity in thousandths of a unit. */
+  readonly ordered_qty_milli: number;
+  /** Ordered line total, minor units — gross, before voids/comps. */
+  readonly ordered_value: number;
+}
+
+/**
+ * One day's revenue rollup for a store (ADR-0081, Track O4). Amounts are the store's single
+ * currency's minor units. Revenue is **T2** — served only behind `console.reports.revenue`.
+ */
+export interface DailyRevenue {
+  readonly business_date: string;
+  readonly currency_code: string;
+  readonly bills: number;
+  readonly gross: number;
+  readonly reductions: number;
+  readonly service_charge: number;
+  readonly tax: number;
+  /** `total_due` summed — the headline revenue figure. */
+  readonly net: number;
+  readonly by_item: Record<string, ItemMix>;
+}
+
 /** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
 export interface ActivationCode {
   readonly activation_code: string;

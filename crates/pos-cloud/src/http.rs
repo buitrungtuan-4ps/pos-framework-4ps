@@ -126,7 +126,7 @@ use crate::config_tree::{
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
-use crate::dashboard::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard};
+use crate::dashboard::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, revenue};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
@@ -489,6 +489,10 @@ where
         .route(
             "/admin/stores/{store_id}/rollups/daily",
             get(admin_daily_rollups::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/revenue/daily",
+            get(admin_revenue_daily::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/webhooks",
@@ -15586,6 +15590,56 @@ struct AdminRollupWindowQuery {
     to: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+/// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].
+///
+/// Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —
+/// narrower than the counts read's `console.data.read`. The rollup carries no customer or employee
+/// identifier; the tenant is named explicitly (the console admin is global).
+async fn admin_revenue_daily<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match revenue(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(revenue) => (StatusCode::OK, Json(revenue)).into_response(),
+        Err(error) => rollup_error_response(&error),
+    }
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log

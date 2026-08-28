@@ -13,8 +13,9 @@
 use std::collections::BTreeMap;
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::events::{BillingBillSettled, SalesOrderLineAdded};
 
-use crate::cloud::DailyRollup;
+use crate::cloud::{DailyRevenue, DailyRollup};
 
 /// Folds one event into `days`, creating the trading day's rollup if absent and counting the event
 /// against its total and its type.
@@ -38,6 +39,77 @@ pub fn fold_event(days: &mut BTreeMap<String, DailyRollup>, event: &EventEnvelop
 #[must_use]
 pub fn render(days: BTreeMap<String, DailyRollup>) -> Vec<DailyRollup> {
     days.into_values().collect()
+}
+
+/// Folds one event's **money** into `revenue` (ADR-0081, Track O4): `billing.bill.settled` into the
+/// day's recognised revenue totals, and `sales.order_line.added` into the day's gross ordered mix.
+/// Every other event is ignored. A payload that fails to decode is skipped rather than failing the
+/// pass — these are events this system wrote, so a decode failure is a corrupt row, not the norm.
+pub fn fold_revenue(
+    revenue: &mut BTreeMap<String, DailyRevenue>,
+    event: &EventEnvelope<RawPayload>,
+) {
+    match event.event_type.as_str() {
+        "billing.bill.settled" => {
+            let Ok(bill) = event.data.decode::<BillingBillSettled>() else {
+                return;
+            };
+            let day = revenue
+                .entry(event.business_date.to_string())
+                .or_insert_with(|| empty_revenue(&event.business_date.to_string()));
+            day.currency_code = bill.total_due.currency_code.to_string();
+            day.bills = day.bills.saturating_add(1);
+            day.gross = day.gross.saturating_add(bill.subtotal.amount_minor);
+            day.reductions = day
+                .reductions
+                .saturating_add(bill.reduction_total.amount_minor);
+            day.service_charge = day
+                .service_charge
+                .saturating_add(bill.service_charge.amount_minor);
+            day.tax = day.tax.saturating_add(bill.tax_total.amount_minor);
+            day.net = day.net.saturating_add(bill.total_due.amount_minor);
+        }
+        "sales.order_line.added" => {
+            let Ok(line) = event.data.decode::<SalesOrderLineAdded>() else {
+                return;
+            };
+            let day = revenue
+                .entry(event.business_date.to_string())
+                .or_insert_with(|| empty_revenue(&event.business_date.to_string()));
+            if day.currency_code.is_empty() {
+                // A settled bill overwrites this with the authoritative currency; until one lands, the
+                // ordered lines are the only currency signal for the day.
+                day.currency_code = line.line_total.currency_code.to_string();
+            }
+            let mix = day
+                .by_item
+                .entry(line.menu_item_id.to_string())
+                .or_default();
+            mix.name = line.display_name.to_string();
+            mix.ordered_qty_milli = mix
+                .ordered_qty_milli
+                .saturating_add(line.quantity.as_milli());
+            mix.ordered_value = mix
+                .ordered_value
+                .saturating_add(line.line_total.amount_minor);
+        }
+        _ => {}
+    }
+}
+
+/// An empty revenue rollup for a trading day.
+fn empty_revenue(business_date: &str) -> DailyRevenue {
+    DailyRevenue {
+        business_date: business_date.to_owned(),
+        currency_code: String::new(),
+        bills: 0,
+        gross: 0,
+        reductions: 0,
+        service_charge: 0,
+        tax: 0,
+        net: 0,
+        by_item: BTreeMap::new(),
+    }
 }
 
 /// The default window when a read names no range: the most recent quarter of trading days.
@@ -100,6 +172,25 @@ impl RollupWindow {
     }
 }
 
+/// Filters an ascending-by-date list to the window's inclusive range and caps it to the newest
+/// `limit` entries, preserving oldest-first order. Shared by the counts and revenue readers.
+fn window_slice<T>(items: Vec<T>, date: impl Fn(&T) -> &str, window: &RollupWindow) -> Vec<T> {
+    let mut filtered: Vec<T> = items
+        .into_iter()
+        .filter(|item| {
+            window
+                .from
+                .as_deref()
+                .is_none_or(|lower| date(item) >= lower)
+                && window.to.as_deref().is_none_or(|upper| date(item) <= upper)
+        })
+        .collect();
+    if filtered.len() > window.limit {
+        filtered.drain(0..filtered.len() - window.limit);
+    }
+    filtered
+}
+
 /// Renders a materialised day map as the dashboard's list, filtered to the window's inclusive date
 /// range and capped to its newest `limit` trading days — still oldest trading day first.
 #[must_use]
@@ -108,24 +199,24 @@ pub fn render_window(
     window: &RollupWindow,
 ) -> Vec<DailyRollup> {
     // The map iterates ascending by `YYYY-MM-DD`, which for this format is chronological order.
-    let mut filtered: Vec<DailyRollup> = days
-        .into_values()
-        .filter(|day| {
-            window
-                .from
-                .as_deref()
-                .is_none_or(|lower| day.business_date.as_str() >= lower)
-                && window
-                    .to
-                    .as_deref()
-                    .is_none_or(|upper| day.business_date.as_str() <= upper)
-        })
-        .collect();
-    // Keep the newest `limit` days (they sit at the tail of the ascending list), oldest-first.
-    if filtered.len() > window.limit {
-        filtered.drain(0..filtered.len() - window.limit);
-    }
-    filtered
+    window_slice(
+        days.into_values().collect(),
+        |day| day.business_date.as_str(),
+        window,
+    )
+}
+
+/// Renders a materialised revenue map as a list, windowed exactly as [`render_window`].
+#[must_use]
+pub fn render_revenue_window(
+    revenue: BTreeMap<String, DailyRevenue>,
+    window: &RollupWindow,
+) -> Vec<DailyRevenue> {
+    window_slice(
+        revenue.into_values().collect(),
+        |day| day.business_date.as_str(),
+        window,
+    )
 }
 
 /// Whether `value` is a `YYYY-MM-DD` calendar-shaped string (digits with dashes at positions 4 and 7).
@@ -238,5 +329,101 @@ mod tests {
     #[test]
     fn a_zero_limit_is_rejected() {
         assert!(RollupWindow::new(None, None, Some(0)).is_err());
+    }
+
+    // --- revenue fold ---
+
+    use super::fold_revenue;
+    use pos_contract_tests::fixtures;
+    use pos_proto::BusinessDate;
+    use pos_proto::envelope::{EventEnvelope, EventTypeRef, RawPayload};
+    use pos_proto::events::EventType;
+    use pos_proto::ids::StoreId;
+    use pos_proto::ulid::Ulid;
+    use serde_json::json;
+
+    fn ulid(n: u128) -> String {
+        Ulid::from_u128(n).to_string()
+    }
+
+    fn money(minor: i64) -> serde_json::Value {
+        json!({ "currency_code": "VND", "amount_minor": minor })
+    }
+
+    /// A base event (an activation fixture) re-typed and re-dated with a hand-built wire payload.
+    fn event_with(
+        date: &str,
+        event_type: EventType,
+        payload: &serde_json::Value,
+    ) -> EventEnvelope<RawPayload> {
+        let (year, month, day) = (
+            date[0..4].parse().expect("year"),
+            date[5..7].parse().expect("month"),
+            date[8..10].parse().expect("day"),
+        );
+        let mut base = fixtures::activations(StoreId::new(Ulid::from_u128(1)), 1, 1).remove(0);
+        base.business_date = BusinessDate::from_ymd(year, month, day).expect("valid date");
+        base.event_type = EventTypeRef::from_known(event_type);
+        base.data = RawPayload::encode(payload).expect("encode payload");
+        base
+    }
+
+    #[test]
+    fn revenue_folds_settled_bills_and_ordered_lines() {
+        let mut revenue = BTreeMap::new();
+        fold_revenue(
+            &mut revenue,
+            &event_with(
+                "2026-03-15",
+                EventType::BillingBillSettled,
+                &json!({
+                    "bill_id": ulid(1), "receipt_number": 7u64,
+                    "subtotal": money(100_000), "reduction_total": money(10_000),
+                    "service_charge": money(5_000), "tax_total": money(8_000),
+                    "rounding_adjustment": money(0), "total_due": money(103_000),
+                }),
+            ),
+        );
+        fold_revenue(
+            &mut revenue,
+            &event_with(
+                "2026-03-15",
+                EventType::SalesOrderLineAdded,
+                &json!({
+                    "order_id": ulid(2), "order_line_id": ulid(3), "menu_item_id": ulid(4),
+                    "display_name": "Margherita", "quantity": { "milli": 2000 },
+                    "unit_price": money(50_000), "line_total": money(100_000),
+                    "tax_class_id": ulid(5), "tax_rate": { "numerator": 8, "denominator": 100 },
+                    "seat": null, "course_id": null, "note_present": false,
+                }),
+            ),
+        );
+
+        let day = revenue
+            .get("2026-03-15")
+            .expect("the trading day was folded");
+        assert_eq!(day.bills, 1);
+        assert_eq!(day.gross, 100_000);
+        assert_eq!(day.reductions, 10_000);
+        assert_eq!(day.tax, 8_000);
+        assert_eq!(day.net, 103_000, "total_due is the headline revenue");
+        assert_eq!(day.currency_code, "VND");
+        let mix = day.by_item.get(&ulid(4)).expect("the item is in the mix");
+        assert_eq!(mix.name, "Margherita");
+        assert_eq!(mix.ordered_qty_milli, 2000);
+        assert_eq!(mix.ordered_value, 100_000);
+    }
+
+    #[test]
+    fn revenue_ignores_events_that_are_not_money() {
+        let mut revenue = BTreeMap::new();
+        fold_revenue(
+            &mut revenue,
+            &event_with("2026-03-15", EventType::SalesOrderLineFired, &json!({})),
+        );
+        assert!(
+            revenue.is_empty(),
+            "a fired line carries no money and folds nothing"
+        );
     }
 }

@@ -24,9 +24,9 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-use crate::cloud::DailyRollup;
+use crate::cloud::{DailyRevenue, DailyRollup};
 
-use super::rollup::{RollupWindow, fold_event, render_window};
+use super::rollup::{RollupWindow, fold_event, fold_revenue, render_revenue_window, render_window};
 
 /// How many events one projection page reads and folds.
 const PROJECT_PAGE: u32 = 512;
@@ -43,6 +43,12 @@ pub struct StoredRollups {
     pub cursor: Option<EventId>,
     /// The materialised per-trading-day rollups, keyed by `YYYY-MM-DD`.
     pub days: BTreeMap<String, DailyRollup>,
+    /// The materialised per-trading-day **revenue** rollups, keyed by `YYYY-MM-DD` (ADR-0081, O4).
+    /// `#[serde(default)]` so a blob written before O4 loads with an empty revenue map. Revenue then
+    /// accrues from the cursor forward; to backfill a store's historical revenue, reset the rollup
+    /// (the ADR-0036 reset-cursor-and-replay lever) so the projector re-folds the whole log.
+    #[serde(default)]
+    pub revenue: BTreeMap<String, DailyRevenue>,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -134,6 +140,7 @@ where
         }
         for event in &batch {
             fold_event(&mut state.days, event);
+            fold_revenue(&mut state.revenue, event);
             folded = folded.saturating_add(1);
         }
         let short = batch.len() < page_len;
@@ -167,6 +174,28 @@ where
 {
     let state = rollups.load(tenant, store_id).await?;
     Ok(render_window(state.days, window))
+}
+
+/// Answers a store's **revenue** dashboard from the materialised rollup — the recognised-revenue and
+/// gross-ordered-mix totals per trading day, windowed exactly as [`dashboard`], with no event-log
+/// scan. Revenue is **T2**: the caller must hold `console.reports.revenue` (enforced at the route).
+///
+/// `tenant` is the caller's tenant, so the read is confined to that tenant's rollups.
+///
+/// # Errors
+///
+/// [`RollupError::Store`] if the rollup store cannot be read.
+pub async fn revenue<R>(
+    rollups: &R,
+    tenant: TenantId,
+    store_id: StoreId,
+    window: &RollupWindow,
+) -> Result<Vec<DailyRevenue>, RollupError>
+where
+    R: RollupStore,
+{
+    let state = rollups.load(tenant, store_id).await?;
+    Ok(render_revenue_window(state.revenue, window))
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ import type {
   ConfigVersion,
   CreateApiKeyResponse,
   CreatedId,
+  DailyRevenue,
   DailyRollup,
   Device,
   DeviceProposalSummary,
@@ -341,6 +342,28 @@ export const api = {
       "POST",
       `/admin/stores/${encodeURIComponent(storeId)}/rollups/reset?${tenantQuery(tenantId)}`,
     ),
+  // Revenue & product-mix rollup (ADR-0081, Track O4) — prices are T2, so this is served only to
+  // Owner/Admin (console.reports.revenue) and a non-holder gets a 403. Same window as dailyRollups.
+  dailyRevenue: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (window?.from) {
+      params.set("from", window.from);
+    }
+    if (window?.to) {
+      params.set("to", window.to);
+    }
+    if (window?.limit !== undefined) {
+      params.set("limit", String(window.limit));
+    }
+    return requestJson<DailyRevenue[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/daily?${params.toString()}`,
+    );
+  },
 
   // --- device onboarding (ADR-0041) ---
   listProposals: (tenantId: string) =>

@@ -157,6 +157,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   events folds nothing. **Upgrade note:** none for the API — the rollup contents and read routes are
   unchanged; the only difference is which stores the projector visits. No protocol, migration, or
   permission change.
+- **Revenue and product-mix rollups, behind a new revenue permission** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The projector now decodes the money-bearing
+  events it already ingests — `billing.bill.settled` (subtotal, reductions, service charge, tax,
+  total_due) and `sales.order_line.added` (per-item ordered quantity and value) — into a parallel
+  per-trading-day `DailyRevenue` rollup, served windowed at `GET /admin/stores/{store_id}/revenue/daily`.
+  Because prices are **T2**, the route and the rollup are gated behind a new **`console.reports.revenue`**
+  permission (Owner/Admin only — Ops and Viewer are refused), narrower than the counts read's
+  `console.data.read`. Revenue is recognised from settlement; the product mix is the **gross ordered**
+  mix (before voids/comps, which the line events do not carry back to a menu item), so it reads menu
+  popularity, not per-item recognised revenue. No customer or employee identifier enters the rollup.
+  **Upgrade note:** a new permission `console.reports.revenue` (granted to Owner and Admin by default);
+  no migration (the revenue rollup rides the existing `rollups` blob under a `#[serde(default)]` field)
+  and no protocol change. Revenue accrues from the projector's cursor forward; reset a store's rollup
+  (the ADR-0036 lever) to backfill its history.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
