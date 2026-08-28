@@ -241,6 +241,18 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.accepted_tender = Some(accepted_tender(&published));
     }
+    // The `qr` guardrail node (P11b, authored via ADR-0080, Track M7): the edge reads only
+    // `staff_confirmation_required` — whether a table-bearing QR order waits for staff before the
+    // kitchen sees it. The cloud reads the same node for its own guardrails (enabled/hours/rate). An
+    // absent field leaves the base value (default `true`, ADR-0057), so a store that never published
+    // the node still holds guest orders for staff.
+    if let Some(required) = document
+        .get("qr")
+        .and_then(|node| node.get("staff_confirmation_required"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        session.qr_staff_confirmation_required = required;
+    }
     // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
     // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
@@ -825,6 +837,24 @@ mod tests {
         let unchanged = session_from_config(&rebuilt, &serde_json::json!({ "other": true }));
         assert!(!unchanged.channel_enabled(SalesChannel::Delivery));
         assert!(!unchanged.tender_accepted(PaymentMethod::Card));
+    }
+
+    #[test]
+    fn a_qr_node_toggles_staff_confirmation_and_defaults_on() {
+        // The bootstrap holds guest orders for staff (ADR-0057).
+        let base = EdgeSession::bootstrap();
+        assert!(base.qr_staff_confirmation_required);
+
+        // Publishing `qr.staff_confirmation_required = false` turns the hold off (ADR-0080, M7).
+        let off = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": { "staff_confirmation_required": false } }),
+        );
+        assert!(!off.qr_staff_confirmation_required);
+
+        // A publish with no `qr` node leaves the prior value untouched (never-blank).
+        let unchanged = session_from_config(&off, &serde_json::json!({ "other": true }));
+        assert!(!unchanged.qr_staff_confirmation_required);
     }
 
     #[test]

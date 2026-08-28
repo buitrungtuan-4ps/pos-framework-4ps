@@ -224,8 +224,10 @@ where
             total,
             repriced,
             // A QR order (one that names a table) waits for staff before the kitchen sees it
-            // (ADR-0057); a delivery or public-API order is already committed by its channel.
-            awaiting_staff_confirmation: order.table_id.is_some(),
+            // (ADR-0057), unless the store has turned confirmation off in its `qr` guardrail node
+            // (ADR-0080, M7); a delivery or public-API order is already committed by its channel.
+            awaiting_staff_confirmation: order.table_id.is_some()
+                && session.qr_staff_confirmation_required,
         })
     }
 

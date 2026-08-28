@@ -123,6 +123,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **QR ordering guardrails are authorable, and the edge finally honours staff-confirmation** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/qr`
+  routes read and publish a store's QR guardrail settings — enabled, staff-confirmation-required,
+  per-table rate limit, rate window, and business hours — as the `qr` config node the cloud's QR
+  intake already reads (behind `console.config.publish`, audited; hours validated to `0..=23`). The
+  node existed and the cloud read it, but the edge ignored `staff_confirmation_required` and held every
+  table-bearing QR order for staff unconditionally; the edge now reads the node so an operator can turn
+  the hold off. Default stays on (ADR-0057), and an absent node leaves the running value untouched.
+  **Upgrade note:** none — additive route and edge read; no protocol, migration, or permission change.
 - **A store can now be told which channels and tenders it accepts, and the edge enforces it** (roadmap
   v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT
   /admin/config/channels` and `.../tender` routes read and publish a store's enabled sales channels

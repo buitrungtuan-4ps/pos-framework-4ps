@@ -221,6 +221,11 @@ pub struct EdgeSession {
     /// The payment methods this store accepts, from the `tender` config node (ADR-0080, M7). `None`
     /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
+    /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
+    /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
+    /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
+    /// edge reads it from the published `qr` node so an operator can disable the hold.
+    pub qr_staff_confirmation_required: bool,
 }
 
 impl EdgeSession {
@@ -263,6 +268,7 @@ impl EdgeSession {
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
+            qr_staff_confirmation_required: true,
         }
     }
 

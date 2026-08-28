@@ -2994,6 +2994,10 @@ where
             "/admin/config/tender",
             get(admin_read_tender::<Cfg, A, C>).put(admin_publish_tender::<Cfg, A, C>),
         )
+        .route(
+            "/admin/config/qr",
+            get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
+        )
         .with_state(ConfigChannelsState {
             config_trees,
             admin,
@@ -3186,6 +3190,136 @@ fn channels_serialize_unavailable() -> Response {
         "the configuration service is unavailable",
     )
         .into_response()
+}
+
+/// A `qr.business_hours` window in a `PUT /admin/config/qr` body.
+#[derive(Debug, Clone, Deserialize)]
+struct QrBusinessHoursRequest {
+    open_hour: u8,
+    close_hour: u8,
+    #[serde(default)]
+    tz_offset_minutes: i64,
+}
+
+/// A `PUT /admin/config/qr` body: the store and the QR guardrail settings (P11b/ADR-0057). Composed
+/// into the `qr` node the cloud's QR intake reads (`qr_http::qr_config_for`) and the edge reads for its
+/// staff-confirmation decision.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishQrRequest {
+    tenant_id: String,
+    store_id: String,
+    enabled: bool,
+    staff_confirmation_required: bool,
+    per_table_limit: u32,
+    rate_window_secs: u64,
+    #[serde(default)]
+    business_hours: Option<QrBusinessHoursRequest>,
+}
+
+/// A super-admin reads a store's current `qr` guardrail node, or `null`.
+async fn admin_read_qr<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's QR guardrail settings as its `qr` node.
+async fn admin_publish_qr<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishQrRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let mut node = serde_json::json!({
+        "enabled": request.enabled,
+        "staff_confirmation_required": request.staff_confirmation_required,
+        "per_table_limit": request.per_table_limit,
+        "rate_window_secs": request.rate_window_secs,
+    });
+    if let Some(hours) = request.business_hours {
+        if hours.open_hour > 23 || hours.close_hour > 23 {
+            return (
+                StatusCode::BAD_REQUEST,
+                "open_hour and close_hour must be in 0..=23",
+            )
+                .into_response();
+        }
+        if let serde_json::Value::Object(map) = &mut node {
+            map.insert(
+                "business_hours".to_owned(),
+                serde_json::json!({
+                    "open_hour": hours.open_hour,
+                    "close_hour": hours.close_hour,
+                    "tz_offset_minutes": hours.tz_offset_minutes,
+                }),
+            );
+        }
+    }
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "qr",
+        "config.qr.publish",
+        node,
+    )
+    .await
 }
 
 // --- Floor & kitchen master data (`/admin/floor`, `/admin/kitchen`, ADR-0072) -------------------
