@@ -57,6 +57,7 @@ import type {
   Store,
   TaskHealthReport,
   TaxClass,
+  TaxRate,
   Tenant,
   TranslationGrid,
   WebhookSummary,
@@ -579,6 +580,13 @@ export const api = {
       `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
+  // Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies. `set`
+  // replaces the tenant's whole table (behind console.catalog.manage); the read is behind
+  // console.data.read.
+  listTaxRates: (tenantId: string) =>
+    requestJson<TaxRate[]>("GET", `/admin/catalog/tax-rates?${tenantQuery(tenantId)}`),
+  setTaxRates: (tenantId: string, rates: readonly TaxRate[]) =>
+    requestJson<TaxRate[]>("PUT", "/admin/catalog/tax-rates", { tenant_id: tenantId, rates }),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>

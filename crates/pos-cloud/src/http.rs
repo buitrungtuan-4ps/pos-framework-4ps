@@ -73,8 +73,9 @@ use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
     MenuItemId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::locale::TaxRate;
 use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::Open;
+use pos_proto::wire_enum::{Open, WireEnum};
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
@@ -133,6 +134,7 @@ use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
 };
+use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -5200,6 +5202,223 @@ fn catalog_entropy_unavailable() -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the catalog service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies ----------
+
+/// The highest rate the table accepts, in basis points (100%). Matches the migration's CHECK.
+const MAX_TAX_RATE_BPS: u32 = 10_000;
+
+/// The state the tax-rate routes share: the rate store they write, the catalog store they validate a
+/// class against, and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct TaxRateState<Tax, Cat, A, C> {
+    tax_rates: Tax,
+    catalog: Cat,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// One authored tax-rate row on the wire: the class id, the channel's wire token, and the rate in
+/// basis points (10% is `1000`).
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaxRateView {
+    tax_class_id: String,
+    sales_channel: String,
+    rate_bps: u32,
+}
+
+/// A `PUT /admin/catalog/tax-rates` body: the tenant and its whole rate table (a wholesale replace).
+#[derive(Debug, Clone, Deserialize)]
+struct SetTaxRatesRequest {
+    tenant_id: String,
+    rates: Vec<TaxRateRowRequest>,
+}
+
+/// One row of a [`SetTaxRatesRequest`].
+#[derive(Debug, Clone, Deserialize)]
+struct TaxRateRowRequest {
+    tax_class_id: String,
+    sales_channel: String,
+    rate_bps: u32,
+}
+
+/// Builds the tax-rate sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One resource: the tenant's per-(tax class × channel) rate table. `GET` lists it (behind
+/// [`ConsolePermission::Read`]); `PUT` replaces it wholesale (behind
+/// [`ConsolePermission::ManageCatalog`], the permission tax *classes* already use), validating each
+/// row's class, channel, and rate before the write, and auditing `tax_rate.set`.
+pub fn tax_rate_router<Tax, Cat, A, C>(
+    tax_rates: Tax,
+    catalog: Cat,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/catalog/tax-rates",
+            get(admin_list_tax_rates::<Tax, Cat, A, C>).put(admin_set_tax_rates::<Tax, Cat, A, C>),
+        )
+        .with_state(TaxRateState {
+            tax_rates,
+            catalog,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// One authored entry as the wire view.
+fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
+    TaxRateView {
+        tax_class_id: entry.tax_class_id.to_string(),
+        sales_channel: entry.sales_channel.as_wire().to_owned(),
+        rate_bps: entry.rate.basis_points(),
+    }
+}
+
+/// A super-admin lists a tenant's authored tax rates.
+async fn admin_list_tax_rates<Tax, Cat, A, C>(
+    State(state): State<TaxRateState<Tax, Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.tax_rates.list_tax_rates(tenant_id).await {
+        Ok(rows) => {
+            let view: Vec<TaxRateView> = rows.iter().map(tax_rate_view).collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => tax_rate_error_response(&error),
+    }
+}
+
+/// A super-admin replaces a tenant's whole tax-rate table.
+///
+/// Every row is validated before the write: its class must be one the tenant has authored, its channel
+/// a token this build knows, its rate no more than 100%, and no `(class, channel)` pair repeated —
+/// each a `400` naming the fault, so a bad grid never reaches the store as a `500`.
+async fn admin_set_tax_rates<Tax, Cat, A, C>(
+    State(state): State<TaxRateState<Tax, Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<SetTaxRatesRequest>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let known: BTreeSet<TaxClassId> = match state.catalog.list_tax_classes(tenant_id).await {
+        Ok(classes) => classes.iter().map(|class| class.tax_class_id).collect(),
+        Err(error) => return catalog_error_response(&error),
+    };
+    let mut entries = Vec::with_capacity(request.rates.len());
+    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
+    for row in &request.rates {
+        let Ok(tax_class_id) = row.tax_class_id.parse::<Ulid>().map(TaxClassId::new) else {
+            return (StatusCode::BAD_REQUEST, "a tax_class_id is not a ULID").into_response();
+        };
+        if !known.contains(&tax_class_id) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a tax rate names an unknown tax class",
+            )
+                .into_response();
+        }
+        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a tax rate names an unknown sales channel",
+            )
+                .into_response();
+        };
+        if row.rate_bps > MAX_TAX_RATE_BPS {
+            return (StatusCode::BAD_REQUEST, "a tax rate exceeds 100%").into_response();
+        }
+        if !seen.insert((tax_class_id, sales_channel)) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a (tax class, channel) pair is repeated",
+            )
+                .into_response();
+        }
+        entries.push(TaxRateEntry {
+            tax_class_id,
+            sales_channel,
+            rate: TaxRate::from_basis_points(row.rate_bps),
+        });
+    }
+    match state.tax_rates.set_tax_rates(tenant_id, &entries).await {
+        Ok(()) => {
+            let view: Vec<TaxRateView> = entries.iter().map(tax_rate_view).collect();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "tax_rate.set",
+                "tax_rate",
+                &tenant_id.to_string(),
+                None,
+                serde_json::to_value(&view).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => tax_rate_error_response(&error),
+    }
+}
+
+/// Maps a tax-rate store failure to a retryable `503`, logging the detail rather than leaking it.
+fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
+    tracing::error!(%error, "a tax-rate store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the tax-rate service is unavailable",
     )
         .into_response()
 }

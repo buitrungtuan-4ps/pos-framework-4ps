@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The tax-rate console API — author the rates the edge applies** (roadmap v2, Track M4, slice 2;
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). `GET /admin/catalog/tax-rates?tenant_id=` lists a
+  tenant's authored `(tax class × channel)` rates (behind `console.data.read`); `PUT
+  /admin/catalog/tax-rates` replaces the whole table (behind `console.catalog.manage`, the permission
+  tax *classes* already use) and is audited (`tax_rate.set`). Every row is validated **before** the
+  write — its class must be one the tenant has authored, its channel a token this build knows, its rate
+  no more than 100% (`10000` bps), and no `(class, channel)` pair repeated — so a bad grid returns a
+  `400` naming the fault rather than reaching the store as a `500`. The typed dashboard client gains
+  `listTaxRates` / `setTaxRates` and a `TaxRate` type. **Upgrade note:** additive route on an existing
+  permission; nothing publishes the rates to a store yet (the `tax` config node lands in the next slice).
 - **Tax-rate authoring, foundations — a home for the per-(tax class × channel) rate** (roadmap v2,
   Track M4, slice 1; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Begins Track **M4
   (Localization & tax)**. Tax *calculation* has been built and applied on the edge since ADR-0028

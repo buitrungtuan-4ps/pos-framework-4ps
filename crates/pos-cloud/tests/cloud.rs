@@ -75,6 +75,7 @@ use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
 };
+use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -91,7 +92,7 @@ use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
-    TenantId,
+    TaxClassId, TenantId,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -5910,6 +5911,159 @@ fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
 /// it. Distinct constants keep the tenant, a menu, an item and a tax class from colliding.
 fn ulid_text(n: u128) -> String {
     Ulid::from_u128(n).to_string()
+}
+
+/// An in-memory `TaxRateStore` for the route tests (ADR-0074, Track M4), tenant-scoped like the real
+/// adapter; `set` replaces the tenant's rows and leaves other tenants alone.
+#[derive(Clone, Default)]
+struct FakeTaxRates {
+    rows: Arc<Mutex<Vec<(TenantId, TaxRateEntry)>>>,
+}
+
+impl TaxRateStore for FakeTaxRates {
+    async fn list_tax_rates(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxRateEntry>, TaxRateStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(owner, _entry)| *owner == tenant_id)
+            .map(|(_owner, entry)| *entry)
+            .collect())
+    }
+
+    async fn set_tax_rates(
+        &self,
+        tenant_id: TenantId,
+        entries: &[TaxRateEntry],
+    ) -> Result<(), TaxRateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        rows.retain(|(owner, _entry)| *owner != tenant_id);
+        rows.extend(entries.iter().map(|entry| (tenant_id, *entry)));
+        Ok(())
+    }
+}
+
+fn tax_rate_app(admin: FakeAdmin, catalog: FakeCatalog, tax_rates: FakeTaxRates) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::tax_rate_router(
+        tax_rates,
+        catalog,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// Seeds a tax class straight into the fake, so a rate can name a known class without the catalog
+/// create route.
+fn seed_tax_class(catalog: &FakeCatalog, tenant: &str, tax_class_id: &str, name: &str) {
+    catalog.tax_classes.lock().expect("lock").push(TaxClass {
+        tax_class_id: tax_class_id
+            .parse::<Ulid>()
+            .map(TaxClassId::new)
+            .expect("a class ULID"),
+        tenant_id: tenant
+            .parse::<Ulid>()
+            .map(TenantId::new)
+            .expect("a tenant ULID"),
+        name: name.to_owned(),
+        status: EntityStatus::Active,
+    });
+}
+
+#[tokio::test]
+async fn tax_rates_set_lists_and_validates() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Standard");
+    let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
+    let cookie = admin_cookie(&router).await;
+
+    // PUT the tenant's table: one class taxed 10% dine-in and 8% takeaway.
+    let set = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_TAKEAWAY", "rate_bps": 800 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route set tax rates");
+    assert_eq!(set.status(), StatusCode::OK);
+
+    // GET reads them back.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list tax rates");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let rows = json_body(listed).await;
+    assert_eq!(rows.as_array().expect("array").len(), 2);
+
+    // A rate naming an unknown class is a 400, not a store error.
+    let bad_class = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": ulid_text(99), "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route unknown class");
+    assert_eq!(bad_class.status(), StatusCode::BAD_REQUEST);
+
+    // A rate above 100% is a 400.
+    let bad_rate = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 10_001 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad rate");
+    assert_eq!(bad_rate.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn tax_rate_routes_require_a_session() {
+    let router = tax_rate_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeTaxRates::default(),
+    );
+    let tenant = ulid_text(1);
+    let listed = router
+        .oneshot(get(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            None,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(listed.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -161,6 +161,18 @@ export interface TaxClass {
   readonly status: EntityStatus;
 }
 
+/**
+ * One authored tax rate from `GET /admin/catalog/tax-rates` (ADR-0074, Track M4): the rate a tax class
+ * resolves to on a sales channel, in **basis points** (10% is `1000`, the reduced 8% is `800`).
+ * `sales_channel` is the full wire token. `PUT /admin/catalog/tax-rates` replaces a tenant's whole
+ * table with a list of these; the edge reprices against it.
+ */
+export interface TaxRate {
+  readonly tax_class_id: string;
+  readonly sales_channel: SalesChannel;
+  readonly rate_bps: number;
+}
+
 /** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
 export interface ItemCategory {
   readonly item_category_id: string;
