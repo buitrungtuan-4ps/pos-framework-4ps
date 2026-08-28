@@ -128,6 +128,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }
+# Generate a valid image in the media upload test (ADR-0075); already a normal dep, so no new
+# cargo-deny surface.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 http-body-util = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # The ingest and rollup code runs against the in-memory fakes in tests, exactly as it will against

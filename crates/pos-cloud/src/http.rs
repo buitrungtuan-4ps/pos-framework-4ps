@@ -125,6 +125,8 @@ use crate::floorplan::{
     TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
+use crate::images::{self, ImagePipelineError};
+use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeStore, EmployeeUpdate,
@@ -5812,6 +5814,366 @@ fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the tax-rate service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Media (ADR-0075, Track M5): upload, serve, list, and delete image renditions -----------------
+
+/// The largest upload the media route accepts before re-encoding. A generous cap on the *original*
+/// bytes (the body limit rejects anything larger with `413`); the stored renditions are bounded far
+/// smaller by the pipeline's ≤30 KB / ≤150 KB budgets.
+const MAX_MEDIA_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone)]
+struct MediaState<M, A, C> {
+    media: M,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// One media asset as listed — id, content type, the detail rendition's size, and when it was stored.
+#[derive(Debug, Clone, serde::Serialize)]
+struct MediaSummaryView {
+    media_id: String,
+    content_type: String,
+    detail_bytes: u64,
+    created_at_ms: i64,
+}
+
+/// The `POST /admin/media` response: the id the caller references the new asset by, and its size.
+#[derive(Debug, Clone, serde::Serialize)]
+struct UploadedMedia {
+    media_id: String,
+    detail_bytes: u64,
+}
+
+/// Builds the media sub-router ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+///
+/// Four routes on the tenant's media library. `POST` uploads an image as a raw binary body (under an
+/// 8 MB limit), re-encodes it through the ADR-0042 pipeline, and stores the two bounded renditions;
+/// `GET /admin/media` lists summaries; `GET .../thumbnail` and `.../detail` stream one rendition as
+/// `image/jpeg`; `DELETE` removes an asset. Upload and delete need [`ConsolePermission::ManageMedia`]
+/// and are audited; reads and the two serve routes need only [`ConsolePermission::Read`]. The original
+/// upload is never stored — only the renditions.
+pub fn media_router<M, A, C>(media: M, admin: A, clock: C, audit: Arc<dyn AuditRecorder>) -> Router
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/media",
+            get(admin_list_media::<M, A, C>).post(admin_upload_media::<M, A, C>),
+        )
+        .route(
+            "/admin/media/{media_id}",
+            delete(admin_delete_media::<M, A, C>),
+        )
+        .route(
+            "/admin/media/{media_id}/thumbnail",
+            get(admin_get_media_thumbnail::<M, A, C>),
+        )
+        .route(
+            "/admin/media/{media_id}/detail",
+            get(admin_get_media_detail::<M, A, C>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_MEDIA_UPLOAD_BYTES))
+        .with_state(MediaState {
+            media,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin lists a tenant's media assets (summaries, without the bytes).
+async fn admin_list_media<M, A, C>(
+    State(state): State<MediaState<M, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.media.list(tenant_id).await {
+        Ok(rows) => {
+            let view: Vec<MediaSummaryView> = rows
+                .iter()
+                .map(|row| MediaSummaryView {
+                    media_id: row.media_id.to_string(),
+                    content_type: row.content_type.clone(),
+                    detail_bytes: u64::try_from(row.detail_bytes).unwrap_or(u64::MAX),
+                    created_at_ms: row.created_at_ms,
+                })
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => media_error_response(&error),
+    }
+}
+
+/// A super-admin uploads an image: it is re-encoded to two bounded JPEG renditions and stored. The raw
+/// upload is never persisted. `?tenant_id=` names the owner.
+async fn admin_upload_media<M, A, C>(
+    State(state): State<MediaState<M, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageMedia,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let renditions = match images::render(&body) {
+        Ok(renditions) => renditions,
+        Err(ImagePipelineError::Decode(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "the upload is not a decodable image",
+            )
+                .into_response();
+        }
+        Err(ImagePipelineError::Budget { .. }) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "the image could not be reduced within the size budget",
+            )
+                .into_response();
+        }
+        Err(ImagePipelineError::Encode(_)) => {
+            tracing::error!("encoding a media rendition failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not encode the image",
+            )
+                .into_response();
+        }
+    };
+    let Some(media_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MediaId::new)
+    else {
+        return media_entropy_unavailable();
+    };
+    let detail_bytes = u64::try_from(renditions.detail.len()).unwrap_or(u64::MAX);
+    let asset = NewMediaAsset {
+        media_id,
+        tenant_id,
+        content_type: "image/jpeg".to_owned(),
+        thumbnail: renditions.thumbnail,
+        detail: renditions.detail,
+    };
+    match state.media.put(&asset).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "media.upload",
+                "media_asset",
+                &media_id.to_string(),
+                None,
+                Some(serde_json::json!({ "content_type": "image/jpeg", "detail_bytes": detail_bytes })),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(UploadedMedia {
+                    media_id: media_id.to_string(),
+                    detail_bytes,
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => media_error_response(&error),
+    }
+}
+
+/// Streams a stored rendition as `image/jpeg`, or `404` if the tenant has no such asset.
+async fn serve_media_rendition<M, A, C>(
+    state: &MediaState<M, A, C>,
+    headers: &HeaderMap,
+    tenant: &str,
+    media_id: &str,
+    rendition: Rendition,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) =
+        require_permission(&state.admin, &state.clock, headers, ConsolePermission::Read).await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = tenant.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Ok(media_id) = media_id.parse::<Ulid>().map(MediaId::new) else {
+        return (StatusCode::BAD_REQUEST, "media id is not a ULID").into_response();
+    };
+    match state.media.get(tenant_id, media_id, rendition).await {
+        Ok(Some(bytes)) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "image/jpeg"),
+                // Renditions are immutable (content is replaced by a new id), so cache hard, privately.
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "private, max-age=31536000, immutable",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such media asset").into_response(),
+        Err(error) => media_error_response(&error),
+    }
+}
+
+/// A super-admin (or any reader) fetches an asset's thumbnail rendition.
+async fn admin_get_media_thumbnail<M, A, C>(
+    State(state): State<MediaState<M, A, C>>,
+    headers: HeaderMap,
+    Path(media_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    serve_media_rendition(
+        &state,
+        &headers,
+        &query.tenant_id,
+        &media_id,
+        Rendition::Thumbnail,
+    )
+    .await
+}
+
+/// A super-admin (or any reader) fetches an asset's detail rendition.
+async fn admin_get_media_detail<M, A, C>(
+    State(state): State<MediaState<M, A, C>>,
+    headers: HeaderMap,
+    Path(media_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    serve_media_rendition(
+        &state,
+        &headers,
+        &query.tenant_id,
+        &media_id,
+        Rendition::Detail,
+    )
+    .await
+}
+
+/// A super-admin deletes a media asset.
+async fn admin_delete_media<M, A, C>(
+    State(state): State<MediaState<M, A, C>>,
+    headers: HeaderMap,
+    Path(media_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    M: MediaStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageMedia,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Ok(media_id) = media_id.parse::<Ulid>().map(MediaId::new) else {
+        return (StatusCode::BAD_REQUEST, "media id is not a ULID").into_response();
+    };
+    match state.media.delete(tenant_id, media_id).await {
+        Ok(true) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "media.delete",
+                "media_asset",
+                &media_id.to_string(),
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such media asset").into_response(),
+        Err(error) => media_error_response(&error),
+    }
+}
+
+/// The `503` a media-store failure becomes.
+fn media_error_response(error: &MediaStoreError) -> Response {
+    tracing::error!(%error, "a media store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the media service is unavailable",
+    )
+        .into_response()
+}
+
+/// The `503` a failure to mint a media id becomes (OS entropy unavailable).
+fn media_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint a media id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the media service is unavailable",
     )
         .into_response()
 }

@@ -388,6 +388,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Media (ADR-0075, Track M5): upload an image → re-encode → store two bounded renditions;
+        // serve, list, and delete them.
+        .merge(http::media_router(
+            store.media(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
         // config node, so it rides the config tree to the store like every other config change.
         .merge(http::catalog_publish_router(

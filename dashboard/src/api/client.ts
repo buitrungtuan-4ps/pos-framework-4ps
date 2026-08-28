@@ -57,10 +57,12 @@ import type {
   RoleTemplate,
   Store,
   TaskHealthReport,
+  MediaSummary,
   TaxClass,
   TaxRate,
   Tenant,
   TranslationGrid,
+  UploadedMedia,
   WebhookSummary,
 } from "./types";
 import { setActingAdmin, setAuthed } from "../state/session";
@@ -139,6 +141,20 @@ async function requestJsonOrNull<T>(path: string): Promise<T | null> {
   if (response.status === 404) {
     return null;
   }
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  return (await response.json()) as T;
+}
+
+// Uploads a raw binary body (an image) and reads the JSON reply (ADR-0075). The server re-encodes and
+// bounds it, so the browser sends the file as-is; the `content-type` names the format for the decoder.
+async function requestUpload<T>(path: string, file: Blob): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
+  });
   if (!response.ok) {
     throw await failure(response);
   }
@@ -619,6 +635,24 @@ export const api = {
       cutoff_hour: settings.cutoff_hour,
       display_language: settings.display_language ?? null,
     }),
+
+  // --- media (ADR-0075) ---
+  // Upload an image; the server re-encodes it to two bounded renditions and returns the new id.
+  uploadMedia: (tenantId: string, file: Blob) =>
+    requestUpload<UploadedMedia>(`/admin/media?${tenantQuery(tenantId)}`, file),
+  listMedia: (tenantId: string) =>
+    requestJson<MediaSummary[]>("GET", `/admin/media?${tenantQuery(tenantId)}`),
+  deleteMedia: (tenantId: string, mediaId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/media/${encodeURIComponent(mediaId)}?${tenantQuery(tenantId)}`,
+    ),
+  // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
+  mediaThumbnailUrl: (tenantId: string, mediaId: string) =>
+    `/admin/media/${encodeURIComponent(mediaId)}/thumbnail?${tenantQuery(tenantId)}`,
+  mediaDetailUrl: (tenantId: string, mediaId: string) =>
+    `/admin/media/${encodeURIComponent(mediaId)}/detail?${tenantQuery(tenantId)}`,
+
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>

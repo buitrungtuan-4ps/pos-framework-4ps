@@ -267,6 +267,20 @@ export interface CatalogItem {
   readonly status: EntityStatus;
 }
 
+/** A media asset as listed (ADR-0075) — its id and size, never the bytes. */
+export interface MediaSummary {
+  readonly media_id: string;
+  readonly content_type: string;
+  readonly detail_bytes: number;
+  readonly created_at_ms: number;
+}
+
+/** The response to a media upload (ADR-0075): the id to reference the new asset by. */
+export interface UploadedMedia {
+  readonly media_id: string;
+  readonly detail_bytes: number;
+}
+
 /** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
 export interface Menu {
   readonly menu_id: string;

@@ -152,6 +152,13 @@ console_permissions! {
         roles: [Owner, Admin, Ops],
         description: "Acknowledge and resolve operational alerts",
     },
+    /// Upload and delete media assets — item photos and brand logos (ADR-0075). Reading/serving a
+    /// rendition needs only `Read`.
+    ManageMedia {
+        id: "console.media.manage",
+        roles: [Owner, Admin],
+        description: "Upload and delete media assets (item photos, brand logos)",
+    },
     /// Read any tenant data — reports, registry, configuration, catalog, translations.
     Read {
         id: "console.data.read",

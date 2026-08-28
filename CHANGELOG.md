@@ -111,6 +111,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Media upload, serve, list, and delete routes — the image pipeline's first caller**
+  (roadmap v2, Track M5, slice 2; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST /admin/media`
+  takes an image as a raw binary body (under an 8 MB limit), re-encodes it through the ADR-0042 pipeline,
+  and stores only the two bounded JPEG renditions (the original is never persisted); `GET /admin/media`
+  lists summaries; `GET /admin/media/{id}/thumbnail` and `.../detail` stream one rendition as
+  `image/jpeg` with an immutable cache header; `DELETE /admin/media/{id}` removes an asset. Upload and
+  delete are behind a new **`console.media.manage`** permission (Owner/Admin, deny-by-default) and
+  audited (`media.upload`, `media.delete`); reads and the serve routes need only `Read`. A non-image
+  upload is a `400`, an image that cannot be reduced within budget a `422`. The typed dashboard client
+  gains an upload core plus `uploadMedia` / `listMedia` / `deleteMedia` and rendition-URL helpers.
+  **Upgrade note:** additive routes + one new permission; no schema, wire, or edge change.
 - **Media storage foundation — image renditions in Postgres `bytea` behind a `MediaStore` seam**
   (roadmap v2, Track M5, slice 1; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). The ADR-0042 image
   pipeline (`images::render`, ≤30 KB thumbnail / ≤150 KB detail) gains its storage: a new tenant-scoped

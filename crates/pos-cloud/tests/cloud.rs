@@ -57,6 +57,9 @@ use pos_cloud::floorplan::{
 };
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
+use pos_cloud::media::{
+    MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
+};
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
@@ -5982,6 +5985,217 @@ fn seed_tax_class(catalog: &FakeCatalog, tenant: &str, tax_class_id: &str, name:
         name: name.to_owned(),
         status: EntityStatus::Active,
     });
+}
+
+/// An in-memory `MediaStore` for the route tests (ADR-0075), tenant-scoped like the real adapter.
+#[derive(Clone, Default)]
+struct FakeMedia {
+    assets: Arc<Mutex<Vec<NewMediaAsset>>>,
+}
+
+impl MediaStore for FakeMedia {
+    async fn put(&self, asset: &NewMediaAsset) -> Result<(), MediaStoreError> {
+        self.assets.lock().expect("lock").push(asset.clone());
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+        rendition: Rendition,
+    ) -> Result<Option<Vec<u8>>, MediaStoreError> {
+        Ok(self
+            .assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|asset| asset.tenant_id == tenant_id && asset.media_id == media_id)
+            .map(|asset| match rendition {
+                Rendition::Thumbnail => asset.thumbnail.clone(),
+                Rendition::Detail => asset.detail.clone(),
+            }))
+    }
+
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
+        Ok(self
+            .assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|asset| asset.tenant_id == tenant_id)
+            .map(|asset| MediaSummary {
+                media_id: asset.media_id,
+                content_type: asset.content_type.clone(),
+                detail_bytes: asset.detail.len(),
+                created_at_ms: 0,
+            })
+            .collect())
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+    ) -> Result<bool, MediaStoreError> {
+        let mut assets = self.assets.lock().expect("lock");
+        let before = assets.len();
+        assets.retain(|asset| !(asset.tenant_id == tenant_id && asset.media_id == media_id));
+        Ok(assets.len() < before)
+    }
+}
+
+fn media_app(admin: FakeAdmin, media: FakeMedia) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::media_router(
+        media,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// A small valid PNG for the upload path — a 4×4 solid image the ADR-0042 pipeline decodes and
+/// re-encodes to two JPEG renditions.
+fn tiny_png() -> Vec<u8> {
+    let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        4,
+        4,
+        image::Rgb([200, 40, 40]),
+    ));
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .expect("encode a test png");
+    buffer.into_inner()
+}
+
+/// A raw-binary POST (an image upload) carrying a `Cookie` header.
+fn post_bytes_with_cookie(
+    uri: &str,
+    bytes: Vec<u8>,
+    content_type: &str,
+    cookie: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", content_type)
+        .header("cookie", cookie)
+        .body(Body::from(bytes))
+        .expect("build the request")
+}
+
+#[tokio::test]
+async fn media_uploads_serves_lists_and_deletes_and_rejects_a_non_image() {
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // A non-image body is refused before anything is stored.
+    let bad = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            b"this is not an image".to_vec(),
+            "application/octet-stream",
+            &cookie,
+        ))
+        .await
+        .expect("route the bad upload");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A valid image is re-encoded and stored; the reply carries the new id.
+    let created = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            tiny_png(),
+            "image/png",
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    let media_id = created["media_id"].as_str().expect("a media id").to_owned();
+    assert!(created["detail_bytes"].as_u64().expect("size") > 0);
+
+    // The thumbnail serves as JPEG.
+    let thumb = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media/{media_id}/thumbnail?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the thumbnail");
+    assert_eq!(thumb.status(), StatusCode::OK);
+    assert_eq!(
+        thumb
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg"),
+    );
+
+    // The listing shows the one asset.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let items = json_body(listed).await;
+    assert_eq!(items.as_array().expect("array").len(), 1);
+    assert_eq!(items[0]["media_id"], media_id);
+
+    // Delete removes it; a second delete is a 404.
+    let deleted = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/media/{media_id}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the delete");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let gone = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media/{media_id}/thumbnail?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the gone thumbnail");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn media_routes_require_a_session() {
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let tenant = ulid_text(1);
+    let anonymous = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/media?tenant_id={tenant}"))
+                .body(Body::empty())
+                .expect("build"),
+        )
+        .await
+        .expect("route without a cookie");
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
