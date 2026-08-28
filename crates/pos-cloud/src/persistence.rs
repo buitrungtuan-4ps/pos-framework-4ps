@@ -26,13 +26,13 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow,
-    PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
-    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor,
-    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, OrderQueueRow,
+    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
+    PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
+    PostgresFloor, PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresWebhooks, RoleTemplateRow,
+    RoutingRuleRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -81,6 +81,7 @@ use crate::floorplan::{
     TableStore, TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
+use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
@@ -1547,6 +1548,75 @@ impl TaxRateStore for PostgresTaxRates {
         self.replace(&tenant_id.to_string(), &rows)
             .await
             .map_err(|error| TaxRateStoreError::new(error.to_string()))
+    }
+}
+
+// --- Media renditions (ADR-0075) --------------------------------------------------------------
+
+/// Converts one stored `media_assets` summary row into the seam's [`MediaSummary`], failing loudly on
+/// a media id that is not a ULID — that is store corruption (this cloud minted it), not an absence.
+fn media_summary(row: MediaAssetRow) -> Result<MediaSummary, MediaStoreError> {
+    let media_id = row
+        .media_id
+        .parse::<Ulid>()
+        .map(MediaId::new)
+        .map_err(|_ignored| {
+            MediaStoreError::new(format!("a media id is not a ULID: {}", row.media_id))
+        })?;
+    Ok(MediaSummary {
+        media_id,
+        content_type: row.content_type,
+        detail_bytes: usize::try_from(row.detail_bytes).unwrap_or(0),
+        created_at_ms: row.created_at_ms,
+    })
+}
+
+impl MediaStore for PostgresMedia {
+    async fn put(&self, asset: &NewMediaAsset) -> Result<(), MediaStoreError> {
+        let detail_bytes = i32::try_from(asset.detail.len()).unwrap_or(i32::MAX);
+        self.insert(
+            &asset.media_id.to_string(),
+            &asset.tenant_id.to_string(),
+            &asset.content_type,
+            &asset.thumbnail,
+            &asset.detail,
+            detail_bytes,
+        )
+        .await
+        .map_err(|error| MediaStoreError::new(error.to_string()))
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+        rendition: Rendition,
+    ) -> Result<Option<Vec<u8>>, MediaStoreError> {
+        self.fetch_rendition(
+            &tenant_id.to_string(),
+            &media_id.to_string(),
+            matches!(rendition, Rendition::Detail),
+        )
+        .await
+        .map_err(|error| MediaStoreError::new(error.to_string()))
+    }
+
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
+        let rows = self
+            .fetch_summaries(&tenant_id.to_string())
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))?;
+        rows.into_iter().map(media_summary).collect()
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+    ) -> Result<bool, MediaStoreError> {
+        self.remove(&tenant_id.to_string(), &media_id.to_string())
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))
     }
 }
 

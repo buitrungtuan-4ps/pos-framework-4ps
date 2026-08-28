@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Media storage foundation — image renditions in Postgres `bytea` behind a `MediaStore` seam**
+  (roadmap v2, Track M5, slice 1; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). The ADR-0042 image
+  pipeline (`images::render`, ≤30 KB thumbnail / ≤150 KB detail) gains its storage: a new tenant-scoped
+  `media_assets` table (migration 0030) holds the two JPEG renditions as `bytea` — per ADR-0042/ADR-0031,
+  Postgres, not the condemned `blob-garage` port. A `MediaStore` seam (`put` / `get` one rendition /
+  `list` summaries without the bytes / `delete`) lands with a `store-postgres` `PostgresMedia` adapter
+  and the `pos-cloud` persistence bridge, plus an in-memory fake and unit + Postgres integration tests
+  (bytea round-trip, single-rendition read, tenant isolation, delete). Media is immutable — insert,
+  read, list, delete; no update. **Upgrade note:** additive, forward-only migration applied on boot; no
+  routes or edge/wire changes yet (the upload/serve routes and image fields land in later slices).
 - **Per-locale item names, end to end — authored, compiled, and rendered in the store's language**
   (roadmap v2, Track M4, slice 8; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A catalog item
   gains an optional `name_translations` map (locale code → name), authored in the Catalog screen's item

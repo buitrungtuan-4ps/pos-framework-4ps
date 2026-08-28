@@ -135,9 +135,9 @@ impl EventStoreHarness for StoreHarness {
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
                  admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 task_health, audit_log, alerts, catalog_tax_rates, stores, order_queue, subjects, \
-                 webhook_endpoints, device_proposals, activation_codes, device_credentials \
-                 RESTART IDENTITY;",
+                 task_health, audit_log, alerts, catalog_tax_rates, media_assets, stores, \
+                 order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
+                 device_credentials RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -179,9 +179,9 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, stores, \
-             order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
-             device_credentials RESTART IDENTITY",
+             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, \
+             media_assets, stores, order_queue, subjects, webhook_endpoints, device_proposals, \
+             activation_codes, device_credentials RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1664,6 +1664,101 @@ mod tax_rates {
             // The neighbour is untouched.
             let neighbour_after = rates.fetch(TENANT_B).await.expect("fetch neighbour");
             assert_eq!(neighbour_after, neighbour);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Media renditions: bytea round-trip, single-rendition read, tenant isolation, delete (ADR-0075).
+// ---------------------------------------------------------------------------
+
+mod media {
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    #[test]
+    fn stores_reads_one_rendition_lists_and_stays_tenant_scoped() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+
+            let thumbnail = vec![0xFFu8, 0xD8, 0xFF, 0x00, 0x01];
+            let detail = vec![0xFFu8, 0xD8, 0xFF, 0x10, 0x11, 0x12, 0x13];
+            media
+                .insert(
+                    "asset-1",
+                    TENANT_A,
+                    "image/jpeg",
+                    &thumbnail,
+                    &detail,
+                    i32::try_from(detail.len()).expect("fits"),
+                )
+                .await
+                .expect("insert ours");
+            // A neighbour tenant's asset with the same id must never leak across the boundary.
+            media
+                .insert("asset-1", TENANT_B, "image/jpeg", &[0x01], &[0x02], 1)
+                .await
+                .expect("insert neighbour");
+
+            // Each rendition round-trips its exact bytes.
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_A, "asset-1", false)
+                    .await
+                    .expect("thumbnail"),
+                Some(thumbnail),
+            );
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_A, "asset-1", true)
+                    .await
+                    .expect("detail"),
+                Some(detail.clone()),
+            );
+
+            // A listing shows the size without the bytes, tenant-scoped.
+            let listed = media.fetch_summaries(TENANT_A).await.expect("list ours");
+            assert_eq!(listed.len(), 1);
+            let row = listed.first().expect("row");
+            assert_eq!(row.media_id, "asset-1");
+            assert_eq!(row.content_type, "image/jpeg");
+            assert_eq!(
+                usize::try_from(row.detail_bytes).expect("non-negative"),
+                detail.len()
+            );
+
+            // Another tenant cannot read this asset by id.
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_B, "asset-1", true)
+                    .await
+                    .expect("neighbour detail"),
+                Some(vec![0x02]),
+                "the neighbour sees only its own bytes for the shared id"
+            );
+
+            // Delete removes only the named asset and reports it.
+            assert!(media.remove(TENANT_A, "asset-1").await.expect("remove"));
+            assert!(
+                !media.remove(TENANT_A, "asset-1").await.expect("remove"),
+                "removing an absent asset reports no row removed"
+            );
+            assert!(
+                media
+                    .fetch_summaries(TENANT_A)
+                    .await
+                    .expect("list")
+                    .is_empty()
+            );
+            assert_eq!(
+                media
+                    .fetch_summaries(TENANT_B)
+                    .await
+                    .expect("neighbour")
+                    .len(),
+                1,
+                "the neighbour's asset is untouched"
+            );
         });
     }
 }
