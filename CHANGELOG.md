@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A published `inventory` node finally gives the edge its recipe book** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `PUT /admin/config/inventory` route
+  (behind `console.config.publish`, audited by count only) assembles a tenant's authored ingredients,
+  recipes, and suppliers into the store's `inventory` config node the same way campaigns/tax/floor
+  publish, preserving the store layer's other keys. The edge's config apply parses that node and calls
+  `pos_core::inventory::from_published` to build the runtime `RecipeBook` and a per-item auto-86
+  threshold map, replacing the empty bootstrap book: a fired line now consumes its bill of materials
+  (`decide_line` already reads `session.recipes`). An absent or unparseable node leaves the base book
+  untouched — a bad publish never blanks a trading store's recipes. `EdgeSession::item_sellable` is the
+  pure §8 auto-86 decision (available-vs-threshold) the edge now holds; driving it from a **live**
+  on-hand stock projection is the flagged goods-in/stocktake follow-up, so no trading store's menu is
+  86'd from this slice alone. **Upgrade note:** none — additive route and additive session state; no
+  protocol, migration, or permission change, and a store with no `inventory` node behaves exactly as
+  today (every item unlimited).
 - **Ingredients, recipes, and suppliers can be authored over the API** (roadmap v2, Track M6;
   [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). New `/admin/inventory/*` routes give a tenant
   per-record CRUD over its ingredients, per-item/modifier recipes (bill of materials + auto-86

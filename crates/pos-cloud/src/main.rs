@@ -488,6 +488,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Inventory publish (ADR-0079, Track M6): assemble the tenant's authored ingredients, recipes,
+        // and suppliers into the store's `inventory` config node, so the edge builds its RecipeBook and
+        // auto-86 thresholds.
+        .merge(http::config_inventory_router(
+            store.inventory(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // OTA rollout levers (ADR-0078, Track O3): publish a `fleet_update` rollout or engage its
         // kill switch from typed fields, instead of hand-editing the config node.
         .merge(http::ota_config_router(

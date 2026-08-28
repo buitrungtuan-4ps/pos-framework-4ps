@@ -139,7 +139,7 @@ use crate::floorplan::{
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::images::{self, ImagePipelineError};
 use crate::import;
-use crate::inventory::{InventoryStore, InventoryStoreError};
+use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::people::{
@@ -7440,6 +7440,229 @@ fn inventory_error_response(error: &InventoryStoreError) -> Response {
         "the inventory service is unavailable",
     )
         .into_response()
+}
+
+// --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
+
+/// The collaborators the inventory-publish route needs: the inventory store the ingredients, recipes,
+/// and suppliers are read from, the config-tree store the `inventory` node is written onto, plus the
+/// admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigInventoryState<Inv, Cfg, A, C> {
+    inventory: Inv,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `PUT /admin/config/inventory` body: the `(tenant, store)` to push the tenant's authored inventory
+/// to. Like every other node publish, the ingredients/recipes/suppliers come from what is authored, not
+/// the body.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishInventoryRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// A compact audit summary of an inventory publish — how many of each kind went into the node, never
+/// the recipe amounts (T2 proprietary process live in the inventory store).
+#[derive(Debug, Clone, serde::Serialize)]
+struct InventoryPublishSummary {
+    ingredients: usize,
+    recipes: usize,
+    suppliers: usize,
+}
+
+/// Reads a tenant's three authored inventory lists in one place, short-circuiting on the first store
+/// failure. Split out of [`admin_publish_inventory`] to keep that handler within its line budget.
+async fn list_inventory_parts<Inv>(
+    inventory: &Inv,
+    tenant_id: TenantId,
+) -> Result<
+    (
+        Vec<PublishedIngredient>,
+        Vec<PublishedRecipe>,
+        Vec<PublishedSupplier>,
+    ),
+    InventoryStoreError,
+>
+where
+    Inv: InventoryStore,
+{
+    Ok((
+        inventory.list_ingredients(tenant_id).await?,
+        inventory.list_recipes(tenant_id).await?,
+        inventory.list_suppliers(tenant_id).await?,
+    ))
+}
+
+/// Builds the inventory-publish sub-router ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6).
+///
+/// One route: assemble the tenant's authored ingredients, recipes, and suppliers into a
+/// `PublishedInventory`, write it as the store's `inventory` config node, and version it through the
+/// config tree — the same node-merge the campaigns/tax/floor/menu publishes use, so the other
+/// Store-level keys survive. Behind [`ConsolePermission::PublishConfig`]. The edge applies the node to
+/// build its `RecipeBook` and per-item auto-86 thresholds (§8).
+pub fn config_inventory_router<Inv, Cfg, A, C>(
+    inventory: Inv,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/inventory",
+            axum::routing::put(admin_publish_inventory::<Inv, Cfg, A, C>),
+        )
+        .with_state(ConfigInventoryState {
+            inventory,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Sets one node `key` on a store's Store-layer object (index 2), preserving its other keys, and
+/// returns the layer to re-publish. A missing or non-object prior layer starts from an empty object,
+/// so the first publish and a corrupt layer both compose cleanly.
+fn store_layer_with(
+    state_before: Option<&ConfigTreeState>,
+    key: &str,
+    value: serde_json::Value,
+) -> serde_json::Value {
+    let mut layer = state_before.map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !layer.is_object() {
+        layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut layer {
+        map.insert(key.to_owned(), value);
+    }
+    layer
+}
+
+/// Assembles a tenant's authored inventory into a `PublishedInventory`, writes it as the store's
+/// `inventory` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
+async fn admin_publish_inventory<Inv, Cfg, A, C>(
+    State(state): State<ConfigInventoryState<Inv, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishInventoryRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let (ingredients, recipes, suppliers) =
+        match list_inventory_parts(&state.inventory, tenant_id).await {
+            Ok(parts) => parts,
+            Err(error) => return inventory_error_response(&error),
+        };
+    let summary = InventoryPublishSummary {
+        ingredients: ingredients.len(),
+        recipes: recipes.len(),
+        suppliers: suppliers.len(),
+    };
+    let Ok(inventory_value) =
+        serde_json::to_value(inventory_to_node(ingredients, recipes, suppliers))
+    else {
+        tracing::error!("could not serialise an inventory node");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the inventory service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `inventory` key on the store's Store layer (index 2) and re-publish it, preserving the
+    // other Store-level keys (`menu`, `tax`, `campaigns`, `permissions`, `floor`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let store_layer = store_layer_with(state_before.as_ref(), "inventory", inventory_value);
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.inventory.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(summary).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
 }
 
 // --- Campaign publish (`/admin/config/campaigns`, ADR-0077, Track M3) --------------------------

@@ -29,9 +29,11 @@ use std::sync::{Arc, Mutex};
 use pos_core::business_date::{CutoffHour, StoreTimeZone};
 use pos_core::campaign::campaigns_from_published;
 use pos_core::capability::{Capability, CapabilityContext};
+use pos_core::inventory::from_published as inventory_from_published;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
@@ -192,6 +194,23 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<PublishedCampaigns>(&text).ok())
     {
         session.campaigns = campaigns_from_published(&published);
+    }
+    // The `inventory` node the inventory publish writes (ADR-0079, Track M6): the store's ingredients,
+    // per-item recipes (bill of materials), and auto-86 thresholds, converted to the runtime RecipeBook
+    // the fire path consumes and a per-item threshold map. Absent or unparseable leaves the base book
+    // untouched — a bad publish never blanks a trading store's recipes. This kills the empty-book
+    // bootstrap: a fired line now consumes its ingredients (`decide_line` reads `session.recipes`).
+    // Deriving live item availability (auto-86 on the menu) needs an on-hand stock projection, which
+    // arrives with the flagged goods-in/stocktake follow-up; the thresholds are delivered here so that
+    // slice has them, and `EdgeSession::item_sellable` is the pure decision it will drive.
+    if let Some(published) = document
+        .get("inventory")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedInventory>(&text).ok())
+    {
+        let (book, thresholds) = inventory_from_published(&published);
+        session.recipes = book;
+        session.recipe_thresholds = thresholds;
     }
     // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
@@ -684,6 +703,67 @@ mod tests {
             1,
             "an absent campaigns node leaves the list"
         );
+    }
+
+    #[test]
+    fn an_inventory_document_rebuilds_the_recipe_book_and_drives_auto_86() {
+        use pos_core::inventory::StockProjection;
+        use pos_proto::enums::UnitOfMeasure;
+        use pos_proto::ids::IngredientId;
+        use pos_proto::inventory::{
+            PublishedIngredient, PublishedInventory, PublishedRecipe, PublishedRecipeLine,
+        };
+        use pos_proto::quantity::Quantity;
+        use pos_proto::wire_enum::Open;
+
+        let dough = IngredientId::new(Ulid::from_u128(0xD0));
+        // One item needs 100 g of dough per unit, and is 86'd at or below 2 makeable.
+        let node = PublishedInventory::from_parts(
+            vec![PublishedIngredient {
+                id: dough,
+                name: DisplayName::new("Dough"),
+                unit: Open::from_known(UnitOfMeasure::Gram),
+            }],
+            vec![PublishedRecipe {
+                item: item(),
+                lines: vec![PublishedRecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(100_000),
+                }],
+                auto_86_threshold: 2,
+            }],
+            Vec::new(),
+        );
+        let document =
+            serde_json::json!({ "inventory": serde_json::to_value(&node).expect("inventory") });
+
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(rebuilt.recipe_thresholds.get(&item()).copied(), Some(2));
+
+        // The delivered recipe is a real runtime `RecipeBook`: against a stock projection, the auto-86
+        // decision follows §8 — 250 g makes 2 (not strictly above the threshold of 2, so 86'd), 350 g
+        // makes 3 (above it, so sellable). This proves the wire→session→availability path.
+        let mut low = StockProjection::new();
+        low.set_on_hand(dough, Quantity::from_milli(250_000));
+        assert!(
+            !rebuilt.item_sellable(item(), &low),
+            "2 makeable is not strictly above the threshold of 2"
+        );
+        let mut high = StockProjection::new();
+        high.set_on_hand(dough, Quantity::from_milli(350_000));
+        assert!(
+            rebuilt.item_sellable(item(), &high),
+            "3 makeable is above the threshold, so sellable"
+        );
+
+        // An item with no recipe is always sellable, whatever the stock.
+        let untracked = MenuItemId::new(Ulid::from_u128(0x999));
+        assert!(rebuilt.item_sellable(untracked, &StockProjection::new()));
+
+        // No `inventory` node: the base book stays empty (a bad publish never blanks recipes).
+        let no_node =
+            session_from_config(&EdgeSession::bootstrap(), &serde_json::json!({ "x": 1 }));
+        assert!(no_node.recipe_thresholds.is_empty());
     }
 
     #[test]

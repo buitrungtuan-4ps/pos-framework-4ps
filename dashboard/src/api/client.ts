@@ -763,6 +763,13 @@ export const api = {
       "DELETE",
       `/admin/inventory/suppliers/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
+  // Assemble the tenant's authored inventory into one store's `inventory` config node, behind
+  // console.config.publish; the edge applies it to build its RecipeBook and auto-86 thresholds.
+  publishInventory: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/inventory", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
