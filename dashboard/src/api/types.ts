@@ -526,6 +526,38 @@ export interface FleetStore {
   readonly config_current: boolean;
   readonly relay_backlog: number;
   readonly relay_oldest_pending_at_ms: number | null;
+  /** The binary version the store last reported running (ADR-0078), or `null` if it never reported. */
+  readonly installed_version: string | null;
+  /** Whether the store's last post-install self-test passed, or `null`. */
+  readonly self_test_ok: boolean | null;
+  /** Unix ms of the store's most recent OTA report, or `null`. */
+  readonly reported_at_ms: number | null;
+}
+
+/**
+ * A store's currently-published OTA rollout — the `fleet_update` config node — from
+ * `GET /admin/config/ota` (ADR-0078, Track O3), or `null` when nothing is published. `halted` is the
+ * kill switch; `min_ring` names the slowest ring the rollout has reached.
+ */
+export interface OtaRollout {
+  readonly target_version: string;
+  readonly min_ring: string;
+  readonly rollout_percent: number;
+  readonly signing_key_id: string;
+  readonly revoked_key_ids?: readonly string[];
+  readonly halted?: boolean;
+}
+
+/** A `PUT /admin/config/ota` body: publish a rollout from typed fields (no `halted` — a fresh publish
+ *  is live; the kill switch is a separate route). */
+export interface PublishRolloutRequest {
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly target_version: string;
+  readonly min_ring: string;
+  readonly rollout_percent: number;
+  readonly signing_key_id: string;
+  readonly revoked_key_ids: readonly string[];
 }
 
 /** One background loop's health from `GET /admin/health/tasks` (ADR-0068 slice 4). */

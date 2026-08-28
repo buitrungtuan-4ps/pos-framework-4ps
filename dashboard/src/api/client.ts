@@ -55,6 +55,8 @@ import type {
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
+  OtaRollout,
+  PublishRolloutRequest,
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
@@ -1075,6 +1077,26 @@ export const api = {
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
     ),
   taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
+
+  // --- OTA rollout levers (ADR-0078, Track O3) ---
+  // The published rollout is a store's `fleet_update` config node. Reading it is behind
+  // console.data.read; publishing a rollout or flipping its kill switch is behind console.ota.publish
+  // (Owner/Admin only) and audited. Publish composes the node from typed fields and validates it the
+  // same way the generic config publish did; halt loads the published rollout, flips `halted`, and
+  // re-publishes without re-typing it.
+  getOtaRollout: (tenantId: string, storeId: string) =>
+    requestJson<OtaRollout | null>(
+      "GET",
+      `/admin/config/ota?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishOtaRollout: (request: PublishRolloutRequest) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/ota", request),
+  haltOtaRollout: (tenantId: string, storeId: string, halted: boolean) =>
+    requestJson<PublishedConfig>("POST", "/admin/config/ota/halt", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      halted,
+    }),
 
   // --- console audit trail (ADR-0069, Track G2) ---
   // A fleet-wide, filterable read of who changed what, behind console.data.read. Every filter is

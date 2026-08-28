@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console has an OTA updates screen — rollout progress and the levers in one place** (roadmap
+  v2, Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting and lever backends
+  landed with no way to see or drive them from the console; this adds the screen. A tenant-scoped
+  **rollout progress** table shows, per store, the binary it last reported running, whether its
+  post-install self-test passed, when it last reported, and whether it is online — the rollout-ring
+  progress that was invisible — and polls so it stays current. For the store in context, a **manage
+  rollout** pane reads the store's published rollout and offers the first-class levers: a form that
+  publishes a rollout from typed fields (target version, ring, ramp percent, signing key, revoked
+  keys) and a kill switch that halts (or resumes) it without re-typing. Both writes go through the
+  server's `console.ota.publish` gate — a viewer sees the progress but a publish returns `403` — and
+  the publish is guarded by a confirmation that names the version, ring, and store. Added to the
+  Overview nav for Owner/Admin. **Upgrade note:** none — a console-only screen over the existing
+  `GET /admin/fleet` read and the `/admin/config/ota` levers; no schema, protocol, or permission
+  change (the `console.ota.publish` permission shipped with the levers).
 - **First-class OTA rollout levers replace hand-editing a config node** (roadmap v2, Track O3;
   [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). Publishing a fleet update used to mean typing a
   raw `fleet_update` JSON node into the generic config-tree editor; a fat-fingered ring or ramp went
