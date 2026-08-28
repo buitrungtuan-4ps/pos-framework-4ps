@@ -207,6 +207,24 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
 
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
 
+/** `tenant_id` plus an optional rollup window (`from`/`to`/`limit`), as a query string. */
+const rollupWindowQuery = (
+  tenantId: string,
+  window?: { from?: string; to?: string; limit?: number },
+) => {
+  const params = new URLSearchParams(tenantQuery(tenantId));
+  if (window?.from) {
+    params.set("from", window.from);
+  }
+  if (window?.to) {
+    params.set("to", window.to);
+  }
+  if (window?.limit !== undefined) {
+    params.set("limit", String(window.limit));
+  }
+  return params.toString();
+};
+
 export const api = {
   // --- session / enrolment (ADR-0034) ---
   session: () => requestVoid("GET", "/admin/session"),
@@ -916,6 +934,25 @@ export const api = {
     downloadCsv(`/admin/catalog/export/items?${tenantQuery(tenantId)}`, "items.csv"),
   exportTranslationsCsv: (tenantId: string) =>
     downloadCsv(`/admin/translations/export?${tenantQuery(tenantId)}`, "translations.csv"),
+  // Reports CSV exports (ADR-0081, Track O4), windowed like the reads. Revenue is T2 (Owner/Admin).
+  exportRollupsCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/rollups/export?${rollupWindowQuery(tenantId, window)}`,
+      "rollups.csv",
+    ),
+  exportRevenueCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/export?${rollupWindowQuery(tenantId, window)}`,
+      "revenue.csv",
+    ),
   // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
   dryRunTranslationsCsv: (tenantId: string, file: Blob) =>
     requestUpload<TranslationImportReport>(

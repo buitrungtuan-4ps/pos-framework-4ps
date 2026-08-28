@@ -192,6 +192,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   window as the reads, set `content-disposition: attachment`, and are audited by **row count only** —
   never the contents (`reports.export_rollups` / `reports.export_revenue`). **Upgrade note:** none —
   additive read/export routes reusing existing permissions; no protocol or migration change.
+- **The Reports screen is rebuilt into a real analytics view** (roadmap v2, Track O4;
+  [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The console's home screen gains a date-range
+  window (defaulting to the last 90 trading days), inline-SVG trend charts (no chart library — nothing
+  past the CSP to load), and a CSV export button on each section. For Owner/Admin (revenue is **T2**,
+  so the panels are hidden for Ops/Viewer, matching the server's `console.reports.revenue` gate) it
+  adds a revenue table and trend, a product-mix top-10 (by ordered value across the window), an X/Z
+  report card (today's X or a chosen closed day's Z, with the cash-drawer expected/counted/variance),
+  and a cross-store comparison of revenue across the tenant's active stores. Counts stay visible to
+  every role. Full en/vi. **Upgrade note:** none — a console screen over the O4 read/export routes; no
+  protocol, migration, or permission change.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
