@@ -151,6 +151,12 @@ resource_id! {
     StockLedgerEntryId
 }
 resource_id! {
+    /// A supplier a store receives goods from. A lightweight reference only — the full purchasing
+    /// relationship (contracts, POs, invoices) lives in the ERP (`docs/pos-spec.md` §19); the store
+    /// keeps just enough to name who a goods-receipt came from.
+    SupplierId
+}
+resource_id! {
     /// A pricing or promotion campaign.
     CampaignId
 }

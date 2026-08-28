@@ -123,6 +123,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The inventory engine gets a wire node and a conversion, so recipes can finally be authored**
+  (roadmap v2, Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `pos-core`
+  inventory domain (spec §8 — recipes, stock projection, auto-86) has been built and property-tested
+  since P3, but it had no inputs: the edge plumbs a `RecipeBook` into its fire path yet that book is
+  empty, so a fired line consumes nothing and every item reads as unlimited. This slice adds the
+  authoring shape. A new `pos_proto::inventory::PublishedInventory` config-node type carries a store's
+  ingredients (id, name, `UnitOfMeasure`), per-item/per-modifier recipes (ingredient lines with a
+  per-unit quantity) and their auto-86 thresholds, and lightweight supplier references — the wire
+  mirror the cloud will write as the `inventory` key on the config tree, exactly as `campaigns`/`tax`
+  do. `pos_core::inventory::from_published` turns it back into the runtime `RecipeBook` and a per-item
+  threshold map — the one place that sees both shapes. A new `UnitOfMeasure` wire enum
+  (gram/kilogram/millilitre/litre/piece) is a per-ingredient display label; the availability
+  arithmetic stays unit-agnostic, so there is deliberately no cross-unit conversion. The storage,
+  admin routes, publish path, edge apply, and console follow in the same track. **Upgrade note:** none
+  — additive `pos-proto` types and a new enum; no protocol, migration, or permission change in this
+  slice, and a store with no `inventory` node behaves exactly as today (every item unlimited).
 - **The console shows reconciliation history and gives the rebuild lever a button** (roadmap v2,
   Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). A new Reconciliation screen reads
   `GET /admin/reconcile` and lists each store's recent reconciliation runs — store, ids offered, how
