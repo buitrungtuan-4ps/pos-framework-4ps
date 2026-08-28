@@ -5489,6 +5489,7 @@ impl CatalogStore for FakeCatalog {
         for row in rows.iter_mut() {
             if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
                 row.name.clone_from(&item.name);
+                row.name_translations.clone_from(&item.name_translations);
                 row.tax_class_id = item.tax_class_id;
                 row.item_category_id = item.item_category_id;
                 row.item_subcategory_id = item.item_subcategory_id;
@@ -6270,7 +6271,13 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
         .clone()
         .oneshot(post_with_cookie(
             "/admin/catalog/items",
-            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+                // Per-locale names (ADR-0074): a real one, plus a blank row the handler drops.
+                "name_translations": { "vi": "Bánh Margherita", "": "ignored", "ja": "  " },
+            }),
             &cookie,
         ))
         .await
@@ -6279,6 +6286,15 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let created = json_body(created).await;
     assert_eq!(created["name"], "Margherita");
     assert_eq!(created["status"], "active");
+    assert_eq!(
+        created["name_translations"]["vi"], "Bánh Margherita",
+        "a real per-locale name is kept"
+    );
+    assert!(
+        created["name_translations"].get("").is_none()
+            && created["name_translations"].get("ja").is_none(),
+        "a blank-key or blank-value translation row is dropped"
+    );
     let item_id = created["menu_item_id"]
         .as_str()
         .expect("an item id")
@@ -6296,6 +6312,7 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let items = json_body(listed).await;
     assert_eq!(items.as_array().expect("array").len(), 1);
     assert_eq!(items[0]["menu_item_id"], item_id);
+    assert_eq!(items[0]["name_translations"]["vi"], "Bánh Margherita");
 
     // A menu, optionally with a parent — created by name, id minted server-side.
     let created = router

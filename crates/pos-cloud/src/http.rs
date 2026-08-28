@@ -2394,6 +2394,11 @@ struct PublishLocaleRequest {
     currency_code: String,
     timezone: String,
     cutoff_hour: u8,
+    /// The store's display language (a locale code, e.g. `"vi"`), which selects a compiled item's
+    /// per-locale name at the edge (ADR-0074). Optional; when absent or blank the store shows each
+    /// item's default name, exactly as before.
+    #[serde(default)]
+    display_language: Option<String>,
 }
 
 /// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -2480,11 +2485,25 @@ where
     if CutoffHour::new(request.cutoff_hour).is_err() {
         return (StatusCode::BAD_REQUEST, "cutoff_hour must be in 0..=23").into_response();
     }
-    let locale_value = serde_json::json!({
+    let mut locale_value = serde_json::json!({
         "currency_code": request.currency_code,
         "timezone": request.timezone,
         "cutoff_hour": request.cutoff_hour,
     });
+    // The display language is optional: include it only when a non-blank code was given, so a store
+    // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
+    if let Some(language) = request
+        .display_language
+        .as_deref()
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "display_language".to_owned(),
+            serde_json::Value::String(language.to_owned()),
+        );
+    }
 
     // Set the `locale` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys.
@@ -5364,6 +5383,10 @@ where
 struct CreateItemRequest {
     tenant_id: String,
     name: String,
+    /// Per-locale names keyed by locale code (ADR-0074). Optional and additive; `name` is the
+    /// always-present fallback.
+    #[serde(default)]
+    name_translations: std::collections::BTreeMap<String, String>,
     tax_class_id: String,
     #[serde(default)]
     item_category_id: Option<String>,
@@ -5375,12 +5398,31 @@ struct CreateItemRequest {
 struct UpdateItemRequest {
     tenant_id: String,
     name: String,
+    /// Per-locale names keyed by locale code (ADR-0074). Optional and additive; `name` is the
+    /// always-present fallback.
+    #[serde(default)]
+    name_translations: std::collections::BTreeMap<String, String>,
     tax_class_id: String,
     #[serde(default)]
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
     status: String,
+}
+
+/// Drops empty-key or empty-value entries from an authored per-locale name map and trims both sides,
+/// so a blank row a form left behind never becomes a `""` translation the edge would show in place of
+/// the default name (ADR-0074).
+fn clean_name_translations(
+    raw: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    raw.into_iter()
+        .filter_map(|(locale, name)| {
+            let locale = locale.trim().to_owned();
+            let name = name.trim().to_owned();
+            (!locale.is_empty() && !name.is_empty()).then_some((locale, name))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -6036,6 +6078,7 @@ where
         menu_item_id,
         tenant_id,
         name: request.name,
+        name_translations: clean_name_translations(request.name_translations),
         tax_class_id,
         item_category_id,
         item_subcategory_id,
@@ -6112,6 +6155,7 @@ where
         menu_item_id,
         tenant_id,
         name: request.name,
+        name_translations: clean_name_translations(request.name_translations),
         tax_class_id,
         item_category_id,
         item_subcategory_id,

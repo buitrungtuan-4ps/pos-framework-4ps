@@ -604,7 +604,12 @@ export const api = {
   publishLocale: (
     tenantId: string,
     storeId: string,
-    settings: { currency_code: string; timezone: string; cutoff_hour: number },
+    settings: {
+      currency_code: string;
+      timezone: string;
+      cutoff_hour: number;
+      display_language?: string;
+    },
   ) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
       tenant_id: tenantId,
@@ -612,6 +617,7 @@ export const api = {
       currency_code: settings.currency_code,
       timezone: settings.timezone,
       cutoff_hour: settings.cutoff_hour,
+      display_language: settings.display_language ?? null,
     }),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
@@ -662,11 +668,16 @@ export const api = {
     tenantId: string,
     name: string,
     taxClassId: string,
-    taxonomy: { itemCategoryId: string | null; itemSubcategoryId: string | null },
+    taxonomy: {
+      itemCategoryId: string | null;
+      itemSubcategoryId: string | null;
+      nameTranslations?: Record<string, string>;
+    },
   ) =>
     requestJson<CatalogItem>("POST", "/admin/catalog/items", {
       tenant_id: tenantId,
       name,
+      name_translations: taxonomy.nameTranslations ?? {},
       tax_class_id: taxClassId,
       item_category_id: taxonomy.itemCategoryId,
       item_subcategory_id: taxonomy.itemSubcategoryId,
@@ -676,6 +687,7 @@ export const api = {
     tenantId: string,
     fields: {
       name: string;
+      nameTranslations?: Record<string, string>;
       taxClassId: string;
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
@@ -685,6 +697,7 @@ export const api = {
     requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
       tenant_id: tenantId,
       name: fields.name,
+      name_translations: fields.nameTranslations ?? {},
       tax_class_id: fields.taxClassId,
       item_category_id: fields.itemCategoryId,
       item_subcategory_id: fields.itemSubcategoryId,

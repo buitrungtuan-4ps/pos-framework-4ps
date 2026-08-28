@@ -29,6 +29,9 @@ pub struct CatalogItemRow {
     pub tenant_id: String,
     /// The human name.
     pub name: String,
+    /// The per-locale names as a JSON object (locale code → name), the `name_translations` jsonb
+    /// column verbatim; `{}` when the item has none (ADR-0074).
+    pub name_translations: String,
     /// The tax class id (a ULID string).
     pub tax_class_id: String,
     /// The operational category id (a ULID string), or `None` if unclassified.
@@ -185,6 +188,7 @@ impl PostgresCatalog {
         menu_item_id: &str,
         tenant_id: &str,
         name: &str,
+        name_translations: &str,
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
@@ -193,12 +197,14 @@ impl PostgresCatalog {
         connection
             .execute(
                 "INSERT INTO catalog_items \
-                 (menu_item_id, tenant_id, name, tax_class_id, item_category_id, item_subcategory_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
+                 item_subcategory_id) \
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)",
                 &[
                     &menu_item_id,
                     &tenant_id,
                     &name,
+                    &name_translations,
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,
@@ -218,8 +224,8 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT menu_item_id, tenant_id, name, tax_class_id, item_category_id, \
-                 item_subcategory_id, status FROM catalog_items \
+                "SELECT menu_item_id, tenant_id, name, name_translations::text, tax_class_id, \
+                 item_category_id, item_subcategory_id, status FROM catalog_items \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -231,10 +237,11 @@ impl PostgresCatalog {
                 menu_item_id: row.get(0),
                 tenant_id: row.get(1),
                 name: row.get(2),
-                tax_class_id: row.get(3),
-                item_category_id: row.get(4),
-                item_subcategory_id: row.get(5),
-                status: row.get(6),
+                name_translations: row.get(3),
+                tax_class_id: row.get(4),
+                item_category_id: row.get(5),
+                item_subcategory_id: row.get(6),
+                status: row.get(7),
             })
             .collect())
     }
@@ -245,11 +252,18 @@ impl PostgresCatalog {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one UPDATE binding the item's flat columns by name; the per-locale names column \
+                  (ADR-0074) takes it one over the limit, and a params struct for a single call site \
+                  would obscure more than it clarifies"
+    )]
     pub async fn set_item(
         &self,
         tenant_id: &str,
         menu_item_id: &str,
         name: &str,
+        name_translations: &str,
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
@@ -258,13 +272,15 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let changed = connection
             .execute(
-                "UPDATE catalog_items SET name = $3, tax_class_id = $4, item_category_id = $5, \
-                 item_subcategory_id = $6, status = $7, updated_at = now() \
+                "UPDATE catalog_items SET name = $3, name_translations = $4::jsonb, \
+                 tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, status = $8, \
+                 updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2",
                 &[
                     &tenant_id,
                     &menu_item_id,
                     &name,
+                    &name_translations,
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,

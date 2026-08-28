@@ -96,6 +96,9 @@ const MIGRATION_0027: &str = include_str!("../migrations/0027_alerts.sql");
 /// The per-(tax class × channel) tax rate table ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
 const MIGRATION_0028: &str = include_str!("../migrations/0028_catalog_tax_rates.sql");
 
+/// Per-locale item names on `catalog_items` ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+const MIGRATION_0029: &str = include_str!("../migrations/0029_catalog_item_name_translations.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -266,6 +269,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0028)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0029)
             .await
             .map_err(unavailable)
     }

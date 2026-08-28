@@ -10,7 +10,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { Country } from "../api/types";
-import { t } from "../i18n";
+import { LOCALES, localeName, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
@@ -68,6 +68,9 @@ export function StoreSettings() {
   const [currency, setCurrency] = createSignal("VND");
   const [timezone, setTimezone] = createSignal("Asia/Ho_Chi_Minh");
   const [cutoffHour, setCutoffHour] = createSignal(4);
+  // The store's display language, which selects a compiled item's per-locale name at the edge
+  // (ADR-0074). Blank means each item shows its default name.
+  const [displayLanguage, setDisplayLanguage] = createSignal("");
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -110,6 +113,7 @@ export function StoreSettings() {
         currency_code: currency().trim().toUpperCase(),
         timezone: timezone().trim(),
         cutoff_hour: cutoffHour(),
+        display_language: displayLanguage().trim() || undefined,
       });
       toast.ok(t("storeSettings.published", { store: storeName() }));
     } catch (caught) {
@@ -164,6 +168,21 @@ export function StoreSettings() {
                   }
                 />
                 <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cutoffHint")}</p>
+              </FormField>
+
+              <FormField label={t("storeSettings.language")}>
+                <input
+                  class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                  list="language-options"
+                  value={displayLanguage()}
+                  onInput={(event) => setDisplayLanguage(event.currentTarget.value)}
+                />
+                <datalist id="language-options">
+                  <For each={LOCALES}>
+                    {(code) => <option value={code}>{localeName(code)}</option>}
+                  </For>
+                </datalist>
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.languageHint")}</p>
               </FormField>
 
               <div class="rounded-token border border-line bg-surface-raised p-3 text-sm">

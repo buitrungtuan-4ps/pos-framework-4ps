@@ -22,11 +22,26 @@ import type {
   TaxClass,
 } from "../api/types";
 import { SALES_CHANNELS } from "../api/types";
-import { t, type MessageKey } from "../i18n";
+import { LOCALES, localeName, t, type MessageKey } from "../i18n";
 import { formatMoney } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+
+// Drops blank-key or blank-value entries from an edited per-locale name map and trims both sides, so a
+// row the operator left empty never ships as a `""` translation (ADR-0074). The server cleans too;
+// this keeps the request tidy.
+const cleanTranslations = (raw: Record<string, string>): Record<string, string> => {
+  const cleaned: Record<string, string> = {};
+  for (const [locale, name] of Object.entries(raw)) {
+    const key = locale.trim();
+    const value = name.trim();
+    if (key && value) {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+};
 
 // A blank per-channel price sheet: every channel maps to an empty amount string (not priced).
 const emptyPriceSheet = (): Record<SalesChannel, string> =>
@@ -86,6 +101,8 @@ export function Catalog() {
   const [editingSection, setEditingSection] = createSignal("");
   const [draftSectionSort, setDraftSectionSort] = createSignal("0");
   const [draftName, setDraftName] = createSignal("");
+  // Per-locale item names being edited (ADR-0074), keyed by locale code; `name` stays the fallback.
+  const [draftTranslations, setDraftTranslations] = createSignal<Record<string, string>>({});
 
   // Placement editor.
   const [placementItem, setPlacementItem] = createSignal("");
@@ -416,7 +433,11 @@ export function Catalog() {
 
   const setItemFields = async (
     item: CatalogItem,
-    fields: { name?: string; status?: EntityStatus },
+    fields: {
+      name?: string;
+      nameTranslations?: Record<string, string>;
+      status?: EntityStatus;
+    },
   ) => {
     const name = (fields.name ?? item.name).trim();
     if (!name) {
@@ -428,6 +449,8 @@ export function Catalog() {
     try {
       await api.updateItem(item.menu_item_id, tenantId(), {
         name,
+        // A status-only toggle keeps the item's existing translations; an edit passes the draft.
+        nameTranslations: cleanTranslations(fields.nameTranslations ?? item.name_translations),
         taxClassId: item.tax_class_id,
         itemCategoryId: item.item_category_id,
         itemSubcategoryId: item.item_subcategory_id,
@@ -435,6 +458,7 @@ export function Catalog() {
       });
       setEditingItem("");
       setDraftName("");
+      setDraftTranslations({});
       await load();
     } catch (caught) {
       fail(caught);
@@ -721,28 +745,59 @@ export function Catalog() {
                                     </div>
                                   }
                                 >
-                                  <div class="flex flex-wrap items-center gap-2">
-                                    <input
-                                      class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                                      aria-label={t("catalog.name")}
-                                      value={draftName()}
-                                      onInput={(event) => setDraftName(event.currentTarget.value)}
-                                    />
-                                    <Button
-                                      disabled={busy()}
-                                      onClick={() => void setItemFields(item, { name: draftName() })}
-                                    >
-                                      {t("action.save")}
-                                    </Button>
-                                    <Button
-                                      variant="secondary"
-                                      onClick={() => {
-                                        setEditingItem("");
-                                        setDraftName("");
-                                      }}
-                                    >
-                                      {t("action.cancel")}
-                                    </Button>
+                                  <div class="flex flex-col gap-2">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                      <input
+                                        class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                        aria-label={t("catalog.name")}
+                                        value={draftName()}
+                                        onInput={(event) => setDraftName(event.currentTarget.value)}
+                                      />
+                                      <Button
+                                        disabled={busy()}
+                                        onClick={() =>
+                                          void setItemFields(item, {
+                                            name: draftName(),
+                                            nameTranslations: draftTranslations(),
+                                          })
+                                        }
+                                      >
+                                        {t("action.save")}
+                                      </Button>
+                                      <Button
+                                        variant="secondary"
+                                        onClick={() => {
+                                          setEditingItem("");
+                                          setDraftName("");
+                                          setDraftTranslations({});
+                                        }}
+                                      >
+                                        {t("action.cancel")}
+                                      </Button>
+                                    </div>
+                                    <p class="text-xs text-ink-muted">
+                                      {t("catalog.localizedNamesHint")}
+                                    </p>
+                                    <For each={LOCALES}>
+                                      {(code) => (
+                                        <label class="flex items-center gap-2 text-xs">
+                                          <span class="w-24 shrink-0 text-ink-muted">
+                                            {localeName(code)}
+                                          </span>
+                                          <input
+                                            class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
+                                            aria-label={localeName(code)}
+                                            value={draftTranslations()[code] ?? ""}
+                                            onInput={(event) =>
+                                              setDraftTranslations({
+                                                ...draftTranslations(),
+                                                [code]: event.currentTarget.value,
+                                              })
+                                            }
+                                          />
+                                        </label>
+                                      )}
+                                    </For>
                                   </div>
                                 </Show>
                               </td>
@@ -756,6 +811,7 @@ export function Catalog() {
                                   onClick={() => {
                                     setEditingItem(item.menu_item_id);
                                     setDraftName(item.name);
+                                    setDraftTranslations({ ...item.name_translations });
                                   }}
                                 >
                                   {t("catalog.rename")}

@@ -259,6 +259,8 @@ export interface CatalogItem {
   readonly menu_item_id: string;
   readonly tenant_id: string;
   readonly name: string;
+  /** Per-locale names keyed by locale code ("vi", "en", …); `name` is the fallback (ADR-0074). */
+  readonly name_translations: Readonly<Record<string, string>>;
   readonly tax_class_id: string;
   readonly item_category_id: string | null;
   readonly item_subcategory_id: string | null;

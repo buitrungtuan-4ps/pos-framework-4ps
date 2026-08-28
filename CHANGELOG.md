@@ -111,6 +111,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Per-locale item names, end to end — authored, compiled, and rendered in the store's language**
+  (roadmap v2, Track M4, slice 8; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A catalog item
+  gains an optional `name_translations` map (locale code → name), authored in the Catalog screen's item
+  editor (one input per shipped locale) and stored as a jsonb column on `catalog_items` (migration
+  0029, additive, `NOT NULL DEFAULT '{}'`). The menu compiler carries them onto the compiled
+  `MenuEntry` as an **additive** `display_name_translations` map beside the existing `display_name`,
+  which stays the fallback. A store's optional **display language** — a new field on the `locale` config
+  node, set from the Store settings screen — selects each item's name once at the edge, at config
+  install (`MenuCatalog::localized`), folding it into `display_name` so the priced line, receipt, and
+  KDS read in the store's language with the reprice contract untouched. An item with no translation for
+  that language keeps its default name (never-blank), and a store that sets no language behaves exactly
+  as before. **Upgrade note:** wire-additive — a new optional field, nothing renamed or removed, so
+  `PROTOCOL_VERSION` is unchanged and an older edge simply ignores the field; the migration is
+  forward-only and applied idempotently on boot. Prices and names are T2 catalog content, shipped in
+  config and never logged.
 - **The Store settings console screen — currency, timezone, cutoff, and a live business-date preview**
   (roadmap v2, Track M4, slice 9; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new store-scoped
   `/store-settings` screen (under *Settings*) sets a store's currency (3-letter code, with the country

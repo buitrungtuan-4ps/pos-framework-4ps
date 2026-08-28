@@ -64,19 +64,26 @@ publish, and read surfaces*, not new tax or locale mechanics.
    store property, not catalog). Publish writes a **`locale` config node** onto the Store layer; the
    edge applies its timezone and cutoff into `session.timezone` / `session.cutoff` (and carries the
    currency for display), killing the hardcoded UTC / 04:00. Business-date *display* then just calls the
-   existing `derive_business_date`.
+   existing `derive_business_date`. The node also carries an optional `display_language` — the locale
+   the store renders item names in (decision 5); absent, each item shows its default name.
 4. **Translation grid: dynamic locales, completion %, missing-only.** Dashboard-only. The grid's column
    set becomes the union of the locales the grid already carries and the locale catalogue from
    `GET /admin/locales`, replacing the hardcoded `["en","vi"]`; a per-locale completion percentage
    (non-empty cells ÷ keys) and a missing-only filter are computed client-side. No schema or wire
    change — the persisted grid is already locale-agnostic, and `en` stays the enforced fallback.
 5. **Per-locale item names — additive.** `CatalogItem` gains an optional `name_translations`
-   (locale → name), stored as jsonb; the menu compiler emits an **additive** `MenuEntry`
-   `display_name_translations` map alongside the existing `display_name`, which stays the fallback. The
-   device selects the name for its active locale and falls back to `display_name` (then `en`) — the same
-   floor the translation runtime uses. This is a **wire-additive** change (a new optional field, nothing
-   renamed or removed), so it does **not** bump `PROTOCOL_VERSION`. Per-locale names start with items;
-   category / layout / menu-section labels are a later, mechanical extension of the same shape.
+   (locale → name), stored as a jsonb column on `catalog_items` (migration 0029, `NOT NULL DEFAULT
+   '{}'`); the menu compiler emits an **additive** `MenuEntry` `display_name_translations` map alongside
+   the existing `display_name`, which stays the fallback. Selection happens **once, at the edge, at
+   config install**: the store's `display_language` — an optional field added to the `locale` node
+   (decision 3) — picks each entry's name via `MenuCatalog::localized`, folding it into `display_name`
+   so the priced line, receipt, and KDS all read in the store's language with no change to the reprice
+   contract; an item with no translation for that language keeps its default name (never-blank), and a
+   store that sets no language shows every default name exactly as today. This is a **wire-additive**
+   change (a new optional field, nothing renamed or removed), so it does **not** bump
+   `PROTOCOL_VERSION`. Per-locale names start with items; category / layout / menu-section labels, and a
+   per-device (rather than per-store) render language, are a later, mechanical extension of the same
+   shape.
 
 **Permissions.** No new `ConsolePermission`. Tax rates reuse `ManageCatalog` (Owner/Admin — tax classes
 already there); store locale settings reuse `ManageStores` (Owner/Admin); the country/locale reads and

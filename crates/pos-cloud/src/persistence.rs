@@ -2290,11 +2290,17 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
         Some(text) => Some(parse_catalog_subcategory_id(&text)?),
         None => None,
     };
+    // The `name_translations` jsonb is a locale→name object we wrote ourselves; a value that does not
+    // parse as such falls back to no translations (the item's `name` remains its caption) rather than
+    // failing the whole list — a malformed blob must not take a store's menu away.
+    let name_translations: BTreeMap<String, String> =
+        serde_json::from_str(&row.name_translations).unwrap_or_default();
     Ok(CatalogItem {
         menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
         tenant_id: parse_registry_tenant(&row.tenant_id)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?,
         name: row.name,
+        name_translations,
         tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
         item_category_id,
         item_subcategory_id,
@@ -2525,10 +2531,13 @@ impl CatalogStore for PostgresCatalog {
     async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
         let category = item.item_category_id.map(|id| id.to_string());
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
+        let name_translations = serde_json::to_string(&item.name_translations)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         self.insert_item(
             &item.menu_item_id.to_string(),
             &item.tenant_id.to_string(),
             &item.name,
+            &name_translations,
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
@@ -2548,10 +2557,13 @@ impl CatalogStore for PostgresCatalog {
     async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
         let category = item.item_category_id.map(|id| id.to_string());
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
+        let name_translations = serde_json::to_string(&item.name_translations)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         self.set_item(
             &item.tenant_id.to_string(),
             &item.menu_item_id.to_string(),
             &item.name,
+            &name_translations,
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),

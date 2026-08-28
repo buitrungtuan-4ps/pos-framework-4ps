@@ -88,6 +88,16 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
     let mut session = base.clone();
+    // The store's display language from the `locale` node (ADR-0074), if it set one — the locale it
+    // renders item names in. Read here so the `menu` branch below can resolve each entry's per-locale
+    // name once, at install; a store that sets no language shows each item's default name.
+    let display_language = document
+        .get("locale")
+        .and_then(|locale| locale.get("display_language"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .map(str::to_owned);
     // Parse the node via its JSON text, not `from_value`: some wire types (e.g. `CurrencyCode`)
     // deserialize from a *borrowed* `&str`, which `from_str` supports but `from_value` cannot.
     if let Some(book) = document
@@ -95,7 +105,14 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<MenuBook>(&text).ok())
     {
-        session.menu = book.catalog_for(channel).clone();
+        let catalog = book.catalog_for(channel);
+        // Resolve each entry's display name to the store's language once, here (ADR-0074): the priced
+        // line and receipt then read in the store's language, and an item with no translation for it
+        // keeps its default name (never-blank).
+        session.menu = match display_language.as_deref() {
+            Some(language) => catalog.localized(language),
+            None => catalog.clone(),
+        };
     }
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
     // authorises sign-ins against, replacing any local roster.
@@ -626,6 +643,83 @@ mod tests {
             bad.currency.as_str(),
             "VND",
             "the valid currency still applied"
+        );
+    }
+
+    /// A `menu` node whose entry carries per-locale names, plus a `locale` node naming the store's
+    /// display language.
+    fn document_with_translated_menu(
+        channel: SalesChannel,
+        language: Option<&str>,
+    ) -> serde_json::Value {
+        use std::collections::BTreeMap;
+        let entry = MenuEntry::new(
+            item(),
+            DisplayName::new("Margherita"),
+            Money::new(CurrencyCode::VND, 99_000),
+            TaxClassId::new(Ulid::from_u128(1)),
+        )
+        .with_name_translations(BTreeMap::from([(
+            "vi".to_owned(),
+            DisplayName::new("Bánh Margherita"),
+        )]));
+        let book = MenuBook::new().with(channel, MenuCatalog::new().with(entry));
+        let mut document =
+            serde_json::json!({ "menu": serde_json::to_value(&book).expect("serialize") });
+        if let Some(language) = language {
+            document["locale"] = serde_json::json!({ "display_language": language });
+        }
+        document
+    }
+
+    #[test]
+    fn the_store_language_localizes_the_menu_and_absent_keeps_the_default() {
+        let base = EdgeSession::bootstrap();
+
+        // With the store set to Vietnamese, the item's display name is resolved to its `vi` translation
+        // at install, so the priced line and receipt read in the store's language.
+        let vietnamese = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, Some("vi")),
+        );
+        assert_eq!(
+            vietnamese
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Bánh Margherita",
+        );
+
+        // With no display language, the item keeps its default name (never-blank) — today's behaviour.
+        let default = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, None),
+        );
+        assert_eq!(
+            default
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Margherita",
+        );
+
+        // A language the item is not translated into also falls back to the default name.
+        let untranslated = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, Some("ja")),
+        );
+        assert_eq!(
+            untranslated
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Margherita",
         );
     }
 

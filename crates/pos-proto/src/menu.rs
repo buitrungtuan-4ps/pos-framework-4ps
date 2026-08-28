@@ -23,6 +23,8 @@
 //! serialisation as every other configuration shape. The *logic* that consumes it — repricing — is
 //! domain, and lives in `pos_core::menu`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
@@ -45,8 +47,18 @@ use crate::wire_enum::Open;
 pub struct MenuEntry {
     /// The item this prices — the identifier an inbound order names.
     pub menu_item_id: MenuItemId,
-    /// The name to show the guest, captured onto the line so it never re-reads the live menu.
+    /// The name to show the guest, captured onto the line so it never re-reads the live menu. Always
+    /// present, and the fallback for a locale [`display_name_translations`](Self::display_name_translations)
+    /// does not carry.
     pub display_name: DisplayName,
+    /// The name in each locale the item is translated into, keyed by locale code (`"vi"`, `"en"`, …)
+    /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The store's display
+    /// language selects one at the edge with [`localized_name`](Self::localized_name); a locale absent
+    /// here falls back to [`display_name`](Self::display_name), so an item with no translations behaves
+    /// exactly as it did before. Additive and `#[serde(default)]`: an older edge that predates the
+    /// field ignores it, and a book that omits it still loads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub display_name_translations: BTreeMap<String, DisplayName>,
     /// The store's price per unit. Integer [`Money`]; the caller's quote never overrides it.
     pub unit_price: Money,
     /// The tax class, which the channel-keyed [`crate::locale::TaxRateTable`] turns into a rate.
@@ -75,6 +87,7 @@ impl MenuEntry {
         Self {
             menu_item_id,
             display_name,
+            display_name_translations: BTreeMap::new(),
             unit_price,
             tax_class_id,
             available: true,
@@ -86,6 +99,24 @@ impl MenuEntry {
     pub fn out_of_stock(mut self) -> Self {
         self.available = false;
         self
+    }
+
+    /// The same entry with its per-locale names set (ADR-0074). [`display_name`](Self::display_name)
+    /// stays the fallback; each translation overrides it for its locale at the edge.
+    #[must_use]
+    pub fn with_name_translations(mut self, translations: BTreeMap<String, DisplayName>) -> Self {
+        self.display_name_translations = translations;
+        self
+    }
+
+    /// The name to show in `language`: the translation for that locale if the entry carries one, else
+    /// [`display_name`](Self::display_name). Total and never-blank — an untranslated item shows its
+    /// default name rather than nothing.
+    #[must_use]
+    pub fn localized_name(&self, language: &str) -> &DisplayName {
+        self.display_name_translations
+            .get(language)
+            .unwrap_or(&self.display_name)
     }
 }
 
@@ -148,6 +179,25 @@ impl MenuCatalog {
     #[must_use]
     pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    /// The same catalog with every entry's [`display_name`](MenuEntry::display_name) resolved to
+    /// `language` (ADR-0074) — the store's display language applied once, at the edge, so the priced
+    /// line and receipt read in the store's language. An entry with no translation for `language`
+    /// keeps its default name (never-blank). The lookup by id is unchanged, so repricing a base item
+    /// or a modifier reads the localized name uniformly.
+    #[must_use]
+    pub fn localized(&self, language: &str) -> Self {
+        Self::from_items(
+            self.items
+                .iter()
+                .map(|entry| {
+                    let mut localized = entry.clone();
+                    localized.display_name = entry.localized_name(language).clone();
+                    localized
+                })
+                .collect(),
+        )
     }
 }
 
@@ -259,6 +309,8 @@ impl MenuBook {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{MenuBook, MenuCatalog, MenuEntry};
     use crate::enums::SalesChannel;
     use crate::ids::{MenuItemId, TaxClassId};
@@ -450,6 +502,74 @@ mod tests {
         assert!(
             book.is_empty(),
             "no channels and a defaulted empty fallback"
+        );
+    }
+
+    fn translated() -> MenuEntry {
+        margherita().with_name_translations(BTreeMap::from([
+            ("vi".to_owned(), DisplayName::new("Bánh Margherita")),
+            ("ja".to_owned(), DisplayName::new("マルゲリータ")),
+        ]))
+    }
+
+    #[test]
+    fn localized_name_picks_the_locale_and_falls_back_to_the_default() {
+        let entry = translated();
+        assert_eq!(entry.localized_name("vi").as_str(), "Bánh Margherita");
+        assert_eq!(entry.localized_name("ja").as_str(), "マルゲリータ");
+        assert_eq!(
+            entry.localized_name("en").as_str(),
+            "Margherita",
+            "a locale the item is not translated into falls back to the default name"
+        );
+    }
+
+    #[test]
+    fn localizing_a_catalog_resolves_every_entry_or_keeps_its_default() {
+        // The store's display language applied once: a translated item shows its localized name, an
+        // untranslated one keeps its default, and the lookup by id is unchanged.
+        let catalog = MenuCatalog::new().with(translated()).with(MenuEntry::new(
+            item(501),
+            DisplayName::new("Coke"),
+            vnd(30_000),
+            food_class(),
+        ));
+        let vietnamese = catalog.localized("vi");
+        assert_eq!(
+            vietnamese
+                .get(item(500))
+                .expect("translated item")
+                .display_name
+                .as_str(),
+            "Bánh Margherita"
+        );
+        assert_eq!(
+            vietnamese
+                .get(item(501))
+                .expect("untranslated item")
+                .display_name
+                .as_str(),
+            "Coke",
+            "an item with no translation keeps its default name"
+        );
+    }
+
+    #[test]
+    fn translations_round_trip_and_an_entry_without_them_omits_the_field() {
+        // The translations map is additive and `skip_serializing_if` empty, so an entry without any
+        // translations serialises exactly as before (no new key) while a translated one round-trips.
+        let with = MenuCatalog::new().with(translated());
+        let json = serde_json::to_string(&with).expect("serialise");
+        assert_eq!(
+            serde_json::from_str::<MenuCatalog>(&json).expect("deserialise"),
+            with
+        );
+
+        let without =
+            serde_json::to_string(&MenuCatalog::new().with(margherita())).expect("serialise");
+        assert!(
+            !without.contains("display_name_translations"),
+            "an entry with no translations does not carry the field on the wire"
         );
     }
 }
