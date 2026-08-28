@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Reports & analytics gets an architecture: windowed rollups, revenue, and X/Z close semantics**
+  (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Frames the reporting
+  track additively over the one materialised-rollup projector (ADR-0036): date-range/windowed reads
+  so the API stops shipping a store's entire history; a registry-driven projector that reads the
+  Active-store list instead of scanning `SELECT DISTINCT … FROM events` every pass (perf wave 2);
+  revenue and product-mix rollups decoded from the settlement and line-fired events the projector
+  already ingests, gated behind a new `console.reports.revenue` permission because prices are **T2**;
+  and a resolution of the long-open **D10** spec gap — an X report is a non-resetting on-demand read of
+  the current period, a Z report is a one-time immutable per-business-date close artefact served
+  verbatim thereafter. Deliberately out of scope and flagged: per-employee performance analytics (an
+  employee-monitoring boundary the org and the metrics port both draw), the scale-only perf reshapes
+  (dirty-marking, windowed storage blobs, config-blob delta, request-latency histograms), and the
+  country-specific statutory report layouts. **Upgrade note:** none — an ADR; the routes, permission,
+  and projector changes land in the following slices, all additive.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
