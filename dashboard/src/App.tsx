@@ -22,6 +22,7 @@ import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
 import { Devices } from "./screens/Devices";
 import { Fleet } from "./screens/Fleet";
+import { Inventory } from "./screens/Inventory";
 import { Ota } from "./screens/Ota";
 import { Reconcile } from "./screens/Reconcile";
 import { Floor } from "./screens/Floor";
@@ -88,6 +89,7 @@ export function App() {
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
           <Route path="/campaigns" component={Campaigns} />
+          <Route path="/inventory" component={Inventory} />
           <Route path="/media" component={Media} />
           <Route path="/layout" component={Layout} />
           <Route path="/floor" component={Floor} />

@@ -123,6 +123,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console gets an Inventory screen to author recipes without touching JSON** (roadmap v2,
+  Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new Inventory screen (under
+  Master data, Owner/Admin) lists and edits a tenant's ingredients (name + unit), recipes, and
+  suppliers on the F2 CRUD kit, and publishes the composed node to a store. The recipe editor is a
+  bill-of-materials builder: pick the menu item from the tenant's catalog (no raw ULID), add ingredient
+  lines each with a per-unit amount in that ingredient's unit, and set the auto-86 threshold — a recipe
+  is keyed by its item, so saving is an upsert and the item is fixed once it exists. ULIDs stay behind
+  a Technical-details disclosure, destructive actions confirm, and outcomes route through toasts, per
+  the kit. English and Vietnamese strings both ship. **Upgrade note:** none — dashboard-only, over the
+  M6 routes already added.
 - **A published `inventory` node finally gives the edge its recipe book** (roadmap v2, Track M6;
   [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `PUT /admin/config/inventory` route
   (behind `console.config.publish`, audited by count only) assembles a tenant's authored ingredients,

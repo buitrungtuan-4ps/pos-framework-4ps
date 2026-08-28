@@ -287,6 +287,15 @@ export type UnitOfMeasure =
   | "UNIT_OF_MEASURE_LITER"
   | "UNIT_OF_MEASURE_PIECE";
 
+/** The units of measure an ingredient can be stocked in, for the picker. */
+export const UNITS: readonly UnitOfMeasure[] = [
+  "UNIT_OF_MEASURE_GRAM",
+  "UNIT_OF_MEASURE_KILOGRAM",
+  "UNIT_OF_MEASURE_MILLILITER",
+  "UNIT_OF_MEASURE_LITER",
+  "UNIT_OF_MEASURE_PIECE",
+];
+
 /** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
 export interface Ingredient {
   readonly id: string;
