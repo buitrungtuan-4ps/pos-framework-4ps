@@ -123,6 +123,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Menu screen's Items list moves onto the F2 CRUD kit** (roadmap v2, Track F3, F3 slice 2;
+  [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The product master is the first slice of
+  the Catalog split: a new `screens/catalog/Items.tsx` (with a small shared `screens/catalog/shared.tsx`)
+  renders items as a searchable, sortable, paginated `DataTable` — the item's ULID tucked behind a
+  `TechnicalDetails` disclosure and its status shown as a `StatusBadge` — with create and edit in a
+  `Drawer` rather than the monolith's inline table editing. Every behaviour is preserved: create takes
+  a name, a required tax class, and optional category/sub-category; edit changes the name and the
+  per-locale names ([ADR-0074](docs/adr/0074-localization-and-tax.md)) while re-sending the item's
+  taxonomy untouched; the inline image widget ([ADR-0075](docs/adr/0075-media-and-file-rail.md)) and
+  the owner/admin CSV export ride along; and archive/restore stays a one-click reversible toggle.
+  Built alongside the existing `Catalog` screen (not yet routed), so the monolith stays live and the
+  build stays green until the shell lands in a later slice. **Upgrade note:** none — frontend-only,
+  no `/admin` route, permission, or migration change.
 - **Catalog & Layout rebuild gets an architecture** (roadmap v2, Track F3;
   [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). Frames the last Track-F work: the two
   remaining pre-F2 dashboard screens are rebuilt on the F2 CRUD kit. The 1,898-line Catalog monolith
