@@ -184,6 +184,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   gated behind `console.reports.revenue`. Dashboard `XzReport`/`DailyCash` types + `xzReport` client.
   **Upgrade note:** none beyond the `console.reports.revenue` permission already introduced with the
   revenue rollup; the cash summary rides the same `#[serde(default)]` rollup blob (no migration).
+- **Reports export to CSV** (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md),
+  reusing the ADR-0075 rail). `GET /admin/stores/{store_id}/rollups/export` streams the windowed daily
+  activity counts as a CSV (behind `console.data.read`), and `GET
+  /admin/stores/{store_id}/revenue/export` streams the windowed daily revenue totals (behind
+  `console.reports.revenue`, because prices are **T2**). Both accept the same `?from=&to=&limit=`
+  window as the reads, set `content-disposition: attachment`, and are audited by **row count only** —
+  never the contents (`reports.export_rollups` / `reports.export_revenue`). **Upgrade note:** none —
+  additive read/export routes reusing existing permissions; no protocol or migration change.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the

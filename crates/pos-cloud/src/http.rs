@@ -501,6 +501,14 @@ where
             get(admin_xz_report::<S, R, K, C, A, T, W>),
         )
         .route(
+            "/admin/stores/{store_id}/rollups/export",
+            get(admin_export_rollups::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/revenue/export",
+            get(admin_export_revenue::<S, R, K, C, A, T, W>),
+        )
+        .route(
             "/admin/webhooks",
             post(admin_register_webhook::<S, R, K, C, A, T, W>)
                 .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
@@ -15699,6 +15707,129 @@ struct XzReportQuery {
     tenant_id: String,
     #[serde(default)]
     business_date: Option<String>,
+}
+
+/// Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read
+/// (ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by
+/// row count.
+async fn admin_export_rollups<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context =
+        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
+            Ok(context) => context,
+            Err(denied) => return denied,
+        };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let days = match dashboard(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(days) => days,
+        Err(error) => return rollup_error_response(&error),
+    };
+    let Ok(body) = export::rollups_csv(&days) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+    };
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        "reports.export_rollups",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "rollups", "rows": days.len() })),
+    )
+    .await;
+    csv_download_response("rollups.csv", body)
+}
+
+/// Exports a store's daily revenue rollups as a CSV download, windowed like the read (ADR-0081, Track
+/// O4). Prices are **T2**, so `console.reports.revenue`; audited by row count only — never contents.
+async fn admin_export_revenue<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(days) => days,
+        Err(error) => return rollup_error_response(&error),
+    };
+    let Ok(body) = export::revenue_csv(&days) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+    };
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        "reports.export_revenue",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "revenue", "rows": days.len() })),
+    )
+    .await;
+    csv_download_response("revenue.csv", body)
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log
