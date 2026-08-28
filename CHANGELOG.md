@@ -123,6 +123,72 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Layout screen becomes a visual per-channel editor** (roadmap v2, Track F3, F3 slice 4;
+  [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The 710-line hand-typed layout editor is
+  rebuilt on the F2 kit: per channel, positioned buttons render on a **device-shaped grid preview** at
+  their `(column, row)` (click a tile to edit it), a client-side **collision check** flags — and
+  stacks, never hides — two buttons sharing a cell, **copy-between-channels** clones a channel's
+  buttons to another (behind a confirm), and the flowing buttons (no grid slot) reorder through the
+  kit's `ReorderList` — F3 is its first consumer, which now gains **pointer drag layered over its
+  keyboard up/down** (the arrows stay the accessible fallback) — writing each button's order. The button editor and
+  the display-taxonomy (display categories + sub-categories) move into kit `DataTable`s, a `Drawer`,
+  and a `ConfirmDialog`, and the `channel`/`StatusCell`/error helpers are now shared with the Catalog
+  sub-screens. **Upgrade note:** none — frontend-only; the `layout` config node, the compile/publish
+  path, and the backend contract are unchanged; moving a button still reprices nothing.
+- **The Menu screen is now a tabbed shell over its five kit sub-screens; the 1,898-line monolith is
+  gone** (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)).
+  `/catalog` now renders `CatalogShell` — one route, one nav entry, one breadcrumb, with a tab bar
+  across Items, Taxonomy, Tax classes, Modifiers, and Menus. The shell owns the page header and the
+  tenant `RequireContext` gate, and mounts only the active tab, so each sub-screen's auto-load fires
+  on first view and the five never fetch at once. `screens/Catalog.tsx` is deleted. **Upgrade note:**
+  none — the `/catalog` URL, nav entry, and backend contract are unchanged; only the screen's
+  internals changed.
+- **The Menus sub-screen lands on the kit with a currency-aware money field and bulk price editing**
+  (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The
+  priced heart of the catalog — menus (with inheritance), authoring sections, per-channel placements,
+  and publish-to-store — becomes `screens/catalog/Menus.tsx` on the kit: menus, sections, and
+  placements are each a `DataTable`, and create/edit move into `Drawer`s. Two F3 additions ride along:
+  a new **`MoneyField`** (in `components/ui.tsx`) edits a price as an integer in a currency's smallest
+  unit (the exact `amount_minor` stored), grouped for the active locale as the operator types, with
+  the currency now **chosen from the country registry** (`GET /admin/countries`) instead of a free-text
+  box; and a **bulk price editor** sets one channel's price across a section's placements (or the whole
+  menu) at once — or clears it — over the same audited `setPlacement` path, leaving the other channels
+  untouched. Removing a placement now runs through a `ConfirmDialog`. Built unrouted alongside the
+  monolith; the shell and route swap follow. **Upgrade note:** none — frontend-only, no `/admin`
+  route, permission, or migration change; prices remain **T2**, authored in the console and shipped in
+  config, never logged.
+- **The Menu screen's Items, Tax classes, Taxonomy, and Modifiers move onto the F2 CRUD kit**
+  (roadmap v2, Track F3, F3 slice 2; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The
+  first four entities split out of the 1,898-line Catalog monolith: `screens/catalog/Items.tsx`,
+  `screens/catalog/TaxClasses.tsx`, `screens/catalog/Taxonomy.tsx` (item categories +
+  sub-categories), and `screens/catalog/Modifiers.tsx` (modifier groups), each on a small shared
+  `screens/catalog/shared.tsx`. Every list is now a searchable, sortable, paginated `DataTable` with
+  the entity's ULID tucked behind a `TechnicalDetails` disclosure and its status shown as a
+  `StatusBadge`; create and edit move into a `Drawer` in place of the monolith's inline table
+  editing. Behaviour is preserved throughout: an item takes a name, a required tax class, and
+  optional category/sub-category at create, and edit changes its name and per-locale names
+  ([ADR-0074](docs/adr/0074-localization-and-tax.md)) while re-sending its taxonomy untouched; the
+  inline image widget ([ADR-0075](docs/adr/0075-media-and-file-rail.md)) and the owner/admin CSV
+  export ride along; a sub-category is created under a required parent, kept on rename; a modifier
+  group is authored with its min/max rule, member items, and attachments, then renamed or
+  archived/restored with the rule and members re-shipped unchanged; and archive/restore stays a
+  one-click reversible toggle everywhere. Built alongside the existing `Catalog` screen (not yet
+  routed), so the monolith stays live and the build stays green until the shell lands in a later
+  slice. **Upgrade note:** none — frontend-only, no `/admin` route, permission, or migration change.
+- **Catalog & Layout rebuild gets an architecture** (roadmap v2, Track F3;
+  [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). Frames the last Track-F work: the two
+  remaining pre-F2 dashboard screens are rebuilt on the F2 CRUD kit. The 1,898-line Catalog monolith
+  becomes five tabbed, searchable sub-screens under one `/catalog` route — Items, Taxonomy, Tax
+  classes, Modifiers, and Menus — each on `DataTable`/`Drawer`/`ConfirmDialog`/`StatusBadge`/
+  `TechnicalDetails`; a new `MoneyField` gives currency-aware price fields (locale-grouped, storing
+  minor units) and the Menus sub-screen gains bulk price editing. Layout becomes a visual per-channel
+  grid with a device-shaped preview, client-side collision detection, copy-between-channels, and
+  drag-to-reorder (the kit's `ReorderList` gains pointer drag over its keyboard fallback). Behaviour-
+  preserving and frontend-only — the Phase 2a backend and the ADR-0066 authoring model are untouched.
+  Deliberately deferred and flagged: reading the store's published currency to prefill the price field
+  (no such read exists yet), full free-form grid pointer-drag polish, and the Fork-A shared-web-kit
+  extraction. **Upgrade note:** none — an ADR; the sub-screens and Layout rebuild land in the following
+  slices, all frontend and additive.
 - **Reports & analytics gets an architecture: windowed rollups, revenue, and X/Z close semantics**
   (roadmap v2, Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Frames the reporting
   track additively over the one materialised-rollup projector (ADR-0036): date-range/windowed reads
