@@ -108,6 +108,9 @@ const MIGRATION_0031: &str = include_str!("../migrations/0031_catalog_item_image
 /// The campaign authoring table ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0032: &str = include_str!("../migrations/0032_campaigns.sql");
 
+/// Voucher instances minted for a voucher-kind campaign ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+const MIGRATION_0033: &str = include_str!("../migrations/0033_vouchers.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -294,6 +297,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0032)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0033)
             .await
             .map_err(unavailable)
     }
@@ -492,6 +499,14 @@ impl PostgresStore {
     #[must_use]
     pub fn campaigns(&self) -> crate::campaigns::PostgresCampaigns {
         crate::campaigns::PostgresCampaigns::new(self.pool.clone())
+    }
+
+    /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `VoucherStore` seam over it.
+    #[must_use]
+    pub fn vouchers(&self) -> crate::vouchers::PostgresVouchers {
+        crate::vouchers::PostgresVouchers::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

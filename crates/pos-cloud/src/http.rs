@@ -75,7 +75,7 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
-    TenantId,
+    TenantId, VoucherId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::money::CurrencyCode;
@@ -151,6 +151,7 @@ use crate::registry::{
 use crate::retention::{RetentionError, SubjectStore};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
+use crate::vouchers::{NewVoucher, VoucherStore, VoucherStoreError, generate_code};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
 };
@@ -6408,6 +6409,230 @@ where
         )
             .into_response(),
     }
+}
+
+// --- Vouchers (ADR-0077, Track M3): mint and list the codes a voucher-kind campaign redeems --------
+
+/// The largest batch of vouchers one request may mint. Generous for a real promotion drop, bounded so
+/// a typo cannot ask the store to mint millions in one call.
+const MAX_VOUCHER_BATCH: u32 = 10_000;
+
+/// The state the voucher routes share: the voucher store, the campaign store (to check the campaign
+/// exists and is a voucher-kind), and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct VoucherState<V, Camp, A, C> {
+    vouchers: V,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `POST /admin/campaigns/{id}/vouchers` body: the tenant and how many codes to mint.
+#[derive(Debug, Clone, Deserialize)]
+struct GenerateVouchersRequest {
+    tenant_id: String,
+    count: u32,
+}
+
+/// One minted or listed voucher on the wire: the id, the code, and its status.
+#[derive(Debug, Clone, serde::Serialize)]
+struct VoucherView {
+    voucher_id: String,
+    code: String,
+    status: crate::vouchers::VoucherStatus,
+}
+
+/// Builds the voucher sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// `POST /admin/campaigns/{id}/vouchers` mints a batch of codes for a voucher-kind campaign and returns
+/// them once; `GET` lists a campaign's codes. Both behind [`ConsolePermission::ManageCampaigns`] — a
+/// voucher code carries redeemable value, so even listing it is a manage action, not a plain read. The
+/// mint audits `voucher.batch.generate` with the count only, never the codes.
+pub fn voucher_router<V, Camp, A, C>(
+    vouchers: V,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/campaigns/{campaign_id}/vouchers",
+            get(admin_list_vouchers::<V, Camp, A, C>)
+                .post(admin_generate_vouchers::<V, Camp, A, C>),
+        )
+        .with_state(VoucherState {
+            vouchers,
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin mints a batch of voucher codes for a voucher-kind campaign.
+async fn admin_generate_vouchers<V, Camp, A, C>(
+    State(state): State<VoucherState<V, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Json(request): Json<GenerateVouchersRequest>,
+) -> Response
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.count == 0 || request.count > MAX_VOUCHER_BATCH {
+        return (StatusCode::BAD_REQUEST, "count must be between 1 and 10000").into_response();
+    }
+    // The campaign must exist and be a voucher-kind — a code only makes sense for one the engine
+    // evaluates as a voucher.
+    match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(campaign)) if campaign.kind == PublishedCampaignKind::Voucher => {}
+        Ok(Some(_other)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "campaign is not a voucher-kind campaign",
+            )
+                .into_response();
+        }
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    }
+    // Mint the batch — a fresh id and code each, failing closed if OS entropy is unavailable.
+    let mut minted = Vec::with_capacity(request.count as usize);
+    for _ in 0..request.count {
+        let (Some(voucher_id), Some(code)) = (
+            mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(VoucherId::new),
+            generate_code(),
+        ) else {
+            return campaign_entropy_unavailable();
+        };
+        minted.push(NewVoucher {
+            voucher_id,
+            campaign_id,
+            code,
+        });
+    }
+    match state.vouchers.insert_batch(tenant_id, &minted).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "voucher.batch.generate",
+                "campaign",
+                &campaign_id.to_string(),
+                None,
+                // The count only — never the codes, which carry redeemable value.
+                serde_json::to_value(minted.len()).ok(),
+            )
+            .await;
+            let view: Vec<VoucherView> = minted
+                .iter()
+                .map(|voucher| VoucherView {
+                    voucher_id: voucher.voucher_id.to_string(),
+                    code: voucher.code.clone(),
+                    status: crate::vouchers::VoucherStatus::Active,
+                })
+                .collect();
+            (StatusCode::CREATED, Json(view)).into_response()
+        }
+        Err(error) => voucher_error_response(&error),
+    }
+}
+
+/// A super-admin lists a campaign's minted voucher codes.
+async fn admin_list_vouchers<V, Camp, A, C>(
+    State(state): State<VoucherState<V, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state
+        .vouchers
+        .list_by_campaign(tenant_id, campaign_id)
+        .await
+    {
+        Ok(records) => {
+            let view: Vec<VoucherView> = records
+                .into_iter()
+                .map(|record| VoucherView {
+                    voucher_id: record.voucher_id,
+                    code: record.code,
+                    status: record.status,
+                })
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => voucher_error_response(&error),
+    }
+}
+
+/// Maps a voucher store failure to a retryable `503`, logging the detail rather than leaking it.
+fn voucher_error_response(error: &VoucherStoreError) -> Response {
+    tracing::error!(%error, "a voucher store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the voucher service is unavailable",
+    )
+        .into_response()
 }
 
 // --- Media (ADR-0075, Track M5): upload, serve, list, and delete image renditions -----------------

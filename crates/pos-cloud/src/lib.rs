@@ -90,6 +90,7 @@ pub mod relay;
 pub mod retention;
 pub mod tax;
 pub mod translations;
+pub mod vouchers;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};

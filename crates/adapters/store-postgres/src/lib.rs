@@ -41,6 +41,7 @@ mod subjects;
 mod task_health;
 mod tax_rates;
 mod translations;
+mod vouchers;
 mod webhooks;
 
 pub use activation::{ActivationCodeRow, PostgresActivationCodes};
@@ -71,4 +72,5 @@ pub use subjects::{PostgresSubjects, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use tax_rates::{PostgresTaxRates, TaxRateRow};
 pub use translations::PostgresTranslations;
+pub use vouchers::{NewVoucherRow, PostgresVouchers, VoucherRow};
 pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};

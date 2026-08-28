@@ -396,6 +396,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Vouchers (ADR-0077, Track M3): mint and list the distributable codes a voucher-kind
+        // campaign redeems (behind console.campaigns.manage, audited by count only).
+        .merge(http::voucher_router(
+            store.vouchers(),
+            store.campaigns(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Media (ADR-0075, Track M5): upload an image → re-encode → store two bounded renditions;
         // serve, list, and delete them.
         .merge(http::media_router(

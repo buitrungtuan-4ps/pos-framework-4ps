@@ -149,6 +149,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (`0032_campaigns`, rollback safe) and one new permission (`console.campaigns.manage`, Owner/Admin);
   no protocol change (the `campaigns` node is an additive Store-layer key), and a store with no node
   published runs no promotions, exactly as today.
+- **Voucher batch generation for a voucher-kind campaign** (roadmap v2, Track M3;
+  [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). `POST /admin/campaigns/{id}/vouchers` mints a
+  batch of up to 10,000 unique, high-entropy codes (12-character Crockford base32, so a code read off a
+  printed flyer is unambiguous) for a voucher-kind campaign, stores each as a voucher instance
+  (migration `0033_vouchers`, tenant-scoped, `(tenant_id, code)` unique), and returns them once for
+  distribution; `GET` lists a campaign's codes. Both are behind `console.campaigns.manage` — a code
+  carries redeemable value, so even listing is a manage action, not a plain read — and the mint audits
+  `voucher.batch.generate` with the **count only, never the codes**. Unlike an API key, a voucher code
+  is stored in clear text because it must be handed out; redemption stays the engine's existing online
+  check-and-mark (the `PromotionVoucher*` events), and the atomic redeem endpoint is a flagged
+  follow-up. **Upgrade note:** an additive migration (`0033_vouchers`, rollback safe); no protocol or
+  permission change (reuses `console.campaigns.manage`).
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

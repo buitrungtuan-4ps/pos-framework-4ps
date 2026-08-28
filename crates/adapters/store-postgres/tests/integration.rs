@@ -1766,6 +1766,83 @@ mod campaigns {
 }
 
 // ---------------------------------------------------------------------------
+// Voucher instances: batch insert, code uniqueness per tenant, list-by-campaign, isolation (ADR-0077).
+// ---------------------------------------------------------------------------
+
+mod vouchers {
+    use store_postgres::NewVoucherRow;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// A batch inserts atomically, lists by campaign newest-first, rejects a duplicate code within the
+    /// tenant, and lets a neighbour tenant reuse the same code (codes are unique per tenant).
+    #[test]
+    fn mint_batch_list_and_code_uniqueness() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let vouchers = store.vouchers();
+
+            let batch = [
+                NewVoucherRow {
+                    voucher_id: "v-1",
+                    campaign_id: "camp-1",
+                    code: "ALPHA",
+                },
+                NewVoucherRow {
+                    voucher_id: "v-2",
+                    campaign_id: "camp-1",
+                    code: "BRAVO",
+                },
+            ];
+            vouchers.insert_batch(TENANT_A, &batch).await.expect("mint");
+
+            let listed = vouchers
+                .list_by_campaign(TENANT_A, "camp-1")
+                .await
+                .expect("list");
+            assert_eq!(listed.len(), 2);
+            assert!(listed.iter().all(|row| row.status == "ACTIVE"));
+            assert!(listed.iter().any(|row| row.code == "ALPHA"));
+
+            // A neighbour tenant may reuse the same code — codes are unique per tenant, not globally.
+            vouchers
+                .insert_batch(
+                    TENANT_B,
+                    &[NewVoucherRow {
+                        voucher_id: "v-1",
+                        campaign_id: "camp-1",
+                        code: "ALPHA",
+                    }],
+                )
+                .await
+                .expect("neighbour reuse");
+
+            // A duplicate code within the tenant violates the unique constraint and fails the batch.
+            let collision = vouchers
+                .insert_batch(
+                    TENANT_A,
+                    &[NewVoucherRow {
+                        voucher_id: "v-9",
+                        campaign_id: "camp-1",
+                        code: "ALPHA",
+                    }],
+                )
+                .await;
+            assert!(collision.is_err(), "a duplicate code is rejected");
+
+            // A different campaign in the same tenant lists separately.
+            assert!(
+                vouchers
+                    .list_by_campaign(TENANT_A, "camp-2")
+                    .await
+                    .expect("list other")
+                    .is_empty()
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Media renditions: bytea round-trip, single-rendition read, tenant isolation, delete (ADR-0075).
 // ---------------------------------------------------------------------------
 

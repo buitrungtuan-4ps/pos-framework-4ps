@@ -26,14 +26,14 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, OrderQueueRow,
-    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
-    PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
+    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, NewVoucherRow,
+    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts,
+    PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
     PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia, PostgresOrderQueue,
     PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    PostgresTranslations, PostgresVouchers, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow,
+    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -104,6 +104,7 @@ use crate::relay::{
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
+use crate::vouchers::{NewVoucher, VoucherRecord, VoucherStatus, VoucherStore, VoucherStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -1652,6 +1653,58 @@ fn decode_campaign(json: &str) -> Result<PublishedCampaign, CampaignStoreError> 
     serde_json::from_str(json).map_err(|error| {
         CampaignStoreError::new(format!("a stored campaign is not valid: {error}"))
     })
+}
+
+impl VoucherStore for PostgresVouchers {
+    async fn insert_batch(
+        &self,
+        tenant_id: TenantId,
+        vouchers: &[NewVoucher],
+    ) -> Result<(), VoucherStoreError> {
+        // Own the id/code strings for the duration of the call; the adapter's row type borrows them.
+        let owned: Vec<(String, String, String)> = vouchers
+            .iter()
+            .map(|voucher| {
+                (
+                    voucher.voucher_id.to_string(),
+                    voucher.campaign_id.to_string(),
+                    voucher.code.clone(),
+                )
+            })
+            .collect();
+        let rows: Vec<NewVoucherRow<'_>> = owned
+            .iter()
+            .map(|(voucher_id, campaign_id, code)| NewVoucherRow {
+                voucher_id,
+                campaign_id,
+                code,
+            })
+            .collect();
+        self.insert_batch(&tenant_id.to_string(), &rows)
+            .await
+            .map_err(|error| VoucherStoreError::new(error.to_string()))
+    }
+
+    async fn list_by_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<Vec<VoucherRecord>, VoucherStoreError> {
+        let rows = self
+            .list_by_campaign(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| VoucherStoreError::new(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| VoucherRecord {
+                voucher_id: row.voucher_id,
+                campaign_id: row.campaign_id,
+                code: row.code,
+                status: VoucherStatus::from_wire(&row.status),
+                created_at_ms: row.created_at_ms,
+            })
+            .collect())
+    }
 }
 
 // --- Media renditions (ADR-0075) --------------------------------------------------------------
