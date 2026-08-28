@@ -33,6 +33,7 @@ use pos_proto::money::Money;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 
+use crate::media::MediaId;
 use crate::registry::EntityStatus;
 
 /// A menu's identifier — a ULID minted at creation. A menu is an authoring concept that never
@@ -188,6 +189,9 @@ pub struct CatalogItem {
     pub item_category_id: Option<ItemCategoryId>,
     /// The operational sub-category, refining the category, or `None` (entity 3).
     pub item_subcategory_id: Option<ItemSubcategoryId>,
+    /// The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display
+    /// only; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder.
+    pub image_ref: Option<MediaId>,
     /// Active or archived.
     pub status: EntityStatus,
 }
@@ -710,6 +714,7 @@ mod tests {
             row.tax_class_id = item.tax_class_id;
             row.item_category_id = item.item_category_id;
             row.item_subcategory_id = item.item_subcategory_id;
+            row.image_ref = item.image_ref;
             row.status = item.status;
             Ok(true)
         }
@@ -1141,6 +1146,7 @@ mod tests {
             tax_class_id: tax_class(1),
             item_category_id: None,
             item_subcategory_id: None,
+            image_ref: None,
             status: EntityStatus::Active,
         }
     }

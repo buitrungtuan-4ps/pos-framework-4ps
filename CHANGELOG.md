@@ -111,6 +111,87 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
+  (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
+  Protection contact's instrument for an individual rights request, over the existing subject store
+  ([ADR-0035](docs/adr/0035-retention-and-pii-masking.md)). `GET /admin/subjects/{id}` looks a subject
+  up — existence, whether it is masked, and the field count, **without** returning the values; `GET
+  .../export` returns the record with its field values (the portability/access payload); `POST
+  .../erase` masks every field permanently, keeping the id so records still reconcile. All three are
+  **per-subject and tenant-scoped** (there is no list-all or bulk route), behind a new **owner-only**
+  `console.subjects.manage` permission, and audited — the entry records who acted on which subject and
+  what action, the export records the field count, **never the field values**. The dashboard adds an
+  owner-only **Subject requests** screen with a standing reminder to confirm the lawful basis and
+  identity and to escalate EU-resident requests to the Data Protection contact; erase requires typing
+  the subject id to confirm. The `SubjectStore` seam gains a per-subject `fetch`; erase reuses the
+  retention masking. **Upgrade note:** additive routes + one owner-only permission; no schema (reuses
+  the `subjects` table), wire, or edge change.
+- **A CSV import rail for the translation grid — dry-run first, apply on confirm**
+  (roadmap v2, Track M5, slice 6; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST
+  /admin/translations/import/dry-run` parses an uploaded CSV and returns a **row-by-row report**
+  (would-create / would-update / rejected-with-reason) **without writing anything**; `POST
+  /admin/translations/import/apply` re-parses the same file and merges the valid rows onto the tenant's
+  grid — existing keys not in the file are preserved, rejected rows (empty key, or missing the `en`
+  fallback) are skipped — then saves and audits the row counts (never the contents). Both are behind
+  `console.translations.manage`, under a 4 MB body limit, and the merged grid satisfies the `en`-fallback
+  rule by construction. The Translations screen gains an **Import CSV** button that shows the dry-run
+  report in a review dialog before the operator confirms. Round-trips with the slice-5 translation export.
+  Item import (upsert with FK validation) and the T1/T2 domains are deferred (ADR-0075 decision 5).
+  **Upgrade note:** additive routes; no schema, wire, or edge change.
+- **A CSV export rail — download the catalog items and the translation grid**
+  (roadmap v2, Track M5, slice 5; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A reusable, pure CSV
+  serialiser (`pos_cloud::export`, buying the `csv` crate for RFC-4180 quoting per ADR-0007) behind two
+  authenticated routes: `GET /admin/catalog/export/items` (behind `console.catalog.manage`) streams the
+  item master as `items.csv` — id, name, status, tax class, category/sub-category, image ref, **never a
+  price** — and `GET /admin/translations/export` (behind `console.translations.manage`) streams the
+  translation grid as `translations.csv` (a `key` column plus one column per locale). Each is audited —
+  the entry records who exported which domain and how many rows, never the row contents — and is
+  tenant-scoped by RLS, so it is not a cross-tenant path. The dashboard adds an **Export CSV** button to
+  the Menu (items) and Translations screens. Per the data-classification guardrails (ADR-0075 decision
+  5), the **employee roster (T1)**, **per-channel prices (T2 verbatim)**, and the rollup report export
+  are deliberately **not** shipped here — they await a human-reviewed design/DPIA. **Upgrade note:**
+  additive read-only routes; adds the `csv` dependency; no schema, wire, or edge change.
+- **A Media library screen and an image picker on the item editor**
+  (roadmap v2, Track M5, slice 4; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A new **Media**
+  screen (Master data, owner/admin) lists the tenant's uploaded images as a thumbnail grid with size
+  and upload date, uploads a new image, and deletes one — with a confirm step and the never-blank
+  posture (a deleted image an item still references shows a placeholder, never a broken image). The
+  Catalog item editor gains an **image** column: a compact widget shows the item's current image and
+  lets the operator pick one from the library or upload a new one, or remove it; the change persists
+  immediately. Both surfaces are tenant-scoped and gate their write affordances on `console.media.manage`
+  (owner/admin), which the server re-checks. New i18n keys (en + vi). **Upgrade note:** dashboard-only;
+  no API, schema, or edge change.
+- **A catalog item can carry an image — an optional `image_ref` on the item**
+  (roadmap v2, Track M5, slice 3; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `CatalogItem` gains
+  an `image_ref: Option<MediaId>` (additive column, migration 0031), authored in the console and
+  round-tripped through the catalog CRUD routes and the typed dashboard client. This is an
+  authoring/display concern only: the compiled `MenuBook` the edge reprices from is unchanged — images
+  do not cross to the edge in this track. A reference to a media asset that has since been deleted is not
+  an error: the ref simply resolves to nothing and the UI shows a placeholder (the never-blank posture).
+  The brand-logo `image_ref` follows with the receipt/branding work, beside its renderer. **Upgrade
+  note:** additive, forward-only migration applied on boot; the create/update item request bodies gain an
+  optional `image_ref` field (absent leaves the item imageless); no wire or edge change.
+- **Media upload, serve, list, and delete routes — the image pipeline's first caller**
+  (roadmap v2, Track M5, slice 2; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST /admin/media`
+  takes an image as a raw binary body (under an 8 MB limit), re-encodes it through the ADR-0042 pipeline,
+  and stores only the two bounded JPEG renditions (the original is never persisted); `GET /admin/media`
+  lists summaries; `GET /admin/media/{id}/thumbnail` and `.../detail` stream one rendition as
+  `image/jpeg` with an immutable cache header; `DELETE /admin/media/{id}` removes an asset. Upload and
+  delete are behind a new **`console.media.manage`** permission (Owner/Admin, deny-by-default) and
+  audited (`media.upload`, `media.delete`); reads and the serve routes need only `Read`. A non-image
+  upload is a `400`, an image that cannot be reduced within budget a `422`. The typed dashboard client
+  gains an upload core plus `uploadMedia` / `listMedia` / `deleteMedia` and rendition-URL helpers.
+  **Upgrade note:** additive routes + one new permission; no schema, wire, or edge change.
+- **Media storage foundation — image renditions in Postgres `bytea` behind a `MediaStore` seam**
+  (roadmap v2, Track M5, slice 1; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). The ADR-0042 image
+  pipeline (`images::render`, ≤30 KB thumbnail / ≤150 KB detail) gains its storage: a new tenant-scoped
+  `media_assets` table (migration 0030) holds the two JPEG renditions as `bytea` — per ADR-0042/ADR-0031,
+  Postgres, not the condemned `blob-garage` port. A `MediaStore` seam (`put` / `get` one rendition /
+  `list` summaries without the bytes / `delete`) lands with a `store-postgres` `PostgresMedia` adapter
+  and the `pos-cloud` persistence bridge, plus an in-memory fake and unit + Postgres integration tests
+  (bytea round-trip, single-rendition read, tenant isolation, delete). Media is immutable — insert,
+  read, list, delete; no update. **Upgrade note:** additive, forward-only migration applied on boot; no
+  routes or edge/wire changes yet (the upload/serve routes and image fields land in later slices).
 - **Per-locale item names, end to end — authored, compiled, and rendered in the store's language**
   (roadmap v2, Track M4, slice 8; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A catalog item
   gains an optional `name_translations` map (locale code → name), authored in the Catalog screen's item

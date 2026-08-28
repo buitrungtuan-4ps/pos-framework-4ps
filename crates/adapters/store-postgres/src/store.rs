@@ -99,6 +99,12 @@ const MIGRATION_0028: &str = include_str!("../migrations/0028_catalog_tax_rates.
 /// Per-locale item names on `catalog_items` ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
 const MIGRATION_0029: &str = include_str!("../migrations/0029_catalog_item_name_translations.sql");
 
+/// Media renditions in Postgres `bytea` ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+const MIGRATION_0030: &str = include_str!("../migrations/0030_media_assets.sql");
+
+/// An image reference on a catalog item ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+const MIGRATION_0031: &str = include_str!("../migrations/0031_catalog_item_image_ref.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -273,6 +279,14 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0029)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0030)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0031)
             .await
             .map_err(unavailable)
     }
@@ -455,6 +469,14 @@ impl PostgresStore {
     #[must_use]
     pub fn tax_rates(&self) -> crate::tax_rates::PostgresTaxRates {
         crate::tax_rates::PostgresTaxRates::new(self.pool.clone())
+    }
+
+    /// The media-rendition store over this pool ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `MediaStore` seam over it.
+    #[must_use]
+    pub fn media(&self) -> crate::media::PostgresMedia {
+        crate::media::PostgresMedia::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

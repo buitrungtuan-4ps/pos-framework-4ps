@@ -38,6 +38,8 @@ pub struct CatalogItemRow {
     pub item_category_id: Option<String>,
     /// The operational sub-category id (a ULID string), or `None`.
     pub item_subcategory_id: Option<String>,
+    /// The item's image (a media id ULID string), or `None` (ADR-0075).
+    pub image_ref: Option<String>,
     /// `active` or `archived`.
     pub status: String,
 }
@@ -183,6 +185,12 @@ impl PostgresCatalog {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one INSERT binding the item's flat columns by name; the names (ADR-0074) and image \
+                  (ADR-0075) columns take it over the limit, and a params struct for a single call \
+                  site would obscure more than it clarifies"
+    )]
     pub async fn insert_item(
         &self,
         menu_item_id: &str,
@@ -192,14 +200,15 @@ impl PostgresCatalog {
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
+        image_ref: Option<&str>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
                 "INSERT INTO catalog_items \
                  (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
-                 item_subcategory_id) \
-                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)",
+                 item_subcategory_id, image_ref) \
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)",
                 &[
                     &menu_item_id,
                     &tenant_id,
@@ -208,6 +217,7 @@ impl PostgresCatalog {
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,
+                    &image_ref,
                 ],
             )
             .await
@@ -225,7 +235,7 @@ impl PostgresCatalog {
         let rows = connection
             .query(
                 "SELECT menu_item_id, tenant_id, name, name_translations::text, tax_class_id, \
-                 item_category_id, item_subcategory_id, status FROM catalog_items \
+                 item_category_id, item_subcategory_id, image_ref, status FROM catalog_items \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -241,7 +251,8 @@ impl PostgresCatalog {
                 tax_class_id: row.get(4),
                 item_category_id: row.get(5),
                 item_subcategory_id: row.get(6),
-                status: row.get(7),
+                image_ref: row.get(7),
+                status: row.get(8),
             })
             .collect())
     }
@@ -267,14 +278,15 @@ impl PostgresCatalog {
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
+        image_ref: Option<&str>,
         status: &str,
     ) -> Result<bool, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let changed = connection
             .execute(
                 "UPDATE catalog_items SET name = $3, name_translations = $4::jsonb, \
-                 tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, status = $8, \
-                 updated_at = now() \
+                 tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, \
+                 image_ref = $8, status = $9, updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2",
                 &[
                     &tenant_id,
@@ -284,6 +296,7 @@ impl PostgresCatalog {
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,
+                    &image_ref,
                     &status,
                 ],
             )

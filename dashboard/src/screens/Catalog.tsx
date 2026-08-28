@@ -25,8 +25,9 @@ import { SALES_CHANNELS } from "../api/types";
 import { LOCALES, localeName, t, type MessageKey } from "../i18n";
 import { formatMoney } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { storeId, storeName, tenantId } from "../state/session";
+import { actingAdmin, storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { ImagePicker } from "../components/ImagePicker";
 
 // Drops blank-key or blank-value entries from an edited per-locale name map and trims both sides, so a
 // row the operator left empty never ships as a `""` translation (ADR-0074). The server cleans too;
@@ -431,12 +432,30 @@ export function Catalog() {
     }
   };
 
+  // console.media.manage → owner/admin (mirrors the backend role set; the server re-checks). Gates the
+  // per-item image widget's write affordances. The same role set holds console.catalog.manage, so it
+  // also gates the CSV export button below.
+  const canManageMedia = () => {
+    const role = actingAdmin()?.role;
+    return role === "owner" || role === "admin";
+  };
+
+  const exportItems = async () => {
+    try {
+      await api.exportItemsCsv(tenantId());
+    } catch (caught) {
+      fail(caught);
+    }
+  };
+
   const setItemFields = async (
     item: CatalogItem,
     fields: {
       name?: string;
       nameTranslations?: Record<string, string>;
       status?: EntityStatus;
+      // Present sets the image (a MediaId, or null to clear); absent preserves the current ref.
+      imageRef?: string | null;
     },
   ) => {
     const name = (fields.name ?? item.name).trim();
@@ -454,6 +473,8 @@ export function Catalog() {
         taxClassId: item.tax_class_id,
         itemCategoryId: item.item_category_id,
         itemSubcategoryId: item.item_subcategory_id,
+        // Preserve the item's image on a rename/status edit; the image widget passes a new ref or null.
+        imageRef: fields.imageRef !== undefined ? fields.imageRef : item.image_ref,
         status: fields.status ?? item.status,
       });
       setEditingItem("");
@@ -704,9 +725,16 @@ export function Catalog() {
           <Card
             title={t("catalog.items")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <div class="flex flex-wrap gap-2">
+                <Show when={canManageMedia()}>
+                  <Button variant="secondary" disabled={busy()} onClick={() => void exportItems()}>
+                    {t("catalog.exportCsv")}
+                  </Button>
+                </Show>
+                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+                  {t("action.refresh")}
+                </Button>
+              </div>
             }
           >
             <Show
@@ -723,6 +751,7 @@ export function Catalog() {
                       <thead>
                         <tr class="border-b border-line text-ink-muted">
                           <th class="py-2 pr-4 font-medium">{t("catalog.name")}</th>
+                          <th class="py-2 pr-4 font-medium">{t("catalog.image")}</th>
                           <th class="py-2 pr-4 font-medium">{t("catalog.taxClass")}</th>
                           <th class="py-2 pr-4 font-medium">{t("catalog.category")}</th>
                           <th class="py-2 pr-4 font-medium">{t("catalog.status")}</th>
@@ -800,6 +829,17 @@ export function Catalog() {
                                     </For>
                                   </div>
                                 </Show>
+                              </td>
+                              <td class="py-2 pr-4">
+                                <ImagePicker
+                                  tenantId={tenantId()}
+                                  value={item.image_ref}
+                                  canManage={canManageMedia()}
+                                  disabled={busy()}
+                                  onChange={(mediaId) =>
+                                    void setItemFields(item, { imageRef: mediaId })
+                                  }
+                                />
                               </td>
                               <td class="py-2 pr-4">{taxClassName(item.tax_class_id)}</td>
                               <td class="py-2 pr-4">{categoryName(item.item_category_id)}</td>

@@ -18,6 +18,7 @@ use core::future::Future;
 use core::time::Duration;
 
 use pos_proto::determinism::ClockSource;
+use pos_proto::ids::{SubjectId, TenantId};
 use pos_proto::time::Timestamp;
 
 use super::policy::RetentionPolicy;
@@ -48,6 +49,17 @@ pub trait SubjectStore {
         &self,
         records: &[SubjectRecord],
     ) -> impl Future<Output = Result<u64, RetentionError>> + Send;
+
+    /// One subject by id, scoped to `tenant` — the deliberate, per-subject read behind the PDPD/GDPR
+    /// subject-request tooling ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)), distinct
+    /// from the cron. Returns `None` when no such subject belongs to `tenant`, so the tool cannot reach
+    /// across tenants. The returned record carries its real `masked_at`, so a caller can tell whether it
+    /// still holds personal data.
+    fn fetch(
+        &self,
+        tenant: TenantId,
+        subject_id: SubjectId,
+    ) -> impl Future<Output = Result<Option<SubjectRecord>, RetentionError>> + Send;
 }
 
 /// A subject-store operation failed.
@@ -179,7 +191,7 @@ mod tests {
 
     use super::{RetentionError, SubjectStore, sweep};
 
-    use pos_proto::ids::SubjectId;
+    use pos_proto::ids::{SubjectId, TenantId};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
 
@@ -252,6 +264,18 @@ mod tests {
                 }
             }
             Ok(saved)
+        }
+
+        async fn fetch(
+            &self,
+            _tenant: TenantId,
+            subject_id: SubjectId,
+        ) -> Result<Option<SubjectRecord>, RetentionError> {
+            let rows = self.rows.lock().expect("lock");
+            Ok(rows
+                .iter()
+                .find(|row| row.subject_id == subject_id)
+                .cloned())
         }
     }
 

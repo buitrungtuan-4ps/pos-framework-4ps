@@ -135,9 +135,9 @@ impl EventStoreHarness for StoreHarness {
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
                  admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 task_health, audit_log, alerts, catalog_tax_rates, stores, order_queue, subjects, \
-                 webhook_endpoints, device_proposals, activation_codes, device_credentials \
-                 RESTART IDENTITY;",
+                 task_health, audit_log, alerts, catalog_tax_rates, media_assets, stores, \
+                 order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
+                 device_credentials RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -179,9 +179,9 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, stores, \
-             order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
-             device_credentials RESTART IDENTITY",
+             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, \
+             media_assets, stores, order_queue, subjects, webhook_endpoints, device_proposals, \
+             activation_codes, device_credentials RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1669,6 +1669,101 @@ mod tax_rates {
 }
 
 // ---------------------------------------------------------------------------
+// Media renditions: bytea round-trip, single-rendition read, tenant isolation, delete (ADR-0075).
+// ---------------------------------------------------------------------------
+
+mod media {
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    #[test]
+    fn stores_reads_one_rendition_lists_and_stays_tenant_scoped() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+
+            let thumbnail = vec![0xFFu8, 0xD8, 0xFF, 0x00, 0x01];
+            let detail = vec![0xFFu8, 0xD8, 0xFF, 0x10, 0x11, 0x12, 0x13];
+            media
+                .insert(
+                    "asset-1",
+                    TENANT_A,
+                    "image/jpeg",
+                    &thumbnail,
+                    &detail,
+                    i32::try_from(detail.len()).expect("fits"),
+                )
+                .await
+                .expect("insert ours");
+            // A neighbour tenant's asset with the same id must never leak across the boundary.
+            media
+                .insert("asset-1", TENANT_B, "image/jpeg", &[0x01], &[0x02], 1)
+                .await
+                .expect("insert neighbour");
+
+            // Each rendition round-trips its exact bytes.
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_A, "asset-1", false)
+                    .await
+                    .expect("thumbnail"),
+                Some(thumbnail),
+            );
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_A, "asset-1", true)
+                    .await
+                    .expect("detail"),
+                Some(detail.clone()),
+            );
+
+            // A listing shows the size without the bytes, tenant-scoped.
+            let listed = media.fetch_summaries(TENANT_A).await.expect("list ours");
+            assert_eq!(listed.len(), 1);
+            let row = listed.first().expect("row");
+            assert_eq!(row.media_id, "asset-1");
+            assert_eq!(row.content_type, "image/jpeg");
+            assert_eq!(
+                usize::try_from(row.detail_bytes).expect("non-negative"),
+                detail.len()
+            );
+
+            // Another tenant cannot read this asset by id.
+            assert_eq!(
+                media
+                    .fetch_rendition(TENANT_B, "asset-1", true)
+                    .await
+                    .expect("neighbour detail"),
+                Some(vec![0x02]),
+                "the neighbour sees only its own bytes for the shared id"
+            );
+
+            // Delete removes only the named asset and reports it.
+            assert!(media.remove(TENANT_A, "asset-1").await.expect("remove"));
+            assert!(
+                !media.remove(TENANT_A, "asset-1").await.expect("remove"),
+                "removing an absent asset reports no row removed"
+            );
+            assert!(
+                media
+                    .fetch_summaries(TENANT_A)
+                    .await
+                    .expect("list")
+                    .is_empty()
+            );
+            assert_eq!(
+                media
+                    .fetch_summaries(TENANT_B)
+                    .await
+                    .expect("neighbour")
+                    .len(),
+                1,
+                "the neighbour's asset is untouched"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The console audit trail: append-only, tenant-scoped, INSERT/SELECT-only (ADR-0069).
 // ---------------------------------------------------------------------------
 
@@ -2376,6 +2471,65 @@ mod subjects_store {
                 !subjects.mask(id, redacted, 6000).await.expect("re-mask"),
                 "an already-masked row is not re-masked"
             );
+        });
+    }
+
+    /// `fetch_one` is the subject-request tooling's read (ADR-0076): it returns one row scoped to its
+    /// tenant, reports the real `masked_at`, and returns `None` for a wrong tenant or unknown id.
+    #[test]
+    fn fetch_one_is_tenant_scoped_and_reports_masked_at() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let subjects = store.subjects();
+
+            let id: &str = "SUBJECT0000000000000000BB";
+            let tenant: &str = "TENANT000000000000000000AA";
+            let other_tenant: &str = "TENANT000000000000000000BB";
+            let fields: &str = r#"{"name":"name-placeholder"}"#;
+            admin
+                .execute(
+                    "INSERT INTO subjects (subject_id, tenant_id, collected_at, fields) \
+                     VALUES ($1, $2, $3, $4::text::jsonb)",
+                    &[&id, &tenant, &1000_i64, &fields],
+                )
+                .await
+                .expect("seed a subject");
+
+            // The owning tenant sees it, unmasked (masked_at is None).
+            let row = subjects
+                .fetch_one(id, tenant)
+                .await
+                .expect("fetch")
+                .expect("the subject exists for its tenant");
+            assert_eq!(row.subject_id, id);
+            assert_eq!(row.masked_at_ms, None);
+
+            // A different tenant cannot reach it, and an unknown id is None.
+            assert!(
+                subjects
+                    .fetch_one(id, other_tenant)
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "a subject is not visible to another tenant"
+            );
+            assert!(
+                subjects
+                    .fetch_one("SUBJECT0000000000000000ZZ", tenant)
+                    .await
+                    .expect("fetch")
+                    .is_none()
+            );
+
+            // After masking, fetch_one reports the masked_at stamp.
+            let redacted: &str = r#"{"name":"[REDACTED]"}"#;
+            assert!(subjects.mask(id, redacted, 7000).await.expect("mask"));
+            let masked = subjects
+                .fetch_one(id, tenant)
+                .await
+                .expect("fetch")
+                .expect("still present after masking");
+            assert_eq!(masked.masked_at_ms, Some(7000));
         });
     }
 }

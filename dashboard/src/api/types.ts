@@ -89,6 +89,22 @@ export interface ActivationCode {
  */
 export type TranslationGrid = Record<string, Record<string, string>>;
 
+/** One row's fate in a CSV import dry-run (ADR-0075): create a new key, update an existing one, or
+ *  reject it with a reason (a missing `en`, an empty key). */
+export interface TranslationImportRow {
+  readonly key: string;
+  readonly action: "create" | "update" | "reject";
+  readonly reason?: string;
+}
+
+/** The dry-run (and post-apply) report for a translation-grid CSV import (ADR-0075). */
+export interface TranslationImportReport {
+  readonly rows: readonly TranslationImportRow[];
+  readonly create_count: number;
+  readonly update_count: number;
+  readonly reject_count: number;
+}
+
 /** Whether a registry entity is in use or retired (ADR-0065). Entities are archived, never deleted. */
 export type EntityStatus = "active" | "archived";
 
@@ -264,7 +280,40 @@ export interface CatalogItem {
   readonly tax_class_id: string;
   readonly item_category_id: string | null;
   readonly item_subcategory_id: string | null;
+  /** The item's photo — a media id (ADR-0075), or null. */
+  readonly image_ref: string | null;
   readonly status: EntityStatus;
+}
+
+/** A media asset as listed (ADR-0075) — its id and size, never the bytes. */
+export interface MediaSummary {
+  readonly media_id: string;
+  readonly content_type: string;
+  readonly detail_bytes: number;
+  readonly created_at_ms: number;
+}
+
+/** The response to a media upload (ADR-0075): the id to reference the new asset by. */
+export interface UploadedMedia {
+  readonly media_id: string;
+  readonly detail_bytes: number;
+}
+
+/** A data subject as looked up (ADR-0076): existence and status, without the personal field values. */
+export interface SubjectMeta {
+  readonly subject_id: string;
+  readonly collected_at_ms: number;
+  /** Whether the personal data has already been masked (erased). */
+  readonly masked: boolean;
+  readonly field_count: number;
+}
+
+/** A data subject's exported record (ADR-0076) — the portability/access payload, with field values. */
+export interface SubjectExport {
+  readonly subject_id: string;
+  readonly collected_at_ms: number;
+  readonly masked: boolean;
+  readonly fields: Record<string, string>;
 }
 
 /** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */

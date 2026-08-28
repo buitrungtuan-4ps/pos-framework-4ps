@@ -23,6 +23,7 @@ import { Devices } from "./screens/Devices";
 import { Fleet } from "./screens/Fleet";
 import { Floor } from "./screens/Floor";
 import { Login } from "./screens/Login";
+import { Media } from "./screens/Media";
 import { MySecurity } from "./screens/MySecurity";
 import { MySessions } from "./screens/MySessions";
 import { NewStore } from "./screens/NewStore";
@@ -32,6 +33,7 @@ import { Setup } from "./screens/Setup";
 import { Stations } from "./screens/Stations";
 import { StoreSettings } from "./screens/StoreSettings";
 import { Stores } from "./screens/Stores";
+import { Subjects } from "./screens/Subjects";
 import { TaxRates } from "./screens/TaxRates";
 import { Translations } from "./screens/Translations";
 import { Webhooks } from "./screens/Webhooks";
@@ -80,6 +82,7 @@ export function App() {
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
+          <Route path="/media" component={Media} />
           <Route path="/layout" component={Layout} />
           <Route path="/floor" component={Floor} />
           <Route path="/stations" component={Stations} />
@@ -91,6 +94,7 @@ export function App() {
           <Route path="/tax-rates" component={TaxRates} />
           <Route path="/store-settings" component={StoreSettings} />
           <Route path="/people" component={People} />
+          <Route path="/subjects" component={Subjects} />
           <Route path="/activation" component={Activation} />
           <Route path="/admins" component={Admins} />
           <Route path="/my-sessions" component={MySessions} />

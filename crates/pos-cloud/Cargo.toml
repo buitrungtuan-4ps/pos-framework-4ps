@@ -125,9 +125,17 @@ utoipa = "5"
 # dependency tree stays as small as the pipeline needs.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
+# The CSV import/export rail (M5, ADR-0075). RFC-4180 quoting and escaping is the "fiddly-but-bounded,
+# general" work ADR-0007 says to buy rather than hand-roll. Permissive-licensed (Unlicense OR MIT),
+# advisory-clean; pulls only `csv-core`/`itoa`/`ryu` beside `serde`, already in the tree.
+csv = "1"
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }
+# Generate a valid image in the media upload test (ADR-0075); already a normal dep, so no new
+# cargo-deny surface.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 http-body-util = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # The ingest and rollup code runs against the in-memory fakes in tests, exactly as it will against

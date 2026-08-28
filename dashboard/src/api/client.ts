@@ -57,10 +57,15 @@ import type {
   RoleTemplate,
   Store,
   TaskHealthReport,
+  MediaSummary,
+  SubjectExport,
+  SubjectMeta,
   TaxClass,
   TaxRate,
   Tenant,
   TranslationGrid,
+  TranslationImportReport,
+  UploadedMedia,
   WebhookSummary,
 } from "./types";
 import { setActingAdmin, setAuthed } from "../state/session";
@@ -143,6 +148,42 @@ async function requestJsonOrNull<T>(path: string): Promise<T | null> {
     throw await failure(response);
   }
   return (await response.json()) as T;
+}
+
+// Uploads a raw binary body (an image) and reads the JSON reply (ADR-0075). The server re-encodes and
+// bounds it, so the browser sends the file as-is; the `content-type` names the format for the decoder.
+async function requestUpload<T>(path: string, file: Blob): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  return (await response.json()) as T;
+}
+
+// Fetches a CSV export (ADR-0075) and hands it to the browser as a file download. The session cookie
+// rides the same-origin request, so a viewer without the domain's manage permission gets a `403` that
+// surfaces as an `ApiError` for the caller to toast — no partial file is saved.
+async function downloadCsv(path: string, filename: string): Promise<void> {
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
@@ -619,6 +660,60 @@ export const api = {
       cutoff_hour: settings.cutoff_hour,
       display_language: settings.display_language ?? null,
     }),
+
+  // --- media (ADR-0075) ---
+  // Upload an image; the server re-encodes it to two bounded renditions and returns the new id.
+  uploadMedia: (tenantId: string, file: Blob) =>
+    requestUpload<UploadedMedia>(`/admin/media?${tenantQuery(tenantId)}`, file),
+  listMedia: (tenantId: string) =>
+    requestJson<MediaSummary[]>("GET", `/admin/media?${tenantQuery(tenantId)}`),
+  deleteMedia: (tenantId: string, mediaId: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/media/${encodeURIComponent(mediaId)}?${tenantQuery(tenantId)}`,
+    ),
+  // --- CSV export rail (ADR-0075, Track M5) ---
+  // Each export is permission-gated and audited server-side; the download carries the session cookie.
+  exportItemsCsv: (tenantId: string) =>
+    downloadCsv(`/admin/catalog/export/items?${tenantQuery(tenantId)}`, "items.csv"),
+  exportTranslationsCsv: (tenantId: string) =>
+    downloadCsv(`/admin/translations/export?${tenantQuery(tenantId)}`, "translations.csv"),
+  // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
+  dryRunTranslationsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<TranslationImportReport>(
+      `/admin/translations/import/dry-run?${tenantQuery(tenantId)}`,
+      file,
+    ),
+  applyTranslationsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<TranslationImportReport>(
+      `/admin/translations/import/apply?${tenantQuery(tenantId)}`,
+      file,
+    ),
+
+  // --- subject-request tooling (ADR-0076, owner-only, per-subject, audited) ---
+  // A 404 (no such subject for this tenant) surfaces as an ApiError the caller distinguishes by status.
+  lookupSubject: (tenantId: string, subjectId: string) =>
+    requestJson<SubjectMeta>(
+      "GET",
+      `/admin/subjects/${encodeURIComponent(subjectId)}?${tenantQuery(tenantId)}`,
+    ),
+  exportSubject: (tenantId: string, subjectId: string) =>
+    requestJson<SubjectExport>(
+      "GET",
+      `/admin/subjects/${encodeURIComponent(subjectId)}/export?${tenantQuery(tenantId)}`,
+    ),
+  eraseSubject: (tenantId: string, subjectId: string) =>
+    requestJson<{ readonly erased: boolean; readonly already_masked: boolean }>(
+      "POST",
+      `/admin/subjects/${encodeURIComponent(subjectId)}/erase?${tenantQuery(tenantId)}`,
+    ),
+
+  // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
+  mediaThumbnailUrl: (tenantId: string, mediaId: string) =>
+    `/admin/media/${encodeURIComponent(mediaId)}/thumbnail?${tenantQuery(tenantId)}`,
+  mediaDetailUrl: (tenantId: string, mediaId: string) =>
+    `/admin/media/${encodeURIComponent(mediaId)}/detail?${tenantQuery(tenantId)}`,
+
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>
@@ -672,6 +767,7 @@ export const api = {
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
       nameTranslations?: Record<string, string>;
+      imageRef?: string | null;
     },
   ) =>
     requestJson<CatalogItem>("POST", "/admin/catalog/items", {
@@ -681,6 +777,7 @@ export const api = {
       tax_class_id: taxClassId,
       item_category_id: taxonomy.itemCategoryId,
       item_subcategory_id: taxonomy.itemSubcategoryId,
+      image_ref: taxonomy.imageRef ?? null,
     }),
   updateItem: (
     menuItemId: string,
@@ -691,6 +788,7 @@ export const api = {
       taxClassId: string;
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
+      imageRef?: string | null;
       status: EntityStatus;
     },
   ) =>
@@ -701,6 +799,7 @@ export const api = {
       tax_class_id: fields.taxClassId,
       item_category_id: fields.itemCategoryId,
       item_subcategory_id: fields.itemSubcategoryId,
+      image_ref: fields.imageRef ?? null,
       status: fields.status,
     }),
   listMenus: (tenantId: string) =>

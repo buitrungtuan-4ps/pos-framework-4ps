@@ -8,7 +8,7 @@
 //! proven without a database, while the store-specific behaviour (RLS, partitioning, the rollup and
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -57,6 +57,9 @@ use pos_cloud::floorplan::{
 };
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
+use pos_cloud::media::{
+    MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
+};
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
@@ -75,6 +78,7 @@ use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
 };
+use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
@@ -91,8 +95,8 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
-    TaxClassId, TenantId,
+    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId,
+    SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
@@ -1057,6 +1061,17 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
         .expect("read the body")
         .to_bytes();
     serde_json::from_slice(&bytes).expect("parse the body as JSON")
+}
+
+/// The response body as a UTF-8 string — for the CSV export routes (ADR-0075).
+async fn text_body(response: axum::response::Response) -> String {
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    String::from_utf8(bytes.to_vec()).expect("body is valid UTF-8")
 }
 
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
@@ -2802,6 +2817,126 @@ async fn translation_routes_require_a_session() {
         .await
         .expect("route");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// The CSV export streams the grid as `text/csv` with a union-of-locales header and a row per key
+/// (ADR-0075, Track M5); unauthenticated it is a 401.
+#[tokio::test]
+async fn translation_export_streams_csv_and_needs_a_session() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let grid = serde_json::json!({
+        "menu.pho": { "en": "Pho", "vi": "Phở" },
+        "menu.tea": { "en": "Tea" },
+    });
+    let put = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/translations?tenant_id={tenant_ulid}"),
+            &grid,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    let export_uri = format!("/admin/translations/export?tenant_id={tenant_ulid}");
+    let unauth = router
+        .clone()
+        .oneshot(get(&export_uri, None))
+        .await
+        .expect("route");
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let exported = router
+        .oneshot(get_with_cookie(&export_uri, &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let content_type = exported
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/csv"), "served as CSV");
+    let csv = text_body(exported).await;
+    let mut lines = csv.lines();
+    assert_eq!(lines.next().unwrap(), "key,en,vi");
+    assert_eq!(lines.next().unwrap(), "menu.pho,Pho,Phở");
+    // The tea key has no vi value, so its vi cell is an empty trailing field.
+    assert_eq!(lines.next().unwrap(), "menu.tea,Tea,");
+}
+
+/// A CSV import is dry-run-first (ADR-0075, Track M5): the dry-run classifies every row and writes
+/// nothing; the apply merges the valid rows onto the grid and skips the rejected ones.
+#[tokio::test]
+async fn translation_import_dry_runs_then_applies() {
+    let router = translation_app(provisioned_admin(), FakeTranslations::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let grid_uri = format!("/admin/translations?tenant_id={tenant_ulid}");
+
+    // A starting grid with one key.
+    let base = serde_json::json!({ "menu.pho": { "en": "Pho" } });
+    let put = router
+        .clone()
+        .oneshot(put_with_cookie(&grid_uri, &base, &cookie))
+        .await
+        .expect("route the publish");
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    // A CSV that updates menu.pho, adds menu.tea, and has one row with no en (rejected).
+    let csv = "key,en,vi\nmenu.pho,Pho noodles,Phở\nmenu.tea,Tea,Trà\nmenu.rice,,Cơm\n";
+
+    // Dry-run: the report classifies the rows and the grid is untouched.
+    let dry = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/translations/import/dry-run?tenant_id={tenant_ulid}"),
+            csv.as_bytes().to_vec(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the dry-run");
+    assert_eq!(dry.status(), StatusCode::OK);
+    let report = json_body(dry).await;
+    assert_eq!(report["create_count"], 1);
+    assert_eq!(report["update_count"], 1);
+    assert_eq!(report["reject_count"], 1);
+    let after_dry = router
+        .clone()
+        .oneshot(get_with_cookie(&grid_uri, &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(json_body(after_dry).await, base, "a dry-run writes nothing");
+
+    // Apply: the valid rows merge in; the rejected row is skipped.
+    let apply = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/translations/import/apply?tenant_id={tenant_ulid}"),
+            csv.as_bytes().to_vec(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the apply");
+    assert_eq!(apply.status(), StatusCode::OK);
+    let applied = router
+        .oneshot(get_with_cookie(&grid_uri, &cookie))
+        .await
+        .expect("route the re-read");
+    let grid = json_body(applied).await;
+    assert_eq!(grid["menu.pho"]["en"], "Pho noodles", "the update landed");
+    assert_eq!(grid["menu.tea"]["vi"], "Trà", "the create landed");
+    assert!(
+        grid.get("menu.rice").is_none(),
+        "the rejected row was skipped"
+    );
 }
 
 // --- Webhook admin routes (`/admin/webhooks`, behind the session guard) --------------------------
@@ -5493,6 +5628,7 @@ impl CatalogStore for FakeCatalog {
                 row.tax_class_id = item.tax_class_id;
                 row.item_category_id = item.item_category_id;
                 row.item_subcategory_id = item.item_subcategory_id;
+                row.image_ref = item.image_ref;
                 row.status = item.status;
                 return Ok(true);
             }
@@ -5984,6 +6120,217 @@ fn seed_tax_class(catalog: &FakeCatalog, tenant: &str, tax_class_id: &str, name:
     });
 }
 
+/// An in-memory `MediaStore` for the route tests (ADR-0075), tenant-scoped like the real adapter.
+#[derive(Clone, Default)]
+struct FakeMedia {
+    assets: Arc<Mutex<Vec<NewMediaAsset>>>,
+}
+
+impl MediaStore for FakeMedia {
+    async fn put(&self, asset: &NewMediaAsset) -> Result<(), MediaStoreError> {
+        self.assets.lock().expect("lock").push(asset.clone());
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+        rendition: Rendition,
+    ) -> Result<Option<Vec<u8>>, MediaStoreError> {
+        Ok(self
+            .assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|asset| asset.tenant_id == tenant_id && asset.media_id == media_id)
+            .map(|asset| match rendition {
+                Rendition::Thumbnail => asset.thumbnail.clone(),
+                Rendition::Detail => asset.detail.clone(),
+            }))
+    }
+
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
+        Ok(self
+            .assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|asset| asset.tenant_id == tenant_id)
+            .map(|asset| MediaSummary {
+                media_id: asset.media_id,
+                content_type: asset.content_type.clone(),
+                detail_bytes: asset.detail.len(),
+                created_at_ms: 0,
+            })
+            .collect())
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+    ) -> Result<bool, MediaStoreError> {
+        let mut assets = self.assets.lock().expect("lock");
+        let before = assets.len();
+        assets.retain(|asset| !(asset.tenant_id == tenant_id && asset.media_id == media_id));
+        Ok(assets.len() < before)
+    }
+}
+
+fn media_app(admin: FakeAdmin, media: FakeMedia) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::media_router(
+        media,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// A small valid PNG for the upload path — a 4×4 solid image the ADR-0042 pipeline decodes and
+/// re-encodes to two JPEG renditions.
+fn tiny_png() -> Vec<u8> {
+    let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        4,
+        4,
+        image::Rgb([200, 40, 40]),
+    ));
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .expect("encode a test png");
+    buffer.into_inner()
+}
+
+/// A raw-binary POST (an image upload) carrying a `Cookie` header.
+fn post_bytes_with_cookie(
+    uri: &str,
+    bytes: Vec<u8>,
+    content_type: &str,
+    cookie: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", content_type)
+        .header("cookie", cookie)
+        .body(Body::from(bytes))
+        .expect("build the request")
+}
+
+#[tokio::test]
+async fn media_uploads_serves_lists_and_deletes_and_rejects_a_non_image() {
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // A non-image body is refused before anything is stored.
+    let bad = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            b"this is not an image".to_vec(),
+            "application/octet-stream",
+            &cookie,
+        ))
+        .await
+        .expect("route the bad upload");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A valid image is re-encoded and stored; the reply carries the new id.
+    let created = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            tiny_png(),
+            "image/png",
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    let media_id = created["media_id"].as_str().expect("a media id").to_owned();
+    assert!(created["detail_bytes"].as_u64().expect("size") > 0);
+
+    // The thumbnail serves as JPEG.
+    let thumb = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media/{media_id}/thumbnail?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the thumbnail");
+    assert_eq!(thumb.status(), StatusCode::OK);
+    assert_eq!(
+        thumb
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg"),
+    );
+
+    // The listing shows the one asset.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let items = json_body(listed).await;
+    assert_eq!(items.as_array().expect("array").len(), 1);
+    assert_eq!(items[0]["media_id"], media_id);
+
+    // Delete removes it; a second delete is a 404.
+    let deleted = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/media/{media_id}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the delete");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let gone = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media/{media_id}/thumbnail?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the gone thumbnail");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn media_routes_require_a_session() {
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let tenant = ulid_text(1);
+    let anonymous = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/media?tenant_id={tenant}"))
+                .body(Body::empty())
+                .expect("build"),
+        )
+        .await
+        .expect("route without a cookie");
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn tax_rates_set_lists_and_validates() {
     let catalog = FakeCatalog::default();
@@ -6277,6 +6624,8 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
                 "tax_class_id": ulid_text(7),
                 // Per-locale names (ADR-0074): a real one, plus a blank row the handler drops.
                 "name_translations": { "vi": "Bánh Margherita", "": "ignored", "ja": "  " },
+                // An item photo (ADR-0075) — a media id round-tripped as image_ref.
+                "image_ref": ulid_text(42),
             }),
             &cookie,
         ))
@@ -6286,6 +6635,11 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let created = json_body(created).await;
     assert_eq!(created["name"], "Margherita");
     assert_eq!(created["status"], "active");
+    assert_eq!(
+        created["image_ref"],
+        ulid_text(42),
+        "the item photo round-trips"
+    );
     assert_eq!(
         created["name_translations"]["vi"], "Bánh Margherita",
         "a real per-locale name is kept"
@@ -6313,6 +6667,30 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     assert_eq!(items.as_array().expect("array").len(), 1);
     assert_eq!(items[0]["menu_item_id"], item_id);
     assert_eq!(items[0]["name_translations"]["vi"], "Bánh Margherita");
+
+    // The CSV export (ADR-0075, Track M5): the item master as text/csv, no price column.
+    let exported = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/export/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route export items");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let csv = text_body(exported).await;
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "menu_item_id,name,status,tax_class_id,item_category_id,item_subcategory_id,image_ref"
+    );
+    let row = lines.next().expect("one item row");
+    assert!(row.contains("Margherita") && row.contains(&item_id));
+    assert!(row.contains(&ulid_text(42)), "the image ref is a column");
+    assert!(
+        !csv.to_lowercase().contains("price"),
+        "no price is exported"
+    );
 
     // A menu, optionally with a parent — created by name, id minted server-side.
     let created = router
@@ -9342,4 +9720,190 @@ async fn publishing_capability_flags_merges_the_store_layer_and_rejects_conflict
             .is_empty(),
         "the inter-flag rule is reported"
     );
+}
+
+// --- Subject-request tooling (`/admin/subjects`, owner-only, ADR-0076) ---------------------------
+
+/// An in-memory subject store: rows keyed by `(tenant, record)`. Only `fetch` and `save_masked` are
+/// exercised by the tooling; `due_before` is the cron's and returns nothing here.
+#[derive(Clone, Default)]
+struct FakeSubjects {
+    rows: Arc<Mutex<Vec<(TenantId, SubjectRecord)>>>,
+}
+
+impl FakeSubjects {
+    fn with(tenant: TenantId, record: SubjectRecord) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(vec![(tenant, record)])),
+        }
+    }
+}
+
+impl SubjectStore for FakeSubjects {
+    async fn due_before(
+        &self,
+        _cutoff: Timestamp,
+        _limit: u32,
+    ) -> Result<Vec<SubjectRecord>, RetentionError> {
+        Ok(Vec::new())
+    }
+
+    async fn save_masked(&self, masked: &[SubjectRecord]) -> Result<u64, RetentionError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let mut saved = 0;
+        for update in masked {
+            if let Some(entry) = rows
+                .iter_mut()
+                .find(|(_, row)| row.subject_id == update.subject_id)
+            {
+                entry.1 = update.clone();
+                saved += 1;
+            }
+        }
+        Ok(saved)
+    }
+
+    async fn fetch(
+        &self,
+        tenant: TenantId,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, RetentionError> {
+        let rows = self.rows.lock().expect("lock");
+        Ok(rows
+            .iter()
+            .find(|(row_tenant, row)| *row_tenant == tenant && row.subject_id == subject_id)
+            .map(|(_, row)| row.clone()))
+    }
+}
+
+/// The main router (for the session guard) plus the subject-request sub-router.
+fn subjects_app(admin: FakeAdmin, subjects: FakeSubjects) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::subjects_router(
+        subjects,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// A synthetic subject record — placeholder values, never anything resembling a real person.
+fn a_subject(subject_id: SubjectId) -> SubjectRecord {
+    SubjectRecord {
+        subject_id,
+        collected_at: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+        fields: BTreeMap::from([
+            ("name".to_owned(), "Test Subject".to_owned()),
+            ("phone".to_owned(), "N/A".to_owned()),
+        ]),
+        masked_at: None,
+    }
+}
+
+/// Lookup returns status without values; export returns values; erase masks; and every route is
+/// owner-only (ADR-0076). An admin (not owner) is refused.
+#[tokio::test]
+async fn subject_lookup_export_and_erase_are_owner_only_and_audited() {
+    let admin = provisioned_admin();
+    let subject_id = SubjectId::new(Ulid::from_u128(0x0ABC));
+    let subjects = FakeSubjects::with(tenant(), a_subject(subject_id));
+    let router = subjects_app(admin.clone(), subjects);
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let non_owner = role_session_cookie(&admin, AdminRole::Admin, "admin-token").await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let sid = subject_id.to_string();
+    let lookup_uri = format!("/admin/subjects/{sid}?tenant_id={tenant_ulid}");
+
+    // An admin (not owner) is refused — owner-only, a 403 distinct from the 401 of no session.
+    let denied = router
+        .clone()
+        .oneshot(get_with_cookie(&lookup_uri, &non_owner))
+        .await
+        .expect("route");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    // The owner looks up: metadata only, no field values.
+    let looked = router
+        .clone()
+        .oneshot(get_with_cookie(&lookup_uri, &owner))
+        .await
+        .expect("route");
+    assert_eq!(looked.status(), StatusCode::OK);
+    let meta = json_body(looked).await;
+    assert_eq!(meta["masked"], false);
+    assert_eq!(meta["field_count"], 2);
+    assert!(meta.get("fields").is_none(), "a lookup returns no values");
+
+    // Export returns the field values — the portability payload.
+    let exported = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/subjects/{sid}/export?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(exported.status(), StatusCode::OK);
+    assert_eq!(json_body(exported).await["fields"]["name"], "Test Subject");
+
+    // Erase masks the record.
+    let erased = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/subjects/{sid}/erase?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(erased.status(), StatusCode::OK);
+    assert_eq!(json_body(erased).await["already_masked"], false);
+
+    // After erasure the lookup shows masked, and an export returns the redaction sentinel.
+    let after = router
+        .clone()
+        .oneshot(get_with_cookie(&lookup_uri, &owner))
+        .await
+        .expect("route");
+    assert_eq!(json_body(after).await["masked"], true);
+    let re_export = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/subjects/{sid}/export?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(
+        json_body(re_export).await["fields"]["name"],
+        "[REDACTED]",
+        "erasure masked the value"
+    );
+}
+
+/// An unknown id is a 404, and the routes need a session.
+#[tokio::test]
+async fn subject_lookup_404s_for_an_unknown_id_and_needs_a_session() {
+    let admin = provisioned_admin();
+    let router = subjects_app(admin.clone(), FakeSubjects::default());
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let sid = Ulid::from_u128(0x0999).to_string();
+    let uri = format!("/admin/subjects/{sid}?tenant_id={tenant_ulid}");
+
+    let missing = router
+        .clone()
+        .oneshot(get_with_cookie(&uri, &owner))
+        .await
+        .expect("route");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let no_session = router.oneshot(get(&uri, None)).await.expect("route");
+    assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
 }

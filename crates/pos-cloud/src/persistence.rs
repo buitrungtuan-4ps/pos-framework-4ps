@@ -26,13 +26,13 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, NewSessionRow, OrderQueueRow, PendingOrderRow,
-    PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
-    PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor,
-    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresStore, PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, OrderQueueRow,
+    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
+    PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
+    PostgresFloor, PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresWebhooks, RoleTemplateRow,
+    RoutingRuleRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -81,6 +81,7 @@ use crate::floorplan::{
     TableStore, TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
+use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
@@ -207,6 +208,46 @@ impl SubjectStore for PostgresSubjects {
             }
         }
         Ok(saved)
+    }
+
+    async fn fetch(
+        &self,
+        tenant: TenantId,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, RetentionError> {
+        let Some(row) = self
+            .fetch_one(&subject_id.to_string(), &tenant.to_string())
+            .await
+            .map_err(|error| RetentionError::new(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let subject_id = row
+            .subject_id
+            .parse::<Ulid>()
+            .map(SubjectId::new)
+            .map_err(|_| {
+                RetentionError::new(format!("subject id is not a ULID: {}", row.subject_id))
+            })?;
+        let collected_at = Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
+            .map_err(|_| RetentionError::new("a subject's collected_at is out of range"))?;
+        let masked_at = match row.masked_at_ms {
+            Some(ms) => Some(
+                Timestamp::from_milliseconds_since_epoch(ms)
+                    .map_err(|_| RetentionError::new("a subject's masked_at is out of range"))?,
+            ),
+            None => None,
+        };
+        let fields: BTreeMap<String, String> =
+            serde_json::from_str(&row.fields_json).map_err(|error| {
+                RetentionError::new(format!("decoding a subject's fields failed: {error}"))
+            })?;
+        Ok(Some(SubjectRecord {
+            subject_id,
+            collected_at,
+            fields,
+            masked_at,
+        }))
     }
 }
 
@@ -1550,6 +1591,75 @@ impl TaxRateStore for PostgresTaxRates {
     }
 }
 
+// --- Media renditions (ADR-0075) --------------------------------------------------------------
+
+/// Converts one stored `media_assets` summary row into the seam's [`MediaSummary`], failing loudly on
+/// a media id that is not a ULID — that is store corruption (this cloud minted it), not an absence.
+fn media_summary(row: MediaAssetRow) -> Result<MediaSummary, MediaStoreError> {
+    let media_id = row
+        .media_id
+        .parse::<Ulid>()
+        .map(MediaId::new)
+        .map_err(|_ignored| {
+            MediaStoreError::new(format!("a media id is not a ULID: {}", row.media_id))
+        })?;
+    Ok(MediaSummary {
+        media_id,
+        content_type: row.content_type,
+        detail_bytes: usize::try_from(row.detail_bytes).unwrap_or(0),
+        created_at_ms: row.created_at_ms,
+    })
+}
+
+impl MediaStore for PostgresMedia {
+    async fn put(&self, asset: &NewMediaAsset) -> Result<(), MediaStoreError> {
+        let detail_bytes = i32::try_from(asset.detail.len()).unwrap_or(i32::MAX);
+        self.insert(
+            &asset.media_id.to_string(),
+            &asset.tenant_id.to_string(),
+            &asset.content_type,
+            &asset.thumbnail,
+            &asset.detail,
+            detail_bytes,
+        )
+        .await
+        .map_err(|error| MediaStoreError::new(error.to_string()))
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+        rendition: Rendition,
+    ) -> Result<Option<Vec<u8>>, MediaStoreError> {
+        self.fetch_rendition(
+            &tenant_id.to_string(),
+            &media_id.to_string(),
+            matches!(rendition, Rendition::Detail),
+        )
+        .await
+        .map_err(|error| MediaStoreError::new(error.to_string()))
+    }
+
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
+        let rows = self
+            .fetch_summaries(&tenant_id.to_string())
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))?;
+        rows.into_iter().map(media_summary).collect()
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        media_id: MediaId,
+    ) -> Result<bool, MediaStoreError> {
+        self.remove(&tenant_id.to_string(), &media_id.to_string())
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))
+    }
+}
+
 // --- The console audit trail (ADR-0069) -------------------------------------------------------
 
 /// Converts one stored `audit_log` row into the cloud's [`AuditEntry`], failing loudly on a
@@ -2295,6 +2405,13 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
     // failing the whole list — a malformed blob must not take a store's menu away.
     let name_translations: BTreeMap<String, String> =
         serde_json::from_str(&row.name_translations).unwrap_or_default();
+    // A malformed `image_ref` (not a ULID) degrades to "no image" rather than failing the list — the
+    // never-blank / placeholder posture (ADR-0075), the same as a media asset that was later deleted.
+    let image_ref = row
+        .image_ref
+        .as_deref()
+        .and_then(|text| text.parse::<Ulid>().ok())
+        .map(MediaId::new);
     Ok(CatalogItem {
         menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
         tenant_id: parse_registry_tenant(&row.tenant_id)
@@ -2304,6 +2421,7 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
         tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
         item_category_id,
         item_subcategory_id,
+        image_ref,
         status: EntityStatus::from_db(&row.status),
     })
 }
@@ -2533,6 +2651,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let image_ref = item.image_ref.map(|id| id.to_string());
         self.insert_item(
             &item.menu_item_id.to_string(),
             &item.tenant_id.to_string(),
@@ -2541,6 +2660,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            image_ref.as_deref(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))
@@ -2559,6 +2679,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let image_ref = item.image_ref.map(|id| id.to_string());
         self.set_item(
             &item.tenant_id.to_string(),
             &item.menu_item_id.to_string(),
@@ -2567,6 +2688,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            image_ref.as_deref(),
             item.status.as_str(),
         )
         .await
