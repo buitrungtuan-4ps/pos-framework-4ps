@@ -32,9 +32,11 @@ pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
 /// Enumerates the `(tenant, store)` pairs whose rollups the projector maintains — the fleet.
 ///
 /// The seam between the projector and the database, so the loop is tested without one.
-/// `store-postgres` answers it from the distinct `(tenant_id, store_id)` of the event log.
+/// `store-postgres` answers it from the registry's Active stores (ADR-0065) — a metadata read, not a
+/// `SELECT DISTINCT` scan of the event log (the O4 perf-wave-2 change, ADR-0081).
 pub trait StoreCatalog {
-    /// Every `(tenant, store)` with events, across all tenants.
+    /// Every Active `(tenant, store)` in the registry, across all tenants. A store with no events yet
+    /// folds nothing; an archived store drops out (its stored rollup stays intact and readable).
     fn active_stores(
         &self,
     ) -> impl Future<Output = Result<Vec<(TenantId, StoreId)>, PortError>> + Send;

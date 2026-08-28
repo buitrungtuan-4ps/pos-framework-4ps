@@ -147,6 +147,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   optional window and is otherwise unchanged. **Upgrade note:** a rollups read with no query params
   now returns at most the last 90 trading days instead of the full history — pass an explicit
   `from`/`to`/`limit` (up to 366 days) to widen it. Counts only; no PII, no protocol/migration change.
+- **The rollup projector reads the registry instead of scanning the event log** (roadmap v2, Track O4
+  "perf wave 2"; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). The background projector decided
+  which stores to fold from `SELECT DISTINCT tenant_id, store_id FROM events` — a full scan of the
+  event table on every 30-second pass. It now lists the registry's **Active** stores (ADR-0065), a
+  metadata read. "The fleet" the projector maintains is now the provisioned, active stores: a store is
+  registered at provisioning, so an event-bearing store is registered; an archived store drops out of
+  the sweep (its stored rollup is left intact and still readable), and a registered store with no
+  events folds nothing. **Upgrade note:** none for the API — the rollup contents and read routes are
+  unchanged; the only difference is which stores the projector visits. No protocol, migration, or
+  permission change.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
