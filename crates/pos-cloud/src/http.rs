@@ -77,6 +77,8 @@ use pos_proto::locale::TaxRate;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
 
+use pos_country::CountryRegistry;
+
 use pos_core::activation::{ActivationCode, Redemption, redeem};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
@@ -5588,6 +5590,118 @@ fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
         "the tax-rate service is unavailable",
     )
         .into_response()
+}
+
+// --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
+
+/// One compiled country module as the console reads it: the code, human name, currency, preferred
+/// language, number format, and the default retention period. What the platform can serve — not a
+/// per-store setting, and not fiscalization.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CountryView {
+    code: String,
+    display_name: String,
+    currency_code: String,
+    default_language: String,
+    decimal_separator: String,
+    group_separator: String,
+    digits_per_group: u8,
+    default_retention_days: u16,
+}
+
+/// The state the country/locale reads share: the views computed once at start-up from the compiled
+/// registry, plus the admin/clock the permission check needs.
+#[derive(Clone)]
+struct CountryState<A, C> {
+    countries: Arc<Vec<CountryView>>,
+    locales: Arc<Vec<String>>,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the countries/locales sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// `GET /admin/countries` lists the compiled country modules; `GET /admin/locales` lists the content
+/// locales the platform can serve (each module's preferred language plus the enforced `en` fallback,
+/// which feeds the translation grid's column set). Both are read-only master data behind
+/// [`ConsolePermission::Read`], computed once from the registry at start-up.
+pub fn country_router<A, C>(registry: &CountryRegistry, admin: A, clock: C) -> Router
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let mut countries = Vec::new();
+    // `en` is always present as the fallback (docs/pos-spec.md §9); a module's preferred language adds
+    // to the catalogue.
+    let mut locales: BTreeSet<String> = BTreeSet::new();
+    locales.insert("en".to_owned());
+    for module in registry.modules() {
+        let pack = module.locale_pack();
+        locales.insert(pack.default_language.as_str().to_owned());
+        countries.push(CountryView {
+            code: module.country_code().as_str().to_owned(),
+            display_name: module.display_name().to_owned(),
+            currency_code: pack.currency_code.as_str().to_owned(),
+            default_language: pack.default_language.as_str().to_owned(),
+            decimal_separator: pack.number_format.decimal_separator.to_string(),
+            group_separator: pack.number_format.group_separator.to_string(),
+            digits_per_group: pack.number_format.digits_per_group,
+            default_retention_days: pack.default_retention_days,
+        });
+    }
+    Router::new()
+        .route("/admin/countries", get(admin_list_countries::<A, C>))
+        .route("/admin/locales", get(admin_list_locales::<A, C>))
+        .with_state(CountryState {
+            countries: Arc::new(countries),
+            locales: Arc::new(locales.into_iter().collect()),
+            admin,
+            clock,
+        })
+}
+
+/// A super-admin lists the compiled country modules.
+async fn admin_list_countries<A, C>(
+    State(state): State<CountryState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    (StatusCode::OK, Json(state.countries.as_ref().clone())).into_response()
+}
+
+/// A super-admin lists the content locales the platform can serve.
+async fn admin_list_locales<A, C>(
+    State(state): State<CountryState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    (StatusCode::OK, Json(state.locales.as_ref().clone())).into_response()
 }
 
 /// Parses an optional parent-menu id from a request body; `Err` for a present-but-malformed value.

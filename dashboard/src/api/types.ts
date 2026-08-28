@@ -173,6 +173,23 @@ export interface TaxRate {
   readonly rate_bps: number;
 }
 
+/**
+ * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
+ * data: the code, human name, currency, preferred language, number format, and default retention
+ * period. Feeds the currency picker and locale surfaces. `GET /admin/locales` returns the content
+ * locales the platform can serve (BCP-47 tags), which the translation grid uses for its columns.
+ */
+export interface Country {
+  readonly code: string;
+  readonly display_name: string;
+  readonly currency_code: string;
+  readonly default_language: string;
+  readonly decimal_separator: string;
+  readonly group_separator: string;
+  readonly digits_per_group: number;
+  readonly default_retention_days: number;
+}
+
 /** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
 export interface ItemCategory {
   readonly item_category_id: string;

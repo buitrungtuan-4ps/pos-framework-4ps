@@ -1521,6 +1521,8 @@ dependencies = [
  "metrics-vm",
  "pos-contract-tests",
  "pos-core",
+ "pos-country",
+ "pos-country-zz",
  "pos-fakes",
  "pos-ports",
  "pos-proto",

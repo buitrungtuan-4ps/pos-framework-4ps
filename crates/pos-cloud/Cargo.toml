@@ -9,6 +9,13 @@ publish.workspace      = true
 repository.workspace   = true
 
 [features]
+# The cloud carries the country modules it surfaces as master data (ADR-0074): the CountryRegistry
+# it builds from these feeds the console's currency picker and locale catalogue. Unlike a single-cell
+# edge (ADR-0027), the cloud serves a fleet across countries, so it enables the reference module by
+# default; a fork adds `country-vn = ["dep:pos-country-vn"]` and enables it here.
+default = ["country-zz"]
+country-zz = ["dep:pos-country-zz"]
+
 # The end-to-end cursor test needs a live NATS server with JetStream, so it is gated off the PR
 # `test` job. The merge-to-`main` integration job and a developer with NATS_URL set enable it:
 # `cargo test -p pos-cloud --features integration`.
@@ -47,6 +54,12 @@ metrics-vm = { path = "../adapters/metrics-vm" }
 # publishing (ADR-0033), reusing the domain's own rule set so the cloud and edge cannot disagree.
 # pos-core is pure (the dependency-rule test keeps it I/O-free), so composing it here is sound.
 pos-core = { path = "../pos-core" }
+
+# Country modules the cloud surfaces as master data (ADR-0027, ADR-0074): the currency picker and the
+# locale catalogue read from the registry built over these. Selected per binary as features like the
+# edge; `pos-country-zz` is the reference module (optional, so only the enabled ones compile).
+pos-country = { path = "../pos-country" }
+pos-country-zz = { path = "../../countries/zz", optional = true }
 
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
 # test proves they never reach pos-core.

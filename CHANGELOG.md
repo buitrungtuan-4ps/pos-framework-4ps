@@ -111,6 +111,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Countries & locale packs surfaced as master data** (roadmap v2, Track M4, slice 4;
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). `pos-cloud` now builds a `CountryRegistry` from
+  the country modules compiled into it — a country is a Cargo feature like the edge (ADR-0027), and the
+  cloud enables the reference `zz` module by default (a fork adds `country-vn = ["dep:pos-country-vn"]`).
+  Two read-only routes behind `console.data.read`: `GET /admin/countries` lists each module (code,
+  display name, currency, preferred language, number format, default retention) and `GET /admin/locales`
+  lists the content locales the platform can serve (each module's preferred language plus the enforced
+  `en` fallback) — the source the currency picker and the translation grid's column set read from. The
+  typed client gains `listCountries` / `listLocales` and a `Country` type. Production country modules
+  with fiscalization (VN e-invoice, JP qualified invoice) remain a flagged follow-up. **Upgrade note:**
+  additive read routes and an additive default feature; no schema or protocol change.
 - **The `tax` config node — authored rates reach the edge and are billed** (roadmap v2, Track M4,
   slice 3; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Closes the headline M4 gap: a store now
   bills the *authored* tax rates instead of the hardcoded bootstrap default. `PUT /admin/config/tax`

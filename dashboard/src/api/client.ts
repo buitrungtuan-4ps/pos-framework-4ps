@@ -20,6 +20,7 @@ import type {
   Brand,
   CapabilityCatalogue,
   CatalogItem,
+  Country,
   FloorTable,
   RoutingRule,
   Station,
@@ -594,6 +595,10 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+  // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
+  // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
+  listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
+  listLocales: () => requestJson<string[]>("GET", "/admin/locales"),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>

@@ -24,7 +24,8 @@ use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, cursor, dashboard, http, orders, relay,
+    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, countries, cursor, dashboard, http,
+    orders, relay,
 };
 use store_postgres::PostgresStore;
 
@@ -404,6 +405,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+        ))
+        // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
+        // read-only master data — the currency picker and the translation grid's locale catalogue.
+        .merge(http::country_router(
+            &countries::registry(),
+            store.admin(),
+            SystemClock,
         ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
