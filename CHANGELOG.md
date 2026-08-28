@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A catalog item can carry an image — an optional `image_ref` on the item**
+  (roadmap v2, Track M5, slice 3; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `CatalogItem` gains
+  an `image_ref: Option<MediaId>` (additive column, migration 0031), authored in the console and
+  round-tripped through the catalog CRUD routes and the typed dashboard client. This is an
+  authoring/display concern only: the compiled `MenuBook` the edge reprices from is unchanged — images
+  do not cross to the edge in this track. A reference to a media asset that has since been deleted is not
+  an error: the ref simply resolves to nothing and the UI shows a placeholder (the never-blank posture).
+  The brand-logo `image_ref` follows with the receipt/branding work, beside its renderer. **Upgrade
+  note:** additive, forward-only migration applied on boot; the create/update item request bodies gain an
+  optional `image_ref` field (absent leaves the item imageless); no wire or edge change.
 - **Media upload, serve, list, and delete routes — the image pipeline's first caller**
   (roadmap v2, Track M5, slice 2; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `POST /admin/media`
   takes an image as a raw binary body (under an 8 MB limit), re-encodes it through the ADR-0042 pipeline,

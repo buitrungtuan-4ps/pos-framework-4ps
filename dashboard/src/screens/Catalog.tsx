@@ -454,6 +454,8 @@ export function Catalog() {
         taxClassId: item.tax_class_id,
         itemCategoryId: item.item_category_id,
         itemSubcategoryId: item.item_subcategory_id,
+        // Preserve the item's image on a rename/status edit; the image widget (a later slice) sets it.
+        imageRef: item.image_ref,
         status: fields.status ?? item.status,
       });
       setEditingItem("");

@@ -102,6 +102,9 @@ const MIGRATION_0029: &str = include_str!("../migrations/0029_catalog_item_name_
 /// Media renditions in Postgres `bytea` ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
 const MIGRATION_0030: &str = include_str!("../migrations/0030_media_assets.sql");
 
+/// An image reference on a catalog item ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+const MIGRATION_0031: &str = include_str!("../migrations/0031_catalog_item_image_ref.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -280,6 +283,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0030)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0031)
             .await
             .map_err(unavailable)
     }

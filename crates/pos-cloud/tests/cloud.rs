@@ -5496,6 +5496,7 @@ impl CatalogStore for FakeCatalog {
                 row.tax_class_id = item.tax_class_id;
                 row.item_category_id = item.item_category_id;
                 row.item_subcategory_id = item.item_subcategory_id;
+                row.image_ref = item.image_ref;
                 row.status = item.status;
                 return Ok(true);
             }
@@ -6491,6 +6492,8 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
                 "tax_class_id": ulid_text(7),
                 // Per-locale names (ADR-0074): a real one, plus a blank row the handler drops.
                 "name_translations": { "vi": "Bánh Margherita", "": "ignored", "ja": "  " },
+                // An item photo (ADR-0075) — a media id round-tripped as image_ref.
+                "image_ref": ulid_text(42),
             }),
             &cookie,
         ))
@@ -6500,6 +6503,11 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let created = json_body(created).await;
     assert_eq!(created["name"], "Margherita");
     assert_eq!(created["status"], "active");
+    assert_eq!(
+        created["image_ref"],
+        ulid_text(42),
+        "the item photo round-trips"
+    );
     assert_eq!(
         created["name_translations"]["vi"], "Bánh Margherita",
         "a real per-locale name is kept"

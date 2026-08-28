@@ -18,9 +18,10 @@ use pos_proto::ids::TenantId;
 use pos_proto::ulid::Ulid;
 
 /// A media asset's identifier — a ULID minted at upload. Cloud-only: an item or brand references it
-/// (`image_ref`, a later slice), but it never crosses the edge wire, so it lives beside the seam like
-/// [`MenuId`](crate::catalog::Menu) rather than in `pos-proto`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// (`image_ref`), but it never crosses the edge wire, so it lives beside the seam like
+/// [`MenuId`](crate::catalog::Menu) rather than in `pos-proto`. Serializes as its bare ULID string, so
+/// an item's/brand's `image_ref` is a plain id (or `null`) on the admin API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct MediaId(Ulid);
 
 impl MediaId {

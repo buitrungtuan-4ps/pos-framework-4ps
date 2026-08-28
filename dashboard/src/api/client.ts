@@ -706,6 +706,7 @@ export const api = {
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
       nameTranslations?: Record<string, string>;
+      imageRef?: string | null;
     },
   ) =>
     requestJson<CatalogItem>("POST", "/admin/catalog/items", {
@@ -715,6 +716,7 @@ export const api = {
       tax_class_id: taxClassId,
       item_category_id: taxonomy.itemCategoryId,
       item_subcategory_id: taxonomy.itemSubcategoryId,
+      image_ref: taxonomy.imageRef ?? null,
     }),
   updateItem: (
     menuItemId: string,
@@ -725,6 +727,7 @@ export const api = {
       taxClassId: string;
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
+      imageRef?: string | null;
       status: EntityStatus;
     },
   ) =>
@@ -735,6 +738,7 @@ export const api = {
       tax_class_id: fields.taxClassId,
       item_category_id: fields.itemCategoryId,
       item_subcategory_id: fields.itemSubcategoryId,
+      image_ref: fields.imageRef ?? null,
       status: fields.status,
     }),
   listMenus: (tenantId: string) =>

@@ -5394,6 +5394,9 @@ struct CreateItemRequest {
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
+    /// The item's photo — a media id (ADR-0075), or absent/empty for none.
+    #[serde(default)]
+    image_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -5409,6 +5412,9 @@ struct UpdateItemRequest {
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
+    /// The item's photo — a media id (ADR-0075), or absent/empty for none.
+    #[serde(default)]
+    image_ref: Option<String>,
     status: String,
 }
 
@@ -6313,6 +6319,18 @@ fn parse_optional_category(value: Option<&str>) -> Result<Option<ItemCategoryId>
     }
 }
 
+/// Parses an optional media id (an item's/brand's `image_ref`, ADR-0075), with the same
+/// empty-is-`None` rule as [`parse_optional_category`].
+fn parse_optional_media(value: Option<&str>) -> Result<Option<MediaId>, ()> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => text
+            .parse::<Ulid>()
+            .map(|ulid| Some(MediaId::new(ulid)))
+            .map_err(|_| ()),
+        None => Ok(None),
+    }
+}
+
 /// Parses an optional item-sub-category id, with the same empty-is-`None` rule as
 /// [`parse_optional_category`].
 fn parse_optional_subcategory(value: Option<&str>) -> Result<Option<ItemSubcategoryId>, ()> {
@@ -6431,6 +6449,9 @@ where
         )
             .into_response();
     };
+    let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "image_ref is not a ULID").into_response();
+    };
     let Some(menu_item_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuItemId::new)
     else {
@@ -6444,6 +6465,7 @@ where
         tax_class_id,
         item_category_id,
         item_subcategory_id,
+        image_ref,
         status: EntityStatus::Active,
     };
     match state.catalog.create_item(&record).await {
@@ -6513,6 +6535,9 @@ where
         )
             .into_response();
     };
+    let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "image_ref is not a ULID").into_response();
+    };
     let record = CatalogItem {
         menu_item_id,
         tenant_id,
@@ -6521,6 +6546,7 @@ where
         tax_class_id,
         item_category_id,
         item_subcategory_id,
+        image_ref,
         status,
     };
     match state.catalog.update_item(&record).await {

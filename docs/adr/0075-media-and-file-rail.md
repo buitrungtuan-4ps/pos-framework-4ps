@@ -39,12 +39,14 @@ The gaps this closes:
    content-addressed by an immutable id). Behind a new `console.media.manage` permission
    (deny-by-default, Owner/Admin), audited (`media.upload`, `media.delete`).
 
-3. **Items and brands gain an optional `image_ref`.** `CatalogItem` and `BrandRecord` gain an
-   `image_ref: Option<MediaId>` (additive columns, slice 3), authored in the console and displayed in
-   the dashboard. This is an **authoring/display** concern: the compiled `MenuBook` the edge reprices
-   from is unchanged — images do not cross to the edge in this track (flagged below). Deleting a
-   media asset an item still references is allowed; a dangling ref serves a placeholder, never an error
-   (the never-blank posture).
+3. **A catalog item gains an optional `image_ref` (a brand logo follows with receipts).** `CatalogItem`
+   gains an `image_ref: Option<MediaId>` (an additive column, slice 3), authored in the console and
+   displayed in the dashboard. This is an **authoring/display** concern: the compiled `MenuBook` the
+   edge reprices from is unchanged — images do not cross to the edge in this track (flagged below).
+   Deleting a media asset an item still references is allowed; a dangling ref serves a placeholder,
+   never an error (the never-blank posture). `BrandRecord` gains the same shape with the receipt /
+   branding work, whose renderer is the brand logo's actual consumer — so it lands there rather than
+   ahead of a caller (flagged below).
 
 4. **A CSV import/export rail, dry-run-first.** Buy the `csv` crate ([ADR-0007](0007-in-house-vs-dependency.md):
    RFC-4180 quoting/escaping is fiddly-but-bounded, the wrong thing to hand-roll). **Export** (slice 5):
@@ -92,6 +94,7 @@ The gaps this closes:
   later track; this track keeps images to cloud authoring/display.
 - XLSX import/export.
 - Receipt templates + brand logo/footer rendering — depend on this track's media rail and land with the
-  receipt work (M4 flagged them here).
+  receipt work (M4 flagged them here); the `BrandRecord.image_ref` column lands there, beside its
+  renderer.
 - PDPD subject-request tooling — ADR-0076 (subject-request tooling, this track's final slice), the PII-sensitive surface,
   delivered as this track's final slice.

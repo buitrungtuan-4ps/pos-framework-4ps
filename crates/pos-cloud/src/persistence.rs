@@ -2365,6 +2365,13 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
     // failing the whole list — a malformed blob must not take a store's menu away.
     let name_translations: BTreeMap<String, String> =
         serde_json::from_str(&row.name_translations).unwrap_or_default();
+    // A malformed `image_ref` (not a ULID) degrades to "no image" rather than failing the list — the
+    // never-blank / placeholder posture (ADR-0075), the same as a media asset that was later deleted.
+    let image_ref = row
+        .image_ref
+        .as_deref()
+        .and_then(|text| text.parse::<Ulid>().ok())
+        .map(MediaId::new);
     Ok(CatalogItem {
         menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
         tenant_id: parse_registry_tenant(&row.tenant_id)
@@ -2374,6 +2381,7 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
         tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
         item_category_id,
         item_subcategory_id,
+        image_ref,
         status: EntityStatus::from_db(&row.status),
     })
 }
@@ -2603,6 +2611,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let image_ref = item.image_ref.map(|id| id.to_string());
         self.insert_item(
             &item.menu_item_id.to_string(),
             &item.tenant_id.to_string(),
@@ -2611,6 +2620,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            image_ref.as_deref(),
         )
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))
@@ -2629,6 +2639,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let image_ref = item.image_ref.map(|id| id.to_string());
         self.set_item(
             &item.tenant_id.to_string(),
             &item.menu_item_id.to_string(),
@@ -2637,6 +2648,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            image_ref.as_deref(),
             item.status.as_str(),
         )
         .await

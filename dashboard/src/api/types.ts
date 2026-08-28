@@ -264,6 +264,8 @@ export interface CatalogItem {
   readonly tax_class_id: string;
   readonly item_category_id: string | null;
   readonly item_subcategory_id: string | null;
+  /** The item's photo — a media id (ADR-0075), or null. */
+  readonly image_ref: string | null;
   readonly status: EntityStatus;
 }
 
