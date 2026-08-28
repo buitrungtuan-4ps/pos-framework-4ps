@@ -123,6 +123,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Inventory authoring has somewhere to live** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `InventoryStore` seam persists a
+  tenant's ingredients, per-item/modifier recipes (with their auto-86 thresholds), and supplier
+  references, backed by an `inventory_items` table (migration `0037`). The three record kinds share
+  one shape — a tenant, a stable id, and a document — so they live in one table discriminated by
+  `kind` rather than three near-identical tables, each record held as `jsonb` exactly as `campaigns`
+  is; CRUD is per-record. Tenant-scoped and RLS-isolated like every other config table, with an
+  in-memory fake for the seam tests and a Postgres round-trip integration test (create/replace by
+  `(kind, id)`, tenant isolation, kind-scoped delete). Recipe quantities and supplier terms are T2
+  configuration; a row carries no customer identifier. The admin routes, publish path, edge apply, and
+  console follow in the same track. **Upgrade note:** an additive migration (`0037_inventory`,
+  rollback safe); no protocol or permission change in this slice.
 - **The inventory engine gets a wire node and a conversion, so recipes can finally be authored**
   (roadmap v2, Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `pos-core`
   inventory domain (spec §8 — recipes, stock projection, auto-86) has been built and property-tested

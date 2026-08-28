@@ -3275,3 +3275,144 @@ mod device_proposals {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Inventory authoring (ADR-0079): ingredients, recipes, and suppliers as
+// per-(tenant, kind, id) jsonb rows, round-tripped and tenant-scoped.
+// ---------------------------------------------------------------------------
+
+mod inventory_authoring {
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    use pos_proto::enums::UnitOfMeasure;
+    use pos_proto::ids::{IngredientId, MenuItemId, SupplierId};
+    use pos_proto::inventory::{
+        PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
+    };
+    use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
+    use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
+    use store_postgres::PostgresInventory;
+
+    fn ingredient(n: u128, name: &str) -> PublishedIngredient {
+        PublishedIngredient {
+            id: IngredientId::new(Ulid::from_u128(n)),
+            name: DisplayName::new(name),
+            unit: Open::from_known(UnitOfMeasure::Gram),
+        }
+    }
+
+    /// Upsert a wire record (already a JSON value) under `(tenant, kind, id)` — collapses the repeated
+    /// serialize-then-upsert at every call site. Takes a `serde_json::Value` so the helper needs no
+    /// `serde::Serialize` bound (the test crate depends only on `serde_json`).
+    async fn put(
+        inventory: &PostgresInventory,
+        tenant: &str,
+        kind: &str,
+        id: &str,
+        record: serde_json::Value,
+    ) {
+        inventory
+            .upsert(tenant, kind, id, &record.to_string())
+            .await
+            .expect("upsert");
+    }
+
+    async fn count(inventory: &PostgresInventory, tenant: &str, kind: &str) -> usize {
+        inventory.fetch(tenant, kind).await.expect("fetch").len()
+    }
+
+    #[test]
+    fn ingredients_recipes_suppliers_round_trip_scoped_by_tenant_and_kind() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let inventory = store.inventory();
+            let ing_id = Ulid::from_u128(10).to_string();
+
+            // A neighbour tenant's ingredient must not leak into TENANT_A's reads.
+            put(
+                &inventory,
+                TENANT_B,
+                "ingredient",
+                &Ulid::from_u128(99).to_string(),
+                serde_json::to_value(ingredient(99, "Neighbour")).expect("json"),
+            )
+            .await;
+
+            // Create then replace one ingredient — upsert is by (kind, entity_id), not append.
+            put(
+                &inventory,
+                TENANT_A,
+                "ingredient",
+                &ing_id,
+                serde_json::to_value(ingredient(10, "Dough")).expect("json"),
+            )
+            .await;
+            put(
+                &inventory,
+                TENANT_A,
+                "ingredient",
+                &ing_id,
+                serde_json::to_value(ingredient(10, "Dough (renamed)")).expect("json"),
+            )
+            .await;
+
+            // A recipe and a supplier share the table under other kinds.
+            let recipe = PublishedRecipe {
+                item: MenuItemId::new(Ulid::from_u128(20)),
+                lines: vec![PublishedRecipeLine {
+                    ingredient: IngredientId::new(Ulid::from_u128(10)),
+                    per_unit: Quantity::from_milli(100_000),
+                }],
+                auto_86_threshold: 3,
+            };
+            put(
+                &inventory,
+                TENANT_A,
+                "recipe",
+                &recipe.item.to_string(),
+                serde_json::to_value(&recipe).expect("json"),
+            )
+            .await;
+            let supplier = PublishedSupplier {
+                id: SupplierId::new(Ulid::from_u128(30)),
+                name: DisplayName::new("Anchor Dairy"),
+            };
+            put(
+                &inventory,
+                TENANT_A,
+                "supplier",
+                &supplier.id.to_string(),
+                serde_json::to_value(&supplier).expect("json"),
+            )
+            .await;
+
+            // The kind filter keeps the three apart; the ingredient upsert replaced, not appended.
+            let ingredients = inventory.fetch(TENANT_A, "ingredient").await.expect("ings");
+            assert_eq!(ingredients.len(), 1, "upsert replaces by (kind, id)");
+            let decoded: PublishedIngredient =
+                serde_json::from_str(&ingredients.first().expect("one").doc_json).expect("decode");
+            assert_eq!(decoded.name, DisplayName::new("Dough (renamed)"));
+            assert_eq!(count(&inventory, TENANT_A, "recipe").await, 1);
+            assert_eq!(count(&inventory, TENANT_A, "supplier").await, 1);
+
+            // Tenant isolation: TENANT_B sees only its own ingredient, none of TENANT_A's rows.
+            assert_eq!(count(&inventory, TENANT_B, "ingredient").await, 1);
+            assert_eq!(count(&inventory, TENANT_B, "recipe").await, 0);
+
+            // Delete is scoped by (kind, id) and idempotent; other kinds are untouched.
+            inventory
+                .delete(TENANT_A, "ingredient", &ing_id)
+                .await
+                .expect("delete");
+            inventory
+                .delete(TENANT_A, "ingredient", &ing_id)
+                .await
+                .expect("no-op");
+            assert_eq!(count(&inventory, TENANT_A, "ingredient").await, 0);
+            assert_eq!(count(&inventory, TENANT_A, "recipe").await, 1);
+            assert_eq!(count(&inventory, TENANT_A, "supplier").await, 1);
+        });
+    }
+}
