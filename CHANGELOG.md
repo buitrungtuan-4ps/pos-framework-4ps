@@ -123,6 +123,57 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
+  Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
+  (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the
+  sales channels it accepts, the payment methods it takes as tender, its QR ordering guardrails
+  (enabled, staff-confirmation, per-table limit, rate window, optional business hours), and its
+  per-marketplace vendor policies (add/remove rows of vendor, availability, prep minutes, enabled).
+  Each card publishes its own node and is store-scoped — an unpublished section stays never-blank, so
+  before publishing every channel and tender shows enabled and the QR defaults show through. Full
+  en/vi translations, and it reuses the existing `console.config.publish` permission. **Upgrade note:**
+  none — a console screen over the M7 publish routes; no protocol, migration, or permission change.
+- **Marketplace vendor policies can be authored per store** (roadmap v2, Track M7;
+  [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/vendors` routes
+  read and publish a store's per-marketplace policies as the `vendors` config node: per vendor, whether
+  it is enabled, its availability (open/busy/closed — a new `VendorAvailability` wire enum mirroring the
+  `DeliveryVendor` busy-mode), the prep time authored for the busy case, and the menu items suppressed
+  (86'd) on that vendor. Behind `console.config.publish`, audited; a policy naming an unknown
+  availability is refused. This is the authoring surface only — the live loop that pushes busy-mode/86
+  to a marketplace from the policy is the flagged follow-up (same shape as the campaign live-eval and
+  inventory marketplace-notify deferrals). **Upgrade note:** none — additive `pos-proto` types (incl. a
+  new closed-vocabulary enum) and settings routes; no protocol, migration, or permission change.
+- **QR ordering guardrails are authorable, and the edge finally honours staff-confirmation** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/qr`
+  routes read and publish a store's QR guardrail settings — enabled, staff-confirmation-required,
+  per-table rate limit, rate window, and business hours — as the `qr` config node the cloud's QR
+  intake already reads (behind `console.config.publish`, audited; hours validated to `0..=23`). The
+  node existed and the cloud read it, but the edge ignored `staff_confirmation_required` and held every
+  table-bearing QR order for staff unconditionally; the edge now reads the node so an operator can turn
+  the hold off. Default stays on (ADR-0057), and an absent node leaves the running value untouched.
+  **Upgrade note:** none — additive route and edge read; no protocol, migration, or permission change.
+- **A store can now be told which channels and tenders it accepts, and the edge enforces it** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT
+  /admin/config/channels` and `.../tender` routes read and publish a store's enabled sales channels
+  and accepted payment methods as the `channels` and `tender` config nodes (behind
+  `console.config.publish`, audited; authoring rejects an unrecognised token up front). The edge
+  applies both in `session_from_config`: order intake refuses a sales channel the store does not list,
+  and bill settlement refuses a payment method it does not accept. Opt-in and never-blank — a store
+  that has published neither node trades on every channel and takes any known tender, exactly as before
+  M7. **Upgrade note:** none — additive settings routes and edge gates; no protocol, migration, or
+  permission change, and an absent node imposes no restriction.
+- **Channels and tender get authorable node types, so a store can be told which it accepts** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). Today a sales channel is enabled
+  only implicitly (by the menu carrying a row for it) and the accepted payment methods are fixed in the
+  edge. This slice adds the wire shape for authoring them: `pos_proto::channels::PublishedChannels`
+  (the enabled `SalesChannel` set) and `PublishedTender` (the accepted `PaymentMethod` set), each a
+  list of forward-compatible `Open` tokens; and `pos_core::channels::{enabled_channels,
+  accepted_tender}` build the domain sets the edge will enforce, dropping any unspecified/unrecognised
+  token rather than silently switching it on. Opt-in and never-blank: an absent node means no
+  restriction (exactly today's behaviour), a present node is authoritative. The publish routes, edge
+  gates, and console follow in the same track. **Upgrade note:** none — additive `pos-proto`/`pos-core`
+  modules; no protocol, migration, or permission change, and a store with no channels/tender node
+  behaves exactly as today.
 - **A goods receipt can name the supplier it came from** (roadmap v2, Track M6;
   [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `inventory.stock.received` event gains an
   optional `supplier_id` field — a reference to a supplier authored in the `inventory` node — so a

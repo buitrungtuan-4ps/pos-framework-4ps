@@ -334,6 +334,41 @@ export interface Supplier {
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
 export type SupplierInput = Omit<Supplier, "id">;
 
+/** A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree. */
+export interface QrGuardrails {
+  readonly enabled: boolean;
+  readonly staff_confirmation_required: boolean;
+  readonly per_table_limit: number;
+  readonly rate_window_secs: number;
+  readonly business_hours?: {
+    readonly open_hour: number;
+    readonly close_hour: number;
+    readonly tz_offset_minutes: number;
+  } | null;
+}
+
+/** A store's availability to one delivery marketplace (`VendorAvailability`, wire-token prefixed). */
+export type VendorAvailability =
+  | "VENDOR_AVAILABILITY_OPEN"
+  | "VENDOR_AVAILABILITY_BUSY"
+  | "VENDOR_AVAILABILITY_CLOSED";
+
+/** The availabilities offered in the vendor-policy editor. */
+export const VENDOR_AVAILABILITIES: readonly VendorAvailability[] = [
+  "VENDOR_AVAILABILITY_OPEN",
+  "VENDOR_AVAILABILITY_BUSY",
+  "VENDOR_AVAILABILITY_CLOSED",
+];
+
+/** One per-marketplace policy (`PublishedVendorPolicy`, ADR-0080). */
+export interface VendorPolicy {
+  readonly vendor: string;
+  readonly enabled: boolean;
+  readonly availability: VendorAvailability;
+  readonly prep_minutes: number;
+  readonly suppressed_items: string[];
+}
+
 /**
  * A publish dry-run from `POST /admin/config/campaigns/preview` (ADR-0077): the RFC 7386 merge patch
  * a publish would apply to the store's effective config, the version it diffs against (`null` if the

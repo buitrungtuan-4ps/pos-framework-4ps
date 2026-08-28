@@ -68,9 +68,12 @@ use pos_proto::ErrorStatus;
 use pos_proto::campaign::{
     PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedConditions,
 };
+use pos_proto::channels::{
+    PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
+};
 use pos_proto::determinism::ClockSource;
 use pos_proto::display::GridPosition;
-use pos_proto::enums::{SalesChannel, UnitOfMeasure};
+use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
@@ -2824,6 +2827,610 @@ where
         )
             .into_response(),
     }
+}
+
+// --- Channels & tender settings (`/admin/config/channels`, `/admin/config/tender`, ADR-0080, M7) --
+
+/// The collaborators the channels/tender settings routes need: the config-tree store the node is
+/// written onto and read back from, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigChannelsState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `(tenant, store)` query for reading a store's current settings node.
+#[derive(Debug, Clone, Deserialize)]
+struct ConfigNodeQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// A `PUT /admin/config/channels` body: the `(tenant, store)` and the enabled sales-channel tokens.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishChannelsRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    enabled: Vec<String>,
+}
+
+/// A `PUT /admin/config/tender` body: the `(tenant, store)` and the accepted payment-method tokens.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishTenderRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    accepted: Vec<String>,
+}
+
+/// Parses each `UPPER_SNAKE_CASE` token to a known wire-enum value, refusing an unrecognised or
+/// unspecified one — authoring rejects a typo up front rather than storing a token the edge would drop.
+fn parse_known_tokens<E: WireEnum>(tokens: &[String]) -> Result<Vec<Open<E>>, String> {
+    let mut out = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        match E::from_wire(token) {
+            Some(known) if known != E::UNSPECIFIED => out.push(Open::from_known(known)),
+            _ => return Err(format!("{token} is not a recognised value")),
+        }
+    }
+    Ok(out)
+}
+
+/// Reads a store's current Store-layer node value by key, or `null` when it has none.
+async fn read_store_node<Cfg>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    node_key: &str,
+) -> Result<serde_json::Value, Response>
+where
+    Cfg: ConfigTreeStore,
+{
+    match config_trees.load(tenant_id, store_id).await {
+        Ok(Some(state)) => Ok(state
+            .layers
+            .get(2)
+            .and_then(|layer| layer.get(node_key))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)),
+        Ok(None) => Ok(serde_json::Value::Null),
+        Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+/// Publishes `node_value` as the store's `node_key`, versioned — the shared load→merge→publish→save→
+/// audit tail every settings-node publish uses.
+async fn publish_store_settings_node<Cfg, A, C>(
+    state: &ConfigChannelsState<Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    node_key: &str,
+    action: &str,
+    node_value: serde_json::Value,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let store_layer = store_layer_with(state_before.as_ref(), node_key, node_value.clone());
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                context,
+                Some(tenant_id),
+                action,
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(node_value),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// Builds the channels/tender settings sub-router ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).
+///
+/// `GET`/`PUT /admin/config/channels` and `.../tender`: read a store's current enabled channels /
+/// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`]; publishes are
+/// behind [`ConsolePermission::PublishConfig`] and audited — settings, not a CRUD master-data domain,
+/// so there is no dedicated authoring permission. The edge applies each node as a policy gate.
+pub fn config_channels_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/channels",
+            get(admin_read_channels::<Cfg, A, C>).put(admin_publish_channels::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/tender",
+            get(admin_read_tender::<Cfg, A, C>).put(admin_publish_tender::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/qr",
+            get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/vendors",
+            get(admin_read_vendors::<Cfg, A, C>).put(admin_publish_vendors::<Cfg, A, C>),
+        )
+        .with_state(ConfigChannelsState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin reads a store's current `channels` node (the enabled sales channels), or `null`.
+async fn admin_read_channels<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "channels").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's enabled sales channels as its `channels` node.
+async fn admin_publish_channels<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishChannelsRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let enabled = match parse_known_tokens::<SalesChannel>(&request.enabled) {
+        Ok(tokens) => tokens,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let Ok(value) = serde_json::to_value(PublishedChannels::new(enabled)) else {
+        return channels_serialize_unavailable();
+    };
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "channels",
+        "config.channels.publish",
+        value,
+    )
+    .await
+}
+
+/// A super-admin reads a store's current `tender` node (the accepted payment methods), or `null`.
+async fn admin_read_tender<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "tender").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's accepted payment methods as its `tender` node.
+async fn admin_publish_tender<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishTenderRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let accepted = match parse_known_tokens::<PaymentMethod>(&request.accepted) {
+        Ok(tokens) => tokens,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let Ok(value) = serde_json::to_value(PublishedTender::new(accepted)) else {
+        return channels_serialize_unavailable();
+    };
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "tender",
+        "config.tender.publish",
+        value,
+    )
+    .await
+}
+
+/// The `503` for the impossible case that a channels/tender node fails to serialise.
+fn channels_serialize_unavailable() -> Response {
+    tracing::error!("could not serialise a channels/tender node");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the configuration service is unavailable",
+    )
+        .into_response()
+}
+
+/// A `qr.business_hours` window in a `PUT /admin/config/qr` body.
+#[derive(Debug, Clone, Deserialize)]
+struct QrBusinessHoursRequest {
+    open_hour: u8,
+    close_hour: u8,
+    #[serde(default)]
+    tz_offset_minutes: i64,
+}
+
+/// A `PUT /admin/config/qr` body: the store and the QR guardrail settings (P11b/ADR-0057). Composed
+/// into the `qr` node the cloud's QR intake reads (`qr_http::qr_config_for`) and the edge reads for its
+/// staff-confirmation decision.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishQrRequest {
+    tenant_id: String,
+    store_id: String,
+    enabled: bool,
+    staff_confirmation_required: bool,
+    per_table_limit: u32,
+    rate_window_secs: u64,
+    #[serde(default)]
+    business_hours: Option<QrBusinessHoursRequest>,
+}
+
+/// A super-admin reads a store's current `qr` guardrail node, or `null`.
+async fn admin_read_qr<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's QR guardrail settings as its `qr` node.
+async fn admin_publish_qr<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishQrRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let mut node = serde_json::json!({
+        "enabled": request.enabled,
+        "staff_confirmation_required": request.staff_confirmation_required,
+        "per_table_limit": request.per_table_limit,
+        "rate_window_secs": request.rate_window_secs,
+    });
+    if let Some(hours) = request.business_hours {
+        if hours.open_hour > 23 || hours.close_hour > 23 {
+            return (
+                StatusCode::BAD_REQUEST,
+                "open_hour and close_hour must be in 0..=23",
+            )
+                .into_response();
+        }
+        if let serde_json::Value::Object(map) = &mut node {
+            map.insert(
+                "business_hours".to_owned(),
+                serde_json::json!({
+                    "open_hour": hours.open_hour,
+                    "close_hour": hours.close_hour,
+                    "tz_offset_minutes": hours.tz_offset_minutes,
+                }),
+            );
+        }
+    }
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "qr",
+        "config.qr.publish",
+        node,
+    )
+    .await
+}
+
+/// A `PUT /admin/config/vendors` body: the store and its per-marketplace policies.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishVendorsRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    policies: Vec<PublishedVendorPolicy>,
+}
+
+/// A super-admin reads a store's current `vendors` policy node, or `null`.
+async fn admin_read_vendors<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's per-marketplace policies as its `vendors` node. Each policy's
+/// availability must be a recognised value; the live loop that pushes it to a marketplace is deferred.
+async fn admin_publish_vendors<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishVendorsRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request
+        .policies
+        .iter()
+        .any(|policy| policy.availability.is_unspecified() || policy.availability.is_unrecognised())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a vendor policy names an unknown availability (open/busy/closed)",
+        )
+            .into_response();
+    }
+    let Ok(value) = serde_json::to_value(PublishedVendorPolicies::new(request.policies)) else {
+        return channels_serialize_unavailable();
+    };
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "vendors",
+        "config.vendors.publish",
+        value,
+    )
+    .await
 }
 
 // --- Floor & kitchen master data (`/admin/floor`, `/admin/kitchen`, ADR-0072) -------------------

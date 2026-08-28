@@ -198,6 +198,22 @@ wire_enum! {
 }
 
 wire_enum! {
+    /// A store's availability to one delivery marketplace ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).
+    ///
+    /// Mirrors the `BusyMode` the outbound `DeliveryVendor` port already carries: `Open` accepts orders,
+    /// `Busy` throttles them (a longer prep time is authored alongside), `Closed` stops them. Authored
+    /// per vendor in the `vendors` config node; the live loop that pushes it to a marketplace is the
+    /// flagged follow-up.
+    VendorAvailability, prefix = "VENDOR_AVAILABILITY";
+    /// Accepting orders normally.
+    Open = "OPEN",
+    /// Accepting orders but throttled — a longer prep time applies.
+    Busy = "BUSY",
+    /// Not accepting orders.
+    Closed = "CLOSED",
+}
+
+wire_enum! {
     /// How a price reduction was granted.
     ///
     /// These three are deliberately separate, and `docs/pos-spec.md` §5 is explicit
@@ -237,6 +253,7 @@ mod tests {
     use super::{
         BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
         SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState, UnitOfMeasure,
+        VendorAvailability,
     };
     use crate::wire_enum::{Open, WireEnum};
 
@@ -292,6 +309,7 @@ mod tests {
         check::<ReductionKind>("REDUCTION_KIND");
         check::<ShipmentStatus>("SHIPMENT_STATUS");
         check::<UnitOfMeasure>("UNIT_OF_MEASURE");
+        check::<VendorAvailability>("VENDOR_AVAILABILITY");
     }
 
     #[test]

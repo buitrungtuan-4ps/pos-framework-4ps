@@ -29,9 +29,11 @@ use std::sync::{Arc, Mutex};
 use pos_core::business_date::{CutoffHour, StoreTimeZone};
 use pos_core::campaign::campaigns_from_published;
 use pos_core::capability::{Capability, CapabilityContext};
+use pos_core::channels::{accepted_tender, enabled_channels};
 use pos_core::inventory::from_published as inventory_from_published;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::campaign::PublishedCampaigns;
+use pos_proto::channels::{PublishedChannels, PublishedTender};
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
@@ -89,6 +91,12 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 /// against. Any node that is absent or does not parse is left as the base has it — a bad or partial
 /// publish never blanks a field, it just does not change it.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a flat series of independent, self-contained node branches (menu, permissions, \
+              capabilities, floor, stations, tax, campaigns, inventory, channels, tender, locale); \
+              each is a few lines and reads better inline than behind a helper indirection"
+)]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
     let mut session = base.clone();
@@ -211,6 +219,39 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         let (book, thresholds) = inventory_from_published(&published);
         session.recipes = book;
         session.recipe_thresholds = thresholds;
+    }
+    // The `channels` node the channels publish writes (ADR-0080, Track M7): the sales channels a store
+    // accepts. A present node is authoritative — the edge refuses an order on a channel it does not
+    // list; an absent node leaves `None` (no restriction), so a store that never published one trades
+    // on every channel exactly as before M7.
+    if let Some(published) = document
+        .get("channels")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedChannels>(&text).ok())
+    {
+        session.enabled_channels = Some(enabled_channels(&published));
+    }
+    // The `tender` node the tender publish writes (ADR-0080, Track M7): the payment methods a store
+    // accepts. Same opt-in rule — a present node gates settlement, an absent one accepts any known
+    // method as before.
+    if let Some(published) = document
+        .get("tender")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedTender>(&text).ok())
+    {
+        session.accepted_tender = Some(accepted_tender(&published));
+    }
+    // The `qr` guardrail node (P11b, authored via ADR-0080, Track M7): the edge reads only
+    // `staff_confirmation_required` — whether a table-bearing QR order waits for staff before the
+    // kitchen sees it. The cloud reads the same node for its own guardrails (enabled/hours/rate). An
+    // absent field leaves the base value (default `true`, ADR-0057), so a store that never published
+    // the node still holds guest orders for staff.
+    if let Some(required) = document
+        .get("qr")
+        .and_then(|node| node.get("staff_confirmation_required"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        session.qr_staff_confirmation_required = required;
     }
     // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
@@ -764,6 +805,56 @@ mod tests {
         let no_node =
             session_from_config(&EdgeSession::bootstrap(), &serde_json::json!({ "x": 1 }));
         assert!(no_node.recipe_thresholds.is_empty());
+    }
+
+    #[test]
+    fn channels_and_tender_nodes_gate_the_session_and_absent_means_no_restriction() {
+        use pos_proto::{PaymentMethod, SalesChannel};
+
+        // A store with no nodes published has no restriction — every channel and tender is accepted.
+        let base = EdgeSession::bootstrap();
+        assert!(base.channel_enabled(SalesChannel::Delivery));
+        assert!(base.tender_accepted(PaymentMethod::Card));
+
+        // Publishing `channels` = [DINE_IN] and `tender` = [CASH] makes each authoritative.
+        let document = serde_json::json!({
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+            "tender": { "accepted": ["PAYMENT_METHOD_CASH"] },
+        });
+        let rebuilt = session_from_config(&base, &document);
+        assert!(rebuilt.channel_enabled(SalesChannel::DineIn));
+        assert!(
+            !rebuilt.channel_enabled(SalesChannel::Delivery),
+            "a channel not listed is refused once a node is published"
+        );
+        assert!(rebuilt.tender_accepted(PaymentMethod::Cash));
+        assert!(
+            !rebuilt.tender_accepted(PaymentMethod::Card),
+            "a method not listed is refused once a node is published"
+        );
+
+        // A publish that carries neither node leaves the prior restriction untouched (never-blank).
+        let unchanged = session_from_config(&rebuilt, &serde_json::json!({ "other": true }));
+        assert!(!unchanged.channel_enabled(SalesChannel::Delivery));
+        assert!(!unchanged.tender_accepted(PaymentMethod::Card));
+    }
+
+    #[test]
+    fn a_qr_node_toggles_staff_confirmation_and_defaults_on() {
+        // The bootstrap holds guest orders for staff (ADR-0057).
+        let base = EdgeSession::bootstrap();
+        assert!(base.qr_staff_confirmation_required);
+
+        // Publishing `qr.staff_confirmation_required = false` turns the hold off (ADR-0080, M7).
+        let off = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": { "staff_confirmation_required": false } }),
+        );
+        assert!(!off.qr_staff_confirmation_required);
+
+        // A publish with no `qr` node leaves the prior value untouched (never-blank).
+        let unchanged = session_from_config(&off, &serde_json::json!({ "other": true }));
+        assert!(!unchanged.qr_staff_confirmation_required);
     }
 
     #[test]
