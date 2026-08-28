@@ -74,3 +74,16 @@ their own track, and the repo already treats them as hardware/composition gates:
 - A report is device/store telemetry, not personal data: it carries a version string and a boolean, never
   a customer identifier. Reports and reconciliation runs are operational records, kept out of the T1/T2
   reproduction rules.
+
+**Delivery (2026-08-28).** Slices 1–5 shipped: `CloudSync::report()` with its adapter, fake, and a
+fifth contract case; the OTA-progress read model (`/internal/ota/report`, migration `0035`, the fleet
+read's installed-version/self-test columns); the first-class OTA publish/kill-switch levers behind
+`console.ota.publish` (`/admin/config/ota` + `/halt`) and the console OTA-updates screen; and
+reconciliation run history (migration `0036`, `/internal/reconcile` records a run, `GET /admin/reconcile`
+lists them) with the console Reconciliation screen and the rollup-**rebuild** button that gives the
+existing `rollups/reset` lever a home in the UI. Three items from *Deliberately deferred* remain
+flagged and unshipped, exactly as scoped: composing the edge OTA updater and a scheduled reconcile
+manifest-sender into the shipped `pos_edge` binary (the ADR-0055 hardware gate), the
+`/internal/ota/artifact` **server**, and the remote last-30-minutes log tail over NATS (a net-new
+request-reply over the outbound-only `MessageLink`, rejected once in ADR-0054 — a follow-up track, not
+this one).
