@@ -30,6 +30,7 @@
 //! The evaluation order, the timing split and the offline rule — the parts with correctness
 //! guarantees — are complete.
 
+use pos_proto::campaign::{PublishedAction, PublishedCampaign, PublishedCampaignKind};
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::CampaignId;
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding};
@@ -189,6 +190,19 @@ impl WeekdaySet {
     #[must_use]
     pub const fn contains(self, day: Weekday) -> bool {
         self.0 & day.bit() != 0
+    }
+
+    /// The set from a raw 7-bit mask, `Monday` = bit 0. Bits above Sunday are ignored, so a wire
+    /// value can never smuggle in an eighth day. The inverse of [`WeekdaySet::bits`].
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits & 0b0111_1111)
+    }
+
+    /// The raw 7-bit mask, `Monday` = bit 0. The wire form a published schedule carries.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
     }
 }
 
@@ -407,15 +421,74 @@ pub fn evaluate(
     Ok(applied)
 }
 
+/// Turns a published `campaigns` config node into the runtime campaigns [`evaluate`] takes.
+///
+/// The edge calls this when it applies the node the cloud published (ADR-0077). The two shapes are
+/// faithful mirrors, so the conversion is **total** — every wire campaign becomes exactly one
+/// [`Campaign`], with no rule dropped or reinterpreted, so what the operator authored is what the
+/// store evaluates.
+#[must_use]
+pub fn campaigns_from_published(node: &pos_proto::campaign::PublishedCampaigns) -> Vec<Campaign> {
+    node.campaigns()
+        .iter()
+        .map(campaign_from_published)
+        .collect()
+}
+
+/// One wire campaign to its runtime form. Private: callers convert the whole node so the ordering the
+/// engine relies on is never split from the campaigns it orders.
+fn campaign_from_published(published: &PublishedCampaign) -> Campaign {
+    Campaign {
+        id: published.id,
+        kind: match published.kind {
+            PublishedCampaignKind::ItemLevel => CampaignKind::ItemLevel,
+            PublishedCampaignKind::Combo => CampaignKind::Combo,
+            PublishedCampaignKind::BillLevel => CampaignKind::BillLevel,
+            PublishedCampaignKind::Voucher => CampaignKind::Voucher,
+            PublishedCampaignKind::Manual => CampaignKind::Manual,
+        },
+        priority: published.priority,
+        exclusion_group: published.exclusion_group,
+        action: match published.action {
+            PublishedAction::Percentage { rate } => Action::Percentage(rate),
+            PublishedAction::AmountOff { amount } => Action::AmountOff(amount),
+        },
+        conditions: Conditions {
+            min_bill: published.conditions.min_bill,
+            // Drop any channel token this build does not understand: it can never match a real
+            // channel, and keeping it would only let a newer cloud's vocabulary sit inertly in the
+            // list. A restriction the edge cannot honour simply narrows to the channels it can.
+            channels: published.conditions.channels.as_ref().map(|channels| {
+                channels
+                    .iter()
+                    .filter(|channel| !channel.is_unrecognised())
+                    .map(pos_proto::wire_enum::Open::known)
+                    .collect()
+            }),
+            schedule: published.conditions.schedule.map(|window| Schedule {
+                days: WeekdaySet::from_bits(window.days),
+                start_minute: window.start_minute,
+                end_minute: window.end_minute,
+            }),
+        },
+        quota_remaining: published.quota_remaining,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Action, Campaign, CampaignKind, Conditions, Connectivity, EvalContext, LocalTime, Schedule,
-        Timing, Weekday, WeekdaySet, evaluate,
+        Timing, Weekday, WeekdaySet, campaigns_from_published, evaluate,
+    };
+    use pos_proto::campaign::{
+        PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedCampaigns,
+        PublishedConditions, PublishedSchedule,
     };
     use pos_proto::enums::SalesChannel;
     use pos_proto::ids::CampaignId;
     use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
+    use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
 
     fn campaign_id(n: u128) -> CampaignId {
@@ -677,5 +750,74 @@ mod tests {
         assert_eq!(applied.len(), 2, "two campaigns, two lines");
         assert_eq!(applied.first().map(|a| a.reduction), Some(vnd(10_000)));
         assert_eq!(applied.get(1).map(|a| a.reduction), Some(vnd(5_000)));
+    }
+
+    #[test]
+    fn a_published_node_converts_faithfully_and_still_evaluates() {
+        // A published happy-hour (16:00–17:00, 15% off, min bill 50,000) round-trips into a runtime
+        // campaign that the engine applies inside its window and rejects outside it — proving the
+        // wire→runtime mapping keeps every rule the operator authored.
+        let node = PublishedCampaigns::new().with(PublishedCampaign {
+            id: campaign_id(1),
+            name: DisplayName::new("Happy hour"),
+            kind: PublishedCampaignKind::ItemLevel,
+            priority: 3,
+            exclusion_group: Some(2),
+            action: PublishedAction::Percentage {
+                rate: Ratio::percent(15).expect("percent"),
+            },
+            conditions: PublishedConditions {
+                min_bill: Some(vnd(50_000)),
+                channels: Some(vec![pos_proto::wire_enum::Open::from_known(
+                    SalesChannel::DineIn,
+                )]),
+                schedule: Some(PublishedSchedule {
+                    days: WeekdaySet::EVERY_DAY.bits(),
+                    start_minute: 16 * 60,
+                    end_minute: 17 * 60,
+                }),
+            },
+            quota_remaining: Some(10),
+        });
+
+        let campaigns = campaigns_from_published(&node);
+        assert_eq!(campaigns.len(), 1);
+        let converted = campaigns.first().expect("one campaign");
+        assert_eq!(converted.kind, CampaignKind::ItemLevel);
+        assert_eq!(converted.priority, 3);
+        assert_eq!(converted.exclusion_group, Some(2));
+        assert_eq!(converted.quota_remaining, Some(10));
+        assert_eq!(
+            converted.action,
+            Action::Percentage(Ratio::percent(15).expect("percent"))
+        );
+        let schedule = converted.conditions.schedule.expect("schedule");
+        assert!(schedule.days.contains(Weekday::Monday));
+        assert_eq!(schedule.start_minute, 16 * 60);
+
+        // Inside the window: applies.
+        let mut inside = ctx(vnd(100_000));
+        inside.now = LocalTime {
+            weekday: Weekday::Monday,
+            minute_of_day: 16 * 60 + 30,
+        };
+        assert_eq!(
+            evaluate(&campaigns, Timing::LineAdd, &inside)
+                .expect("eval")
+                .len(),
+            1
+        );
+
+        // Outside the window: does not.
+        let mut outside = ctx(vnd(100_000));
+        outside.now = LocalTime {
+            weekday: Weekday::Monday,
+            minute_of_day: 18 * 60,
+        };
+        assert!(
+            evaluate(&campaigns, Timing::LineAdd, &outside)
+                .expect("eval")
+                .is_empty()
+        );
     }
 }

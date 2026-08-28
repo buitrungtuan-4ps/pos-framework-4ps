@@ -26,21 +26,25 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, OrderQueueRow,
-    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
-    PostgresAudit, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet,
-    PostgresFloor, PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile,
-    PostgresRegistry, PostgresRollups, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresWebhooks, RoleTemplateRow,
-    RoutingRuleRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewScheduledPublishRow, NewSessionRow,
+    NewVoucherRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresAlerts, PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia,
+    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
+    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
+    RoleTemplateRow, RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow, TableRow,
+    TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
+use pos_proto::campaign::PublishedCampaign;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
-    MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
+    TenantId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
@@ -61,6 +65,7 @@ use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
 use crate::auth::totp::TotpSecret;
+use crate::campaigns::{CampaignStore, CampaignStoreError};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
@@ -98,8 +103,13 @@ use crate::relay::{
     StoreOutcome,
 };
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
+use crate::scheduling::{
+    NewScheduledPublish, ScheduledPublish, ScheduledPublishError, ScheduledPublishStatus,
+    ScheduledPublishStore,
+};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
+use crate::vouchers::{NewVoucher, VoucherRecord, VoucherStatus, VoucherStore, VoucherStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -1588,6 +1598,204 @@ impl TaxRateStore for PostgresTaxRates {
         self.replace(&tenant_id.to_string(), &rows)
             .await
             .map_err(|error| TaxRateStoreError::new(error.to_string()))
+    }
+}
+
+impl CampaignStore for PostgresCampaigns {
+    async fn list_campaigns(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PublishedCampaign>, CampaignStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))?;
+        rows.iter()
+            .map(|row| decode_campaign(&row.campaign_json))
+            .collect()
+    }
+
+    async fn get_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<Option<PublishedCampaign>, CampaignStoreError> {
+        let row = self
+            .fetch_one(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))?;
+        row.map(|row| decode_campaign(&row.campaign_json))
+            .transpose()
+    }
+
+    async fn upsert_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign: &PublishedCampaign,
+    ) -> Result<(), CampaignStoreError> {
+        let json = serde_json::to_string(campaign).map_err(|error| {
+            CampaignStoreError::new(format!("could not serialize a campaign: {error}"))
+        })?;
+        self.upsert(&tenant_id.to_string(), &campaign.id.to_string(), &json)
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))
+    }
+
+    async fn delete_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<(), CampaignStoreError> {
+        self.delete(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| CampaignStoreError::new(error.to_string()))
+    }
+}
+
+/// Decodes one stored campaign document, failing loudly on JSON this cloud wrote that no longer
+/// parses — that is store corruption, not an absence.
+fn decode_campaign(json: &str) -> Result<PublishedCampaign, CampaignStoreError> {
+    serde_json::from_str(json).map_err(|error| {
+        CampaignStoreError::new(format!("a stored campaign is not valid: {error}"))
+    })
+}
+
+impl VoucherStore for PostgresVouchers {
+    async fn insert_batch(
+        &self,
+        tenant_id: TenantId,
+        vouchers: &[NewVoucher],
+    ) -> Result<(), VoucherStoreError> {
+        // Own the id/code strings for the duration of the call; the adapter's row type borrows them.
+        let owned: Vec<(String, String, String)> = vouchers
+            .iter()
+            .map(|voucher| {
+                (
+                    voucher.voucher_id.to_string(),
+                    voucher.campaign_id.to_string(),
+                    voucher.code.clone(),
+                )
+            })
+            .collect();
+        let rows: Vec<NewVoucherRow<'_>> = owned
+            .iter()
+            .map(|(voucher_id, campaign_id, code)| NewVoucherRow {
+                voucher_id,
+                campaign_id,
+                code,
+            })
+            .collect();
+        self.insert_batch(&tenant_id.to_string(), &rows)
+            .await
+            .map_err(|error| VoucherStoreError::new(error.to_string()))
+    }
+
+    async fn list_by_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<Vec<VoucherRecord>, VoucherStoreError> {
+        let rows = self
+            .list_by_campaign(&tenant_id.to_string(), &campaign_id.to_string())
+            .await
+            .map_err(|error| VoucherStoreError::new(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| VoucherRecord {
+                voucher_id: row.voucher_id,
+                campaign_id: row.campaign_id,
+                code: row.code,
+                status: VoucherStatus::from_wire(&row.status),
+                created_at_ms: row.created_at_ms,
+            })
+            .collect())
+    }
+}
+
+/// Rehydrates a stored scheduled-publish row into the seam's domain type, failing loudly on an id or
+/// node this cloud wrote that no longer parses — store corruption, not an absence.
+fn scheduled_from_row(row: ScheduledPublishRow) -> Result<ScheduledPublish, ScheduledPublishError> {
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_ignored| {
+            ScheduledPublishError::new("a scheduled publish has a non-ULID tenant")
+        })?;
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|_ignored| {
+            ScheduledPublishError::new("a scheduled publish has a non-ULID store")
+        })?;
+    let node_value = serde_json::from_str(&row.node_value_json).map_err(|error| {
+        ScheduledPublishError::new(format!("a scheduled node is not valid JSON: {error}"))
+    })?;
+    Ok(ScheduledPublish {
+        id: row.id,
+        tenant_id,
+        store_id,
+        node_key: row.node_key,
+        node_value,
+        effective_at_ms: row.effective_at_ms,
+        status: ScheduledPublishStatus::from_wire(&row.status),
+        created_at_ms: row.created_at_ms,
+        applied_version_id: row.applied_version_id,
+    })
+}
+
+impl ScheduledPublishStore for PostgresScheduledPublishes {
+    async fn schedule(&self, publish: &NewScheduledPublish) -> Result<(), ScheduledPublishError> {
+        let node_value_json = serde_json::to_string(&publish.node_value).map_err(|error| {
+            ScheduledPublishError::new(format!("could not serialize a scheduled node: {error}"))
+        })?;
+        let tenant = publish.tenant_id.to_string();
+        let store = publish.store_id.to_string();
+        let row = NewScheduledPublishRow {
+            id: &publish.id,
+            tenant_id: &tenant,
+            store_id: &store,
+            node_key: &publish.node_key,
+            node_value_json: &node_value_json,
+            effective_at_ms: publish.effective_at_ms,
+            created_by: &publish.created_by,
+        };
+        self.schedule(&row)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn due(&self, now_ms: i64) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+        let rows = self
+            .due(now_ms)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
+        rows.into_iter().map(scheduled_from_row).collect()
+    }
+
+    async fn list_for_store(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+        let rows = self
+            .list_for_store(&tenant_id.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
+        rows.into_iter().map(scheduled_from_row).collect()
+    }
+
+    async fn cancel(&self, tenant_id: TenantId, id: &str) -> Result<bool, ScheduledPublishError> {
+        self.cancel(&tenant_id.to_string(), id)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn mark_applied(&self, id: &str, version_id: &str) -> Result<(), ScheduledPublishError> {
+        self.mark_applied(id, version_id)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
     }
 }
 

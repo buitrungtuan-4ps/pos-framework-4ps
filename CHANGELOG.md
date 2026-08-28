@@ -123,6 +123,83 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Campaigns are now authorable over the finished pricing engine** (roadmap v2, Track M3;
+  [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The pricing engine (`pos_core::campaign`,
+  `docs/pos-spec.md` §7) already evaluates all five campaign kinds with windows, quotas, and
+  exclusions, but `Campaign` is a pure runtime type with no wire form, so nothing could author or
+  deliver a promotion. This track closes that: `pos_proto::campaign::PublishedCampaigns` is the wire
+  mirror the cloud publishes as the `campaigns` config-tree node, and
+  `pos_core::campaign::campaigns_from_published` is the total, infallible conversion back into the
+  `Campaign`s the edge evaluates, so what an operator authors is exactly what the store prices against
+  (channels ride as `Open<SalesChannel>` so a newer cloud's token round-trips rather than failing the
+  node). A tenant-scoped `campaigns` table (migration `0032`, RLS on `app.tenant_id`) and a
+  `CampaignStore` seam hold the authored promotions; per-campaign CRUD routes — `GET`/`POST` on
+  `/admin/campaigns` and `GET`/`PUT`/`DELETE` on `/admin/campaigns/{id}` — read behind
+  `console.data.read` and write behind a **new `console.campaigns.manage`** permission (Owner/Admin),
+  validating each campaign's shape and auditing `campaign.create`/`update`/`delete` with a summary
+  (id, name, kind, priority) that never reproduces the discount terms in the queryable trail. The id
+  is server-owned. `PUT /admin/config/campaigns` (behind `console.config.publish`, like every other
+  node publish) assembles the tenant's campaigns into the `campaigns` config-tree node, and the edge's
+  `session_from_config` parses it into `EdgeSession.campaigns` under the never-blank rule — a bad or
+  absent publish never drops a trading store's promotions. Voucher batch generation, effective-dated
+  scheduling, publish preview/diff, and the dashboard screen follow in the same track. **Applying**
+  the delivered campaigns to a live bill (building the eval context, the timing split, and voucher
+  redemption) is a flagged follow-up — it is a runtime-pricing change distinct from authoring, and a
+  partial version would break §7's one-line-per-campaign rule. **Upgrade note:** an additive migration
+  (`0032_campaigns`, rollback safe) and one new permission (`console.campaigns.manage`, Owner/Admin);
+  no protocol change (the `campaigns` node is an additive Store-layer key), and a store with no node
+  published runs no promotions, exactly as today.
+- **Voucher batch generation for a voucher-kind campaign** (roadmap v2, Track M3;
+  [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). `POST /admin/campaigns/{id}/vouchers` mints a
+  batch of up to 10,000 unique, high-entropy codes (12-character Crockford base32, so a code read off a
+  printed flyer is unambiguous) for a voucher-kind campaign, stores each as a voucher instance
+  (migration `0033_vouchers`, tenant-scoped, `(tenant_id, code)` unique), and returns them once for
+  distribution; `GET` lists a campaign's codes. Both are behind `console.campaigns.manage` — a code
+  carries redeemable value, so even listing is a manage action, not a plain read — and the mint audits
+  `voucher.batch.generate` with the **count only, never the codes**. Unlike an API key, a voucher code
+  is stored in clear text because it must be handed out; redemption stays the engine's existing online
+  check-and-mark (the `PromotionVoucher*` events), and the atomic redeem endpoint is a flagged
+  follow-up. **Upgrade note:** an additive migration (`0033_vouchers`, rollback safe); no protocol or
+  permission change (reuses `console.campaigns.manage`).
+- **Effective-dated & scheduled config publishes — the Tết-menu case** (roadmap v2, Track M3;
+  [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). Every other publish is immediate; a Tết menu
+  or a midnight price change needed a human awake at 00:00. Now `POST /admin/config/campaigns/schedule`
+  snapshots the tenant's campaigns and schedules them to publish to a store at a future instant, a
+  background **activator** applies every due publish at its time (through the same config tree the
+  immediate publishes use, versioned identically), `GET /admin/config/scheduled` lists a store's
+  pending publishes, and `DELETE /admin/config/scheduled/{id}` cancels one. Snapshot-at-schedule, not
+  recompute-at-fire: the value published is what was authored and reviewed when scheduled, so later
+  edits never leak into a publish nobody looked at again. The mechanism is node-agnostic (`node_key`
+  names any Store-layer key), so menu/tax scheduling reuse the same store and activator — this track
+  wires the campaign schedule route. Behind `console.config.publish` (schedule/cancel) and
+  `console.data.read` (list), audited `config.campaigns.schedule` / `config.schedule.cancel`. The
+  activator reports its own task health like the retention and alert loops. **Upgrade note:** an
+  additive migration (`0034_scheduled_publishes`, rollback safe) and a new config knob
+  `scheduled_publish_interval_secs` (default 30); no protocol or permission change.
+- **Publish preview — see the exact diff before committing a campaigns publish** (roadmap v2, Track
+  M3; [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). Publishing the `campaigns` node was
+  all-or-nothing with no before/after. Now `POST /admin/config/campaigns/preview` runs the publish as
+  a dry-run — it assembles the same node, composes and validates it against the store's live config
+  exactly as the real publish would, and returns the **RFC 7386 merge patch** it would apply to the
+  effective document, plus the version it diffs against and an `unchanged` flag — **without minting a
+  version, saving, or auditing** (it changes nothing). A candidate that would fail validation comes
+  back `422` with the very violations a real publish would reject it with, so an author sees the
+  problem before committing. The dry-run helper is node-agnostic (it previews any Store-layer key),
+  so scheduled and other node publishes can reuse it. Behind `console.config.publish`, the same
+  audience that can publish. **Upgrade note:** none — a new read-only route, no migration, protocol,
+  or permission change.
+- **Campaigns console screen — author, publish, preview and schedule promotions without JSON**
+  (roadmap v2, Track M3; [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The dashboard gains a
+  **Campaigns** screen (on the F2 CRUD kit) that ties the whole track together: author the five kinds
+  with their discount (percentage or amount off), conditions (minimum bill, sales channels, a weekly
+  window), exclusion group and quota; mint voucher batches for a voucher-kind campaign (shown once,
+  with a copy-now note); and publish the tenant's campaigns to a store — immediately, after a
+  **preview** that shows the exact merge patch, or **scheduled** to a future instant, with the store's
+  pending schedule listed and cancellable. Campaigns are tenant-authored; publishing/previewing/
+  scheduling need a store chosen in the top bar (the F0 context gate), and the screen sits behind the
+  Owner/Admin nav gate that matches `console.campaigns.manage`. Full en + vi localisation.
+  **Upgrade note:** none — a console-only addition over the routes already shipped in this track; no
+  migration, protocol, or permission change.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

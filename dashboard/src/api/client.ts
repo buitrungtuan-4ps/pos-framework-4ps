@@ -18,6 +18,9 @@ import type {
   AuditEntry,
   AuditFilter,
   Brand,
+  Campaign,
+  CampaignInput,
+  CampaignPreview,
   CapabilityCatalogue,
   CatalogItem,
   Country,
@@ -55,6 +58,8 @@ import type {
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
+  ScheduledPublish,
+  ScheduledPublishCreated,
   Store,
   TaskHealthReport,
   MediaSummary,
@@ -66,6 +71,7 @@ import type {
   TranslationGrid,
   TranslationImportReport,
   UploadedMedia,
+  Voucher,
   WebhookSummary,
 } from "./types";
 import { setActingAdmin, setAuthed } from "../state/session";
@@ -636,6 +642,61 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+  // Campaigns & scheduling (ADR-0077, Track M3). Per-campaign CRUD is behind console.campaigns.manage
+  // (read behind console.data.read); the id is server-owned so create/update never send one. The
+  // publish/preview/schedule routes push the tenant's authored campaigns to one store's `campaigns`
+  // config node behind console.config.publish; the edge applies it.
+  listCampaigns: (tenantId: string) =>
+    requestJson<Campaign[]>("GET", `/admin/campaigns?${tenantQuery(tenantId)}`),
+  createCampaign: (tenantId: string, input: CampaignInput) =>
+    requestJson<Campaign>("POST", "/admin/campaigns", { tenant_id: tenantId, ...input }),
+  updateCampaign: (tenantId: string, id: string, input: CampaignInput) =>
+    requestJson<Campaign>("PUT", `/admin/campaigns/${encodeURIComponent(id)}`, {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  deleteCampaign: (tenantId: string, id: string) =>
+    requestVoid("DELETE", `/admin/campaigns/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),
+  // Vouchers: mint a batch of codes for a voucher-kind campaign (returned once), or list a campaign's
+  // codes. Both behind console.campaigns.manage — a code carries redeemable value.
+  generateVouchers: (tenantId: string, campaignId: string, count: number) =>
+    requestJson<Voucher[]>("POST", `/admin/campaigns/${encodeURIComponent(campaignId)}/vouchers`, {
+      tenant_id: tenantId,
+      count,
+    }),
+  listVouchers: (tenantId: string, campaignId: string) =>
+    requestJson<Voucher[]>(
+      "GET",
+      `/admin/campaigns/${encodeURIComponent(campaignId)}/vouchers?${tenantQuery(tenantId)}`,
+    ),
+  // Preview the merge patch a campaigns publish would apply (no version minted, nothing saved), then
+  // publish, or schedule the snapshot to publish at a future instant (the Tết-menu case).
+  previewCampaigns: (tenantId: string, storeId: string) =>
+    requestJson<CampaignPreview>("POST", "/admin/config/campaigns/preview", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+  publishCampaigns: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/campaigns", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+  scheduleCampaigns: (tenantId: string, storeId: string, effectiveAtMs: number) =>
+    requestJson<ScheduledPublishCreated>("POST", "/admin/config/campaigns/schedule", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      effective_at_ms: effectiveAtMs,
+    }),
+  listScheduled: (tenantId: string, storeId: string) =>
+    requestJson<ScheduledPublish[]>(
+      "GET",
+      `/admin/config/scheduled?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  cancelScheduled: (tenantId: string, id: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/config/scheduled/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),

@@ -24,6 +24,7 @@ mod admin;
 mod alerts;
 mod apikeys;
 mod audit;
+mod campaigns;
 mod catalog;
 mod config_trees;
 mod devices;
@@ -35,11 +36,13 @@ mod people;
 mod reconcile;
 mod registry;
 mod rollups;
+mod scheduling;
 mod store;
 mod subjects;
 mod task_health;
 mod tax_rates;
 mod translations;
+mod vouchers;
 mod webhooks;
 
 pub use activation::{ActivationCodeRow, PostgresActivationCodes};
@@ -49,6 +52,7 @@ pub use admin::{
 pub use alerts::{AlertRow, PostgresAlerts};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use audit::{AuditLogRow, PostgresAudit};
+pub use campaigns::{CampaignRow, PostgresCampaigns};
 pub use catalog::{
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
@@ -64,9 +68,11 @@ pub use people::{AssignmentRow, EmployeeRow, PostgresPeople, RoleTemplateRow};
 pub use reconcile::PostgresReconcile;
 pub use registry::{BrandRow, DeviceRow, PostgresRegistry, StoreRow, TenantRow};
 pub use rollups::PostgresRollups;
+pub use scheduling::{NewScheduledPublishRow, PostgresScheduledPublishes, ScheduledPublishRow};
 pub use store::{PgTx, PostgresStore};
 pub use subjects::{PostgresSubjects, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use tax_rates::{PostgresTaxRates, TaxRateRow};
 pub use translations::PostgresTranslations;
+pub use vouchers::{NewVoucherRow, PostgresVouchers, VoucherRow};
 pub use webhooks::{PostgresWebhooks, WebhookRow, WebhookSummaryRow};

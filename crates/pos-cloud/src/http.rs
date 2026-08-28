@@ -65,16 +65,21 @@ use pos_ports::PortError;
 use pos_ports::config_store::ConfigUpdate;
 use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
+use pos_proto::campaign::{
+    PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedConditions,
+};
 use pos_proto::determinism::ClockSource;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
-    MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
+    TenantId, VoucherId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::money::CurrencyCode;
+use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
 
@@ -101,6 +106,7 @@ use crate::auth::enrol::{
 use crate::auth::password::hash_password;
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
+use crate::campaigns::{CampaignStore, CampaignStoreError, to_node as campaigns_to_node};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
@@ -110,7 +116,9 @@ use crate::catalog::{
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config_tree::{
-    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore, SyncOutcome,
+    CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
+    ConfigValidator, SyncOutcome,
+    merge::{diff, merge_layers},
 };
 use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
 use crate::devices::{
@@ -143,8 +151,12 @@ use crate::registry::{
     StoreRecord, TenantRecord,
 };
 use crate::retention::{RetentionError, SubjectStore};
+use crate::scheduling::{
+    NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
+};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
+use crate::vouchers::{NewVoucher, VoucherStore, VoucherStoreError, generate_code};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
 };
@@ -5827,6 +5839,1221 @@ fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the tax-rate service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----
+
+/// The largest minute-of-day a schedule window accepts (exclusive) — a day has 1440 minutes.
+const MINUTES_PER_DAY: u16 = 24 * 60;
+
+/// The state the campaign routes share: the campaign store they read and write, and the
+/// admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct CampaignState<Camp, A, C> {
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A create/update body: the tenant and the campaign's authoring fields. The id is **server-owned** —
+/// minted on create, the path id on update — so a client never supplies or forges it. Everything else
+/// is the wire campaign's own shape (kind, action, conditions), reused rather than re-declared.
+#[derive(Debug, Clone, Deserialize)]
+struct CampaignRequest {
+    tenant_id: String,
+    name: String,
+    kind: PublishedCampaignKind,
+    priority: i32,
+    #[serde(default)]
+    exclusion_group: Option<u16>,
+    action: PublishedAction,
+    #[serde(default)]
+    conditions: PublishedConditions,
+    #[serde(default)]
+    quota_remaining: Option<u32>,
+}
+
+/// A compact audit summary of a campaign: enough to see *what* changed, without reproducing the exact
+/// discount terms (T2 configuration) in the queryable audit trail — the terms live in the campaign
+/// store, the trail records that they moved.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CampaignAuditSummary {
+    campaign_id: String,
+    name: String,
+    kind: PublishedCampaignKind,
+    priority: i32,
+}
+
+impl CampaignAuditSummary {
+    fn of(campaign: &PublishedCampaign) -> Self {
+        Self {
+            campaign_id: campaign.id.to_string(),
+            name: campaign.name.as_str().to_owned(),
+            kind: campaign.kind,
+            priority: campaign.priority,
+        }
+    }
+}
+
+/// Builds the campaigns sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// Per-campaign CRUD over a tenant's promotions. `GET` (list and by-id) is behind
+/// [`ConsolePermission::Read`]; `POST`/`PUT`/`DELETE` are behind [`ConsolePermission::ManageCampaigns`]
+/// and audited (`campaign.create`/`update`/`delete`) with a summary, never the discount terms. The id
+/// is server-owned. Publishing these campaigns to a store is a separate route that reuses
+/// `PublishConfig` (a later slice).
+pub fn campaign_router<Camp, A, C>(
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/campaigns",
+            get(admin_list_campaigns::<Camp, A, C>).post(admin_create_campaign::<Camp, A, C>),
+        )
+        .route(
+            "/admin/campaigns/{campaign_id}",
+            get(admin_get_campaign::<Camp, A, C>)
+                .put(admin_update_campaign::<Camp, A, C>)
+                .delete(admin_delete_campaign::<Camp, A, C>),
+        )
+        .with_state(CampaignState {
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Validates a campaign request and builds the campaign with the given (server-owned) id. Returns the
+/// fault message for a `400` rather than the whole response, so the error type stays small (a
+/// `Result<_, Response>` trips `clippy::result_large_err`).
+fn build_campaign(
+    request: &CampaignRequest,
+    id: CampaignId,
+) -> Result<PublishedCampaign, &'static str> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("a campaign name is required");
+    }
+    if let Some(schedule) = &request.conditions.schedule
+        && (schedule.start_minute >= MINUTES_PER_DAY || schedule.end_minute >= MINUTES_PER_DAY)
+    {
+        return Err("a schedule minute is out of range (0..1440)");
+    }
+    if let Some(channels) = &request.conditions.channels
+        && channels
+            .iter()
+            .any(|channel| channel.is_unrecognised() || channel.is_unspecified())
+    {
+        return Err("a campaign names an unknown sales channel");
+    }
+    match request.action {
+        PublishedAction::Percentage { rate } if rate.numerator() < 0 => {
+            return Err("a percentage rate cannot be negative");
+        }
+        PublishedAction::AmountOff { amount } if amount.is_negative() => {
+            return Err("an amount off cannot be negative");
+        }
+        _ => {}
+    }
+    Ok(PublishedCampaign {
+        id,
+        name: DisplayName::new(name),
+        kind: request.kind,
+        priority: request.priority,
+        exclusion_group: request.exclusion_group,
+        action: request.action,
+        conditions: request.conditions.clone(),
+        quota_remaining: request.quota_remaining,
+    })
+}
+
+/// A super-admin lists a tenant's authored campaigns.
+async fn admin_list_campaigns<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => (StatusCode::OK, Json(campaigns)).into_response(),
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin reads one campaign by id.
+async fn admin_get_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(campaign)) => (StatusCode::OK, Json(campaign)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin creates a campaign; the server mints its id.
+async fn admin_create_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CampaignRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(campaign_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(CampaignId::new)
+    else {
+        return campaign_entropy_unavailable();
+    };
+    let campaign = match build_campaign(&request, campaign_id) {
+        Ok(campaign) => campaign,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.create",
+                "campaign",
+                &campaign_id.to_string(),
+                None,
+                serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
+            )
+            .await;
+            (StatusCode::CREATED, Json(campaign)).into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin updates a campaign in place, by the path id.
+async fn admin_update_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Json(request): Json<CampaignRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(existing)) => existing,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    };
+    let campaign = match build_campaign(&request, campaign_id) {
+        Ok(campaign) => campaign,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.update",
+                "campaign",
+                &campaign_id.to_string(),
+                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(campaign)).into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin deletes a campaign by id.
+async fn admin_delete_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(existing)) => existing,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    };
+    match state
+        .campaigns
+        .delete_campaign(tenant_id, campaign_id)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.delete",
+                "campaign",
+                &campaign_id.to_string(),
+                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// `503` when OS entropy is unavailable to mint a campaign id — the request cannot proceed and a retry
+/// may succeed.
+fn campaign_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint a campaign id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the campaign service is unavailable",
+    )
+        .into_response()
+}
+
+/// Maps a campaign store failure to a retryable `503`, logging the detail rather than leaking it.
+fn campaign_error_response(error: &CampaignStoreError) -> Response {
+    tracing::error!(%error, "a campaign store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the campaign service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Campaign publish (`/admin/config/campaigns`, ADR-0077, Track M3) --------------------------
+
+/// The collaborators the campaign-publish route needs: the campaign store the promotions are read
+/// from, the config-tree store the `campaigns` node is written onto, plus the admin/clock/audit every
+/// write carries.
+#[derive(Clone)]
+struct ConfigCampaignsState<Camp, Cfg, A, C> {
+    campaigns: Camp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `PUT /admin/config/campaigns` body: the `(tenant, store)` to push the tenant's authored campaigns
+/// to. Like every other node publish, the campaigns come from what is authored, not the body.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishCampaignsRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the campaign-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// One route: assemble the tenant's authored campaigns into a `PublishedCampaigns`, write it as the
+/// store's `campaigns` config node, and version it through the config tree — the same node-merge the
+/// tax/floor/menu publishes use, so the other Store-level keys survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to `EdgeSession::campaigns`.
+pub fn config_campaigns_router<Camp, Cfg, A, C>(
+    campaigns: Camp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/campaigns",
+            axum::routing::put(admin_publish_campaigns::<Camp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/campaigns/preview",
+            post(preview_publish_campaigns::<Camp, Cfg, A, C>),
+        )
+        .with_state(ConfigCampaignsState {
+            campaigns,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
+/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
+async fn admin_publish_campaigns<Camp, Cfg, A, C>(
+    State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishCampaignsRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `campaigns` key on the store's Store layer (index 2) and re-publish it, preserving the
+    // other Store-level keys (`menu`, `tax`, `permissions`, `floor`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("campaigns".to_owned(), campaigns_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.campaigns.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(campaigns.len()).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+/// What publishing a candidate node *would* change, computed without minting a version or saving:
+/// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
+/// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigPreview {
+    /// The version the diff is computed against — the store's current version — or `null` when the
+    /// store has no published configuration yet (the candidate is then entirely new).
+    from_version_id: Option<String>,
+    /// The RFC 7386 merge patch a publish would apply to the effective document. An empty object
+    /// means the candidate composes to exactly today's effective document.
+    diff: serde_json::Value,
+    /// True when `diff` is empty — nothing would change, so there is nothing to publish.
+    unchanged: bool,
+}
+
+/// The dry-run behind a node publish: composes the store's effective document with `node_key` set to
+/// `node_value` on the Store layer (index 2) and returns the merge patch from the store's current
+/// effective document to that candidate. Mints no version and saves nothing — the tree is composed in
+/// memory and dropped.
+///
+/// The candidate is validated with exactly the [`CapabilityValidator`] a real publish uses, so
+/// `Err` carries the violations a publish would reject it with — the preview reports them verbatim
+/// rather than a bland "invalid". `diff` mirrors the delta an up-to-date store would receive on the
+/// next sync: current published effective → candidate effective.
+fn preview_config_node(
+    state_before: Option<&ConfigTreeState>,
+    node_key: &str,
+    node_value: serde_json::Value,
+) -> Result<ConfigPreview, Vec<String>> {
+    use serde_json::Value;
+    let empty = || Value::Object(serde_json::Map::new());
+    // The four authored layers as stored (all empty when the store has no tree yet).
+    let layers: [Value; 4] = state_before.map_or_else(
+        || [empty(), empty(), empty(), empty()],
+        |s| s.layers.clone(),
+    );
+    // The effective document the store currently holds — what a sync delta is computed against.
+    let (from_version_id, current) = state_before
+        .and_then(|s| s.history.last())
+        .map_or((None, empty()), |v| {
+            (Some(v.id.to_string()), v.effective.clone())
+        });
+
+    // Set `node_key` on the Store layer, leaving its other keys intact, exactly as the publish route
+    // does before composing.
+    let mut store_layer = layers[2].clone();
+    if !store_layer.is_object() {
+        store_layer = empty();
+    }
+    if let Value::Object(map) = &mut store_layer {
+        map.insert(node_key.to_owned(), node_value);
+    }
+
+    let candidate = merge_layers(&[&layers[0], &layers[1], &store_layer, &layers[3]]);
+    CapabilityValidator.validate(&candidate)?;
+
+    let patch = diff(&current, &candidate);
+    let unchanged = matches!(&patch, Value::Object(map) if map.is_empty());
+    Ok(ConfigPreview {
+        from_version_id,
+        diff: patch,
+        unchanged,
+    })
+}
+
+/// `POST /admin/config/campaigns/preview` — the dry-run of the campaigns publish. Assembles the
+/// tenant's authored campaigns into the `campaigns` node exactly as the publish route would, then
+/// returns the merge patch it would apply to the store's effective document — without minting a
+/// version, saving, or auditing (it changes nothing). `422` with the same violations a real publish
+/// would reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience
+/// that can actually publish.
+async fn preview_publish_campaigns<Camp, Cfg, A, C>(
+    State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishCampaignsRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
+        Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
+        Err(violations) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Vouchers (ADR-0077, Track M3): mint and list the codes a voucher-kind campaign redeems --------
+
+/// The largest batch of vouchers one request may mint. Generous for a real promotion drop, bounded so
+/// a typo cannot ask the store to mint millions in one call.
+const MAX_VOUCHER_BATCH: u32 = 10_000;
+
+/// The state the voucher routes share: the voucher store, the campaign store (to check the campaign
+/// exists and is a voucher-kind), and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct VoucherState<V, Camp, A, C> {
+    vouchers: V,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `POST /admin/campaigns/{id}/vouchers` body: the tenant and how many codes to mint.
+#[derive(Debug, Clone, Deserialize)]
+struct GenerateVouchersRequest {
+    tenant_id: String,
+    count: u32,
+}
+
+/// One minted or listed voucher on the wire: the id, the code, and its status.
+#[derive(Debug, Clone, serde::Serialize)]
+struct VoucherView {
+    voucher_id: String,
+    code: String,
+    status: crate::vouchers::VoucherStatus,
+}
+
+/// Builds the voucher sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// `POST /admin/campaigns/{id}/vouchers` mints a batch of codes for a voucher-kind campaign and returns
+/// them once; `GET` lists a campaign's codes. Both behind [`ConsolePermission::ManageCampaigns`] — a
+/// voucher code carries redeemable value, so even listing it is a manage action, not a plain read. The
+/// mint audits `voucher.batch.generate` with the count only, never the codes.
+pub fn voucher_router<V, Camp, A, C>(
+    vouchers: V,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/campaigns/{campaign_id}/vouchers",
+            get(admin_list_vouchers::<V, Camp, A, C>)
+                .post(admin_generate_vouchers::<V, Camp, A, C>),
+        )
+        .with_state(VoucherState {
+            vouchers,
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin mints a batch of voucher codes for a voucher-kind campaign.
+async fn admin_generate_vouchers<V, Camp, A, C>(
+    State(state): State<VoucherState<V, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Json(request): Json<GenerateVouchersRequest>,
+) -> Response
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.count == 0 || request.count > MAX_VOUCHER_BATCH {
+        return (StatusCode::BAD_REQUEST, "count must be between 1 and 10000").into_response();
+    }
+    // The campaign must exist and be a voucher-kind — a code only makes sense for one the engine
+    // evaluates as a voucher.
+    match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(campaign)) if campaign.kind == PublishedCampaignKind::Voucher => {}
+        Ok(Some(_other)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "campaign is not a voucher-kind campaign",
+            )
+                .into_response();
+        }
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    }
+    // Mint the batch — a fresh id and code each, failing closed if OS entropy is unavailable.
+    let mut minted = Vec::with_capacity(request.count as usize);
+    for _ in 0..request.count {
+        let (Some(voucher_id), Some(code)) = (
+            mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(VoucherId::new),
+            generate_code(),
+        ) else {
+            return campaign_entropy_unavailable();
+        };
+        minted.push(NewVoucher {
+            voucher_id,
+            campaign_id,
+            code,
+        });
+    }
+    match state.vouchers.insert_batch(tenant_id, &minted).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "voucher.batch.generate",
+                "campaign",
+                &campaign_id.to_string(),
+                None,
+                // The count only — never the codes, which carry redeemable value.
+                serde_json::to_value(minted.len()).ok(),
+            )
+            .await;
+            let view: Vec<VoucherView> = minted
+                .iter()
+                .map(|voucher| VoucherView {
+                    voucher_id: voucher.voucher_id.to_string(),
+                    code: voucher.code.clone(),
+                    status: crate::vouchers::VoucherStatus::Active,
+                })
+                .collect();
+            (StatusCode::CREATED, Json(view)).into_response()
+        }
+        Err(error) => voucher_error_response(&error),
+    }
+}
+
+/// A super-admin lists a campaign's minted voucher codes.
+async fn admin_list_vouchers<V, Camp, A, C>(
+    State(state): State<VoucherState<V, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    V: VoucherStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state
+        .vouchers
+        .list_by_campaign(tenant_id, campaign_id)
+        .await
+    {
+        Ok(records) => {
+            let view: Vec<VoucherView> = records
+                .into_iter()
+                .map(|record| VoucherView {
+                    voucher_id: record.voucher_id,
+                    code: record.code,
+                    status: record.status,
+                })
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => voucher_error_response(&error),
+    }
+}
+
+/// Maps a voucher store failure to a retryable `503`, logging the detail rather than leaking it.
+fn voucher_error_response(error: &VoucherStoreError) -> Response {
+    tracing::error!(%error, "a voucher store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the voucher service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Scheduled publishes (ADR-0077, Track M3): the effective-dated / Tết-menu mechanism -----------
+
+/// The state the scheduled-publish routes share: the scheduled-publish store, the campaign store (to
+/// snapshot the campaigns node at schedule time), and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct ScheduledPublishState<Sch, Camp, A, C> {
+    scheduled: Sch,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `POST /admin/config/campaigns/schedule` body: the `(tenant, store)` and the future instant the
+/// snapshot should publish, Unix milliseconds.
+#[derive(Debug, Clone, Deserialize)]
+struct ScheduleCampaignsRequest {
+    tenant_id: String,
+    store_id: String,
+    effective_at_ms: i64,
+}
+
+/// A scheduled publish as listed — metadata only; the snapshotted node value is not returned (it can
+/// be large, and the console shows what and when, not the payload).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ScheduledPublishView {
+    id: String,
+    node_key: String,
+    effective_at_ms: i64,
+    status: ScheduledPublishStatus,
+    created_at_ms: i64,
+}
+
+/// A `GET /admin/config/scheduled` query: the `(tenant, store)` whose pending publishes to list.
+#[derive(Debug, Clone, Deserialize)]
+struct ScheduledListQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the scheduled-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// `POST /admin/config/campaigns/schedule` snapshots the tenant's campaigns and schedules them to
+/// publish to a store at a future instant (the Tết-menu case) — behind [`ConsolePermission::PublishConfig`],
+/// the permission an immediate publish uses. `GET /admin/config/scheduled` lists a store's pending
+/// publishes ([`ConsolePermission::Read`]); `DELETE /admin/config/scheduled/{id}` cancels one
+/// (`PublishConfig`). A background activator applies them at their time.
+pub fn scheduled_publish_router<Sch, Camp, A, C>(
+    scheduled: Sch,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/campaigns/schedule",
+            post(admin_schedule_campaigns::<Sch, Camp, A, C>),
+        )
+        .route(
+            "/admin/config/scheduled",
+            get(admin_list_scheduled::<Sch, Camp, A, C>),
+        )
+        .route(
+            "/admin/config/scheduled/{id}",
+            delete(admin_cancel_scheduled::<Sch, Camp, A, C>),
+        )
+        .with_state(ScheduledPublishState {
+            scheduled,
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin schedules the tenant's campaigns to publish to a store at a future instant. The node
+/// is snapshotted now (what is authored and reviewed), so later edits do not leak into the publish.
+async fn admin_schedule_campaigns<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<ScheduleCampaignsRequest>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.effective_at_ms <= state.clock.now().as_milliseconds_since_epoch() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "effective_at_ms must be in the future",
+        )
+            .into_response();
+    }
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(node_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node to schedule");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+    let Some(id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()) else {
+        return campaign_entropy_unavailable();
+    };
+    let publish = NewScheduledPublish {
+        id: id.to_string(),
+        tenant_id,
+        store_id,
+        node_key: "campaigns".to_owned(),
+        node_value,
+        effective_at_ms: request.effective_at_ms,
+        created_by: context.admin.id.clone(),
+    };
+    match state.scheduled.schedule(&publish).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.campaigns.schedule",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(serde_json::json!({
+                    "campaigns": campaigns.len(),
+                    "effective_at_ms": request.effective_at_ms,
+                }))
+                .ok(),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": publish.id,
+                    "effective_at_ms": request.effective_at_ms,
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// A super-admin lists a store's pending scheduled publishes.
+async fn admin_list_scheduled<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ScheduledListQuery>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(store_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        query.store_id.parse::<Ulid>().ok().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.scheduled.list_for_store(tenant_id, store_id).await {
+        Ok(rows) => {
+            let view: Vec<ScheduledPublishView> = rows
+                .into_iter()
+                .map(|row| ScheduledPublishView {
+                    id: row.id,
+                    node_key: row.node_key,
+                    effective_at_ms: row.effective_at_ms,
+                    status: row.status,
+                    created_at_ms: row.created_at_ms,
+                })
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// A super-admin cancels a pending scheduled publish.
+async fn admin_cancel_scheduled<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.scheduled.cancel(tenant_id, &id).await {
+        Ok(true) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.schedule.cancel",
+                "scheduled_publish",
+                &id,
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such pending scheduled publish").into_response(),
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// Maps a scheduled-publish store failure to a retryable `503`, logging the detail rather than leaking it.
+fn scheduled_error_response(error: &ScheduledPublishError) -> Response {
+    tracing::error!(%error, "a scheduled-publish store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the scheduling service is unavailable",
     )
         .into_response()
 }
@@ -12453,4 +13680,106 @@ fn rollup_error_response(error: &RollupError) -> Response {
         "the dashboard is temporarily unavailable",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod preview_diff_tests {
+    //! The pure dry-run behind the campaigns-publish preview ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)),
+    //! covered directly since it, not the thin route around it, holds the logic worth pinning.
+    use super::preview_config_node;
+    use crate::config_tree::{ConfigTreeState, PublishedVersion};
+    use pos_proto::ids::ConfigVersionId;
+    use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    fn version(raw: &str) -> ConfigVersionId {
+        ConfigVersionId::new(raw.parse::<Ulid>().expect("a valid test ULID"))
+    }
+
+    /// A store whose Store layer already carries a `tax` node and an old `campaigns` node, with a
+    /// single published version whose effective document is that Store layer composed alone.
+    fn state_with(store_layer: Value) -> ConfigTreeState {
+        let empty = || Value::Object(serde_json::Map::new());
+        ConfigTreeState {
+            layers: [empty(), empty(), store_layer.clone(), empty()],
+            history: vec![PublishedVersion {
+                id: version("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+                effective: store_layer,
+            }],
+            k: 8,
+        }
+    }
+
+    #[test]
+    fn a_changed_node_diffs_to_only_that_node_and_leaves_the_others_alone() {
+        let state = state_with(json!({
+            "tax": {"rate": 8},
+            "campaigns": {"campaigns": [{"id": "old"}]},
+        }));
+        let candidate = json!({"campaigns": [{"id": "new"}]});
+
+        let preview = preview_config_node(Some(&state), "campaigns", candidate)
+            .expect("the candidate validates");
+
+        assert!(!preview.unchanged);
+        assert_eq!(
+            preview.from_version_id.as_deref(),
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+        );
+        // Only the campaigns node moves; `tax` never appears in the patch.
+        assert_eq!(
+            preview.diff,
+            json!({"campaigns": {"campaigns": [{"id": "new"}]}}),
+            "the patch replaces just the campaigns node",
+        );
+    }
+
+    #[test]
+    fn republishing_the_same_node_is_an_empty_patch() {
+        let node = json!({"campaigns": [{"id": "keep"}]});
+        let state = state_with(json!({"campaigns": node}));
+
+        let preview =
+            preview_config_node(Some(&state), "campaigns", node).expect("the candidate validates");
+
+        assert!(preview.unchanged);
+        assert_eq!(preview.diff, json!({}), "nothing to publish");
+    }
+
+    #[test]
+    fn a_store_with_no_tree_yet_previews_the_whole_node_as_new() {
+        let candidate = json!({"campaigns": [{"id": "first"}]});
+
+        let preview =
+            preview_config_node(None, "campaigns", candidate).expect("the candidate validates");
+
+        assert!(!preview.unchanged);
+        assert!(
+            preview.from_version_id.is_none(),
+            "no version to diff against yet",
+        );
+        assert_eq!(
+            preview.diff,
+            json!({"campaigns": {"campaigns": [{"id": "first"}]}}),
+        );
+    }
+
+    #[test]
+    fn a_candidate_that_would_not_validate_reports_the_publish_time_violations() {
+        // Two mutually exclusive capability flags — the same conflict a real publish rejects (§10).
+        let candidate = json!(true);
+        let state = state_with(json!({
+            "pay_first_enabled": true,
+            "tables_enabled": true,
+        }));
+
+        let violations = preview_config_node(Some(&state), "unrelated", candidate)
+            .expect_err("the composed document must fail validation");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
+            "the preview surfaces the real conflict: {violations:?}",
+        );
+    }
 }

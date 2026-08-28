@@ -56,6 +56,7 @@ pub mod alerts;
 pub mod assets;
 pub mod audit;
 pub mod auth;
+pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
 pub mod clock;
@@ -87,8 +88,10 @@ pub mod reconcile;
 pub mod registry;
 pub mod relay;
 pub mod retention;
+pub mod scheduling;
 pub mod tax;
 pub mod translations;
+pub mod vouchers;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome};

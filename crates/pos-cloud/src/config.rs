@@ -97,6 +97,13 @@ const fn default_alert_eval_interval_secs() -> u64 {
     60
 }
 
+/// How often the scheduled-publish activator checks for due publishes, in seconds. Thirty seconds is
+/// fine granularity for an effective-dated publish (a Tết menu switching at midnight is not to the
+/// second) and cheap — one indexed query per tick (ADR-0077, Track M3).
+const fn default_scheduled_publish_interval_secs() -> u64 {
+    30
+}
+
 /// How long a store may be silent before an alert fires, in seconds, when the config does not say —
 /// five minutes (the O2 minimum set; the Fleet screen's own online view stays at three).
 const fn default_alert_store_offline_secs() -> u64 {
@@ -206,6 +213,10 @@ pub struct CloudConfig {
     /// ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
     #[serde(default = "default_alert_eval_interval_secs")]
     pub alert_eval_interval_secs: u64,
+    /// How often the scheduled-publish activator applies due publishes, in seconds
+    /// ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    #[serde(default = "default_scheduled_publish_interval_secs")]
+    pub scheduled_publish_interval_secs: u64,
     /// How long a store may be silent before a store-offline alert fires, in seconds (ADR-0073).
     #[serde(default = "default_alert_store_offline_secs")]
     pub alert_store_offline_secs: u64,
