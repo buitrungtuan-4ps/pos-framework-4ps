@@ -205,6 +205,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal(),
     ));
 
+    // The scheduled-publish activator (ADR-0077, Track M3): applies effective-dated publishes (the
+    // Tết-menu case) when their time arrives, through the same config tree the immediate publishes use.
+    let scheduled_publish_interval = Duration::from_secs(config.scheduled_publish_interval_secs);
+    tracing::info!(
+        interval_secs = config.scheduled_publish_interval_secs,
+        "scheduled-publish activator started"
+    );
+    let scheduled_publish_task = tokio::spawn(pos_cloud::scheduling::run(
+        store.scheduled_publishes(),
+        store.config_trees(),
+        store.task_health(),
+        SystemClock,
+        scheduled_publish_interval,
+        shutdown_signal(),
+    ));
+
     // The optional monitoring profile (metrics-vm → VictoriaMetrics, ADR-0031): a sparse liveness
     // heartbeat off the sales path, gated by [metrics] and off by default. Per
     // `docs/capacity-and-reliability.md` the profile is off below ~50 stores in favour of sparse
@@ -405,6 +421,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Scheduled publishes (ADR-0077, Track M3): schedule the campaigns node to publish to a store
+        // at a future instant (the Tết-menu case), list a store's pending publishes, and cancel one.
+        // A background activator applies them at their time.
+        .merge(http::scheduled_publish_router(
+            store.scheduled_publishes(),
+            store.campaigns(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Media (ADR-0075, Track M5): upload an image → re-encode → store two bounded renditions;
         // serve, list, and delete them.
         .merge(http::media_router(
@@ -541,6 +567,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = webhook_task.await;
     alert_task.abort();
     let _ = alert_task.await;
+    scheduled_publish_task.abort();
+    let _ = scheduled_publish_task.await;
     if let Some(task) = metrics_task {
         task.abort();
         let _ = task.await;

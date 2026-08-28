@@ -149,6 +149,9 @@ use crate::registry::{
     StoreRecord, TenantRecord,
 };
 use crate::retention::{RetentionError, SubjectStore};
+use crate::scheduling::{
+    NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
+};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::vouchers::{NewVoucher, VoucherStore, VoucherStoreError, generate_code};
@@ -6631,6 +6634,292 @@ fn voucher_error_response(error: &VoucherStoreError) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the voucher service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Scheduled publishes (ADR-0077, Track M3): the effective-dated / Tết-menu mechanism -----------
+
+/// The state the scheduled-publish routes share: the scheduled-publish store, the campaign store (to
+/// snapshot the campaigns node at schedule time), and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct ScheduledPublishState<Sch, Camp, A, C> {
+    scheduled: Sch,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A `POST /admin/config/campaigns/schedule` body: the `(tenant, store)` and the future instant the
+/// snapshot should publish, Unix milliseconds.
+#[derive(Debug, Clone, Deserialize)]
+struct ScheduleCampaignsRequest {
+    tenant_id: String,
+    store_id: String,
+    effective_at_ms: i64,
+}
+
+/// A scheduled publish as listed — metadata only; the snapshotted node value is not returned (it can
+/// be large, and the console shows what and when, not the payload).
+#[derive(Debug, Clone, serde::Serialize)]
+struct ScheduledPublishView {
+    id: String,
+    node_key: String,
+    effective_at_ms: i64,
+    status: ScheduledPublishStatus,
+    created_at_ms: i64,
+}
+
+/// A `GET /admin/config/scheduled` query: the `(tenant, store)` whose pending publishes to list.
+#[derive(Debug, Clone, Deserialize)]
+struct ScheduledListQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the scheduled-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// `POST /admin/config/campaigns/schedule` snapshots the tenant's campaigns and schedules them to
+/// publish to a store at a future instant (the Tết-menu case) — behind [`ConsolePermission::PublishConfig`],
+/// the permission an immediate publish uses. `GET /admin/config/scheduled` lists a store's pending
+/// publishes ([`ConsolePermission::Read`]); `DELETE /admin/config/scheduled/{id}` cancels one
+/// (`PublishConfig`). A background activator applies them at their time.
+pub fn scheduled_publish_router<Sch, Camp, A, C>(
+    scheduled: Sch,
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/campaigns/schedule",
+            post(admin_schedule_campaigns::<Sch, Camp, A, C>),
+        )
+        .route(
+            "/admin/config/scheduled",
+            get(admin_list_scheduled::<Sch, Camp, A, C>),
+        )
+        .route(
+            "/admin/config/scheduled/{id}",
+            delete(admin_cancel_scheduled::<Sch, Camp, A, C>),
+        )
+        .with_state(ScheduledPublishState {
+            scheduled,
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// A super-admin schedules the tenant's campaigns to publish to a store at a future instant. The node
+/// is snapshotted now (what is authored and reviewed), so later edits do not leak into the publish.
+async fn admin_schedule_campaigns<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<ScheduleCampaignsRequest>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request.effective_at_ms <= state.clock.now().as_milliseconds_since_epoch() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "effective_at_ms must be in the future",
+        )
+            .into_response();
+    }
+    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => campaigns,
+        Err(error) => return campaign_error_response(&error),
+    };
+    let Ok(node_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node to schedule");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the campaign service is unavailable",
+        )
+            .into_response();
+    };
+    let Some(id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()) else {
+        return campaign_entropy_unavailable();
+    };
+    let publish = NewScheduledPublish {
+        id: id.to_string(),
+        tenant_id,
+        store_id,
+        node_key: "campaigns".to_owned(),
+        node_value,
+        effective_at_ms: request.effective_at_ms,
+        created_by: context.admin.id.clone(),
+    };
+    match state.scheduled.schedule(&publish).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.campaigns.schedule",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(serde_json::json!({
+                    "campaigns": campaigns.len(),
+                    "effective_at_ms": request.effective_at_ms,
+                }))
+                .ok(),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": publish.id,
+                    "effective_at_ms": request.effective_at_ms,
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// A super-admin lists a store's pending scheduled publishes.
+async fn admin_list_scheduled<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ScheduledListQuery>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(store_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        query.store_id.parse::<Ulid>().ok().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.scheduled.list_for_store(tenant_id, store_id).await {
+        Ok(rows) => {
+            let view: Vec<ScheduledPublishView> = rows
+                .into_iter()
+                .map(|row| ScheduledPublishView {
+                    id: row.id,
+                    node_key: row.node_key,
+                    effective_at_ms: row.effective_at_ms,
+                    status: row.status,
+                    created_at_ms: row.created_at_ms,
+                })
+                .collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// A super-admin cancels a pending scheduled publish.
+async fn admin_cancel_scheduled<Sch, Camp, A, C>(
+    State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.scheduled.cancel(tenant_id, &id).await {
+        Ok(true) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.schedule.cancel",
+                "scheduled_publish",
+                &id,
+                None,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such pending scheduled publish").into_response(),
+        Err(error) => scheduled_error_response(&error),
+    }
+}
+
+/// Maps a scheduled-publish store failure to a retryable `503`, logging the detail rather than leaking it.
+fn scheduled_error_response(error: &ScheduledPublishError) -> Response {
+    tracing::error!(%error, "a scheduled-publish store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the scheduling service is unavailable",
     )
         .into_response()
 }

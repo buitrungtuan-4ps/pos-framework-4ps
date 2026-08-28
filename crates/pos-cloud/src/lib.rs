@@ -88,6 +88,7 @@ pub mod reconcile;
 pub mod registry;
 pub mod relay;
 pub mod retention;
+pub mod scheduling;
 pub mod tax;
 pub mod translations;
 pub mod vouchers;

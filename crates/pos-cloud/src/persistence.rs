@@ -26,14 +26,15 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewSessionRow, NewVoucherRow,
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts,
-    PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
-    PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia, PostgresOrderQueue,
-    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresVouchers, PostgresWebhooks, RoleTemplateRow, RoutingRuleRow,
-    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewScheduledPublishRow, NewSessionRow,
+    NewVoucherRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
+    PostgresAlerts, PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia,
+    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
+    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
+    RoleTemplateRow, RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow, TableRow,
+    TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -102,6 +103,10 @@ use crate::relay::{
     StoreOutcome,
 };
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
+use crate::scheduling::{
+    NewScheduledPublish, ScheduledPublish, ScheduledPublishError, ScheduledPublishStatus,
+    ScheduledPublishStore,
+};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use crate::vouchers::{NewVoucher, VoucherRecord, VoucherStatus, VoucherStore, VoucherStoreError};
@@ -1704,6 +1709,93 @@ impl VoucherStore for PostgresVouchers {
                 created_at_ms: row.created_at_ms,
             })
             .collect())
+    }
+}
+
+/// Rehydrates a stored scheduled-publish row into the seam's domain type, failing loudly on an id or
+/// node this cloud wrote that no longer parses — store corruption, not an absence.
+fn scheduled_from_row(row: ScheduledPublishRow) -> Result<ScheduledPublish, ScheduledPublishError> {
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_ignored| {
+            ScheduledPublishError::new("a scheduled publish has a non-ULID tenant")
+        })?;
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|_ignored| {
+            ScheduledPublishError::new("a scheduled publish has a non-ULID store")
+        })?;
+    let node_value = serde_json::from_str(&row.node_value_json).map_err(|error| {
+        ScheduledPublishError::new(format!("a scheduled node is not valid JSON: {error}"))
+    })?;
+    Ok(ScheduledPublish {
+        id: row.id,
+        tenant_id,
+        store_id,
+        node_key: row.node_key,
+        node_value,
+        effective_at_ms: row.effective_at_ms,
+        status: ScheduledPublishStatus::from_wire(&row.status),
+        created_at_ms: row.created_at_ms,
+        applied_version_id: row.applied_version_id,
+    })
+}
+
+impl ScheduledPublishStore for PostgresScheduledPublishes {
+    async fn schedule(&self, publish: &NewScheduledPublish) -> Result<(), ScheduledPublishError> {
+        let node_value_json = serde_json::to_string(&publish.node_value).map_err(|error| {
+            ScheduledPublishError::new(format!("could not serialize a scheduled node: {error}"))
+        })?;
+        let tenant = publish.tenant_id.to_string();
+        let store = publish.store_id.to_string();
+        let row = NewScheduledPublishRow {
+            id: &publish.id,
+            tenant_id: &tenant,
+            store_id: &store,
+            node_key: &publish.node_key,
+            node_value_json: &node_value_json,
+            effective_at_ms: publish.effective_at_ms,
+            created_by: &publish.created_by,
+        };
+        self.schedule(&row)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn due(&self, now_ms: i64) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+        let rows = self
+            .due(now_ms)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
+        rows.into_iter().map(scheduled_from_row).collect()
+    }
+
+    async fn list_for_store(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+        let rows = self
+            .list_for_store(&tenant_id.to_string(), &store_id.to_string())
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
+        rows.into_iter().map(scheduled_from_row).collect()
+    }
+
+    async fn cancel(&self, tenant_id: TenantId, id: &str) -> Result<bool, ScheduledPublishError> {
+        self.cancel(&tenant_id.to_string(), id)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn mark_applied(&self, id: &str, version_id: &str) -> Result<(), ScheduledPublishError> {
+        self.mark_applied(id, version_id)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
     }
 }
 

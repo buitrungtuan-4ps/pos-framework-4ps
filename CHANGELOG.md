@@ -161,6 +161,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   check-and-mark (the `PromotionVoucher*` events), and the atomic redeem endpoint is a flagged
   follow-up. **Upgrade note:** an additive migration (`0033_vouchers`, rollback safe); no protocol or
   permission change (reuses `console.campaigns.manage`).
+- **Effective-dated & scheduled config publishes — the Tết-menu case** (roadmap v2, Track M3;
+  [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). Every other publish is immediate; a Tết menu
+  or a midnight price change needed a human awake at 00:00. Now `POST /admin/config/campaigns/schedule`
+  snapshots the tenant's campaigns and schedules them to publish to a store at a future instant, a
+  background **activator** applies every due publish at its time (through the same config tree the
+  immediate publishes use, versioned identically), `GET /admin/config/scheduled` lists a store's
+  pending publishes, and `DELETE /admin/config/scheduled/{id}` cancels one. Snapshot-at-schedule, not
+  recompute-at-fire: the value published is what was authored and reviewed when scheduled, so later
+  edits never leak into a publish nobody looked at again. The mechanism is node-agnostic (`node_key`
+  names any Store-layer key), so menu/tax scheduling reuse the same store and activator — this track
+  wires the campaign schedule route. Behind `console.config.publish` (schedule/cancel) and
+  `console.data.read` (list), audited `config.campaigns.schedule` / `config.schedule.cancel`. The
+  activator reports its own task health like the retention and alert loops. **Upgrade note:** an
+  additive migration (`0034_scheduled_publishes`, rollback safe) and a new config knob
+  `scheduled_publish_interval_secs` (default 30); no protocol or permission change.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

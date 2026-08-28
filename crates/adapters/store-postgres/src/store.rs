@@ -111,6 +111,9 @@ const MIGRATION_0032: &str = include_str!("../migrations/0032_campaigns.sql");
 /// Voucher instances minted for a voucher-kind campaign ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0033: &str = include_str!("../migrations/0033_vouchers.sql");
 
+/// Scheduled, effective-dated config publishes ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+const MIGRATION_0034: &str = include_str!("../migrations/0034_scheduled_publishes.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -301,6 +304,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0033)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0034)
             .await
             .map_err(unavailable)
     }
@@ -507,6 +514,15 @@ impl PostgresStore {
     #[must_use]
     pub fn vouchers(&self) -> crate::vouchers::PostgresVouchers {
         crate::vouchers::PostgresVouchers::new(self.pool.clone())
+    }
+
+    /// The scheduled-publish store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ScheduledPublishStore` seam
+    /// over it, and the activator loop reads its due rows.
+    #[must_use]
+    pub fn scheduled_publishes(&self) -> crate::scheduling::PostgresScheduledPublishes {
+        crate::scheduling::PostgresScheduledPublishes::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
