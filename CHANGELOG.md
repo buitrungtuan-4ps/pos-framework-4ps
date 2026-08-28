@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Store settings console screen — currency, timezone, cutoff, and a live business-date preview**
+  (roadmap v2, Track M4, slice 9; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new store-scoped
+  `/store-settings` screen (under *Settings*) sets a store's currency (3-letter code, with the country
+  registry's currencies as suggestions), IANA timezone (with a short list of common zones as
+  suggestions, any valid zone accepted — the server validates against the tz database), and
+  business-date cutoff hour, then publishes them with `publishLocale`. A live **business date now**
+  preview computes the store's trading day from the chosen timezone and cutoff (mirroring the edge's
+  `derive_business_date`, ADR-0014), so the operator sees the effect before publishing; an unknown
+  timezone is flagged inline. **Upgrade note:** dashboard-only; consumes the M4 slice-5 locale publish
+  route.
 - **The translation grid gains dynamic locales, per-locale completion %, and a missing-only filter**
   (roadmap v2, Track M4, slice 7; [ADR-0074](docs/adr/0074-localization-and-tax.md)). The grid's
   columns are no longer the app's own UI locales (`en`/`vi`): they are the union of the platform's

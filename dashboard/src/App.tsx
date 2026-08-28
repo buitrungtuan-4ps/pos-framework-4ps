@@ -30,6 +30,7 @@ import { People } from "./screens/People";
 import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
 import { Stations } from "./screens/Stations";
+import { StoreSettings } from "./screens/StoreSettings";
 import { Stores } from "./screens/Stores";
 import { TaxRates } from "./screens/TaxRates";
 import { Translations } from "./screens/Translations";
@@ -88,6 +89,7 @@ export function App() {
           <Route path="/webhooks" component={Webhooks} />
           <Route path="/translations" component={Translations} />
           <Route path="/tax-rates" component={TaxRates} />
+          <Route path="/store-settings" component={StoreSettings} />
           <Route path="/people" component={People} />
           <Route path="/activation" component={Activation} />
           <Route path="/admins" component={Admins} />
