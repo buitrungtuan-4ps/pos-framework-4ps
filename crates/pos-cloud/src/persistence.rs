@@ -29,12 +29,12 @@ use store_postgres::{
     DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewScheduledPublishRow, NewSessionRow,
     NewVoucherRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
     PostgresAlerts, PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresMedia,
-    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresRollups,
-    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
-    RoleTemplateRow, RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow, TableRow,
-    TaskHealthRow, TaxRateRow, TenantRow,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory,
+    PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry,
+    PostgresRollups, PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory,
+    PostgresSubjects, PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers,
+    PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow,
+    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -43,9 +43,10 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
-    TenantId,
+    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, StationId, StoreId, SubjectId,
+    SupplierId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -86,6 +87,7 @@ use crate::floorplan::{
     TableStore, TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
+use crate::inventory::{InventoryStore, InventoryStoreError};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::people::{
@@ -1743,6 +1745,156 @@ fn decode_campaign(json: &str) -> Result<PublishedCampaign, CampaignStoreError> 
     serde_json::from_str(json).map_err(|error| {
         CampaignStoreError::new(format!("a stored campaign is not valid: {error}"))
     })
+}
+
+/// The `kind` discriminators the `inventory_items` table stores the three record kinds under.
+const INVENTORY_KIND_INGREDIENT: &str = "ingredient";
+const INVENTORY_KIND_RECIPE: &str = "recipe";
+const INVENTORY_KIND_SUPPLIER: &str = "supplier";
+
+/// Decodes one stored inventory document (a wire record), failing loudly on JSON this cloud wrote that
+/// no longer parses — that is store corruption, not an absence.
+fn decode_inventory<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, InventoryStoreError> {
+    serde_json::from_str(json).map_err(|error| {
+        InventoryStoreError::new(format!("a stored inventory record is not valid: {error}"))
+    })
+}
+
+impl InventoryStore for PostgresInventory {
+    async fn list_ingredients(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PublishedIngredient>, InventoryStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string(), INVENTORY_KIND_INGREDIENT)
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        rows.iter()
+            .map(|row| decode_inventory(&row.doc_json))
+            .collect()
+    }
+
+    async fn upsert_ingredient(
+        &self,
+        tenant_id: TenantId,
+        ingredient: &PublishedIngredient,
+    ) -> Result<(), InventoryStoreError> {
+        let json = serde_json::to_string(ingredient).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize an ingredient: {error}"))
+        })?;
+        self.upsert(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_INGREDIENT,
+            &ingredient.id.to_string(),
+            &json,
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn delete_ingredient(
+        &self,
+        tenant_id: TenantId,
+        ingredient_id: IngredientId,
+    ) -> Result<(), InventoryStoreError> {
+        self.delete(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_INGREDIENT,
+            &ingredient_id.to_string(),
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn list_recipes(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PublishedRecipe>, InventoryStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string(), INVENTORY_KIND_RECIPE)
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        rows.iter()
+            .map(|row| decode_inventory(&row.doc_json))
+            .collect()
+    }
+
+    async fn upsert_recipe(
+        &self,
+        tenant_id: TenantId,
+        recipe: &PublishedRecipe,
+    ) -> Result<(), InventoryStoreError> {
+        let json = serde_json::to_string(recipe).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize a recipe: {error}"))
+        })?;
+        self.upsert(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_RECIPE,
+            &recipe.item.to_string(),
+            &json,
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn delete_recipe(
+        &self,
+        tenant_id: TenantId,
+        item: MenuItemId,
+    ) -> Result<(), InventoryStoreError> {
+        self.delete(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_RECIPE,
+            &item.to_string(),
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn list_suppliers(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PublishedSupplier>, InventoryStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string(), INVENTORY_KIND_SUPPLIER)
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        rows.iter()
+            .map(|row| decode_inventory(&row.doc_json))
+            .collect()
+    }
+
+    async fn upsert_supplier(
+        &self,
+        tenant_id: TenantId,
+        supplier: &PublishedSupplier,
+    ) -> Result<(), InventoryStoreError> {
+        let json = serde_json::to_string(supplier).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize a supplier: {error}"))
+        })?;
+        self.upsert(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_SUPPLIER,
+            &supplier.id.to_string(),
+            &json,
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn delete_supplier(
+        &self,
+        tenant_id: TenantId,
+        supplier_id: SupplierId,
+    ) -> Result<(), InventoryStoreError> {
+        self.delete(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_SUPPLIER,
+            &supplier_id.to_string(),
+        )
+        .await
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
 }
 
 impl VoucherStore for PostgresVouchers {

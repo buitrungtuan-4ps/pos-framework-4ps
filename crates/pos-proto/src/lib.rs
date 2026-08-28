@@ -36,6 +36,7 @@ pub mod error;
 pub mod events;
 pub mod floor;
 pub mod ids;
+pub mod inventory;
 pub mod locale;
 pub mod menu;
 pub mod money;
@@ -55,7 +56,7 @@ pub use display::{
 };
 pub use enums::{
     BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
-    SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
+    SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState, UnitOfMeasure,
 };
 pub use envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 pub use error::{ErrorBody, ErrorDetail, ErrorResponse, ErrorStatus};
@@ -65,7 +66,7 @@ pub use ids::{
     AreaId, BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EmployeeId, EventId, IngredientId, MenuItemId, OrderId, OrderLineId,
     PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId,
-    StoreId, SubjectId, TableId, TaxClassId, TenantId, VoucherId,
+    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
 };
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,

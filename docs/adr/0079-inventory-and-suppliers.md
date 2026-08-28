@@ -1,0 +1,36 @@
+# ADR-0079 — Inventory & suppliers: author recipes and stock thresholds in the cloud, so the finished §8 engine finally has inputs
+
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-28
+**Relates to** [ADR-0063](0063-store-menu-catalog.md) / [ADR-0066](0066-cloud-catalog.md) (the menu items and modifiers recipes attach to) · [ADR-0070](0070-people-and-access.md) / [ADR-0072](0072-floor-and-kitchen.md) (the author-in-cloud → publish config node → edge-applies pattern this reuses) · `docs/pos-spec.md` §8 (the inventory domain) · §19 (purchasing, which stays in the ERP) · `docs/cloud-admin-ux-plan.md` (Track M6)
+
+**Context.** The inventory domain (`pos_core::inventory`, spec §8) is **built and property-tested** — `RecipeBook`, `StockProjection`, `consumption_for_fire`, `stocktake_movement`, and `Availability::is_sellable(threshold)` (the auto-86 decision) — but it has **no inputs**. The edge plumbs a `RecipeBook` into its fire path (`decide_line(..., &session.recipes)`), yet that book is empty in the bootstrap: recipes are never authored anywhere and never reach a store. So a fired line consumes nothing, availability is always `Unlimited`, and auto-86 never fires. There is also no ingredient master, no unit vocabulary, no per-item 86 threshold, and no way to name the supplier a goods-receipt came from. This is the last major master-data domain with a finished engine and no authoring surface.
+
+**Decision.** Add the cloud authoring layer on top of the existing §8 engine, using the exact author → publish config node → edge-applies pattern `permissions` (ADR-0070) and `floor`/`stations` (ADR-0072) already use. No new domain arithmetic — the math stays in `pos_core::inventory`.
+
+1. **A wire node + a pure conversion** (this ADR, slice 1). `pos_proto::inventory::PublishedInventory` is the serializable mirror the cloud writes as the `inventory` key on the config tree's Store layer: `ingredients` (id, name, `UnitOfMeasure`), `recipes` (per item/modifier: ingredient lines with per-unit `Quantity`, plus an `auto_86_threshold`), and lightweight `suppliers` (id, name). `pos_core::inventory::from_published` turns it back into a `RecipeBook` and a per-item threshold map — the only place that sees both shapes, exactly as `campaigns_from_published` does. A new `UnitOfMeasure` wire enum (gram/kilogram/millilitre/litre/piece) is a per-ingredient display label; the arithmetic stays unit-agnostic, so there is deliberately no cross-unit conversion.
+2. **Storage + seam** (slice 2). An `InventoryStore` seam over `store-postgres` tables (ingredients, recipe lines, per-item thresholds, suppliers), tenant-scoped by RLS like every other master-data table; migration `0037`.
+3. **Admin CRUD + publish** (slices 3–4). `/admin/inventory/*` CRUD behind a new `console.inventory.manage` permission, audited; `PUT /admin/config/inventory` composes the `PublishedInventory` node through the config tree (the same `CapabilityValidator` path every node publish uses). The edge applies the node — building `session.recipes` and the threshold map, killing the bootstrap-empty book — so a fired line finally consumes stock and `MenuEntry.available` reflects `available(item).is_sellable(threshold)`: an out-of-stock item shows unavailable on the POS.
+4. **Console + supplier reference** (slices 5–6). Dashboard screens (Ingredients, a per-item recipe/BOM editor, Suppliers, thresholds) on the F2 kit; and a lightweight supplier reference on a stock **receipt**, so a goods-receipt names who it came from.
+
+**Deliberately deferred (flagged, not silently dropped).**
+
+- **Live auto-86 marketplace notification.** §8 says an auto-86'd item "tells marketplaces". Recomputing availability on every fire/stock event and pushing an "unavailable" signal out to marketplace integrations is a store-side runtime loop — the same shape as the live bill-flow campaign evaluation ADR-0077 deferred. This track makes availability *correct and visible on the POS*; the outbound marketplace-notify loop is a flagged follow-up.
+- **Full purchasing.** Purchase orders, invoices, supplier contracts and price lists stay in the ERP (§19); the `erp-sap` adapter already carries that boundary. M6 keeps only the supplier *reference* a receipt needs.
+- **Stock receipt/stocktake authoring UI on the edge.** The domain (`StockMovement::receive`/`spoil`/`adjust`, `stocktake_movement`) exists; a full goods-in / stocktake operator flow on the shipped edge is store-side runtime work beyond the cloud authoring this track delivers.
+
+**Consequences.**
+
+- Additive throughout: a new `pos-proto` module and enum, a new config node key, one additive migration, one new console permission. No protocol-version bump — a store with no `inventory` node published behaves exactly as today (every item `Unlimited`), the never-blank config contract keeping whatever the edge holds if a publish is absent or unparseable.
+- Recipes, ingredients, thresholds, and supplier names are configuration and reference data — never a customer identifier or any T1 field. Recipe quantities and supplier terms are operational T2 configuration, worked in the console, not reproduced verbatim in shareable outputs.
+- Because the conversion lives in `pos_core` and the node is validated by the same `CapabilityValidator` the edge reads, the cloud and edge cannot disagree about what a legal recipe is.
+
+**Delivery note (M6 complete).** All six slices shipped:
+
+1. `pos_proto::inventory::PublishedInventory` + the `UnitOfMeasure` wire enum + `SupplierId`, and `pos_core::inventory::from_published`.
+2. The `InventoryStore` seam (`crates/pos-cloud/src/inventory.rs`), its `store-postgres` impl over the single `inventory_items` table discriminated by `kind`, and migration `0037_inventory.sql`.
+3. `/admin/inventory/*` per-record CRUD behind the new `console.inventory.manage` permission (Owner/Admin), audited by summary — an ingredient and supplier in full, a recipe by item/line-count/threshold only, never the BOM amounts.
+4. `PUT /admin/config/inventory` composing the node through the config tree; the edge's `session_from_config` applies it to build `session.recipes` and `session.recipe_thresholds`, with `EdgeSession::item_sellable` as the pure §8 auto-86 decision.
+5. The dashboard Inventory screen (ingredients, a per-item BOM editor, suppliers, thresholds, publish) on the F2 kit, en/vi.
+6. An optional `supplier_id` on the `inventory.stock.received` event, so a goods receipt names its supplier.
+
+The three deferrals above stand and are unstarted: the live auto-86 marketplace-notify loop, full purchasing (ERP), and the edge goods-in/stocktake operator UI (which is what would *emit* the receipt event slice 6 gave a supplier field). `item_sellable` is wired and tested but not yet driven from a live stock projection, because there is no on-hand stock source on the edge until that goods-in flow lands — so no trading store's menu is 86'd from M6 alone.

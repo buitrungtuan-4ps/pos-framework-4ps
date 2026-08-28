@@ -176,6 +176,28 @@ wire_enum! {
 }
 
 wire_enum! {
+    /// The unit an ingredient is held and consumed in ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md),
+    /// `docs/pos-spec.md` §8).
+    ///
+    /// A property of the ingredient, single-valued: an ingredient is stocked and its recipes are
+    /// authored in one unit, so the availability arithmetic (a `Quantity` in thousandths of that unit)
+    /// never mixes scales. This is a display/authoring label only — the domain math is unit-agnostic —
+    /// so there is deliberately no cross-unit conversion here (grams never become kilograms); pick the
+    /// base unit the store counts in.
+    UnitOfMeasure, prefix = "UNIT_OF_MEASURE";
+    /// Grams.
+    Gram = "GRAM",
+    /// Kilograms.
+    Kilogram = "KILOGRAM",
+    /// Millilitres.
+    Milliliter = "MILLILITER",
+    /// Litres.
+    Liter = "LITER",
+    /// Discrete pieces — eggs, cans, portions.
+    Piece = "PIECE",
+}
+
+wire_enum! {
     /// How a price reduction was granted.
     ///
     /// These three are deliberately separate, and `docs/pos-spec.md` §5 is explicit
@@ -214,7 +236,7 @@ wire_enum! {
 mod tests {
     use super::{
         BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
-        SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
+        SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState, UnitOfMeasure,
     };
     use crate::wire_enum::{Open, WireEnum};
 
@@ -269,6 +291,7 @@ mod tests {
         check::<StockLedgerEntryKind>("STOCK_LEDGER_ENTRY_KIND");
         check::<ReductionKind>("REDUCTION_KIND");
         check::<ShipmentStatus>("SHIPMENT_STATUS");
+        check::<UnitOfMeasure>("UNIT_OF_MEASURE");
     }
 
     #[test]

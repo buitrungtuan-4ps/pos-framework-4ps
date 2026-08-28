@@ -33,6 +33,7 @@
 use std::collections::BTreeMap;
 
 use pos_proto::ids::{IngredientId, MenuItemId};
+use pos_proto::inventory::PublishedInventory;
 use pos_proto::money::MoneyError;
 use pos_proto::quantity::Quantity;
 
@@ -329,6 +330,37 @@ pub fn stocktake_movement(
     })
 }
 
+/// Builds the runtime [`RecipeBook`] and the per-item auto-86 thresholds from the published
+/// `inventory` config node ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)).
+///
+/// The edge calls this on config apply to populate the recipe book its fire path consumes and the
+/// thresholds its availability check reads. Ingredients and suppliers in the node are
+/// reference/display data the availability arithmetic does not need, so only the recipes are folded in
+/// here; an item absent from the node has no recipe and is therefore [`Availability::Unlimited`], and
+/// an item present but with an empty BOM is likewise never stock-limited (§8).
+///
+/// The threshold map carries one entry per recipe; an item with no entry falls back to `0` at the call
+/// site (86 only when nothing can be made). A duplicate item id in the node keeps the last occurrence,
+/// mirroring [`RecipeBook::insert`]'s replace-on-repeat.
+#[must_use]
+pub fn from_published(node: &PublishedInventory) -> (RecipeBook, BTreeMap<MenuItemId, i64>) {
+    let mut book = RecipeBook::new();
+    let mut thresholds = BTreeMap::new();
+    for recipe in node.recipes() {
+        let lines = recipe
+            .lines
+            .iter()
+            .map(|line| RecipeLine {
+                ingredient: line.ingredient,
+                per_unit: line.per_unit,
+            })
+            .collect();
+        book.insert(recipe.item, Recipe::new(lines));
+        thresholds.insert(recipe.item, recipe.auto_86_threshold);
+    }
+    (book, thresholds)
+}
+
 /// Negates a quantity, honouring the `i64` range rather than wrapping.
 fn negate(quantity: Quantity) -> Result<Quantity, MoneyError> {
     quantity
@@ -496,6 +528,54 @@ mod tests {
             .apply(&StockMovement::spoil(flour, whole(3)).expect("spoil"))
             .expect("apply");
         assert_eq!(stock.on_hand(flour), whole(7));
+    }
+
+    #[test]
+    fn from_published_builds_the_book_and_thresholds() {
+        use pos_proto::inventory::{PublishedInventory, PublishedRecipe, PublishedRecipeLine};
+
+        let (pizza, dough) = (item(1), ingredient(2));
+        let node = PublishedInventory::from_parts(
+            Vec::new(),
+            vec![
+                PublishedRecipe {
+                    item: pizza,
+                    lines: vec![PublishedRecipeLine {
+                        ingredient: dough,
+                        per_unit: Quantity::from_milli(100_000),
+                    }],
+                    auto_86_threshold: 3,
+                },
+                // An item present with an empty BOM is never stock-limited but still carries a threshold.
+                PublishedRecipe {
+                    item: item(9),
+                    lines: Vec::new(),
+                    auto_86_threshold: 0,
+                },
+            ],
+            Vec::new(),
+        );
+
+        let (book, thresholds) = super::from_published(&node);
+
+        // The pizza's recipe made it across, one dough line of 100 g.
+        let recipe = book.get(pizza).expect("pizza recipe");
+        assert_eq!(recipe.lines.len(), 1);
+        let line = recipe.lines.first().expect("one line");
+        assert_eq!(line.ingredient, dough);
+        assert_eq!(line.per_unit, Quantity::from_milli(100_000));
+        assert_eq!(thresholds.get(&pizza), Some(&3));
+
+        // The empty-BOM item is Unlimited (no positive line) but keeps its threshold entry.
+        let mut stock = StockProjection::new();
+        stock.set_on_hand(dough, Quantity::from_milli(250_000)); // 2 whole pizzas' worth
+        assert_eq!(stock.available(pizza, &book), Availability::Limited(2));
+        assert_eq!(stock.available(item(9), &book), Availability::Unlimited);
+        assert_eq!(thresholds.get(&item(9)), Some(&0));
+
+        // An item absent from the node has no recipe and no threshold entry.
+        assert!(book.get(item(42)).is_none());
+        assert_eq!(thresholds.get(&item(42)), None);
     }
 
     #[test]

@@ -123,6 +123,82 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A goods receipt can name the supplier it came from** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `inventory.stock.received` event gains an
+  optional `supplier_id` field — a reference to a supplier authored in the `inventory` node — so a
+  goods receipt records who it came from. Additive and unversioned: a receipt that names no supplier,
+  or a producer that predates the field, decodes to `None`; it is a reference only, with the full
+  purchasing relationship staying in the ERP. The goods-in/stocktake operator flow that emits a receipt
+  remains the flagged edge follow-up. This completes Track M6 (inventory & suppliers): the finished §8
+  engine now has cloud authoring, a published node, an edge that applies it, and a console to drive it.
+  **Upgrade note:** none — one additive event field; no protocol-version bump.
+- **The console gets an Inventory screen to author recipes without touching JSON** (roadmap v2,
+  Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new Inventory screen (under
+  Master data, Owner/Admin) lists and edits a tenant's ingredients (name + unit), recipes, and
+  suppliers on the F2 CRUD kit, and publishes the composed node to a store. The recipe editor is a
+  bill-of-materials builder: pick the menu item from the tenant's catalog (no raw ULID), add ingredient
+  lines each with a per-unit amount in that ingredient's unit, and set the auto-86 threshold — a recipe
+  is keyed by its item, so saving is an upsert and the item is fixed once it exists. ULIDs stay behind
+  a Technical-details disclosure, destructive actions confirm, and outcomes route through toasts, per
+  the kit. English and Vietnamese strings both ship. **Upgrade note:** none — dashboard-only, over the
+  M6 routes already added.
+- **A published `inventory` node finally gives the edge its recipe book** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `PUT /admin/config/inventory` route
+  (behind `console.config.publish`, audited by count only) assembles a tenant's authored ingredients,
+  recipes, and suppliers into the store's `inventory` config node the same way campaigns/tax/floor
+  publish, preserving the store layer's other keys. The edge's config apply parses that node and calls
+  `pos_core::inventory::from_published` to build the runtime `RecipeBook` and a per-item auto-86
+  threshold map, replacing the empty bootstrap book: a fired line now consumes its bill of materials
+  (`decide_line` already reads `session.recipes`). An absent or unparseable node leaves the base book
+  untouched — a bad publish never blanks a trading store's recipes. `EdgeSession::item_sellable` is the
+  pure §8 auto-86 decision (available-vs-threshold) the edge now holds; driving it from a **live**
+  on-hand stock projection is the flagged goods-in/stocktake follow-up, so no trading store's menu is
+  86'd from this slice alone. **Upgrade note:** none — additive route and additive session state; no
+  protocol, migration, or permission change, and a store with no `inventory` node behaves exactly as
+  today (every item unlimited).
+- **Ingredients, recipes, and suppliers can be authored over the API** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). New `/admin/inventory/*` routes give a tenant
+  per-record CRUD over its ingredients, per-item/modifier recipes (bill of materials + auto-86
+  threshold), and supplier references, over the `InventoryStore` seam. An ingredient's and a
+  supplier's id is server-minted, so a client never supplies or forges one; a recipe's key is the menu
+  item it makes, so a recipe is a `PUT` upsert keyed by that item id (`201` when the item had no recipe
+  before, `200` when it replaced one). Reads are behind `console.data.read`; every write is behind a
+  new `console.inventory.manage` permission (Owner/Admin — the manage norm, since recipes are
+  proprietary process; Ops publishes but does not author them) and is audited by summary. The audit
+  trail records an ingredient and a supplier in full (reference data) but a recipe only by its item,
+  line count, and threshold — never the per-ingredient amounts, which are T2 configuration and stay in
+  the inventory store. The typed dashboard client gains the matching methods and types. **Upgrade
+  note:** one new console permission (`console.inventory.manage`, granted to Owner and Admin); no
+  protocol or migration change in this slice. The composed `inventory` node publish, edge apply, and
+  console screens follow in the same track.
+- **Inventory authoring has somewhere to live** (roadmap v2, Track M6;
+  [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). A new `InventoryStore` seam persists a
+  tenant's ingredients, per-item/modifier recipes (with their auto-86 thresholds), and supplier
+  references, backed by an `inventory_items` table (migration `0037`). The three record kinds share
+  one shape — a tenant, a stable id, and a document — so they live in one table discriminated by
+  `kind` rather than three near-identical tables, each record held as `jsonb` exactly as `campaigns`
+  is; CRUD is per-record. Tenant-scoped and RLS-isolated like every other config table, with an
+  in-memory fake for the seam tests and a Postgres round-trip integration test (create/replace by
+  `(kind, id)`, tenant isolation, kind-scoped delete). Recipe quantities and supplier terms are T2
+  configuration; a row carries no customer identifier. The admin routes, publish path, edge apply, and
+  console follow in the same track. **Upgrade note:** an additive migration (`0037_inventory`,
+  rollback safe); no protocol or permission change in this slice.
+- **The inventory engine gets a wire node and a conversion, so recipes can finally be authored**
+  (roadmap v2, Track M6; [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `pos-core`
+  inventory domain (spec §8 — recipes, stock projection, auto-86) has been built and property-tested
+  since P3, but it had no inputs: the edge plumbs a `RecipeBook` into its fire path yet that book is
+  empty, so a fired line consumes nothing and every item reads as unlimited. This slice adds the
+  authoring shape. A new `pos_proto::inventory::PublishedInventory` config-node type carries a store's
+  ingredients (id, name, `UnitOfMeasure`), per-item/per-modifier recipes (ingredient lines with a
+  per-unit quantity) and their auto-86 thresholds, and lightweight supplier references — the wire
+  mirror the cloud will write as the `inventory` key on the config tree, exactly as `campaigns`/`tax`
+  do. `pos_core::inventory::from_published` turns it back into the runtime `RecipeBook` and a per-item
+  threshold map — the one place that sees both shapes. A new `UnitOfMeasure` wire enum
+  (gram/kilogram/millilitre/litre/piece) is a per-ingredient display label; the availability
+  arithmetic stays unit-agnostic, so there is deliberately no cross-unit conversion. The storage,
+  admin routes, publish path, edge apply, and console follow in the same track. **Upgrade note:** none
+  — additive `pos-proto` types and a new enum; no protocol, migration, or permission change in this
+  slice, and a store with no `inventory` node behaves exactly as today (every item unlimited).
 - **The console shows reconciliation history and gives the rebuild lever a button** (roadmap v2,
   Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). A new Reconciliation screen reads
   `GET /admin/reconcile` and lists each store's recent reconciliation runs — store, ids offered, how

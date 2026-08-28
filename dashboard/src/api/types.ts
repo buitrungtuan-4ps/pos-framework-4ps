@@ -274,6 +274,66 @@ export interface ScheduledPublishCreated {
   readonly effective_at_ms: number;
 }
 
+/** A quantity in thousandths of a unit (`Quantity`) — 1.5 kg is `{ milli: 1500 }`. */
+export interface Quantity {
+  readonly milli: number;
+}
+
+/** A unit of measure (`UnitOfMeasure`); wire tokens are prefixed `UNIT_OF_MEASURE_` (ADR-0079). */
+export type UnitOfMeasure =
+  | "UNIT_OF_MEASURE_GRAM"
+  | "UNIT_OF_MEASURE_KILOGRAM"
+  | "UNIT_OF_MEASURE_MILLILITER"
+  | "UNIT_OF_MEASURE_LITER"
+  | "UNIT_OF_MEASURE_PIECE";
+
+/** The units of measure an ingredient can be stocked in, for the picker. */
+export const UNITS: readonly UnitOfMeasure[] = [
+  "UNIT_OF_MEASURE_GRAM",
+  "UNIT_OF_MEASURE_KILOGRAM",
+  "UNIT_OF_MEASURE_MILLILITER",
+  "UNIT_OF_MEASURE_LITER",
+  "UNIT_OF_MEASURE_PIECE",
+];
+
+/** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
+export interface Ingredient {
+  readonly id: string;
+  readonly name: string;
+  readonly unit: UnitOfMeasure;
+}
+
+/** The authoring fields of an ingredient create/update — an `Ingredient` without its server-owned id. */
+export type IngredientInput = Omit<Ingredient, "id">;
+
+/** One bill-of-materials line (`PublishedRecipeLine`) — an ingredient and the amount one unit consumes. */
+export interface RecipeLine {
+  readonly ingredient: string;
+  readonly per_unit: Quantity;
+}
+
+/**
+ * The bill of materials for one makeable thing — a menu item or a modifier — plus its auto-86 threshold
+ * (`PublishedRecipe`). The item is the recipe's key; an empty `lines` means it is never stock-limited.
+ */
+export interface Recipe {
+  readonly item: string;
+  readonly lines: RecipeLine[];
+  readonly auto_86_threshold: number;
+}
+
+/** The authoring fields of a recipe upsert — the BOM and threshold; the item is the URL key. */
+export type RecipeInput = Omit<Recipe, "item">;
+
+/** A supplier reference (`PublishedSupplier`) — id and name only; purchasing lives in the ERP (§19). */
+export interface Supplier {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
+export type SupplierInput = Omit<Supplier, "id">;
+
 /**
  * A publish dry-run from `POST /admin/config/campaigns/preview` (ADR-0077): the RFC 7386 merge patch
  * a publish would apply to the store's effective config, the version it diffs against (`null` if the

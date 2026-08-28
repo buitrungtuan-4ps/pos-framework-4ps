@@ -31,7 +31,7 @@ use crate::envelope::{DecodeError, EventEnvelope, EventPayload, RawPayload};
 use crate::ids::{
     BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId,
     OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId,
-    StockLedgerEntryId, TableId, TaxClassId, VoucherId,
+    StockLedgerEntryId, SupplierId, TableId, TaxClassId, VoucherId,
 };
 use crate::money::{Money, Ratio};
 use crate::quantity::Quantity;
@@ -604,6 +604,12 @@ event_catalogue! {
         quantity: Quantity,
         /// Why this entry exists.
         kind: Open<StockLedgerEntryKind>,
+        /// The supplier the goods came from, when recorded — a reference to a supplier authored in the
+        /// `inventory` config node ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6).
+        /// Optional and additive: a receipt that names no supplier (or a producer that predates this
+        /// field) decodes to `None`. It is a reference only — the full purchasing relationship stays in
+        /// the ERP (§19). The goods-in flow that emits a receipt is the flagged edge follow-up.
+        supplier_id: Option<SupplierId>,
     },
     /// Stock was corrected by hand.
     InventoryStockAdjusted => "inventory.stock.adjusted", version = 1 {

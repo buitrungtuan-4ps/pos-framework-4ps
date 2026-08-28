@@ -120,6 +120,9 @@ const MIGRATION_0035: &str = include_str!("../migrations/0035_ota_report.sql");
 /// Reconciliation run history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
 const MIGRATION_0036: &str = include_str!("../migrations/0036_reconcile_runs.sql");
 
+/// Inventory authoring: ingredients, recipes, suppliers ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
+const MIGRATION_0037: &str = include_str!("../migrations/0037_inventory.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -323,6 +326,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0036)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0037)
+            .await
             .map_err(unavailable)
     }
 
@@ -520,6 +527,14 @@ impl PostgresStore {
     #[must_use]
     pub fn campaigns(&self) -> crate::campaigns::PostgresCampaigns {
         crate::campaigns::PostgresCampaigns::new(self.pool.clone())
+    }
+
+    /// The inventory authoring store over this pool ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `InventoryStore` seam over it.
+    #[must_use]
+    pub fn inventory(&self) -> crate::inventory::PostgresInventory {
+        crate::inventory::PostgresInventory::new(self.pool.clone())
     }
 
     /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).

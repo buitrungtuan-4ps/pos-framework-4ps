@@ -167,6 +167,16 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author campaigns and promotions, and generate voucher batches",
     },
+    /// Author the inventory master data — ingredients, per-item recipes (bill of materials),
+    /// auto-86 thresholds, and suppliers ([ADR-0079](../adr/0079-inventory-and-suppliers.md), M6).
+    /// Publishing the composed node to a store reuses `PublishConfig`, exactly as every other node
+    /// publish does. Owner/Admin, the manage norm — Ops publishes but does not author the recipes,
+    /// which are proprietary process (T2).
+    ManageInventory {
+        id: "console.inventory.manage",
+        roles: [Owner, Admin],
+        description: "Author ingredients, recipes, auto-86 thresholds, and suppliers",
+    },
     /// Publish an OTA rollout — target version, ring, ramp, signing key, revocations — or engage its
     /// kill switch ([ADR-0078](../adr/0078-sync-and-ota-closure.md)). Owner/Admin only, above the
     /// `PublishConfig` norm that includes Ops: pushing a binary rollout to the fleet is not a
@@ -269,6 +279,7 @@ mod tests {
             ConsolePermission::ManageCatalog,
             ConsolePermission::ManageTranslations,
             ConsolePermission::ManagePeople,
+            ConsolePermission::ManageInventory,
             ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
         ] {

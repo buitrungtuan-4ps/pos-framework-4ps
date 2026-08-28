@@ -29,7 +29,7 @@ use pos_core::decision::{
     decide_line, decide_shift, decide_table,
 };
 use pos_core::error::DomainError;
-use pos_core::inventory::RecipeBook;
+use pos_core::inventory::{RecipeBook, StockProjection};
 use pos_core::menu::PricedLine;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
@@ -206,6 +206,13 @@ pub struct EdgeSession {
     /// delivered to the session here; wiring `evaluate` into the live bill flow is the flagged M3
     /// follow-up.)
     pub campaigns: Vec<Campaign>,
+    /// The per-item auto-86 threshold (§8) from the `inventory` config node
+    /// ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6): an item is 86'd at or below
+    /// this many makeable. Empty in the bootstrap, and an item absent here defaults to `0` (86 only when
+    /// nothing can be made). Paired with [`Self::recipes`]; [`Self::item_sellable`] reads both against a
+    /// stock projection. The live projection that drives auto-86 arrives with the flagged
+    /// goods-in/stocktake follow-up, so nothing 86s a trading store's menu on this slice alone.
+    pub recipe_thresholds: BTreeMap<MenuItemId, i64>,
 }
 
 impl EdgeSession {
@@ -245,6 +252,7 @@ impl EdgeSession {
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
             campaigns: Vec::new(),
+            recipe_thresholds: BTreeMap::new(),
         }
     }
 
@@ -278,6 +286,20 @@ impl EdgeSession {
     pub fn with_campaigns(mut self, campaigns: Vec<Campaign>) -> Self {
         self.campaigns = campaigns;
         self
+    }
+
+    /// The auto-86 decision (§8) for `item` against a stock projection: whether strictly more than the
+    /// item's authored threshold can be made from `stock`. An item with no recipe is always sellable;
+    /// a tracked one uses its `recipe_thresholds` entry (defaulting to `0`).
+    ///
+    /// This is the pure decision the flagged goods-in/stocktake follow-up will drive with a live
+    /// projection ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)); the edge holds no
+    /// on-hand stock yet, so the live menu is not 86'd from it on this slice — applying the recipes so a
+    /// fired line consumes its bill of materials is the change M6 lands here.
+    #[must_use]
+    pub fn item_sellable(&self, item: MenuItemId, stock: &StockProjection) -> bool {
+        let threshold = self.recipe_thresholds.get(&item).copied().unwrap_or(0);
+        stock.available(item, &self.recipes).is_sellable(threshold)
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
