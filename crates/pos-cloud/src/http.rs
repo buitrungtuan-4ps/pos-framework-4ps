@@ -126,7 +126,7 @@ use crate::config_tree::{
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
-use crate::dashboard::{RollupError, RollupStore, StoredRollups, dashboard};
+use crate::dashboard::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
@@ -13245,6 +13245,7 @@ pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
+    Query(window): Query<RollupWindowQuery>,
 ) -> Response
 where
     // S and A are unused here but are part of the shared `CloudApp` state, which the `State`
@@ -13272,10 +13273,34 @@ where
             return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
         }
     };
+    let window = match window.into_window() {
+        Ok(window) => window,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     // The tenant is the grant's, not the request's — this is the isolation boundary.
-    match dashboard(&app.rollups, grant.tenant(), store_id).await {
+    match dashboard(&app.rollups, grant.tenant(), store_id, &window).await {
         Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
         Err(error) => rollup_error_response(&error),
+    }
+}
+
+/// The date-range window params shared by the rollup read routes (ADR-0081, Track O4): an inclusive
+/// `from`/`to` business-date range and a `limit` cap. All optional — absent gives the default
+/// [`crate::dashboard::rollup::DEFAULT_WINDOW_DAYS`]-day window, never the store's whole history.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RollupWindowQuery {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+impl RollupWindowQuery {
+    /// Validates the params into a [`RollupWindow`], or returns a `400` message.
+    fn into_window(self) -> Result<RollupWindow, &'static str> {
+        RollupWindow::new(self.from, self.to, self.limit)
     }
 }
 
@@ -15512,7 +15537,7 @@ async fn admin_daily_rollups<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
-    Query(query): Query<ConfigTenantQuery>,
+    Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
     S: Clone + Send + Sync + 'static,
@@ -15538,12 +15563,29 @@ where
         )
             .into_response();
     };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     // The tenant is named explicitly here (the admin is global), unlike the `/v1` read where it is
     // the API key's. It is a read of the materialised rollup — event counts only, no PII.
-    match dashboard(&app.rollups, tenant_id, store_id).await {
+    match dashboard(&app.rollups, tenant_id, store_id, &window).await {
         Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
         Err(error) => rollup_error_response(&error),
     }
+}
+
+/// The `/admin` daily-rollup query: the explicit `tenant_id` (the console admin is global) plus the
+/// shared [`RollupWindowQuery`] date range and cap (ADR-0081, Track O4).
+#[derive(Debug, Clone, Deserialize)]
+struct AdminRollupWindowQuery {
+    tenant_id: String,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log

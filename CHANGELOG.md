@@ -137,6 +137,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (dirty-marking, windowed storage blobs, config-blob delta, request-latency histograms), and the
   country-specific statutory report layouts. **Upgrade note:** none — an ADR; the routes, permission,
   and projector changes land in the following slices, all additive.
+- **Rollup reads take a date-range window, and no longer ship a store's whole history** (roadmap v2,
+  Track O4; [ADR-0081](docs/adr/0081-reports-and-analytics.md)). Both daily-rollup routes —
+  `GET /v1/stores/{store_id}/rollups/daily` and `GET /admin/stores/{store_id}/rollups/daily` — accept
+  `?from=&to=&limit=`: an inclusive `YYYY-MM-DD` business-date range and a cap on the days returned
+  (the newest kept, still oldest-first). A malformed date, `from` after `to`, or a zero `limit` is a
+  `400`; `limit` is clamped to a year. When a read names no window it now returns the **most recent 90
+  trading days** rather than every retained day. The dashboard's `dailyRollups` client takes an
+  optional window and is otherwise unchanged. **Upgrade note:** a rollups read with no query params
+  now returns at most the last 90 trading days instead of the full history — pass an explicit
+  `from`/`to`/`limit` (up to 366 days) to widen it. Counts only; no PII, no protocol/migration change.
 - **The console gets a Channels & payments screen to author how a store sells** (roadmap v2,
   Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). A new Channels & payments screen
   (under Master data, Owner/Admin) drives the four M7 nodes for one store without touching JSON: the

@@ -26,7 +26,7 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::cloud::DailyRollup;
 
-use super::rollup::{fold_event, render};
+use super::rollup::{RollupWindow, fold_event, render_window};
 
 /// How many events one projection page reads and folds.
 const PROJECT_PAGE: u32 = 512;
@@ -160,12 +160,13 @@ pub async fn dashboard<R>(
     rollups: &R,
     tenant: TenantId,
     store_id: StoreId,
+    window: &RollupWindow,
 ) -> Result<Vec<DailyRollup>, RollupError>
 where
     R: RollupStore,
 {
     let state = rollups.load(tenant, store_id).await?;
-    Ok(render(state.days))
+    Ok(render_window(state.days, window))
 }
 
 #[cfg(test)]
@@ -173,7 +174,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::{RollupError, RollupStore, StoredRollups, dashboard, project};
+    use super::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, project};
 
     use pos_contract_tests::fixtures;
     use pos_fakes::FakeStore;
@@ -261,7 +262,7 @@ mod tests {
         project(&events, &rollups, tenant(), store_id())
             .await
             .expect("project");
-        let materialised = dashboard(&rollups, tenant(), store_id())
+        let materialised = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("dashboard");
 
@@ -287,7 +288,7 @@ mod tests {
             .await
             .expect("first");
         assert_eq!(first.folded, 4);
-        let before = dashboard(&rollups, tenant(), store_id())
+        let before = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("read");
 
@@ -298,7 +299,7 @@ mod tests {
             second.folded, 0,
             "the cursor is at the end, so nothing is refolded"
         );
-        let after = dashboard(&rollups, tenant(), store_id())
+        let after = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("read");
         assert_eq!(
@@ -323,7 +324,7 @@ mod tests {
             .expect("second");
         assert_eq!(report.folded, 5, "only the new events were folded");
 
-        let days = dashboard(&rollups, tenant(), store_id())
+        let days = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("read");
         assert_eq!(days.len(), 2);
@@ -343,7 +344,7 @@ mod tests {
             .await
             .expect("save");
 
-        let days = dashboard(&rollups, tenant(), store_id())
+        let days = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("read");
         assert_eq!(days.len(), 1);

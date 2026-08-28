@@ -310,12 +310,30 @@ export const api = {
       flags,
     }),
 
-  // --- rollups (ADR-0060 admin read) ---
-  dailyRollups: (tenantId: string, storeId: string) =>
-    requestJson<DailyRollup[]>(
+  // --- rollups (ADR-0060 admin read; ADR-0081 windowing) ---
+  // A window is optional: absent, the server returns the most recent 90 trading days, never the
+  // store's entire history. `from`/`to` are inclusive YYYY-MM-DD business dates; `limit` caps the
+  // days returned (newest kept).
+  dailyRollups: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) => {
+    const params = new URLSearchParams(tenantQuery(tenantId));
+    if (window?.from) {
+      params.set("from", window.from);
+    }
+    if (window?.to) {
+      params.set("to", window.to);
+    }
+    if (window?.limit !== undefined) {
+      params.set("limit", String(window.limit));
+    }
+    return requestJson<DailyRollup[]>(
       "GET",
-      `/admin/stores/${encodeURIComponent(storeId)}/rollups/daily?${tenantQuery(tenantId)}`,
-    ),
+      `/admin/stores/${encodeURIComponent(storeId)}/rollups/daily?${params.toString()}`,
+    );
+  },
   // Reset a store's materialised rollup so the projector rebuilds it from the event log — the
   // "reset-cursor-and-replay" recovery lever (ADR-0036), behind console.config.publish. Idempotent.
   resetRollups: (tenantId: string, storeId: string) =>
