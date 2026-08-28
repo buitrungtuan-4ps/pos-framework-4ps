@@ -123,6 +123,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The `campaigns` config node — an authorable, publishable promotion over the finished pricing
+  engine** (roadmap v2, Track M3, slice 1; [ADR-0077](docs/adr/0077-campaigns-and-scheduling.md)). The
+  pricing engine (`pos_core::campaign`, `docs/pos-spec.md` §7) already evaluates all five campaign
+  kinds with windows, quotas, and exclusions, but `Campaign` is a pure runtime type with no wire form,
+  so nothing could author or deliver a promotion. `pos_proto::campaign::PublishedCampaigns` is that
+  wire form — a serializable, field-for-field mirror the cloud will compile and publish as the
+  `campaigns` config-tree node, and `pos_core::campaign::campaigns_from_published` is the total,
+  infallible conversion back into the `Campaign`s the edge evaluates, so what an operator authors is
+  exactly what the store prices against. Channels ride as `Open<SalesChannel>` so a newer cloud's
+  channel token round-trips rather than failing the node. This slice adds the type and the conversion
+  only; storage, CRUD, the publish route, the edge apply, voucher batch generation, effective-dated
+  scheduling, and publish preview/diff follow in the same track. **Upgrade note:** none — a new
+  optional Store-layer node; a store without it runs no promotions, exactly as today; no protocol,
+  migration, or permission change in this slice.
 - **PDPD/GDPR subject-request tooling — per-subject lookup, export, and erasure**
   (roadmap v2, Track M5, slice 7; [ADR-0076](docs/adr/0076-subject-request-tooling.md)). The Data
   Protection contact's instrument for an individual rights request, over the existing subject store

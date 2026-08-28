@@ -27,6 +27,7 @@
 // that doc examples compile under the same rules has to be stated separately.
 #![doc(test(attr(deny(warnings))))]
 
+pub mod campaign;
 pub mod determinism;
 pub mod display;
 pub mod enums;
