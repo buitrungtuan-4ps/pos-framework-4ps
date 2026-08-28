@@ -123,6 +123,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Menu screen is now a tabbed shell over its five kit sub-screens; the 1,898-line monolith is
+  gone** (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)).
+  `/catalog` now renders `CatalogShell` — one route, one nav entry, one breadcrumb, with a tab bar
+  across Items, Taxonomy, Tax classes, Modifiers, and Menus. The shell owns the page header and the
+  tenant `RequireContext` gate, and mounts only the active tab, so each sub-screen's auto-load fires
+  on first view and the five never fetch at once. `screens/Catalog.tsx` is deleted. **Upgrade note:**
+  none — the `/catalog` URL, nav entry, and backend contract are unchanged; only the screen's
+  internals changed.
 - **The Menus sub-screen lands on the kit with a currency-aware money field and bulk price editing**
   (roadmap v2, Track F3, F3 slice 3; [ADR-0082](docs/adr/0082-catalog-and-layout-rebuild.md)). The
   priced heart of the catalog — menus (with inheritance), authoring sections, per-channel placements,

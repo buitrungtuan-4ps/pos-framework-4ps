@@ -563,6 +563,8 @@
   "device.kind.tablet": "Máy tính bảng",
   "catalog.title": "Thực đơn",
   "catalog.description": "Soạn món, thực đơn và giá theo kênh cho tenant này, rồi phát hành một thực đơn tới cửa hàng đang chọn.",
+  "catalog.tabTaxonomy": "Phân loại",
+  "catalog.tabModifiers": "Tùy chọn",
   "catalog.items": "Món",
   "catalog.loadHint": "Tải để xem món và thực đơn của tenant này.",
   "catalog.itemsEmpty": "Chưa có món nào. Tạo một món bên dưới.",

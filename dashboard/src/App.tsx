@@ -17,7 +17,7 @@ import { Alerts } from "./screens/Alerts";
 import { Audit } from "./screens/Audit";
 import { ApiKeys } from "./screens/ApiKeys";
 import { Campaigns } from "./screens/Campaigns";
-import { Catalog } from "./screens/Catalog";
+import { CatalogShell } from "./screens/catalog/CatalogShell";
 import { Channels } from "./screens/Channels";
 import { Config } from "./screens/Config";
 import { Layout } from "./screens/Layout";
@@ -88,7 +88,7 @@ export function App() {
           <Route path="/alerts" component={Alerts} />
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
-          <Route path="/catalog" component={Catalog} />
+          <Route path="/catalog" component={CatalogShell} />
           <Route path="/campaigns" component={Campaigns} />
           <Route path="/inventory" component={Inventory} />
           <Route path="/channels" component={Channels} />

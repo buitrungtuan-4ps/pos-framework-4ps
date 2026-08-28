@@ -563,6 +563,8 @@
   "device.kind.tablet": "Tablet",
   "catalog.title": "Menu",
   "catalog.description": "Author this tenant's items, menus and per-channel prices, then publish a menu to the store in context.",
+  "catalog.tabTaxonomy": "Taxonomy",
+  "catalog.tabModifiers": "Modifiers",
   "catalog.items": "Items",
   "catalog.loadHint": "Load to see this tenant's items and menus.",
   "catalog.itemsEmpty": "No items yet. Create one below.",
