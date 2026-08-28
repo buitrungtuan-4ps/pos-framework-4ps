@@ -123,6 +123,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Channels and tender get authorable node types, so a store can be told which it accepts** (roadmap
+  v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). Today a sales channel is enabled
+  only implicitly (by the menu carrying a row for it) and the accepted payment methods are fixed in the
+  edge. This slice adds the wire shape for authoring them: `pos_proto::channels::PublishedChannels`
+  (the enabled `SalesChannel` set) and `PublishedTender` (the accepted `PaymentMethod` set), each a
+  list of forward-compatible `Open` tokens; and `pos_core::channels::{enabled_channels,
+  accepted_tender}` build the domain sets the edge will enforce, dropping any unspecified/unrecognised
+  token rather than silently switching it on. Opt-in and never-blank: an absent node means no
+  restriction (exactly today's behaviour), a present node is authoritative. The publish routes, edge
+  gates, and console follow in the same track. **Upgrade note:** none — additive `pos-proto`/`pos-core`
+  modules; no protocol, migration, or permission change, and a store with no channels/tender node
+  behaves exactly as today.
 - **A goods receipt can name the supplier it came from** (roadmap v2, Track M6;
   [ADR-0079](docs/adr/0079-inventory-and-suppliers.md)). The `inventory.stock.received` event gains an
   optional `supplier_id` field — a reference to a supplier authored in the `inventory` node — so a

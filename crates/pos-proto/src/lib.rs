@@ -28,6 +28,7 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod campaign;
+pub mod channels;
 pub mod determinism;
 pub mod display;
 pub mod enums;
