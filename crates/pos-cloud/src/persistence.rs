@@ -93,7 +93,7 @@ use crate::people::{
     EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
     RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
 };
-use crate::reconcile::{ReconcileError, ReconcileStore};
+use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
@@ -947,6 +947,64 @@ impl ReconcileStore for PostgresReconcile {
             .filter(|id| !present.contains(&id.to_string()))
             .copied()
             .collect())
+    }
+}
+
+impl ReconcileRunStore for PostgresReconcile {
+    async fn record_run(&self, tenant: TenantId, run: &ReconcileRun) -> Result<(), ReconcileError> {
+        // Counts are bounded by a reconcile window; clamp the usize→i32 conversion defensively so a
+        // pathological manifest records as i32::MAX rather than overflowing.
+        let offered = i32::try_from(run.candidates_offered).unwrap_or(i32::MAX);
+        let missing = i32::try_from(run.missing_found).unwrap_or(i32::MAX);
+        self.record_reconcile_run(
+            &run.run_id,
+            &tenant.to_string(),
+            &run.store.to_string(),
+            offered,
+            missing,
+            run.ran_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| ReconcileError::new(error.to_string()))
+    }
+
+    async fn list_runs(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        limit: u32,
+    ) -> Result<Vec<ReconcileRun>, ReconcileError> {
+        let store_string = store.map(|id| id.to_string());
+        let rows = self
+            .list_reconcile_runs(
+                &tenant.to_string(),
+                store_string.as_deref(),
+                i64::from(limit),
+            )
+            .await
+            .map_err(|error| ReconcileError::new(error.to_string()))?;
+        rows.into_iter()
+            .map(|row| {
+                let store = row
+                    .store_id
+                    .parse::<Ulid>()
+                    .map(StoreId::new)
+                    .map_err(|_| {
+                        ReconcileError::new("a stored reconcile-run store_id is not a ULID")
+                    })?;
+                let ran_at =
+                    Timestamp::from_milliseconds_since_epoch(row.ran_at).map_err(|_| {
+                        ReconcileError::new("a stored reconcile-run ran_at is out of range")
+                    })?;
+                Ok(ReconcileRun {
+                    run_id: row.run_id,
+                    store,
+                    candidates_offered: u32::try_from(row.candidates_offered).unwrap_or(0),
+                    missing_found: u32::try_from(row.missing_found).unwrap_or(0),
+                    ran_at,
+                })
+            })
+            .collect()
     }
 }
 

@@ -12,6 +12,7 @@
 
 use core::future::Future;
 
+use pos_proto::Timestamp;
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
 /// A failure of the reconciliation store itself — the database is unreachable.
@@ -42,4 +43,51 @@ pub trait ReconcileStore {
         store: StoreId,
         candidates: &[EventId],
     ) -> impl Future<Output = Result<Vec<EventId>, ReconcileError>> + Send;
+}
+
+/// One reconciliation run, for the console history read model
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Counts and a timestamp only — a run
+/// is device/store telemetry, never event contents or a customer identifier.
+#[derive(Debug, Clone)]
+pub struct ReconcileRun {
+    /// The run's ULID string (chronological when ordered).
+    pub run_id: String,
+    /// The store the diff was for.
+    pub store: StoreId,
+    /// How many ids the edge offered in its manifest (the window it reconciled).
+    pub candidates_offered: u32,
+    /// How many of them the cloud was missing — the ids it asked the edge to re-push.
+    pub missing_found: u32,
+    /// When the diff ran, stamped from the server clock.
+    pub ran_at: Timestamp,
+}
+
+/// Records and lists reconciliation runs — the history behind `POST /internal/reconcile` (which
+/// records one run per diff) and `GET /admin/reconcile` (which lists them). Kept beside
+/// [`ReconcileStore`] because the same store answers both.
+pub trait ReconcileRunStore {
+    /// Appends one run to `tenant`'s history. Best-effort at the call site: a failure to record must
+    /// not fail the diff the edge is waiting on.
+    ///
+    /// # Errors
+    ///
+    /// [`ReconcileError`] if the store could not be written.
+    fn record_run(
+        &self,
+        tenant: TenantId,
+        run: &ReconcileRun,
+    ) -> impl Future<Output = Result<(), ReconcileError>> + Send;
+
+    /// Lists `tenant`'s most recent runs, newest first, capped at `limit`. An optional `store` narrows
+    /// to one store; `None` reads across the tenant's stores.
+    ///
+    /// # Errors
+    ///
+    /// [`ReconcileError`] if the store could not be read.
+    fn list_runs(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<ReconcileRun>, ReconcileError>> + Send;
 }

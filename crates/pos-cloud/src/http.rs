@@ -145,7 +145,7 @@ use crate::people::{
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
-use crate::reconcile::ReconcileStore;
+use crate::reconcile::{ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
@@ -504,21 +504,40 @@ where
         .layer(axum::middleware::from_fn(security_headers))
 }
 
+/// The collaborators the reconciliation routes share: the diff-and-history store, the admin store the
+/// admin read authenticates against, and the clock that stamps each recorded run and drives the
+/// session guard.
+#[derive(Clone)]
+struct ReconcileState<Rec, A, C> {
+    store: Rec,
+    admin: A,
+    clock: C,
+}
+
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
 ///
 /// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
 /// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
-/// the ids to re-push through `/internal/ingest`. It needs only the [`ReconcileStore`], so it carries
-/// its own state and is merged into the main router in `main`, rather than threading an extra
-/// collaborator through every `CloudApp` handler. Internal, private-network, and absent from the
-/// public OpenAPI, exactly like `/internal/ingest`.
-pub fn reconcile_router<Rec>(store: Rec) -> Router
+/// the ids to re-push through `/internal/ingest`. Every diff now also records a run into the history
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), so `GET /admin/reconcile` can show the
+/// console that reconciliation happened and what it caught. The internal route is private-network and
+/// unauthenticated (absent from the public OpenAPI, exactly like `/internal/ingest`); the admin read is
+/// behind [`ConsolePermission::Read`]. Stated independently and merged in `main`, rather than threading
+/// an extra collaborator through every `CloudApp` handler.
+pub fn reconcile_router<Rec, A, C>(store: Rec, admin: A, clock: C) -> Router
 where
-    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/internal/reconcile", post(reconcile::<Rec>))
-        .with_state(store)
+        .route("/internal/reconcile", post(reconcile::<Rec, A, C>))
+        .route("/admin/reconcile", get(admin_reconcile_runs::<Rec, A, C>))
+        .with_state(ReconcileState {
+            store,
+            admin,
+            clock,
+        })
 }
 
 /// Liveness: answers as soon as the process is serving.
@@ -545,11 +564,17 @@ struct ReconcileResponse {
 }
 
 /// Answers which of the edge's candidate ids the cloud is missing for a store
-/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)). Internal (the reconciliation partner of
+/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), and records the run into the history
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Internal (the reconciliation partner of
 /// `/internal/ingest`), so it carries no authentication and is absent from the public OpenAPI.
-async fn reconcile<Rec>(State(store): State<Rec>, Json(request): Json<ReconcileRequest>) -> Response
+async fn reconcile<Rec, A, C>(
+    State(state): State<ReconcileState<Rec, A, C>>,
+    Json(request): Json<ReconcileRequest>,
+) -> Response
 where
-    Rec: ReconcileStore + Clone + Send + Sync + 'static,
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
 {
     let (Ok(tenant_id), Ok(store_id)) = (
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
@@ -570,19 +595,139 @@ where
             }
         }
     }
-    match store
+    match state
+        .store
         .absent_event_ids(tenant_id, store_id, &candidates)
         .await
     {
-        Ok(missing) => (
-            StatusCode::OK,
-            Json(ReconcileResponse {
-                missing: missing.iter().map(ToString::to_string).collect(),
-            }),
-        )
-            .into_response(),
+        Ok(missing) => {
+            // Record the run into the history — best-effort, so a recording failure never denies the
+            // edge the diff it is waiting on (the diff is the primary product; the history is a trail).
+            let now = state.clock.now();
+            if let Some(run_id) = mint_ulid(now.as_milliseconds_since_epoch()) {
+                let run = ReconcileRun {
+                    run_id: run_id.to_string(),
+                    store: store_id,
+                    candidates_offered: u32::try_from(candidates.len()).unwrap_or(u32::MAX),
+                    missing_found: u32::try_from(missing.len()).unwrap_or(u32::MAX),
+                    ran_at: now,
+                };
+                if let Err(error) = state.store.record_run(tenant_id, &run).await {
+                    tracing::warn!(%error, "recording a reconciliation run failed; the diff still answered");
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(ReconcileResponse {
+                    missing: missing.iter().map(ToString::to_string).collect(),
+                }),
+            )
+                .into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "a reconciliation diff failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The default and maximum page size for the reconciliation history read.
+const RECONCILE_HISTORY_DEFAULT_LIMIT: u32 = 100;
+const RECONCILE_HISTORY_MAX_LIMIT: u32 = 500;
+
+/// A `GET /admin/reconcile` query: the tenant whose runs to list, an optional store filter, and an
+/// optional page size.
+#[derive(Debug, Clone, Deserialize)]
+struct ReconcileHistoryQuery {
+    /// The tenant whose reconciliation history to read (a 26-character ULID).
+    tenant_id: String,
+    /// Narrow to one store (a ULID); absent reads across the tenant's stores.
+    #[serde(default)]
+    store_id: Option<String>,
+    /// Cap the number of runs returned; defaults to [`RECONCILE_HISTORY_DEFAULT_LIMIT`], clamped to
+    /// [`RECONCILE_HISTORY_MAX_LIMIT`].
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// One reconciliation run on the wire ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
+/// counts and a timestamp, never event contents or a customer identifier.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReconcileRunView {
+    /// The run's id (a ULID string; chronological).
+    run_id: String,
+    /// The store the diff was for (a ULID string).
+    store_id: String,
+    /// How many ids the edge offered in its manifest.
+    candidates_offered: u32,
+    /// How many of them the cloud was missing (asked the edge to re-push); zero means fully in sync.
+    missing_found: u32,
+    /// Unix ms of the diff.
+    ran_at_ms: i64,
+}
+
+impl ReconcileRunView {
+    fn from_run(run: ReconcileRun) -> Self {
+        Self {
+            run_id: run.run_id,
+            store_id: run.store.to_string(),
+            candidates_offered: run.candidates_offered,
+            missing_found: run.missing_found,
+            ran_at_ms: run.ran_at.as_milliseconds_since_epoch(),
+        }
+    }
+}
+
+/// Lists a tenant's most recent reconciliation runs, newest first
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
+/// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind
+/// [`ConsolePermission::Read`].
+async fn admin_reconcile_runs<Rec, A, C>(
+    State(state): State<ReconcileState<Rec, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ReconcileHistoryQuery>,
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let store = match query.store_id.as_deref() {
+        Some(raw) => match raw.parse::<Ulid>().map(StoreId::new) {
+            Ok(store) => Some(store),
+            Err(_) => return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response(),
+        },
+        None => None,
+    };
+    let limit = query
+        .limit
+        .unwrap_or(RECONCILE_HISTORY_DEFAULT_LIMIT)
+        .min(RECONCILE_HISTORY_MAX_LIMIT);
+    match state.store.list_runs(tenant_id, store, limit).await {
+        Ok(runs) => {
+            let view: Vec<ReconcileRunView> =
+                runs.into_iter().map(ReconcileRunView::from_run).collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "reading the reconciliation history failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the reconciliation service is unavailable",

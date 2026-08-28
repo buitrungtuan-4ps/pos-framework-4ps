@@ -274,7 +274,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
     let service = http::router(app)
-        .merge(http::reconcile_router(store.reconcile()))
+        .merge(http::reconcile_router(
+            store.reconcile(),
+            store.admin(),
+            SystemClock,
+        ))
         .merge(http::ota_report_router(store.config_trees(), SystemClock))
         .merge(http::device_router(
             store.device_proposals(),

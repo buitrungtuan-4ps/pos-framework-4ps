@@ -123,6 +123,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Reconciliation now leaves a trail** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The `POST /internal/reconcile` diff
+  ([ADR-0040](docs/adr/0040-reconciliation.md)) answered "which of these ids am I missing?"
+  statelessly, so a gap it closed was invisible afterwards — nothing recorded that reconciliation
+  ran, for which store, or how much it caught. Every diff now appends one run to a history —
+  candidates offered, missing found, and when — into a new `reconcile_runs` table (migration `0036`,
+  RLS tenant-isolated like `store_liveness`), and `GET /admin/reconcile` lists a tenant's recent runs
+  (newest first, optional store filter, behind `console.data.read`). Recording is best-effort: a
+  history write that fails never denies the edge the diff it is waiting on. A run is operational
+  telemetry — counts and a timestamp, never event contents or a customer identifier — so it stays out
+  of the T1/T2 reproduction rules. Wiring the *edge* to send reconciliation manifests on a schedule
+  from the shipped `pos_edge` binary stays the flagged hardware/composition gate (ADR-0078 §Deferred,
+  ADR-0055); this slice delivers and tests the cloud-side recording and read that a real edge — or the
+  existing manual re-push flow — feeds. **Upgrade note:** an additive migration (`0036_reconcile_runs`,
+  rollback safe) and a new `/admin/reconcile` read; no protocol or permission change (the read reuses
+  `console.data.read`).
 - **The console has an OTA updates screen — rollout progress and the levers in one place** (roadmap
   v2, Track O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting and lever backends
   landed with no way to see or drive them from the console; this adds the screen. A tenant-scoped
