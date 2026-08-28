@@ -62,6 +62,7 @@ pub mod clock;
 pub mod cloud;
 pub mod config;
 pub mod config_tree;
+pub mod countries;
 pub mod cursor;
 pub mod dashboard;
 pub mod devices;
@@ -83,6 +84,7 @@ pub mod reconcile;
 pub mod registry;
 pub mod relay;
 pub mod retention;
+pub mod tax;
 pub mod translations;
 pub mod webhook;
 

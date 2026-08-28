@@ -26,10 +26,13 @@ use core::future::Future;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
+use pos_core::business_date::{CutoffHour, StoreTimeZone};
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
+use pos_proto::money::CurrencyCode;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 
@@ -56,6 +59,16 @@ struct PublishedPermissions {
     staff: Vec<PublishedStaff>,
 }
 
+/// The published `locale` node: the store's currency, IANA timezone, and business-date cutoff hour
+/// (ADR-0074, Track M4). Each field is applied only if it parses, so a bad value leaves that setting
+/// as the base has it rather than blanking it.
+#[derive(serde::Deserialize)]
+struct PublishedLocale {
+    currency_code: String,
+    timezone: String,
+    cutoff_hour: u8,
+}
+
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
 /// `pos-core` catalogue (§9) does not know — an older edge simply ignores a permission it predates
 /// rather than failing to apply the whole node.
@@ -75,6 +88,16 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
     let mut session = base.clone();
+    // The store's display language from the `locale` node (ADR-0074), if it set one — the locale it
+    // renders item names in. Read here so the `menu` branch below can resolve each entry's per-locale
+    // name once, at install; a store that sets no language shows each item's default name.
+    let display_language = document
+        .get("locale")
+        .and_then(|locale| locale.get("display_language"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .map(str::to_owned);
     // Parse the node via its JSON text, not `from_value`: some wire types (e.g. `CurrencyCode`)
     // deserialize from a *borrowed* `&str`, which `from_str` supports but `from_value` cannot.
     if let Some(book) = document
@@ -82,7 +105,14 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<MenuBook>(&text).ok())
     {
-        session.menu = book.catalog_for(channel).clone();
+        let catalog = book.catalog_for(channel);
+        // Resolve each entry's display name to the store's language once, here (ADR-0074): the priced
+        // line and receipt then read in the store's language, and an item with no translation for it
+        // keeps its default name (never-blank).
+        session.menu = match display_language.as_deref() {
+            Some(language) => catalog.localized(language),
+            None => catalog.clone(),
+        };
     }
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
     // authorises sign-ins against, replacing any local roster.
@@ -136,6 +166,37 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<StationPlan>(&text).ok())
     {
         session.stations = stations;
+    }
+    // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
+    // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
+    // default; a store now bills the authored rates. Absent or unparseable leaves the base table
+    // untouched — a bad publish never blanks a trading store's tax to zero (and `rate_for` still
+    // refuses an unpriced class rather than charging no tax).
+    if let Some(tax_rates) = document
+        .get("tax")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<TaxRateTable>(&text).ok())
+    {
+        session.tax_rates = tax_rates;
+    }
+    // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
+    // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
+    // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
+    // rather than resetting the store's business date to UTC (the never-blank rule, per field).
+    if let Some(locale) = document
+        .get("locale")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedLocale>(&text).ok())
+    {
+        if let Ok(currency) = CurrencyCode::parse(&locale.currency_code) {
+            session.currency = currency;
+        }
+        if let Ok(timezone) = StoreTimeZone::from_iana_name(&locale.timezone) {
+            session.timezone = timezone;
+        }
+        if let Ok(cutoff) = CutoffHour::new(locale.cutoff_hour) {
+            session.cutoff = cutoff;
+        }
     }
     session
 }
@@ -517,6 +578,149 @@ mod tests {
         assert!(rebuilt.floor.table(table_id).is_some());
         // The fired-line resolver derives the station from the published routing (ADR-0072).
         assert_eq!(rebuilt.resolve_station(item(), None), Some(station_id));
+    }
+
+    #[test]
+    fn a_tax_document_rebuilds_the_session_rate_table() {
+        use pos_proto::locale::{TaxRate, TaxRateTable};
+
+        let class = TaxClassId::new(Ulid::from_u128(0x7A));
+        let table = TaxRateTable::new()
+            .with(class, SalesChannel::DineIn, TaxRate::from_percent(8))
+            .with(class, SalesChannel::Takeaway, TaxRate::from_percent(10));
+        let document = serde_json::json!({ "tax": serde_json::to_value(&table).expect("tax") });
+
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(
+            rebuilt.tax_rates.rate_for(class, SalesChannel::DineIn),
+            Some(TaxRate::from_percent(8))
+        );
+        assert_eq!(
+            rebuilt.tax_rates.rate_for(class, SalesChannel::Takeaway),
+            Some(TaxRate::from_percent(10))
+        );
+
+        // No `tax` node: the bootstrap default table survives (a bad publish never blanks tax).
+        let base = EdgeSession::bootstrap();
+        let no_node = session_from_config(&base, &serde_json::json!({ "other": true }));
+        assert!(
+            !no_node.tax_rates.is_empty(),
+            "an absent tax node leaves the table"
+        );
+    }
+
+    #[test]
+    fn a_locale_document_rebuilds_currency_timezone_and_cutoff() {
+        use pos_core::business_date::CutoffHour;
+
+        let document = serde_json::json!({ "locale": {
+            "currency_code": "JPY",
+            "timezone": "Asia/Tokyo",
+            "cutoff_hour": 6,
+        }});
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(rebuilt.currency.as_str(), "JPY");
+        assert_eq!(rebuilt.timezone.iana_name(), Some("Asia/Tokyo"));
+        assert_eq!(rebuilt.cutoff, CutoffHour::new(6).expect("cutoff"));
+
+        // A malformed timezone leaves the base clock unchanged, but the valid currency still applies —
+        // the never-blank rule holds per field.
+        let base = EdgeSession::bootstrap();
+        let bad = session_from_config(
+            &base,
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Not/AZone",
+                "cutoff_hour": 4,
+            }}),
+        );
+        assert_eq!(
+            bad.timezone.iana_name(),
+            base.timezone.iana_name(),
+            "a bad timezone leaves the running clock"
+        );
+        assert_eq!(
+            bad.currency.as_str(),
+            "VND",
+            "the valid currency still applied"
+        );
+    }
+
+    /// A `menu` node whose entry carries per-locale names, plus a `locale` node naming the store's
+    /// display language.
+    fn document_with_translated_menu(
+        channel: SalesChannel,
+        language: Option<&str>,
+    ) -> serde_json::Value {
+        use std::collections::BTreeMap;
+        let entry = MenuEntry::new(
+            item(),
+            DisplayName::new("Margherita"),
+            Money::new(CurrencyCode::VND, 99_000),
+            TaxClassId::new(Ulid::from_u128(1)),
+        )
+        .with_name_translations(BTreeMap::from([(
+            "vi".to_owned(),
+            DisplayName::new("Bánh Margherita"),
+        )]));
+        let book = MenuBook::new().with(channel, MenuCatalog::new().with(entry));
+        let mut document =
+            serde_json::json!({ "menu": serde_json::to_value(&book).expect("serialize") });
+        if let Some(language) = language {
+            document["locale"] = serde_json::json!({ "display_language": language });
+        }
+        document
+    }
+
+    #[test]
+    fn the_store_language_localizes_the_menu_and_absent_keeps_the_default() {
+        let base = EdgeSession::bootstrap();
+
+        // With the store set to Vietnamese, the item's display name is resolved to its `vi` translation
+        // at install, so the priced line and receipt read in the store's language.
+        let vietnamese = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, Some("vi")),
+        );
+        assert_eq!(
+            vietnamese
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Bánh Margherita",
+        );
+
+        // With no display language, the item keeps its default name (never-blank) — today's behaviour.
+        let default = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, None),
+        );
+        assert_eq!(
+            default
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Margherita",
+        );
+
+        // A language the item is not translated into also falls back to the default name.
+        let untranslated = session_from_config(
+            &base,
+            &document_with_translated_menu(base.sales_channel, Some("ja")),
+        );
+        assert_eq!(
+            untranslated
+                .menu
+                .get(item())
+                .expect("priced")
+                .display_name
+                .as_str(),
+            "Margherita",
+        );
     }
 
     #[test]

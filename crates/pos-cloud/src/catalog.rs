@@ -22,6 +22,7 @@
 
 use core::fmt;
 use core::future::Future;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -173,8 +174,14 @@ pub struct CatalogItem {
     pub menu_item_id: MenuItemId,
     /// The owning tenant.
     pub tenant_id: TenantId,
-    /// The human name (the default caption, before a layout overrides it per channel).
+    /// The human name (the default caption, before a layout overrides it per channel). Always
+    /// present, and the fallback for a locale [`name_translations`](Self::name_translations) omits.
     pub name: String,
+    /// The item's name in each locale it is translated into, keyed by locale code (`"vi"`, `"en"`, …)
+    /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries
+    /// these onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,
+    /// falling back to [`name`](Self::name). Additive — an item with none behaves as before.
+    pub name_translations: BTreeMap<String, String>,
     /// The tax class, which the store's channel-keyed rate table turns into a rate at reprice time.
     pub tax_class_id: TaxClassId,
     /// The operational category this item reports under, or `None` if unclassified (entity 2).
@@ -638,6 +645,7 @@ impl CatalogStoreError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     use pos_proto::enums::SalesChannel;
@@ -698,6 +706,7 @@ mod tests {
                 return Ok(false);
             };
             row.name.clone_from(&item.name);
+            row.name_translations.clone_from(&item.name_translations);
             row.tax_class_id = item.tax_class_id;
             row.item_category_id = item.item_category_id;
             row.item_subcategory_id = item.item_subcategory_id;
@@ -1128,6 +1137,7 @@ mod tests {
             menu_item_id: item_id(id_n),
             tenant_id: tenant(tenant_n),
             name: name.to_owned(),
+            name_translations: BTreeMap::new(),
             tax_class_id: tax_class(1),
             item_category_id: None,
             item_subcategory_id: None,

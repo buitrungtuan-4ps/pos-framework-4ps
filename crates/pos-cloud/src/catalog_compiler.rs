@@ -121,6 +121,13 @@ pub fn compile_menu(
             let entry = MenuEntry {
                 menu_item_id: *item_id,
                 display_name: DisplayName::new(item.name.as_str()),
+                display_name_translations: item
+                    .name_translations
+                    .iter()
+                    .map(|(locale, translated)| {
+                        (locale.clone(), DisplayName::new(translated.as_str()))
+                    })
+                    .collect(),
                 unit_price: price.unit_price,
                 tax_class_id: item.tax_class_id,
                 available: placement.available,
@@ -285,6 +292,8 @@ fn proto_button(button: &LayoutButton) -> DisplayButton {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use pos_proto::display::GridPosition;
     use pos_proto::enums::SalesChannel;
     use pos_proto::ids::{
@@ -322,6 +331,7 @@ mod tests {
             menu_item_id: item_id(id),
             tenant_id: tenant(),
             name: name.to_owned(),
+            name_translations: BTreeMap::new(),
             tax_class_id: TaxClassId::new(Ulid::from_u128(7)),
             item_category_id: None,
             item_subcategory_id: None,
@@ -398,6 +408,42 @@ mod tests {
         assert!(
             book.catalog_for(SalesChannel::Takeaway).is_empty(),
             "a channel the item is not priced on sells nothing"
+        );
+    }
+
+    #[test]
+    fn per_locale_item_names_travel_onto_the_compiled_entry() {
+        // The item's per-locale names compile onto the `MenuEntry`, with the default `name` still the
+        // fallback (ADR-0074). Selection happens later, at the edge, from the store's language.
+        let mut translated = item(500, "Margherita");
+        translated
+            .name_translations
+            .insert("vi".to_owned(), "Bánh Margherita".to_owned());
+        let items = [translated];
+        let menus = [menu(10, None)];
+        let placements = [placement(
+            10,
+            500,
+            vec![price(SalesChannel::DineIn, 150_000)],
+            true,
+        )];
+
+        let book = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let entry = book
+            .catalog_for(SalesChannel::DineIn)
+            .get(item_id(500))
+            .expect("priced dine-in")
+            .clone();
+        assert_eq!(
+            entry.display_name.as_str(),
+            "Margherita",
+            "default is the fallback"
+        );
+        assert_eq!(entry.localized_name("vi").as_str(), "Bánh Margherita");
+        assert_eq!(
+            entry.localized_name("en").as_str(),
+            "Margherita",
+            "an untranslated locale falls back to the default name"
         );
     }
 

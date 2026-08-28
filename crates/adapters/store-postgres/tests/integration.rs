@@ -135,8 +135,9 @@ impl EventStoreHarness for StoreHarness {
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
                  TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
                  admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 task_health, audit_log, alerts, stores, order_queue, subjects, webhook_endpoints, \
-                 device_proposals, activation_codes, device_credentials RESTART IDENTITY;",
+                 task_health, audit_log, alerts, catalog_tax_rates, stores, order_queue, subjects, \
+                 webhook_endpoints, device_proposals, activation_codes, device_credentials \
+                 RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -178,9 +179,9 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     admin
         .batch_execute(
             "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, task_health, audit_log, alerts, stores, order_queue, subjects, \
-             webhook_endpoints, device_proposals, activation_codes, device_credentials \
-             RESTART IDENTITY",
+             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, stores, \
+             order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
+             device_credentials RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -1595,6 +1596,74 @@ mod alerts {
                 "a resolved alert does not block a fresh open of the same key"
             );
             assert_eq!(alerts.list_active().await.expect("active").len(), 2);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The per-(tax class × channel) tax rate table: wholesale replace, tenant-scoped (ADR-0074, M4).
+// ---------------------------------------------------------------------------
+
+mod tax_rates {
+    use store_postgres::TaxRateRow;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// A save replaces the tenant's whole table (not append), reads back class-then-channel ordered,
+    /// and never touches a neighbour tenant's rows.
+    #[test]
+    fn replaces_wholesale_and_stays_tenant_scoped() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let rates = store.tax_rates();
+
+            let neighbour = vec![TaxRateRow {
+                tax_class_id: "class-standard".to_owned(),
+                sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
+                rate_bps: 500,
+            }];
+            rates
+                .replace(TENANT_B, &neighbour)
+                .await
+                .expect("set neighbour");
+
+            let first = vec![
+                TaxRateRow {
+                    tax_class_id: "class-standard".to_owned(),
+                    sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
+                    rate_bps: 1000,
+                },
+                TaxRateRow {
+                    tax_class_id: "class-standard".to_owned(),
+                    sales_channel: "SALES_CHANNEL_TAKEAWAY".to_owned(),
+                    rate_bps: 800,
+                },
+            ];
+            rates.replace(TENANT_A, &first).await.expect("set ours");
+            let listed = rates.fetch(TENANT_A).await.expect("fetch ours");
+            assert_eq!(listed.len(), 2);
+            assert_eq!(
+                listed.first().expect("first row").sales_channel,
+                "SALES_CHANNEL_DINE_IN",
+                "rows read back class-then-channel ordered"
+            );
+
+            // A second save replaces rather than appends.
+            let second = vec![TaxRateRow {
+                tax_class_id: "class-standard".to_owned(),
+                sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
+                rate_bps: 1000,
+            }];
+            rates
+                .replace(TENANT_A, &second)
+                .await
+                .expect("replace ours");
+            let replaced = rates.fetch(TENANT_A).await.expect("fetch replaced");
+            assert_eq!(replaced, second, "the whole table is replaced");
+
+            // The neighbour is untouched.
+            let neighbour_after = rates.fetch(TENANT_B).await.expect("fetch neighbour");
+            assert_eq!(neighbour_after, neighbour);
         });
     }
 }

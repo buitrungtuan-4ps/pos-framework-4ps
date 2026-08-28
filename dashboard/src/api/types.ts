@@ -161,6 +161,35 @@ export interface TaxClass {
   readonly status: EntityStatus;
 }
 
+/**
+ * One authored tax rate from `GET /admin/catalog/tax-rates` (ADR-0074, Track M4): the rate a tax class
+ * resolves to on a sales channel, in **basis points** (10% is `1000`, the reduced 8% is `800`).
+ * `sales_channel` is the full wire token. `PUT /admin/catalog/tax-rates` replaces a tenant's whole
+ * table with a list of these; the edge reprices against it.
+ */
+export interface TaxRate {
+  readonly tax_class_id: string;
+  readonly sales_channel: SalesChannel;
+  readonly rate_bps: number;
+}
+
+/**
+ * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
+ * data: the code, human name, currency, preferred language, number format, and default retention
+ * period. Feeds the currency picker and locale surfaces. `GET /admin/locales` returns the content
+ * locales the platform can serve (BCP-47 tags), which the translation grid uses for its columns.
+ */
+export interface Country {
+  readonly code: string;
+  readonly display_name: string;
+  readonly currency_code: string;
+  readonly default_language: string;
+  readonly decimal_separator: string;
+  readonly group_separator: string;
+  readonly digits_per_group: number;
+  readonly default_retention_days: number;
+}
+
 /** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
 export interface ItemCategory {
   readonly item_category_id: string;
@@ -230,6 +259,8 @@ export interface CatalogItem {
   readonly menu_item_id: string;
   readonly tenant_id: string;
   readonly name: string;
+  /** Per-locale names keyed by locale code ("vi", "en", …); `name` is the fallback (ADR-0074). */
+  readonly name_translations: Readonly<Record<string, string>>;
   readonly tax_class_id: string;
   readonly item_category_id: string | null;
   readonly item_subcategory_id: string | null;

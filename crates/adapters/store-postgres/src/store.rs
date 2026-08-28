@@ -93,6 +93,12 @@ const MIGRATION_0026: &str = include_str!("../migrations/0026_kitchen_stations_a
 /// Operational alerts ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
 const MIGRATION_0027: &str = include_str!("../migrations/0027_alerts.sql");
 
+/// The per-(tax class × channel) tax rate table ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+const MIGRATION_0028: &str = include_str!("../migrations/0028_catalog_tax_rates.sql");
+
+/// Per-locale item names on `catalog_items` ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+const MIGRATION_0029: &str = include_str!("../migrations/0029_catalog_item_name_translations.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -259,6 +265,14 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0027)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0028)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0029)
             .await
             .map_err(unavailable)
     }
@@ -433,6 +447,14 @@ impl PostgresStore {
     #[must_use]
     pub fn catalog(&self) -> crate::catalog::PostgresCatalog {
         crate::catalog::PostgresCatalog::new(self.pool.clone())
+    }
+
+    /// The per-(tax class × channel) tax-rate store over this pool ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `TaxRateStore` seam over it.
+    #[must_use]
+    pub fn tax_rates(&self) -> crate::tax_rates::PostgresTaxRates {
+        crate::tax_rates::PostgresTaxRates::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

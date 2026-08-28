@@ -111,6 +111,108 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Per-locale item names, end to end — authored, compiled, and rendered in the store's language**
+  (roadmap v2, Track M4, slice 8; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A catalog item
+  gains an optional `name_translations` map (locale code → name), authored in the Catalog screen's item
+  editor (one input per shipped locale) and stored as a jsonb column on `catalog_items` (migration
+  0029, additive, `NOT NULL DEFAULT '{}'`). The menu compiler carries them onto the compiled
+  `MenuEntry` as an **additive** `display_name_translations` map beside the existing `display_name`,
+  which stays the fallback. A store's optional **display language** — a new field on the `locale` config
+  node, set from the Store settings screen — selects each item's name once at the edge, at config
+  install (`MenuCatalog::localized`), folding it into `display_name` so the priced line, receipt, and
+  KDS read in the store's language with the reprice contract untouched. An item with no translation for
+  that language keeps its default name (never-blank), and a store that sets no language behaves exactly
+  as before. **Upgrade note:** wire-additive — a new optional field, nothing renamed or removed, so
+  `PROTOCOL_VERSION` is unchanged and an older edge simply ignores the field; the migration is
+  forward-only and applied idempotently on boot. Prices and names are T2 catalog content, shipped in
+  config and never logged.
+- **The Store settings console screen — currency, timezone, cutoff, and a live business-date preview**
+  (roadmap v2, Track M4, slice 9; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new store-scoped
+  `/store-settings` screen (under *Settings*) sets a store's currency (3-letter code, with the country
+  registry's currencies as suggestions), IANA timezone (with a short list of common zones as
+  suggestions, any valid zone accepted — the server validates against the tz database), and
+  business-date cutoff hour, then publishes them with `publishLocale`. A live **business date now**
+  preview computes the store's trading day from the chosen timezone and cutoff (mirroring the edge's
+  `derive_business_date`, ADR-0014), so the operator sees the effect before publishing; an unknown
+  timezone is flagged inline. **Upgrade note:** dashboard-only; consumes the M4 slice-5 locale publish
+  route.
+- **The translation grid gains dynamic locales, per-locale completion %, and a missing-only filter**
+  (roadmap v2, Track M4, slice 7; [ADR-0074](docs/adr/0074-localization-and-tax.md)). The grid's
+  columns are no longer the app's own UI locales (`en`/`vi`): they are the union of the platform's
+  content locales (`GET /admin/locales`, driven by the country modules), the enforced `en` fallback,
+  and any locale the stored grid already carries — so a value authored in a locale the UI does not yet
+  ship (`ja`, `ko`) is visible and editable. Each column header shows that locale's completion
+  percentage (non-empty cells ÷ keys), and a *show only keys with a missing translation* toggle filters
+  the grid to the gaps. No schema or wire change — the persisted grid was already locale-agnostic and
+  `en` stays the enforced floor. **Upgrade note:** dashboard-only.
+- **The Tax rates console screen — author the (class × channel) grid and publish it** (roadmap v2,
+  Track M4, slice 6; [ADR-0074](docs/adr/0074-localization-and-tax.md)). A new tenant-scoped
+  `/tax-rates` screen (under *Settings*) edits the tenant's tax rates as a grid — rows are the tenant's
+  tax classes, columns the sales channels, each cell a rate in percent. A blank cell means the class is
+  not sold on that channel (the edge refuses such a sale rather than charging no tax), stated inline so
+  the meaning is not a surprise. **Save** writes the whole table (`setTaxRates`); **Publish to store**
+  pushes it to the store in the top-bar context as the `tax` config node (`publishTax`), enabled only
+  when a store is selected. Loads on the scoped tenant context (F0 gate), reuses the shared channel
+  labels. **Upgrade note:** dashboard-only; no protocol, schema, or permission change.
+- **Store locale settings — currency, timezone, and business-date cutoff, published and applied**
+  (roadmap v2, Track M4, slice 5; [ADR-0074](docs/adr/0074-localization-and-tax.md)). `PUT
+  /admin/config/locale` (behind `console.config.publish`, audited `config.locale.publish`) validates a
+  store's currency (3-letter code), **IANA timezone** (against the tz database), and business-date
+  cutoff hour (`0..=23`) with the domain constructors — a bad value is a `400` naming it — then writes
+  them as the store's **`locale`** config node, preserving sibling nodes. The edge's
+  `session_from_config` gains a `locale` branch that applies each field to `EdgeSession`'s currency,
+  timezone, and cutoff **independently** — a malformed field leaves that one setting as-is rather than
+  resetting a trading store's clock to UTC — killing the hardcoded VND/UTC/04:00 bootstrap so business
+  dates derive in the store's real timezone (ADR-0014). The typed client gains `publishLocale`.
+  **Upgrade note:** additive Store-layer node and route; a store with no `locale` node keeps today's
+  behaviour; no protocol change.
+- **Countries & locale packs surfaced as master data** (roadmap v2, Track M4, slice 4;
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). `pos-cloud` now builds a `CountryRegistry` from
+  the country modules compiled into it — a country is a Cargo feature like the edge (ADR-0027), and the
+  cloud enables the reference `zz` module by default (a fork adds `country-vn = ["dep:pos-country-vn"]`).
+  Two read-only routes behind `console.data.read`: `GET /admin/countries` lists each module (code,
+  display name, currency, preferred language, number format, default retention) and `GET /admin/locales`
+  lists the content locales the platform can serve (each module's preferred language plus the enforced
+  `en` fallback) — the source the currency picker and the translation grid's column set read from. The
+  typed client gains `listCountries` / `listLocales` and a `Country` type. Production country modules
+  with fiscalization (VN e-invoice, JP qualified invoice) remain a flagged follow-up. **Upgrade note:**
+  additive read routes and an additive default feature; no schema or protocol change.
+- **The `tax` config node — authored rates reach the edge and are billed** (roadmap v2, Track M4,
+  slice 3; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Closes the headline M4 gap: a store now
+  bills the *authored* tax rates instead of the hardcoded bootstrap default. `PUT /admin/config/tax`
+  (behind `console.config.publish`, audited `config.tax.publish`) assembles the tenant's authored
+  `(tax class × channel)` rates into a `TaxRateTable`, writes it as the store's **`tax`** config node on
+  the Store layer — preserving the sibling nodes (`menu`, `layout`, `permissions`, `floor`, capability
+  flags) — and versions it through the config tree. The edge's `session_from_config` gains a `tax`
+  branch that parses the node into `EdgeSession::tax_rates`, which `pos_core::billing` and repricing
+  already read; an absent or unparseable node leaves the running table untouched (the never-blank rule),
+  and `rate_for` still refuses an unpriced class rather than charging no tax. The typed client gains
+  `publishTax`. **Upgrade note:** additive Store-layer node and route; a store with no `tax` node keeps
+  today's behaviour; no protocol change.
+- **The tax-rate console API — author the rates the edge applies** (roadmap v2, Track M4, slice 2;
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). `GET /admin/catalog/tax-rates?tenant_id=` lists a
+  tenant's authored `(tax class × channel)` rates (behind `console.data.read`); `PUT
+  /admin/catalog/tax-rates` replaces the whole table (behind `console.catalog.manage`, the permission
+  tax *classes* already use) and is audited (`tax_rate.set`). Every row is validated **before** the
+  write — its class must be one the tenant has authored, its channel a token this build knows, its rate
+  no more than 100% (`10000` bps), and no `(class, channel)` pair repeated — so a bad grid returns a
+  `400` naming the fault rather than reaching the store as a `500`. The typed dashboard client gains
+  `listTaxRates` / `setTaxRates` and a `TaxRate` type. **Upgrade note:** additive route on an existing
+  permission; nothing publishes the rates to a store yet (the `tax` config node lands in the next slice).
+- **Tax-rate authoring, foundations — a home for the per-(tax class × channel) rate** (roadmap v2,
+  Track M4, slice 1; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Begins Track **M4
+  (Localization & tax)**. Tax *calculation* has been built and applied on the edge since ADR-0028
+  (`pos_proto::TaxRateTable`, `pos_core::billing`, `EdgeSession::tax_rates`) — but the rate a tax class
+  resolves to was only ever the hardcoded bootstrap default, with no storage, editor, or publish path.
+  This slice adds the store: migration `0028_catalog_tax_rates.sql` (one tenant-scoped, RLS-isolated row
+  per `(tenant, tax class, sales channel)`, the rate in basis points bounded `[0, 10000]`); a
+  `TaxRateStore` seam (`list` / wholesale `set`) with an in-memory fake and a `store-postgres`
+  `PostgresTaxRates` adapter that replaces a tenant's whole table in one transaction; and a `to_table`
+  helper that assembles authored rows into the wire `TaxRateTable` the edge reprices from (a missing
+  rate stays a visible `None`, never a silent zero-tax sale). ADR-0074 (added here) records the M4
+  design and its deferred items (receipt templates depend on M5; production country modules with
+  fiscalization). The routes, publish, and editor land in the following slices. **Upgrade note:**
+  additive migration only; nothing authors or reads these rows yet.
 - **The Alerts console screen — the operator's live view of the alert engine** (roadmap v2, Track O2,
   slice 6; [ADR-0073](docs/adr/0073-alerting.md)). A new fleet-wide `/alerts` screen (grouped under
   *Overview*, beside Audit, no working context required) reads the alerts the evaluator maintains: the

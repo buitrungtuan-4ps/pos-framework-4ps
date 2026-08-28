@@ -20,6 +20,7 @@ import type {
   Brand,
   CapabilityCatalogue,
   CatalogItem,
+  Country,
   FloorTable,
   RoutingRule,
   Station,
@@ -57,6 +58,7 @@ import type {
   Store,
   TaskHealthReport,
   TaxClass,
+  TaxRate,
   Tenant,
   TranslationGrid,
   WebhookSummary,
@@ -579,6 +581,44 @@ export const api = {
       `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
+  // Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies. `set`
+  // replaces the tenant's whole table (behind console.catalog.manage); the read is behind
+  // console.data.read.
+  listTaxRates: (tenantId: string) =>
+    requestJson<TaxRate[]>("GET", `/admin/catalog/tax-rates?${tenantQuery(tenantId)}`),
+  setTaxRates: (tenantId: string, rates: readonly TaxRate[]) =>
+    requestJson<TaxRate[]>("PUT", "/admin/catalog/tax-rates", { tenant_id: tenantId, rates }),
+  // Publish the tenant's authored tax rates to one store's `tax` config node (ADR-0074), behind
+  // console.config.publish; the edge applies it to its session's rate table.
+  publishTax: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/tax", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+  // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
+  // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
+  listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
+  listLocales: () => requestJson<string[]>("GET", "/admin/locales"),
+  // Publish a store's locale settings (ADR-0074) as its `locale` config node, behind
+  // console.config.publish; the edge applies the currency, timezone, and business-date cutoff.
+  publishLocale: (
+    tenantId: string,
+    storeId: string,
+    settings: {
+      currency_code: string;
+      timezone: string;
+      cutoff_hour: number;
+      display_language?: string;
+    },
+  ) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      currency_code: settings.currency_code,
+      timezone: settings.timezone,
+      cutoff_hour: settings.cutoff_hour,
+      display_language: settings.display_language ?? null,
+    }),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>
@@ -628,11 +668,16 @@ export const api = {
     tenantId: string,
     name: string,
     taxClassId: string,
-    taxonomy: { itemCategoryId: string | null; itemSubcategoryId: string | null },
+    taxonomy: {
+      itemCategoryId: string | null;
+      itemSubcategoryId: string | null;
+      nameTranslations?: Record<string, string>;
+    },
   ) =>
     requestJson<CatalogItem>("POST", "/admin/catalog/items", {
       tenant_id: tenantId,
       name,
+      name_translations: taxonomy.nameTranslations ?? {},
       tax_class_id: taxClassId,
       item_category_id: taxonomy.itemCategoryId,
       item_subcategory_id: taxonomy.itemSubcategoryId,
@@ -642,6 +687,7 @@ export const api = {
     tenantId: string,
     fields: {
       name: string;
+      nameTranslations?: Record<string, string>;
       taxClassId: string;
       itemCategoryId: string | null;
       itemSubcategoryId: string | null;
@@ -651,6 +697,7 @@ export const api = {
     requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
       tenant_id: tenantId,
       name: fields.name,
+      name_translations: fields.nameTranslations ?? {},
       tax_class_id: fields.taxClassId,
       item_category_id: fields.itemCategoryId,
       item_subcategory_id: fields.itemSubcategoryId,

@@ -73,10 +73,15 @@ use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
     MenuItemId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::locale::TaxRate;
+use pos_proto::money::CurrencyCode;
 use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::Open;
+use pos_proto::wire_enum::{Open, WireEnum};
+
+use pos_country::CountryRegistry;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
+use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
@@ -133,6 +138,7 @@ use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
 };
+use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -2181,6 +2187,372 @@ where
                 &store_id.to_string(),
                 None,
                 serde_json::to_value(&request.flags).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Tax publish (`/admin/config/tax`, ADR-0074, Track M4) --------------------------------------
+
+/// The collaborators the tax-publish route needs: the tax-rate store the table is read from, the
+/// config-tree store the `tax` node is written onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigTaxState<Tax, Cfg, A, C> {
+    tax_rates: Tax,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin publishes a tenant's authored tax rates to one of its stores: the `(tenant, store)`.
+/// The rates come from the authored table, not the body — publishing is "push what is authored".
+#[derive(Debug, Clone, Deserialize)]
+struct PublishTaxRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the tax-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One route: assemble the tenant's authored `(tax class × channel)` rates into a `TaxRateTable`, write
+/// it as the store's `tax` config node, and version it through the config tree — the node-merge the
+/// catalog/floor/people publishes use, so the other Store-level keys survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to `EdgeSession::tax_rates`.
+pub fn config_tax_router<Tax, Cfg, A, C>(
+    tax_rates: Tax,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/tax",
+            axum::routing::put(admin_publish_tax::<Tax, Cfg, A, C>),
+        )
+        .with_state(ConfigTaxState {
+            tax_rates,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Assembles a tenant's authored rates into a `TaxRateTable`, writes it as the store's `tax` node, and
+/// versions it — the same load→merge→publish→version shape as the other node publishes.
+async fn admin_publish_tax<Tax, Cfg, A, C>(
+    State(state): State<ConfigTaxState<Tax, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishTaxRequest>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let entries = match state.tax_rates.list_tax_rates(tenant_id).await {
+        Ok(entries) => entries,
+        Err(error) => return tax_rate_error_response(&error),
+    };
+    let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
+        tracing::error!("could not serialise a tax rate table");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the tax-rate service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `tax` key on the store's Store layer (index 2) and re-publish it, preserving the other
+    // Store-level keys (`menu`, `layout`, `permissions`, `floor`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("tax".to_owned(), tax_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.tax.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(entries.len()).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Locale publish (`/admin/config/locale`, ADR-0074, Track M4) --------------------------------
+
+/// The collaborators the locale-publish route needs: the config-tree store the `locale` node is
+/// written onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigLocaleState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA
+/// timezone, and business-date cutoff hour. These drive money display and business-date derivation on
+/// the edge (ADR-0014); until M4 they were hardcoded to VND/UTC/04:00 in the edge bootstrap.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishLocaleRequest {
+    tenant_id: String,
+    store_id: String,
+    currency_code: String,
+    timezone: String,
+    cutoff_hour: u8,
+    /// The store's display language (a locale code, e.g. `"vi"`), which selects a compiled item's
+    /// per-locale name at the edge (ADR-0074). Optional; when absent or blank the store shows each
+    /// item's default name, exactly as before.
+    #[serde(default)]
+    display_language: Option<String>,
+}
+
+/// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One route: validate a store's currency / IANA timezone / cutoff hour with the domain constructors,
+/// write them as the store's `locale` config node, and version it through the config tree — the
+/// node-merge the other publishes use, so sibling nodes survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to its session's currency, timezone,
+/// and cutoff.
+pub fn config_locale_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/locale",
+            axum::routing::put(admin_publish_locale::<Cfg, A, C>),
+        )
+        .with_state(ConfigLocaleState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
+/// load→merge→publish→version shape as the other node publishes. Each field is checked with its domain
+/// constructor before anything is written (a real IANA timezone against the tz database, a 3-letter
+/// currency, an hour in `0..=23`), so a bad value is a `400` naming it rather than a stored error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one publish scenario: validate three fields with their domain constructors, then the \
+              load→merge→version→save→audit shape shared with the other node publishes"
+)]
+async fn admin_publish_locale<Cfg, A, C>(
+    State(state): State<ConfigLocaleState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishLocaleRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if CurrencyCode::parse(&request.currency_code).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "currency_code is not a 3-letter code",
+        )
+            .into_response();
+    }
+    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
+        return (StatusCode::BAD_REQUEST, "timezone is not a valid IANA name").into_response();
+    }
+    if CutoffHour::new(request.cutoff_hour).is_err() {
+        return (StatusCode::BAD_REQUEST, "cutoff_hour must be in 0..=23").into_response();
+    }
+    let mut locale_value = serde_json::json!({
+        "currency_code": request.currency_code,
+        "timezone": request.timezone,
+        "cutoff_hour": request.cutoff_hour,
+    });
+    // The display language is optional: include it only when a non-blank code was given, so a store
+    // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
+    if let Some(language) = request
+        .display_language
+        .as_deref()
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "display_language".to_owned(),
+            serde_json::Value::String(language.to_owned()),
+        );
+    }
+
+    // Set the `locale` key on the store's Store layer (index 2) and re-publish it, preserving the
+    // other Store-level keys.
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("locale".to_owned(), locale_value.clone());
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.locale.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                Some(locale_value),
             )
             .await;
             (
@@ -5011,6 +5383,10 @@ where
 struct CreateItemRequest {
     tenant_id: String,
     name: String,
+    /// Per-locale names keyed by locale code (ADR-0074). Optional and additive; `name` is the
+    /// always-present fallback.
+    #[serde(default)]
+    name_translations: std::collections::BTreeMap<String, String>,
     tax_class_id: String,
     #[serde(default)]
     item_category_id: Option<String>,
@@ -5022,12 +5398,31 @@ struct CreateItemRequest {
 struct UpdateItemRequest {
     tenant_id: String,
     name: String,
+    /// Per-locale names keyed by locale code (ADR-0074). Optional and additive; `name` is the
+    /// always-present fallback.
+    #[serde(default)]
+    name_translations: std::collections::BTreeMap<String, String>,
     tax_class_id: String,
     #[serde(default)]
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
     status: String,
+}
+
+/// Drops empty-key or empty-value entries from an authored per-locale name map and trims both sides,
+/// so a blank row a form left behind never becomes a `""` translation the edge would show in place of
+/// the default name (ADR-0074).
+fn clean_name_translations(
+    raw: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    raw.into_iter()
+        .filter_map(|(locale, name)| {
+            let locale = locale.trim().to_owned();
+            let name = name.trim().to_owned();
+            (!locale.is_empty() && !name.is_empty()).then_some((locale, name))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -5204,6 +5599,335 @@ fn catalog_entropy_unavailable() -> Response {
         .into_response()
 }
 
+// --- Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies ----------
+
+/// The highest rate the table accepts, in basis points (100%). Matches the migration's CHECK.
+const MAX_TAX_RATE_BPS: u32 = 10_000;
+
+/// The state the tax-rate routes share: the rate store they write, the catalog store they validate a
+/// class against, and the admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct TaxRateState<Tax, Cat, A, C> {
+    tax_rates: Tax,
+    catalog: Cat,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// One authored tax-rate row on the wire: the class id, the channel's wire token, and the rate in
+/// basis points (10% is `1000`).
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaxRateView {
+    tax_class_id: String,
+    sales_channel: String,
+    rate_bps: u32,
+}
+
+/// A `PUT /admin/catalog/tax-rates` body: the tenant and its whole rate table (a wholesale replace).
+#[derive(Debug, Clone, Deserialize)]
+struct SetTaxRatesRequest {
+    tenant_id: String,
+    rates: Vec<TaxRateRowRequest>,
+}
+
+/// One row of a [`SetTaxRatesRequest`].
+#[derive(Debug, Clone, Deserialize)]
+struct TaxRateRowRequest {
+    tax_class_id: String,
+    sales_channel: String,
+    rate_bps: u32,
+}
+
+/// Builds the tax-rate sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One resource: the tenant's per-(tax class × channel) rate table. `GET` lists it (behind
+/// [`ConsolePermission::Read`]); `PUT` replaces it wholesale (behind
+/// [`ConsolePermission::ManageCatalog`], the permission tax *classes* already use), validating each
+/// row's class, channel, and rate before the write, and auditing `tax_rate.set`.
+pub fn tax_rate_router<Tax, Cat, A, C>(
+    tax_rates: Tax,
+    catalog: Cat,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/catalog/tax-rates",
+            get(admin_list_tax_rates::<Tax, Cat, A, C>).put(admin_set_tax_rates::<Tax, Cat, A, C>),
+        )
+        .with_state(TaxRateState {
+            tax_rates,
+            catalog,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// One authored entry as the wire view.
+fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
+    TaxRateView {
+        tax_class_id: entry.tax_class_id.to_string(),
+        sales_channel: entry.sales_channel.as_wire().to_owned(),
+        rate_bps: entry.rate.basis_points(),
+    }
+}
+
+/// A super-admin lists a tenant's authored tax rates.
+async fn admin_list_tax_rates<Tax, Cat, A, C>(
+    State(state): State<TaxRateState<Tax, Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.tax_rates.list_tax_rates(tenant_id).await {
+        Ok(rows) => {
+            let view: Vec<TaxRateView> = rows.iter().map(tax_rate_view).collect();
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => tax_rate_error_response(&error),
+    }
+}
+
+/// A super-admin replaces a tenant's whole tax-rate table.
+///
+/// Every row is validated before the write: its class must be one the tenant has authored, its channel
+/// a token this build knows, its rate no more than 100%, and no `(class, channel)` pair repeated —
+/// each a `400` naming the fault, so a bad grid never reaches the store as a `500`.
+async fn admin_set_tax_rates<Tax, Cat, A, C>(
+    State(state): State<TaxRateState<Tax, Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<SetTaxRatesRequest>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let known: BTreeSet<TaxClassId> = match state.catalog.list_tax_classes(tenant_id).await {
+        Ok(classes) => classes.iter().map(|class| class.tax_class_id).collect(),
+        Err(error) => return catalog_error_response(&error),
+    };
+    let mut entries = Vec::with_capacity(request.rates.len());
+    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
+    for row in &request.rates {
+        let Ok(tax_class_id) = row.tax_class_id.parse::<Ulid>().map(TaxClassId::new) else {
+            return (StatusCode::BAD_REQUEST, "a tax_class_id is not a ULID").into_response();
+        };
+        if !known.contains(&tax_class_id) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a tax rate names an unknown tax class",
+            )
+                .into_response();
+        }
+        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a tax rate names an unknown sales channel",
+            )
+                .into_response();
+        };
+        if row.rate_bps > MAX_TAX_RATE_BPS {
+            return (StatusCode::BAD_REQUEST, "a tax rate exceeds 100%").into_response();
+        }
+        if !seen.insert((tax_class_id, sales_channel)) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a (tax class, channel) pair is repeated",
+            )
+                .into_response();
+        }
+        entries.push(TaxRateEntry {
+            tax_class_id,
+            sales_channel,
+            rate: TaxRate::from_basis_points(row.rate_bps),
+        });
+    }
+    match state.tax_rates.set_tax_rates(tenant_id, &entries).await {
+        Ok(()) => {
+            let view: Vec<TaxRateView> = entries.iter().map(tax_rate_view).collect();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "tax_rate.set",
+                "tax_rate",
+                &tenant_id.to_string(),
+                None,
+                serde_json::to_value(&view).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(view)).into_response()
+        }
+        Err(error) => tax_rate_error_response(&error),
+    }
+}
+
+/// Maps a tax-rate store failure to a retryable `503`, logging the detail rather than leaking it.
+fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
+    tracing::error!(%error, "a tax-rate store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the tax-rate service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
+
+/// One compiled country module as the console reads it: the code, human name, currency, preferred
+/// language, number format, and the default retention period. What the platform can serve — not a
+/// per-store setting, and not fiscalization.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CountryView {
+    code: String,
+    display_name: String,
+    currency_code: String,
+    default_language: String,
+    decimal_separator: String,
+    group_separator: String,
+    digits_per_group: u8,
+    default_retention_days: u16,
+}
+
+/// The state the country/locale reads share: the views computed once at start-up from the compiled
+/// registry, plus the admin/clock the permission check needs.
+#[derive(Clone)]
+struct CountryState<A, C> {
+    countries: Arc<Vec<CountryView>>,
+    locales: Arc<Vec<String>>,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the countries/locales sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// `GET /admin/countries` lists the compiled country modules; `GET /admin/locales` lists the content
+/// locales the platform can serve (each module's preferred language plus the enforced `en` fallback,
+/// which feeds the translation grid's column set). Both are read-only master data behind
+/// [`ConsolePermission::Read`], computed once from the registry at start-up.
+pub fn country_router<A, C>(registry: &CountryRegistry, admin: A, clock: C) -> Router
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let mut countries = Vec::new();
+    // `en` is always present as the fallback (docs/pos-spec.md §9); a module's preferred language adds
+    // to the catalogue.
+    let mut locales: BTreeSet<String> = BTreeSet::new();
+    locales.insert("en".to_owned());
+    for module in registry.modules() {
+        let pack = module.locale_pack();
+        locales.insert(pack.default_language.as_str().to_owned());
+        countries.push(CountryView {
+            code: module.country_code().as_str().to_owned(),
+            display_name: module.display_name().to_owned(),
+            currency_code: pack.currency_code.as_str().to_owned(),
+            default_language: pack.default_language.as_str().to_owned(),
+            decimal_separator: pack.number_format.decimal_separator.to_string(),
+            group_separator: pack.number_format.group_separator.to_string(),
+            digits_per_group: pack.number_format.digits_per_group,
+            default_retention_days: pack.default_retention_days,
+        });
+    }
+    Router::new()
+        .route("/admin/countries", get(admin_list_countries::<A, C>))
+        .route("/admin/locales", get(admin_list_locales::<A, C>))
+        .with_state(CountryState {
+            countries: Arc::new(countries),
+            locales: Arc::new(locales.into_iter().collect()),
+            admin,
+            clock,
+        })
+}
+
+/// A super-admin lists the compiled country modules.
+async fn admin_list_countries<A, C>(
+    State(state): State<CountryState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    (StatusCode::OK, Json(state.countries.as_ref().clone())).into_response()
+}
+
+/// A super-admin lists the content locales the platform can serve.
+async fn admin_list_locales<A, C>(
+    State(state): State<CountryState<A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    (StatusCode::OK, Json(state.locales.as_ref().clone())).into_response()
+}
+
 /// Parses an optional parent-menu id from a request body; `Err` for a present-but-malformed value.
 fn parse_optional_menu(value: Option<&str>) -> Result<Option<MenuId>, ()> {
     match value {
@@ -5354,6 +6078,7 @@ where
         menu_item_id,
         tenant_id,
         name: request.name,
+        name_translations: clean_name_translations(request.name_translations),
         tax_class_id,
         item_category_id,
         item_subcategory_id,
@@ -5430,6 +6155,7 @@ where
         menu_item_id,
         tenant_id,
         name: request.name,
+        name_translations: clean_name_translations(request.name_translations),
         tax_class_id,
         item_category_id,
         item_subcategory_id,

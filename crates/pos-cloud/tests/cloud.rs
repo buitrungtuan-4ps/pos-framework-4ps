@@ -75,6 +75,7 @@ use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
 };
+use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
@@ -91,8 +92,9 @@ use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
-    TenantId,
+    TaxClassId, TenantId,
 };
+use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -5487,6 +5489,7 @@ impl CatalogStore for FakeCatalog {
         for row in rows.iter_mut() {
             if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
                 row.name.clone_from(&item.name);
+                row.name_translations.clone_from(&item.name_translations);
                 row.tax_class_id = item.tax_class_id;
                 row.item_category_id = item.item_category_id;
                 row.item_subcategory_id = item.item_subcategory_id;
@@ -5912,6 +5915,352 @@ fn ulid_text(n: u128) -> String {
     Ulid::from_u128(n).to_string()
 }
 
+/// An in-memory `TaxRateStore` for the route tests (ADR-0074, Track M4), tenant-scoped like the real
+/// adapter; `set` replaces the tenant's rows and leaves other tenants alone.
+#[derive(Clone, Default)]
+struct FakeTaxRates {
+    rows: Arc<Mutex<Vec<(TenantId, TaxRateEntry)>>>,
+}
+
+impl TaxRateStore for FakeTaxRates {
+    async fn list_tax_rates(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<TaxRateEntry>, TaxRateStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(owner, _entry)| *owner == tenant_id)
+            .map(|(_owner, entry)| *entry)
+            .collect())
+    }
+
+    async fn set_tax_rates(
+        &self,
+        tenant_id: TenantId,
+        entries: &[TaxRateEntry],
+    ) -> Result<(), TaxRateStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        rows.retain(|(owner, _entry)| *owner != tenant_id);
+        rows.extend(entries.iter().map(|entry| (tenant_id, *entry)));
+        Ok(())
+    }
+}
+
+fn tax_rate_app(admin: FakeAdmin, catalog: FakeCatalog, tax_rates: FakeTaxRates) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::tax_rate_router(
+        tax_rates,
+        catalog,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// Seeds a tax class straight into the fake, so a rate can name a known class without the catalog
+/// create route.
+fn seed_tax_class(catalog: &FakeCatalog, tenant: &str, tax_class_id: &str, name: &str) {
+    catalog.tax_classes.lock().expect("lock").push(TaxClass {
+        tax_class_id: tax_class_id
+            .parse::<Ulid>()
+            .map(TaxClassId::new)
+            .expect("a class ULID"),
+        tenant_id: tenant
+            .parse::<Ulid>()
+            .map(TenantId::new)
+            .expect("a tenant ULID"),
+        name: name.to_owned(),
+        status: EntityStatus::Active,
+    });
+}
+
+#[tokio::test]
+async fn tax_rates_set_lists_and_validates() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Standard");
+    let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
+    let cookie = admin_cookie(&router).await;
+
+    // PUT the tenant's table: one class taxed 10% dine-in and 8% takeaway.
+    let set = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_TAKEAWAY", "rate_bps": 800 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route set tax rates");
+    assert_eq!(set.status(), StatusCode::OK);
+
+    // GET reads them back.
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list tax rates");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let rows = json_body(listed).await;
+    assert_eq!(rows.as_array().expect("array").len(), 2);
+
+    // A rate naming an unknown class is a 400, not a store error.
+    let bad_class = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": ulid_text(99), "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route unknown class");
+    assert_eq!(bad_class.status(), StatusCode::BAD_REQUEST);
+
+    // A rate above 100% is a 400.
+    let bad_rate = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 10_001 },
+            ] }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad rate");
+    assert_eq!(bad_rate.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn tax_rate_routes_require_a_session() {
+    let router = tax_rate_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeTaxRates::default(),
+    );
+    let tenant = ulid_text(1);
+    let listed = router
+        .oneshot(get(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            None,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(listed.status(), StatusCode::UNAUTHORIZED);
+}
+
+fn tax_publish_app(
+    admin: FakeAdmin,
+    tax_rates: FakeTaxRates,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_tax_router(
+        tax_rates,
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
+    let tax_rates = FakeTaxRates::default();
+    let class = TaxClassId::new(Ulid::from_u128(7));
+    tax_rates.rows.lock().expect("lock").push((
+        tenant(),
+        TaxRateEntry {
+            tax_class_id: class,
+            sales_channel: SalesChannel::DineIn,
+            rate: TaxRate::from_percent(10),
+        },
+    ));
+    let config_trees = FakeConfigTrees::default();
+    let router = tax_publish_app(provisioned_admin(), tax_rates, config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/tax",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route tax publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's Store config layer (index 2) now carries the `tax` node — the serialized rate table.
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let tax = &state.layers[2]["tax"];
+    assert!(tax.is_array(), "the tax node is the serialized rate table");
+    assert_eq!(tax.as_array().expect("array").len(), 1);
+}
+
+fn country_app(admin: FakeAdmin) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::country_router(
+        &pos_cloud::countries::registry(),
+        admin,
+        clock(),
+    ))
+}
+
+#[tokio::test]
+async fn countries_and_locales_are_read_only_master_data() {
+    let router = country_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+
+    // The default build compiles in the reference module, so the catalogue is non-empty.
+    let countries = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/countries", &cookie))
+        .await
+        .expect("route countries");
+    assert_eq!(countries.status(), StatusCode::OK);
+    let body = json_body(countries).await;
+    let list = body.as_array().expect("array");
+    assert!(
+        !list.is_empty(),
+        "the reference country module is compiled in"
+    );
+    assert!(
+        list.iter()
+            .all(|country| country["currency_code"].is_string()),
+        "each country carries a currency"
+    );
+
+    // `en` is always in the locale catalogue (the enforced fallback).
+    let locales = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/locales", &cookie))
+        .await
+        .expect("route locales");
+    assert_eq!(locales.status(), StatusCode::OK);
+    let langs = json_body(locales).await;
+    assert!(
+        langs
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|lang| lang == "en"),
+        "en is the enforced fallback locale"
+    );
+
+    // Read-only master data still requires a session.
+    let anon = router
+        .oneshot(get("/admin/countries", None))
+        .await
+        .expect("route anon");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+}
+
+fn locale_publish_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_locale_router(
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn locale_publish_validates_and_writes_the_locale_node() {
+    let config_trees = FakeConfigTrees::default();
+    let router = locale_publish_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let ok = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route locale publish");
+    assert_eq!(ok.status(), StatusCode::OK);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(state.layers[2]["locale"]["timezone"], "Asia/Ho_Chi_Minh");
+    assert_eq!(state.layers[2]["locale"]["currency_code"], "VND");
+
+    // A malformed IANA timezone is a 400, validated before anything is written.
+    let bad = router
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "currency_code": "VND",
+                "timezone": "Nowhere/Nope",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route bad timezone");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());
@@ -5922,7 +6271,13 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
         .clone()
         .oneshot(post_with_cookie(
             "/admin/catalog/items",
-            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+                // Per-locale names (ADR-0074): a real one, plus a blank row the handler drops.
+                "name_translations": { "vi": "Bánh Margherita", "": "ignored", "ja": "  " },
+            }),
             &cookie,
         ))
         .await
@@ -5931,6 +6286,15 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let created = json_body(created).await;
     assert_eq!(created["name"], "Margherita");
     assert_eq!(created["status"], "active");
+    assert_eq!(
+        created["name_translations"]["vi"], "Bánh Margherita",
+        "a real per-locale name is kept"
+    );
+    assert!(
+        created["name_translations"].get("").is_none()
+            && created["name_translations"].get("ja").is_none(),
+        "a blank-key or blank-value translation row is dropped"
+    );
     let item_id = created["menu_item_id"]
         .as_str()
         .expect("an item id")
@@ -5948,6 +6312,7 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
     let items = json_body(listed).await;
     assert_eq!(items.as_array().expect("array").len(), 1);
     assert_eq!(items[0]["menu_item_id"], item_id);
+    assert_eq!(items[0]["name_translations"]["vi"], "Bánh Margherita");
 
     // A menu, optionally with a parent — created by name, id minted server-side.
     let created = router

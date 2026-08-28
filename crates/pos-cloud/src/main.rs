@@ -24,7 +24,8 @@ use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, cursor, dashboard, http, orders, relay,
+    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, countries, cursor, dashboard, http,
+    orders, relay,
 };
 use store_postgres::PostgresStore;
 
@@ -378,10 +379,43 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate an operator authors,
+        // validated against the tenant's tax classes and published as the `tax` config node.
+        .merge(http::tax_rate_router(
+            store.tax_rates(),
+            store.catalog(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
         // config node, so it rides the config tree to the store like every other config change.
         .merge(http::catalog_publish_router(
             store.catalog(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Tax publish (ADR-0074, Track M4): assemble the tenant's authored rates into the store's
+        // `tax` config node, so the edge applies them to its session's tax table.
+        .merge(http::config_tax_router(
+            store.tax_rates(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
+        // read-only master data — the currency picker and the translation grid's locale catalogue.
+        .merge(http::country_router(
+            &countries::registry(),
+            store.admin(),
+            SystemClock,
+        ))
+        // Locale publish (ADR-0074, Track M4): a store's currency, timezone, and business-date cutoff
+        // as the `locale` config node the edge applies (killing the hardcoded UTC/04:00 bootstrap).
+        .merge(http::config_locale_router(
             store.config_trees(),
             store.admin(),
             SystemClock,
