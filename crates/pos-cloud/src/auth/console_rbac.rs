@@ -159,6 +159,14 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Upload and delete media assets (item photos, brand logos)",
     },
+    /// Author campaigns and promotions, and generate voucher batches (ADR-0077). Publishing them to a
+    /// store reuses `PublishConfig`, exactly as every other node publish does. Owner/Admin, the manage
+    /// norm — Ops publishes but does not author the promotion terms.
+    ManageCampaigns {
+        id: "console.campaigns.manage",
+        roles: [Owner, Admin],
+        description: "Author campaigns and promotions, and generate voucher batches",
+    },
     /// Look up, export, and erase a data subject's personal data by id — the PDPD/GDPR subject-request
     /// tooling ([ADR-0076](../adr/0076-subject-request-tooling.md)). Owner-only: this is the console's
     /// most sensitive T1 surface (it can read and irreversibly erase a person's data), narrower than the

@@ -388,6 +388,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Campaigns (ADR-0077, Track M3): author a tenant's promotions over the finished pricing
+        // engine (per-campaign CRUD, behind console.campaigns.manage, audited by summary).
+        .merge(http::campaign_router(
+            store.campaigns(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Media (ADR-0075, Track M5): upload an image → re-encode → store two bounded renditions;
         // serve, list, and delete them.
         .merge(http::media_router(

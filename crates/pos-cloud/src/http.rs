@@ -65,16 +65,21 @@ use pos_ports::PortError;
 use pos_ports::config_store::ConfigUpdate;
 use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
+use pos_proto::campaign::{
+    PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedConditions,
+};
 use pos_proto::determinism::ClockSource;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId, DisplaySubcategoryId, EventId,
-    MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
+    DisplaySubcategoryId, EventId, MenuItemId, StationId, StoreId, SubjectId, TableId, TaxClassId,
+    TenantId,
 };
 use pos_proto::locale::TaxRate;
 use pos_proto::money::CurrencyCode;
+use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
 
@@ -101,6 +106,7 @@ use crate::auth::enrol::{
 use crate::auth::password::hash_password;
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
+use crate::campaigns::{CampaignStore, CampaignStoreError};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
@@ -5827,6 +5833,410 @@ fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "the tax-rate service is unavailable",
+    )
+        .into_response()
+}
+
+// --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----
+
+/// The largest minute-of-day a schedule window accepts (exclusive) — a day has 1440 minutes.
+const MINUTES_PER_DAY: u16 = 24 * 60;
+
+/// The state the campaign routes share: the campaign store they read and write, and the
+/// admin/clock/audit every `/admin` write needs.
+#[derive(Clone)]
+struct CampaignState<Camp, A, C> {
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A create/update body: the tenant and the campaign's authoring fields. The id is **server-owned** —
+/// minted on create, the path id on update — so a client never supplies or forges it. Everything else
+/// is the wire campaign's own shape (kind, action, conditions), reused rather than re-declared.
+#[derive(Debug, Clone, Deserialize)]
+struct CampaignRequest {
+    tenant_id: String,
+    name: String,
+    kind: PublishedCampaignKind,
+    priority: i32,
+    #[serde(default)]
+    exclusion_group: Option<u16>,
+    action: PublishedAction,
+    #[serde(default)]
+    conditions: PublishedConditions,
+    #[serde(default)]
+    quota_remaining: Option<u32>,
+}
+
+/// A compact audit summary of a campaign: enough to see *what* changed, without reproducing the exact
+/// discount terms (T2 configuration) in the queryable audit trail — the terms live in the campaign
+/// store, the trail records that they moved.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CampaignAuditSummary {
+    campaign_id: String,
+    name: String,
+    kind: PublishedCampaignKind,
+    priority: i32,
+}
+
+impl CampaignAuditSummary {
+    fn of(campaign: &PublishedCampaign) -> Self {
+        Self {
+            campaign_id: campaign.id.to_string(),
+            name: campaign.name.as_str().to_owned(),
+            kind: campaign.kind,
+            priority: campaign.priority,
+        }
+    }
+}
+
+/// Builds the campaigns sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+///
+/// Per-campaign CRUD over a tenant's promotions. `GET` (list and by-id) is behind
+/// [`ConsolePermission::Read`]; `POST`/`PUT`/`DELETE` are behind [`ConsolePermission::ManageCampaigns`]
+/// and audited (`campaign.create`/`update`/`delete`) with a summary, never the discount terms. The id
+/// is server-owned. Publishing these campaigns to a store is a separate route that reuses
+/// `PublishConfig` (a later slice).
+pub fn campaign_router<Camp, A, C>(
+    campaigns: Camp,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/campaigns",
+            get(admin_list_campaigns::<Camp, A, C>).post(admin_create_campaign::<Camp, A, C>),
+        )
+        .route(
+            "/admin/campaigns/{campaign_id}",
+            get(admin_get_campaign::<Camp, A, C>)
+                .put(admin_update_campaign::<Camp, A, C>)
+                .delete(admin_delete_campaign::<Camp, A, C>),
+        )
+        .with_state(CampaignState {
+            campaigns,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Validates a campaign request and builds the campaign with the given (server-owned) id. Returns the
+/// fault message for a `400` rather than the whole response, so the error type stays small (a
+/// `Result<_, Response>` trips `clippy::result_large_err`).
+fn build_campaign(
+    request: &CampaignRequest,
+    id: CampaignId,
+) -> Result<PublishedCampaign, &'static str> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("a campaign name is required");
+    }
+    if let Some(schedule) = &request.conditions.schedule
+        && (schedule.start_minute >= MINUTES_PER_DAY || schedule.end_minute >= MINUTES_PER_DAY)
+    {
+        return Err("a schedule minute is out of range (0..1440)");
+    }
+    if let Some(channels) = &request.conditions.channels
+        && channels
+            .iter()
+            .any(|channel| channel.is_unrecognised() || channel.is_unspecified())
+    {
+        return Err("a campaign names an unknown sales channel");
+    }
+    match request.action {
+        PublishedAction::Percentage { rate } if rate.numerator() < 0 => {
+            return Err("a percentage rate cannot be negative");
+        }
+        PublishedAction::AmountOff { amount } if amount.is_negative() => {
+            return Err("an amount off cannot be negative");
+        }
+        _ => {}
+    }
+    Ok(PublishedCampaign {
+        id,
+        name: DisplayName::new(name),
+        kind: request.kind,
+        priority: request.priority,
+        exclusion_group: request.exclusion_group,
+        action: request.action,
+        conditions: request.conditions.clone(),
+        quota_remaining: request.quota_remaining,
+    })
+}
+
+/// A super-admin lists a tenant's authored campaigns.
+async fn admin_list_campaigns<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    match state.campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => (StatusCode::OK, Json(campaigns)).into_response(),
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin reads one campaign by id.
+async fn admin_get_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(campaign)) => (StatusCode::OK, Json(campaign)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin creates a campaign; the server mints its id.
+async fn admin_create_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CampaignRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
+        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    };
+    let Some(campaign_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(CampaignId::new)
+    else {
+        return campaign_entropy_unavailable();
+    };
+    let campaign = match build_campaign(&request, campaign_id) {
+        Ok(campaign) => campaign,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.create",
+                "campaign",
+                &campaign_id.to_string(),
+                None,
+                serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
+            )
+            .await;
+            (StatusCode::CREATED, Json(campaign)).into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin updates a campaign in place, by the path id.
+async fn admin_update_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Json(request): Json<CampaignRequest>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(existing)) => existing,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    };
+    let campaign = match build_campaign(&request, campaign_id) {
+        Ok(campaign) => campaign,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.update",
+                "campaign",
+                &campaign_id.to_string(),
+                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
+            )
+            .await;
+            (StatusCode::OK, Json(campaign)).into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// A super-admin deletes a campaign by id.
+async fn admin_delete_campaign<Camp, A, C>(
+    State(state): State<CampaignState<Camp, A, C>>,
+    headers: HeaderMap,
+    Path(campaign_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Camp: CampaignStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCampaigns,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Some(tenant_id), Some(campaign_id)) = (
+        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
+        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or campaign_id is not a ULID",
+        )
+            .into_response();
+    };
+    let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
+        Ok(Some(existing)) => existing,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Err(error) => return campaign_error_response(&error),
+    };
+    match state
+        .campaigns
+        .delete_campaign(tenant_id, campaign_id)
+        .await
+    {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "campaign.delete",
+                "campaign",
+                &campaign_id.to_string(),
+                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => campaign_error_response(&error),
+    }
+}
+
+/// `503` when OS entropy is unavailable to mint a campaign id — the request cannot proceed and a retry
+/// may succeed.
+fn campaign_entropy_unavailable() -> Response {
+    tracing::error!("could not read OS entropy to mint a campaign id");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the campaign service is unavailable",
+    )
+        .into_response()
+}
+
+/// Maps a campaign store failure to a retryable `503`, logging the detail rather than leaking it.
+fn campaign_error_response(error: &CampaignStoreError) -> Response {
+    tracing::error!(%error, "a campaign store operation failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the campaign service is unavailable",
     )
         .into_response()
 }
