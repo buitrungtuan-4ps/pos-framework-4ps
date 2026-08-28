@@ -111,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **A Media library screen and an image picker on the item editor**
+  (roadmap v2, Track M5, slice 4; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). A new **Media**
+  screen (Master data, owner/admin) lists the tenant's uploaded images as a thumbnail grid with size
+  and upload date, uploads a new image, and deletes one — with a confirm step and the never-blank
+  posture (a deleted image an item still references shows a placeholder, never a broken image). The
+  Catalog item editor gains an **image** column: a compact widget shows the item's current image and
+  lets the operator pick one from the library or upload a new one, or remove it; the change persists
+  immediately. Both surfaces are tenant-scoped and gate their write affordances on `console.media.manage`
+  (owner/admin), which the server re-checks. New i18n keys (en + vi). **Upgrade note:** dashboard-only;
+  no API, schema, or edge change.
 - **A catalog item can carry an image — an optional `image_ref` on the item**
   (roadmap v2, Track M5, slice 3; [ADR-0075](docs/adr/0075-media-and-file-rail.md)). `CatalogItem` gains
   an `image_ref: Option<MediaId>` (additive column, migration 0031), authored in the console and

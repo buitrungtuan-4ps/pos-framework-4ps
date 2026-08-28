@@ -23,6 +23,7 @@ import { Devices } from "./screens/Devices";
 import { Fleet } from "./screens/Fleet";
 import { Floor } from "./screens/Floor";
 import { Login } from "./screens/Login";
+import { Media } from "./screens/Media";
 import { MySecurity } from "./screens/MySecurity";
 import { MySessions } from "./screens/MySessions";
 import { NewStore } from "./screens/NewStore";
@@ -80,6 +81,7 @@ export function App() {
           <Route path="/stores" component={Stores} />
           <Route path="/stores/new" component={NewStore} />
           <Route path="/catalog" component={Catalog} />
+          <Route path="/media" component={Media} />
           <Route path="/layout" component={Layout} />
           <Route path="/floor" component={Floor} />
           <Route path="/stations" component={Stations} />
