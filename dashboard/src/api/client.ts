@@ -11,6 +11,7 @@ import type {
   AdminRole,
   AdminSessionView,
   AdminStatus,
+  Alert,
   ApiKeySummary,
   Assignment,
   Area,
@@ -882,4 +883,20 @@ export const api = {
     const query = params.toString();
     return requestJson<AuditEntry[]>("GET", query ? `/admin/audit?${query}` : "/admin/audit");
   },
+
+  // --- operational alerts (ADR-0073, Track O2) ---
+  // A fleet-wide read of the alerts the evaluator maintains, behind console.data.read: the active set
+  // by default, or recent history (active + resolved) with `recent`. Acknowledge/resolve need
+  // console.alerts.manage (Owner/Admin/Ops) and are audited; both are idempotent.
+  listAlerts: (recent = false, limit?: number) => {
+    const params = new URLSearchParams();
+    if (recent) params.set("recent", "true");
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = params.toString();
+    return requestJson<Alert[]>("GET", query ? `/admin/alerts?${query}` : "/admin/alerts");
+  },
+  acknowledgeAlert: (id: string) =>
+    requestVoid("POST", `/admin/alerts/${encodeURIComponent(id)}/ack`),
+  resolveAlert: (id: string) =>
+    requestVoid("POST", `/admin/alerts/${encodeURIComponent(id)}/resolve`),
 };

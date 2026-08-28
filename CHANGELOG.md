@@ -111,6 +111,75 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The Alerts console screen — the operator's live view of the alert engine** (roadmap v2, Track O2,
+  slice 6; [ADR-0073](docs/adr/0073-alerting.md)). A new fleet-wide `/alerts` screen (grouped under
+  *Overview*, beside Audit, no working context required) reads the alerts the evaluator maintains: the
+  active set by default, with a toggle to *Recent* history (active + resolved). Each row shows the
+  severity (Critical rides a `danger` pill; the label always accompanies the hue), the localized
+  condition kind, the server's summary, the scope (a tenant or *Fleet-wide*), the last-seen age, and
+  the lifecycle state (firing / acknowledged / resolved); a details drawer opens the full timestamps
+  and the alert's `detail` numbers, with the ULID and dedup key tucked behind *Technical details*. An
+  operator holding `console.alerts.manage` (Owner/Admin/Ops) gets **Acknowledge** and **Resolve**
+  actions inline and in the drawer — hidden for read-only roles, exactly as the server gates them; both
+  are idempotent, so a stale click is harmless. Built on the F2 kit (`DataTable` search/sort/paginate,
+  `Drawer`, `StatusBadge`, `EmptyState`, `TechnicalDetails`), with `StatusBadge` gaining a `danger`
+  tone (`text-danger`, which clears WCAG-AA on the card surface) for an active fault. The
+  notification-bell → live-alert-count wiring is a small, separable follow-up. **Upgrade note:**
+  dashboard-only; no protocol, schema, or permission change.
+- **The console alert API — the in-console delivery channel** (roadmap v2, Track O2, slice 4;
+  [ADR-0073](docs/adr/0073-alerting.md)). The alerts the evaluator maintains are now readable and
+  actionable from the console: `GET /admin/alerts` lists the fleet-wide active set (or recent history,
+  active + resolved, with `?recent=true&limit=`) behind `console.data.read`; `POST /admin/alerts/{id}/ack`
+  and `POST /admin/alerts/{id}/resolve` acknowledge and hand-resolve an alert behind a new
+  **`console.alerts.manage`** permission (Owner/Admin/Ops — alerts are a day-to-day ops concern) and are
+  audited (`alert.acknowledge`, `alert.resolve`). Both writes are idempotent, and a condition still
+  firing simply reopens on the next evaluator tick. The typed dashboard client gains `listAlerts`,
+  `acknowledgeAlert`, and `resolveAlert`; route tests cover the active/recent split, the ack/resolve
+  lifecycle, and the session gate. The **in-console channel is the shipped delivery path**; the
+  off-console push channels (a webhook channel over the ADR-0032 transport, email, and a Zalo/Telegram
+  chat adapter) plug into an `AlertChannel` seam and are a flagged follow-up. **Upgrade note:** additive
+  read + two idempotent write routes and one new console permission; no schema or protocol change.
+- **The alert evaluator background loop** (roadmap v2, Track O2, slice 3;
+  [ADR-0073](docs/adr/0073-alerting.md)). The cloud now *watches* its read models: a new background
+  loop (in the mould of the rollup projector and webhook dispatcher) sweeps the fleet, task-health, and
+  webhook read models each tick, runs the pure evaluator, and reconciles the firing set against the
+  alert store — opening a new alert per newly-firing condition, refreshing live ones, and **resolving
+  those that have cleared** (a store coming back online clears its own offline alert). It records its
+  own `task_health` tick, so the watcher is itself watched, and is added to the health endpoint's
+  expected-loops set. Cadence and every threshold are `CloudConfig` tunables (`alert_eval_interval_secs`,
+  `alert_store_offline_secs` = 5 min, `alert_relay_backlog_max`, `alert_relay_oldest_secs`,
+  `alert_projector_stale_slack_secs`, `alert_jetstream_capacity_percent`) with sensible defaults. Live
+  conditions: store offline, relay backlog, webhook auto-disabled, projector unhealthy. The JetStream
+  capacity condition is supported by the evaluator but its cloud-side stream-info probe is a flagged
+  follow-up (`NatsConsumer` exposes no capacity read and NATS ingest is optional). **Upgrade note:**
+  additive cloud-internal loop + config tunables; no schema, protocol, or permission change; the loop
+  writes alerts to the `0027` table but nothing reads them until the console API lands (slice 5).
+- **Alert store: the `alerts` table and its seam** (roadmap v2, Track O2, slice 2;
+  [ADR-0073](docs/adr/0073-alerting.md)). Persists operational alerts with an open→resolved lifecycle.
+  Migration `0027_alerts.sql` adds the `alerts` table — nullable `tenant_id` (server-wide alerts carry
+  none), RLS-isolated like `audit_log`, with a **partial unique index** (`coalesce(tenant_id,''), kind,
+  dedup_key WHERE resolved_at IS NULL`) that enforces one *open* alert per condition while letting a
+  resolved one remain as history. The new `AlertStore` seam upserts (opens or refreshes in place,
+  keeping the original id and `first_seen_at`), resolves, acknowledges, and lists the active and recent
+  alerts; a `store-postgres` `PostgresAlerts` adapter implements it (the upsert's `ON CONFLICT` targets
+  the partial index), with an in-memory fake proving the lifecycle contract and a real-Postgres
+  integration test covering dedup, resolve→history, and reopen. An alert stores a condition and a small
+  JSON detail, never a payload or PII. **Upgrade note:** additive migration `0027` (rollback-safe); no
+  protocol or permission change; nothing writes to the table until the evaluator loop lands (slice 3).
+- **Alerting foundations: the alert model and a pure evaluator** (roadmap v2, Track O2, slice 1;
+  [ADR-0073](docs/adr/0073-alerting.md)). Begins Track **O2 (Alerting)** — the cloud finally *watches*
+  the read models O1 built instead of only serving them on demand. This first slice lays the type
+  foundations: `pos_cloud::alerts` defines the `AlertKind` catalogue (store offline, relay backlog,
+  webhook disabled, projector unhealthy, JetStream near-capacity), an ordered `AlertSeverity`, and the
+  `FiringAlert` a detector produces; and a **pure `evaluate`** that turns a read-model snapshot
+  (per-tenant fleet rows + disabled webhook endpoints, background-task health, an optional JetStream
+  capacity reading, and tunable thresholds) into the firing set — no I/O and no clock, so every
+  condition is exhaustively unit-tested. ADR-0073 records the engine's design (open→resolved lifecycle,
+  delivery over the console + the existing webhook transport, email/chat as seams) and, explicitly,
+  which conditions ship on ready data now versus those deferred for want of upstream telemetry (clock
+  drift, disk-low, print-error spike, e-invoice/fiscal, projector failure *streaks*). Store, background
+  loop, delivery, and the `/admin` surface land in the following slices. **Upgrade note:** additive
+  cloud-internal types only; nothing runs yet — no schema, route, protocol, or permission change.
 - **The in-store app draws the store's real floor and routes fires by the published plan** (roadmap
   v2, Track M2, slice 8; [ADR-0072](docs/adr/0072-floor-and-kitchen.md)). The in-store `ui/` now reads
   `GET /api/floor` at start and renders the store's published areas and tables instead of a hardcoded

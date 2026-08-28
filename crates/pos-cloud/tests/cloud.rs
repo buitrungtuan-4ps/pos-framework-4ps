@@ -21,6 +21,7 @@ use argon2::password_hash::SaltString;
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
+use pos_cloud::alerts::{AlertKind, AlertRecord, AlertStore, AlertStoreError};
 use pos_cloud::audit::{
     AuditActor, AuditEntry, AuditId, AuditQuery, AuditRecorder, AuditSink, AuditStore,
     AuditStoreError, NoopAuditRecorder,
@@ -6915,6 +6916,209 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
             .expect("set pin across tenant"),
         "a PIN set is scoped to the tenant — no row matched"
     );
+}
+
+// --- Operational alerts (`/admin/alerts`, ADR-0073, Track O2) -----------------------------------
+
+/// An in-memory [`AlertStore`] for the alerts-route tests: the same open→resolved lifecycle the store
+/// contract test covers, behind an `Arc<Mutex<…>>` so the router can clone it.
+#[derive(Clone, Default)]
+struct FakeAlerts {
+    rows: Arc<Mutex<Vec<AlertRecord>>>,
+}
+
+impl FakeAlerts {
+    fn seed(&self, rows: Vec<AlertRecord>) {
+        *self.rows.lock().expect("lock") = rows;
+    }
+}
+
+impl AlertStore for FakeAlerts {
+    async fn upsert(&self, record: &AlertRecord) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(open) = rows
+            .iter_mut()
+            .find(|r| r.resolved_at.is_none() && r.key() == record.key())
+        {
+            open.severity = record.severity;
+            open.summary.clone_from(&record.summary);
+            open.detail = record.detail.clone();
+            open.last_seen_at = record.last_seen_at;
+        } else {
+            rows.push(record.clone());
+        }
+        Ok(())
+    }
+
+    async fn resolve(&self, id: &str, resolved_at: Timestamp) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|r| r.id == id && r.resolved_at.is_none())
+        {
+            row.resolved_at = Some(resolved_at);
+        }
+        Ok(())
+    }
+
+    async fn acknowledge(
+        &self,
+        id: &str,
+        acknowledged_at: Timestamp,
+    ) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+            row.acknowledged_at = Some(acknowledged_at);
+        }
+        Ok(())
+    }
+
+    async fn list_active(&self) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|r| r.resolved_at.is_none())
+            .cloned()
+            .collect())
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock").clone();
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+}
+
+fn alert_at(
+    id: &str,
+    kind: AlertKind,
+    tenant_id: Option<TenantId>,
+    dedup: &str,
+    resolved: bool,
+) -> AlertRecord {
+    AlertRecord {
+        id: id.to_owned(),
+        tenant_id,
+        kind,
+        dedup_key: dedup.to_owned(),
+        severity: kind.default_severity(),
+        summary: "a condition".to_owned(),
+        detail: serde_json::json!({}),
+        first_seen_at: seen_ago(0),
+        last_seen_at: seen_ago(0),
+        resolved_at: resolved.then(|| seen_ago(0)),
+        acknowledged_at: None,
+    }
+}
+
+/// The main router (for `/admin/login`) merged with the alerts sub-router, one shared admin store.
+fn alerts_app(admin: FakeAdmin, alerts: FakeAlerts) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::alerts_router(
+        alerts,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn alerts_list_active_and_recent_then_acknowledge_and_resolve() {
+    let alerts = FakeAlerts::default();
+    alerts.seed(vec![
+        alert_at("alert-jet", AlertKind::JetstreamCapacity, None, "", false),
+        alert_at(
+            "alert-store",
+            AlertKind::StoreOffline,
+            Some(tenant()),
+            "store-x",
+            false,
+        ),
+        alert_at(
+            "alert-old",
+            AlertKind::RelayBacklog,
+            Some(tenant()),
+            "store-y",
+            true,
+        ),
+    ]);
+    let router = alerts_app(provisioned_admin(), alerts);
+    let cookie = admin_cookie(&router).await;
+
+    // The active list is the two unresolved alerts, and a server-wide one carries a null tenant.
+    let active = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/alerts", &cookie))
+        .await
+        .expect("route the active list");
+    assert_eq!(active.status(), StatusCode::OK);
+    let rows = json_body(active).await;
+    let array = rows.as_array().expect("an array of alerts");
+    assert_eq!(array.len(), 2, "only the unresolved alerts");
+    assert!(
+        array
+            .iter()
+            .any(|a| a["kind"] == "jetstream_capacity" && a["tenant_id"].is_null()),
+        "the server-wide alert carries a null tenant"
+    );
+
+    // Recent history includes the resolved one.
+    let recent = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/alerts?recent=true", &cookie))
+        .await
+        .expect("route the recent list");
+    let rows = json_body(recent).await;
+    assert_eq!(rows.as_array().expect("an array").len(), 3);
+
+    // Acknowledge and resolve are idempotent 204s.
+    let ack = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/alerts/alert-store/ack",
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the ack");
+    assert_eq!(ack.status(), StatusCode::NO_CONTENT);
+    let resolved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/alerts/alert-store/resolve",
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the resolve");
+    assert_eq!(resolved.status(), StatusCode::NO_CONTENT);
+
+    // After the resolve, the active list drops to the server-wide alert alone.
+    let active = router
+        .oneshot(get_with_cookie("/admin/alerts", &cookie))
+        .await
+        .expect("route the active list again");
+    let rows = json_body(active).await;
+    assert_eq!(rows.as_array().expect("an array").len(), 1);
+}
+
+#[tokio::test]
+async fn alerts_require_a_session() {
+    let router = alerts_app(provisioned_admin(), FakeAlerts::default());
+    let denied = router
+        .oneshot(get("/admin/alerts", None))
+        .await
+        .expect("route without a cookie");
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// The floor master-data store as two in-memory lists — the same `AreaStore`/`TableStore` seams the

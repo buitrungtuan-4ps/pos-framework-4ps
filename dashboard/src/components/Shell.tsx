@@ -36,6 +36,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
     items: [
       { href: "/", key: "nav.reports", scope: "store" },
       { href: "/fleet", key: "nav.fleet", scope: "tenant" },
+      { href: "/alerts", key: "nav.alerts" },
       { href: "/audit", key: "nav.audit" },
     ],
   },
@@ -82,6 +83,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
 // The page label for the breadcrumb, by route. `/stores/new` is the one path without a nav entry.
 const CRUMB_KEY: Record<string, MessageKey> = {
   "/": "nav.reports",
+  "/alerts": "nav.alerts",
   "/audit": "nav.audit",
   "/stores": "nav.stores",
   "/stores/new": "wizard.title",
