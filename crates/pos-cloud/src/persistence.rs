@@ -79,7 +79,7 @@ use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
-use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
     RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
@@ -428,6 +428,27 @@ impl ConfigTreeStore for PostgresConfigTrees {
         self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch())
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+}
+
+impl OtaReportStore for PostgresConfigTrees {
+    async fn record_report(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        installed: &str,
+        self_test_passed: bool,
+        reported_at: Timestamp,
+    ) -> Result<(), FleetStoreError> {
+        self.record_ota_report(
+            tenant,
+            store,
+            installed,
+            self_test_passed,
+            reported_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| FleetStoreError::new(error.to_string()))
     }
 }
 
@@ -1368,6 +1389,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let relay_oldest_pending_at = row
         .oldest_pending_at_ms
         .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let reported_at = row
+        .reported_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
@@ -1379,6 +1403,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         config_version_published: row.config_version_published,
         relay_backlog: u64::try_from(row.relay_backlog).unwrap_or(0),
         relay_oldest_pending_at,
+        installed_version: row.installed_version,
+        self_test_ok: row.self_test_ok,
+        reported_at,
     })
 }
 

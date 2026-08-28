@@ -284,6 +284,9 @@ mod tests {
             config_version_published: None,
             relay_backlog: 0,
             relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
         }
     }
 

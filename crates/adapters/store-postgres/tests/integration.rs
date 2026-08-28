@@ -1155,6 +1155,57 @@ mod config_tree_store {
         });
     }
 
+    /// An OTA report (ADR-0078) records the running version and self-test outcome onto the liveness
+    /// row, and — being a contact — advances `last_seen_at`, even for a store that never pulled config.
+    #[test]
+    fn records_an_ota_report() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE));
+            let store_id = StoreId::new(Ulid::from_u128(0x0A7A));
+
+            // A store reports before it has ever pulled config: the row is created, last_seen_at set.
+            trees
+                .record_ota_report(tenant, store_id, "v1.2.3", true, 5000)
+                .await
+                .expect("record report");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, installed_version, self_test_ok, reported_at \
+                     FROM store_liveness WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("the report created a liveness row");
+            assert_eq!(row.get::<_, i64>(0), 5000, "a report is contact");
+            assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("v1.2.3"));
+            assert_eq!(row.get::<_, Option<bool>>(2), Some(true));
+            assert_eq!(row.get::<_, Option<i64>>(3), Some(5000));
+
+            // A later failed-self-test report upserts in place — one row, advanced instant.
+            trees
+                .record_ota_report(tenant, store_id, "v1.3.0", false, 9000)
+                .await
+                .expect("record report again");
+            let row = admin
+                .query_one(
+                    "SELECT last_seen_at, installed_version, self_test_ok FROM store_liveness \
+                     WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, i64>(0), 9000, "the instant advanced");
+            assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("v1.3.0"));
+            assert_eq!(
+                row.get::<_, Option<bool>>(2),
+                Some(false),
+                "a failed self-test is recorded, not dropped"
+            );
+        });
+    }
+
     /// A heartbeat advances only `last_seen_at`, preserving the held version and last-config-pull
     /// instant a prior pull recorded; a heartbeat before any pull creates the row with those NULL
     /// ([ADR-0068] slice 2).

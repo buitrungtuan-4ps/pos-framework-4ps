@@ -4075,6 +4075,9 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 config_version_published: Some("v-current".to_owned()),
                 relay_backlog: 0,
                 relay_oldest_pending_at: None,
+                installed_version: Some("v1.2.3".to_owned()),
+                self_test_ok: Some(true),
+                reported_at: Some(seen_ago(1_000)),
             },
         )
         .with_row(
@@ -4089,6 +4092,9 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 config_version_published: Some("v-current".to_owned()),
                 relay_backlog: 3,
                 relay_oldest_pending_at: Some(seen_ago(120_000)),
+                installed_version: None,
+                self_test_ok: None,
+                reported_at: None,
             },
         );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -4116,6 +4122,11 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
         "held equals published, so it is current"
     );
     assert_eq!(online["relay_backlog"], 0);
+    assert_eq!(
+        online["installed_version"], "v1.2.3",
+        "the fleet read surfaces the reported OTA version"
+    );
+    assert_eq!(online["self_test_ok"], true, "and its self-test outcome");
 
     let offline = &rows[1];
     assert_eq!(
@@ -4147,6 +4158,9 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             config_version_published: Some("v-current".to_owned()),
             relay_backlog: 0,
             relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -4191,6 +4205,9 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             config_version_published: Some("v-current".to_owned()),
             relay_backlog: 0,
             relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

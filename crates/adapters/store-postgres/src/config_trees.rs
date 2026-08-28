@@ -117,6 +117,47 @@ impl PostgresConfigTrees {
         Ok(())
     }
 
+    /// Records a store's OTA report ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)): the
+    /// version it is now running and whether its self-test passed, onto the liveness read model. A
+    /// report is contact, so it advances `last_seen_at` too (which lets a fresh row satisfy the
+    /// `NOT NULL` on `last_seen_at` when a store reports before it has ever pulled config). `reported_at_ms`
+    /// is Unix milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_ota_report(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        installed: &str,
+        self_test_passed: bool,
+        reported_at_ms: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO store_liveness \
+                 (tenant_id, store_id, last_seen_at, installed_version, self_test_ok, reported_at) \
+                 VALUES ($1, $2, $3, $4, $5, $3) \
+                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
+                 last_seen_at = EXCLUDED.last_seen_at, \
+                 installed_version = EXCLUDED.installed_version, \
+                 self_test_ok = EXCLUDED.self_test_ok, \
+                 reported_at = EXCLUDED.reported_at",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &reported_at_ms,
+                    &installed,
+                    &self_test_passed,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
     /// Advances a store's `last_seen_at` from a heartbeat ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)),
     /// leaving `config_version_held` and `last_config_pull_at` untouched on an existing row (a fresh
     /// row gets them `NULL`, since a heartbeat carries no config-pull facts). `seen_at_ms` is Unix

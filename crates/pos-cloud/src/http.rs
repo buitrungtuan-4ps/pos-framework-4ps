@@ -126,7 +126,7 @@ use crate::devices::{
     PersistedDeviceProposal,
 };
 use crate::export;
-use crate::fleet::{FleetRow, FleetStore, FleetStoreError};
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, NewArea, NewRoutingRule, NewStation, NewTable, RoutingRule,
@@ -586,6 +586,95 @@ where
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the reconciliation service is unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
+/// report's arrival instant.
+#[derive(Clone)]
+struct OtaReportState<R, C> {
+    reports: R,
+    clock: C,
+}
+
+/// An edge's OTA report body ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)): which store
+/// reported, the version it is now running, and whether the post-install self-test passed. Identity is
+/// in the body because `/internal` is trusted-network and unauthenticated, exactly like `/internal/reconcile`.
+#[derive(Debug, Clone, Deserialize)]
+struct OtaReportRequest {
+    /// The tenant the store belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store reporting (a 26-character ULID).
+    store_id: String,
+    /// The release the store is now running (a version string, e.g. `v1.2.3`).
+    installed: String,
+    /// Whether the post-install self-test passed.
+    self_test_passed: bool,
+}
+
+/// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// stated independently of [`CloudApp`] like [`reconcile_router`].
+///
+/// `POST /internal/ota/report` records the version a store is running and its last self-test outcome
+/// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
+/// private-network, and absent from the public OpenAPI, exactly like `/internal/ingest` and
+/// `/internal/reconcile`; the server stamps the arrival instant from its own clock.
+pub fn ota_report_router<R, C>(reports: R, clock: C) -> Router
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/internal/ota/report", post(ingest_ota_report::<R, C>))
+        .with_state(OtaReportState { reports, clock })
+}
+
+/// Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+/// Internal (the reporting partner of `/internal/ingest`), so it carries no authentication and is
+/// absent from the public OpenAPI. A malformed id or an empty version is a `400`; a store failure is
+/// a retryable `503`; success is `204`.
+async fn ingest_ota_report<R, C>(
+    State(state): State<OtaReportState<R, C>>,
+    Json(request): Json<OtaReportRequest>,
+) -> Response
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let installed = request.installed.trim();
+    if installed.is_empty() {
+        return (StatusCode::BAD_REQUEST, "an installed version is required").into_response();
+    }
+    match state
+        .reports
+        .record_report(
+            tenant_id,
+            store_id,
+            installed,
+            request.self_test_passed,
+            state.clock.now(),
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "recording an OTA report failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the fleet service is unavailable",
             )
                 .into_response()
         }
@@ -4000,6 +4089,13 @@ struct FleetStoreView {
     config_current: bool,
     relay_backlog: u64,
     relay_oldest_pending_at_ms: Option<i64>,
+    /// The binary version the store last reported running (ADR-0078), or `null` if it has never
+    /// reported.
+    installed_version: Option<String>,
+    /// Whether the store's last post-install self-test passed, or `null`.
+    self_test_ok: Option<bool>,
+    /// Unix ms of the store's most recent OTA report, or `null`.
+    reported_at_ms: Option<i64>,
 }
 
 impl FleetStoreView {
@@ -4031,6 +4127,11 @@ impl FleetStoreView {
             relay_backlog: row.relay_backlog,
             relay_oldest_pending_at_ms: row
                 .relay_oldest_pending_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            installed_version: row.installed_version,
+            self_test_ok: row.self_test_ok,
+            reported_at_ms: row
+                .reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
         }
     }

@@ -123,6 +123,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The cloud ingests OTA reports and shows each store's running version** (roadmap v2, Track O3;
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). The reporting half of the OTA loop now lands
+  somewhere: `POST /internal/ota/report` (a trusted-network `/internal` route, the reporting partner
+  of `/internal/ingest`) records the version a store is running and its last self-test outcome onto
+  the O1 fleet-liveness read model — a report is another kind of liveness contact, so it extends
+  `store_liveness` (migration `0035`, additive columns) rather than opening a new table, and advances
+  the store's `last_seen_at` too. The fleet read (`GET /admin/fleet` and the per-store detail) now
+  carries `installed_version`, `self_test_ok`, and `reported_at`, so the console can finally show, per
+  store, what binary it is running and whether its self-test passed — the rollout-ring progress that
+  was invisible. A dedicated `OtaReportStore` write seam keeps this off the `ConfigTreeStore` trait;
+  the server stamps the report's arrival from its own clock. First-class OTA publish/kill-switch
+  levers and the dashboard OTA view follow in the same track. **Upgrade note:** an additive migration
+  (`0035_ota_report`, rollback safe) and a new `/internal` route; a store that never reports simply
+  leaves the new columns NULL, exactly as the fleet read tolerated before — no protocol or permission
+  change.
 - **The edge can report an update's outcome to the cloud (`CloudSync::report`)** (roadmap v2, Track
   O3; [ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). OTA was a publish into silence: the cloud
   pushed a rollout as config and the edge decided, installed, self-tested, and rolled back — and told
