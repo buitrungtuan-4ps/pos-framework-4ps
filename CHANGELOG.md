@@ -123,6 +123,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **Marketplace vendor policies can be authored per store** (roadmap v2, Track M7;
+  [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/vendors` routes
+  read and publish a store's per-marketplace policies as the `vendors` config node: per vendor, whether
+  it is enabled, its availability (open/busy/closed — a new `VendorAvailability` wire enum mirroring the
+  `DeliveryVendor` busy-mode), the prep time authored for the busy case, and the menu items suppressed
+  (86'd) on that vendor. Behind `console.config.publish`, audited; a policy naming an unknown
+  availability is refused. This is the authoring surface only — the live loop that pushes busy-mode/86
+  to a marketplace from the policy is the flagged follow-up (same shape as the campaign live-eval and
+  inventory marketplace-notify deferrals). **Upgrade note:** none — additive `pos-proto` types (incl. a
+  new closed-vocabulary enum) and settings routes; no protocol, migration, or permission change.
 - **QR ordering guardrails are authorable, and the edge finally honours staff-confirmation** (roadmap
   v2, Track M7; [ADR-0080](docs/adr/0080-channels-and-payments.md)). New `GET`/`PUT /admin/config/qr`
   routes read and publish a store's QR guardrail settings — enabled, staff-confirmation-required,

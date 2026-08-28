@@ -18,7 +18,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::enums::{PaymentMethod, SalesChannel};
+use crate::enums::{PaymentMethod, SalesChannel, VendorAvailability};
+use crate::ids::MenuItemId;
+use crate::text::DisplayName;
 use crate::wire_enum::Open;
 
 /// The `channels` config node: the sales channels a store accepts orders on.
@@ -81,10 +83,67 @@ impl PublishedTender {
     }
 }
 
+/// One store's policy toward a single delivery marketplace, in wire form ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).
+///
+/// A lightweight authoring shape only: which vendor, whether it is on, its availability (open/busy/
+/// closed, mirroring the `DeliveryVendor` busy-mode), the prep time authored for the busy case, and the
+/// menu items suppressed (86'd) on that vendor. The live loop that pushes this to a marketplace is the
+/// flagged follow-up; publishing the policy is this track.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PublishedVendorPolicy {
+    /// The vendor's operator-facing name (e.g. the marketplace brand). Reference/display only.
+    pub vendor: DisplayName,
+    /// Whether the store currently offers orders to this vendor at all.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The store's availability to this vendor. Wrapped in [`Open`] for forward-compatibility.
+    #[serde(default)]
+    pub availability: Open<VendorAvailability>,
+    /// The prep time (minutes) authored for the busy case — how long the vendor should quote while the
+    /// store is throttling. `0` means "use the vendor's default".
+    #[serde(default)]
+    pub prep_minutes: u16,
+    /// Menu items suppressed (86'd) on this vendor specifically, independent of stock-driven auto-86.
+    #[serde(default)]
+    pub suppressed_items: Vec<MenuItemId>,
+}
+
+/// The `vendors` config node: a store's per-marketplace policies.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PublishedVendorPolicies {
+    #[serde(default)]
+    policies: Vec<PublishedVendorPolicy>,
+}
+
+impl PublishedVendorPolicies {
+    /// A node from its policies.
+    #[must_use]
+    pub fn new(policies: Vec<PublishedVendorPolicy>) -> Self {
+        Self { policies }
+    }
+
+    /// Every vendor policy, in the order the node lists them.
+    #[must_use]
+    pub fn policies(&self) -> &[PublishedVendorPolicy] {
+        &self.policies
+    }
+
+    /// Whether the node carries no policy at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.policies.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PublishedChannels, PublishedTender};
-    use crate::enums::{PaymentMethod, SalesChannel};
+    use super::{
+        PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
+    };
+    use crate::enums::{PaymentMethod, SalesChannel, VendorAvailability};
+    use crate::text::DisplayName;
     use crate::wire_enum::Open;
 
     #[test]
@@ -107,6 +166,24 @@ mod tests {
         assert_eq!(node, back);
         assert!(PublishedTender::default().is_empty());
         assert!(PublishedChannels::default().is_empty());
+    }
+
+    #[test]
+    fn a_vendors_node_round_trips_and_defaults_empty() {
+        use crate::ids::MenuItemId;
+        use crate::ulid::Ulid;
+        let node = PublishedVendorPolicies::new(vec![PublishedVendorPolicy {
+            vendor: DisplayName::new("GrabFood"),
+            enabled: true,
+            availability: Open::from_known(VendorAvailability::Busy),
+            prep_minutes: 25,
+            suppressed_items: vec![MenuItemId::new(Ulid::from_u128(9))],
+        }]);
+        let json = serde_json::to_string(&node).expect("serialize");
+        let back: PublishedVendorPolicies = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(node, back);
+        assert_eq!(back.policies().len(), 1);
+        assert!(PublishedVendorPolicies::default().is_empty());
     }
 
     #[test]

@@ -68,7 +68,9 @@ use pos_proto::ErrorStatus;
 use pos_proto::campaign::{
     PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedConditions,
 };
-use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::channels::{
+    PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
+};
 use pos_proto::determinism::ClockSource;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
@@ -2998,6 +3000,10 @@ where
             "/admin/config/qr",
             get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
         )
+        .route(
+            "/admin/config/vendors",
+            get(admin_read_vendors::<Cfg, A, C>).put(admin_publish_vendors::<Cfg, A, C>),
+        )
         .with_state(ConfigChannelsState {
             config_trees,
             admin,
@@ -3318,6 +3324,111 @@ where
         "qr",
         "config.qr.publish",
         node,
+    )
+    .await
+}
+
+/// A `PUT /admin/config/vendors` body: the store and its per-marketplace policies.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishVendorsRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    policies: Vec<PublishedVendorPolicy>,
+}
+
+/// A super-admin reads a store's current `vendors` policy node, or `null`.
+async fn admin_read_vendors<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes a store's per-marketplace policies as its `vendors` node. Each policy's
+/// availability must be a recognised value; the live loop that pushes it to a marketplace is deferred.
+async fn admin_publish_vendors<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishVendorsRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    if request
+        .policies
+        .iter()
+        .any(|policy| policy.availability.is_unspecified() || policy.availability.is_unrecognised())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a vendor policy names an unknown availability (open/busy/closed)",
+        )
+            .into_response();
+    }
+    let Ok(value) = serde_json::to_value(PublishedVendorPolicies::new(request.policies)) else {
+        return channels_serialize_unavailable();
+    };
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "vendors",
+        "config.vendors.publish",
+        value,
     )
     .await
 }
