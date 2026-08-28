@@ -94,6 +94,7 @@ use pos_proto::ids::{
     AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId, TableId,
     TaxClassId, TenantId,
 };
+use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -6064,6 +6065,67 @@ async fn tax_rate_routes_require_a_session() {
         .await
         .expect("route");
     assert_eq!(listed.status(), StatusCode::UNAUTHORIZED);
+}
+
+fn tax_publish_app(
+    admin: FakeAdmin,
+    tax_rates: FakeTaxRates,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_tax_router(
+        tax_rates,
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
+    let tax_rates = FakeTaxRates::default();
+    let class = TaxClassId::new(Ulid::from_u128(7));
+    tax_rates.rows.lock().expect("lock").push((
+        tenant(),
+        TaxRateEntry {
+            tax_class_id: class,
+            sales_channel: SalesChannel::DineIn,
+            rate: TaxRate::from_percent(10),
+        },
+    ));
+    let config_trees = FakeConfigTrees::default();
+    let router = tax_publish_app(provisioned_admin(), tax_rates, config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/tax",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route tax publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    // The store's Store config layer (index 2) now carries the `tax` node — the serialized rate table.
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let tax = &state.layers[2]["tax"];
+    assert!(tax.is_array(), "the tax node is the serialized rate table");
+    assert_eq!(tax.as_array().expect("array").len(), 1);
 }
 
 #[tokio::test]

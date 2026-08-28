@@ -587,6 +587,13 @@ export const api = {
     requestJson<TaxRate[]>("GET", `/admin/catalog/tax-rates?${tenantQuery(tenantId)}`),
   setTaxRates: (tenantId: string, rates: readonly TaxRate[]) =>
     requestJson<TaxRate[]>("PUT", "/admin/catalog/tax-rates", { tenant_id: tenantId, rates }),
+  // Publish the tenant's authored tax rates to one store's `tax` config node (ADR-0074), behind
+  // console.config.publish; the edge applies it to its session's rate table.
+  publishTax: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/tax", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
   listItemCategories: (tenantId: string) =>
     requestJson<ItemCategory[]>("GET", `/admin/catalog/item-categories?${tenantQuery(tenantId)}`),
   createItemCategory: (tenantId: string, name: string) =>

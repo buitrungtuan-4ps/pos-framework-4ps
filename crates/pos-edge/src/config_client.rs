@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
@@ -136,6 +137,18 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<StationPlan>(&text).ok())
     {
         session.stations = stations;
+    }
+    // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
+    // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
+    // default; a store now bills the authored rates. Absent or unparseable leaves the base table
+    // untouched — a bad publish never blanks a trading store's tax to zero (and `rate_for` still
+    // refuses an unpriced class rather than charging no tax).
+    if let Some(tax_rates) = document
+        .get("tax")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<TaxRateTable>(&text).ok())
+    {
+        session.tax_rates = tax_rates;
     }
     session
 }
@@ -517,6 +530,35 @@ mod tests {
         assert!(rebuilt.floor.table(table_id).is_some());
         // The fired-line resolver derives the station from the published routing (ADR-0072).
         assert_eq!(rebuilt.resolve_station(item(), None), Some(station_id));
+    }
+
+    #[test]
+    fn a_tax_document_rebuilds_the_session_rate_table() {
+        use pos_proto::locale::{TaxRate, TaxRateTable};
+
+        let class = TaxClassId::new(Ulid::from_u128(0x7A));
+        let table = TaxRateTable::new()
+            .with(class, SalesChannel::DineIn, TaxRate::from_percent(8))
+            .with(class, SalesChannel::Takeaway, TaxRate::from_percent(10));
+        let document = serde_json::json!({ "tax": serde_json::to_value(&table).expect("tax") });
+
+        let rebuilt = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(
+            rebuilt.tax_rates.rate_for(class, SalesChannel::DineIn),
+            Some(TaxRate::from_percent(8))
+        );
+        assert_eq!(
+            rebuilt.tax_rates.rate_for(class, SalesChannel::Takeaway),
+            Some(TaxRate::from_percent(10))
+        );
+
+        // No `tax` node: the bootstrap default table survives (a bad publish never blanks tax).
+        let base = EdgeSession::bootstrap();
+        let no_node = session_from_config(&base, &serde_json::json!({ "other": true }));
+        assert!(
+            !no_node.tax_rates.is_empty(),
+            "an absent tax node leaves the table"
+        );
     }
 
     #[test]

@@ -111,6 +111,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be re-exported. There is at most one super-admin.
 
 ### Added
+- **The `tax` config node — authored rates reach the edge and are billed** (roadmap v2, Track M4,
+  slice 3; [ADR-0074](docs/adr/0074-localization-and-tax.md)). Closes the headline M4 gap: a store now
+  bills the *authored* tax rates instead of the hardcoded bootstrap default. `PUT /admin/config/tax`
+  (behind `console.config.publish`, audited `config.tax.publish`) assembles the tenant's authored
+  `(tax class × channel)` rates into a `TaxRateTable`, writes it as the store's **`tax`** config node on
+  the Store layer — preserving the sibling nodes (`menu`, `layout`, `permissions`, `floor`, capability
+  flags) — and versions it through the config tree. The edge's `session_from_config` gains a `tax`
+  branch that parses the node into `EdgeSession::tax_rates`, which `pos_core::billing` and repricing
+  already read; an absent or unparseable node leaves the running table untouched (the never-blank rule),
+  and `rate_for` still refuses an unpriced class rather than charging no tax. The typed client gains
+  `publishTax`. **Upgrade note:** additive Store-layer node and route; a store with no `tax` node keeps
+  today's behaviour; no protocol change.
 - **The tax-rate console API — author the rates the edge applies** (roadmap v2, Track M4, slice 2;
   [ADR-0074](docs/adr/0074-localization-and-tax.md)). `GET /admin/catalog/tax-rates?tenant_id=` lists a
   tenant's authored `(tax class × channel)` rates (behind `console.data.read`); `PUT

@@ -396,6 +396,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Tax publish (ADR-0074, Track M4): assemble the tenant's authored rates into the store's
+        // `tax` config node, so the edge applies them to its session's tax table.
+        .merge(http::config_tax_router(
+            store.tax_rates(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Public order intake + the cloud→store relay (ADR-0056, ADR-0061). The served `POST/GET
         // /v1/orders` calls the relay (an `OrderIn` over the durable per-store queue); the store
         // pulls and acks its queue over the store-facing `/sync/.../orders` routes. The relay

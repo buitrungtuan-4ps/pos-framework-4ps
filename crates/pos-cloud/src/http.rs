@@ -134,7 +134,7 @@ use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
 };
-use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
+use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -2183,6 +2183,173 @@ where
                 &store_id.to_string(),
                 None,
                 serde_json::to_value(&request.flags).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(PublishedConfig {
+                    config_version_id: id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(ConfigError::Invalid(violations)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response(),
+    }
+}
+
+// --- Tax publish (`/admin/config/tax`, ADR-0074, Track M4) --------------------------------------
+
+/// The collaborators the tax-publish route needs: the tax-rate store the table is read from, the
+/// config-tree store the `tax` node is written onto, plus the admin/clock/audit every write carries.
+#[derive(Clone)]
+struct ConfigTaxState<Tax, Cfg, A, C> {
+    tax_rates: Tax,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin publishes a tenant's authored tax rates to one of its stores: the `(tenant, store)`.
+/// The rates come from the authored table, not the body — publishing is "push what is authored".
+#[derive(Debug, Clone, Deserialize)]
+struct PublishTaxRequest {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// Builds the tax-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+///
+/// One route: assemble the tenant's authored `(tax class × channel)` rates into a `TaxRateTable`, write
+/// it as the store's `tax` config node, and version it through the config tree — the node-merge the
+/// catalog/floor/people publishes use, so the other Store-level keys survive. Behind
+/// [`ConsolePermission::PublishConfig`]. The edge applies the node to `EdgeSession::tax_rates`.
+pub fn config_tax_router<Tax, Cfg, A, C>(
+    tax_rates: Tax,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/tax",
+            axum::routing::put(admin_publish_tax::<Tax, Cfg, A, C>),
+        )
+        .with_state(ConfigTaxState {
+            tax_rates,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Assembles a tenant's authored rates into a `TaxRateTable`, writes it as the store's `tax` node, and
+/// versions it — the same load→merge→publish→version shape as the other node publishes.
+async fn admin_publish_tax<Tax, Cfg, A, C>(
+    State(state): State<ConfigTaxState<Tax, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishTaxRequest>,
+) -> Response
+where
+    Tax: TaxRateStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let entries = match state.tax_rates.list_tax_rates(tenant_id).await {
+        Ok(entries) => entries,
+        Err(error) => return tax_rate_error_response(&error),
+    };
+    let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
+        tracing::error!("could not serialise a tax rate table");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the tax-rate service is unavailable",
+        )
+            .into_response();
+    };
+
+    // Set the `tax` key on the store's Store layer (index 2) and re-publish it, preserving the other
+    // Store-level keys (`menu`, `layout`, `permissions`, `floor`, capability flags).
+    let state_before = match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state) => state,
+        Err(error) => return config_store_error_response(&error),
+    };
+    let mut store_layer = state_before.as_ref().map_or_else(
+        || serde_json::Value::Object(serde_json::Map::new()),
+        |existing| existing.layers[2].clone(),
+    );
+    if !store_layer.is_object() {
+        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(map) = &mut store_layer {
+        map.insert("tax".to_owned(), tax_value);
+    }
+
+    let mut tree = match state_before {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the configuration service is unavailable",
+        )
+            .into_response();
+    };
+    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+        Ok(id) => {
+            if let Err(error) = state
+                .config_trees
+                .save(tenant_id, store_id, &tree.state())
+                .await
+            {
+                return config_store_error_response(&error);
+            }
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "config.tax.publish",
+                "store",
+                &store_id.to_string(),
+                None,
+                serde_json::to_value(entries.len()).ok(),
             )
             .await;
             (
