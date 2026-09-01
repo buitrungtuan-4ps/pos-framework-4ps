@@ -204,6 +204,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   device-token gate like every other domain route. A store that has not published a menu now shows an
   empty menu on the till, where it previously showed six hardcoded items — publish the store's
   catalogue from the console to fill it.
+- **The till stops doing money arithmetic** (roadmap v3, slice E5;
+  [ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)). The operator UI computed the running check
+  itself — summing the lines and applying a tax rate **hardcoded at 10%** — so a store on any other
+  rate, or with more than one tax class, showed the guest one number and settled against another. A
+  new `GET /api/tables/{id}/check` answers with the edge's own figure, assembled by the same
+  `billing::assemble` the settle path runs, over the same projection and the same session: one
+  calculation, living in the domain. The pay screen now displays that figure rather than deriving
+  one, and takes the store's currency from it instead of assuming `VND`, so a store on another
+  currency renders and tenders correctly with no change here. An acceptance test proves the point
+  end to end — the check the till reads settles the bill exactly, and a settle for any other amount
+  is refused. A table with nothing on it reads as owing zero rather than erroring. **Upgrade note:**
+  no wire, protocol, permission, or migration change; the route is additive and behind the same
+  device-token gate as every other domain route. Change due is still shown as the tender minus the
+  edge's total while the operator taps — a subtraction of two figures they can see — with the
+  authoritative `change_given` recorded per payment at settle. The shift screen's opening float still
+  assumes `VND`; that is the one place left and it is its own slice.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
