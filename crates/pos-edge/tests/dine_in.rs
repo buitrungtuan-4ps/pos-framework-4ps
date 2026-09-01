@@ -176,3 +176,61 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
         }
     });
 }
+
+/// The running check the till reads is the figure the bill settles against (roadmap-v3 E5).
+///
+/// The regression this guards is the one the slice removes: the operator UI used to add the lines up
+/// itself and apply a rate hardcoded at 10%, so a store on any other rate showed the guest one number
+/// and settled against another. Asking the edge means one calculation, in the domain.
+#[test]
+fn the_running_check_matches_what_the_bill_settles_against() {
+    pos_fakes::executor::run_ready(async {
+        let edge = Arc::new(
+            Edge::new(
+                FakeStore::default(),
+                StoreIdentity::for_store(StoreId::new(Ulid::from_u128(2))),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seed"),
+        );
+        let table = TableId::new(Ulid::from_u128(901));
+
+        // An empty table owes nothing — not an error, and not a missing figure.
+        let empty = edge.check_totals(table).expect("an empty table reads");
+        assert_eq!(empty.total_due, vnd(0));
+
+        edge.seat_table(device_a(), table).await.expect("seats");
+        edge.add_line(device_a(), table, a_pizza(600))
+            .await
+            .expect("adds a line");
+        edge.add_line(device_a(), table, a_pizza(601))
+            .await
+            .expect("adds a second line");
+
+        // Two pizzas at 150 000, taxed at the bootstrap's 10%: 300 000 + 30 000.
+        let check = edge.check_totals(table).expect("the check reads");
+        assert_eq!(check.subtotal, vnd(300_000));
+        assert_eq!(check.tax_total, vnd(30_000));
+        assert_eq!(check.total_due, vnd(330_000));
+
+        // And the bill settles against exactly that: a settle for a different amount is refused, so
+        // paying the check's own figure proves the two agree.
+        let bill = edge.open_bill(device_a(), table).await.expect("opens");
+        let settled = edge
+            .settle_bill(
+                device_a(),
+                bill.bill_id,
+                vec![Payment {
+                    method: PaymentMethod::Cash,
+                    tendered: check.total_due,
+                    applied_to_bill: check.total_due,
+                }],
+                Vec::new(),
+            )
+            .await
+            .expect("the check's own figure settles the bill");
+        assert_eq!(settled.total_due, Some(check.total_due));
+        assert_eq!(settled.state, BillState::Settled);
+    });
+}

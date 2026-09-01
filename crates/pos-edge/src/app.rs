@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
-use pos_core::billing::{self, BillInput, ClassBase, Payment};
+use pos_core::billing::{self, BillInput, BillTotals, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::CapabilityContext;
@@ -1271,6 +1271,58 @@ impl<S: EventStore> Edge<S> {
             station_id,
             order_line_ids,
         })
+    }
+
+    /// The running check on a table: what the guest owes **right now**, assembled from the order's
+    /// captured line totals against the store's own tax table (roadmap-v3 slice E5).
+    ///
+    /// A pure read — no command, no event, no state change — so a screen may call it as freely as it
+    /// redraws. It runs the *same* [`billing::assemble`] the settle path runs, from the same
+    /// projection and the same [`EdgeSession`], which is the point: the figure the operator reads to
+    /// the guest and the figure the bill settles against are one calculation, not two that agree
+    /// until a store publishes a second tax class. A table with no open order owes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if a line's tax class has no configured rate — a configuration error the
+    /// caller surfaces rather than papers over with zero tax.
+    pub fn check_totals(&self, table_id: TableId) -> Result<BillTotals, AppError> {
+        let session = self.session();
+        // Bound to a local first: a `match` on the call would hold the projection guard across the
+        // arm, and the arm takes it again — which is a deadlock, not a borrow error.
+        let open_order = self.lock_projection().order_for_table(table_id);
+        let class_bases = match open_order {
+            Some(order_id) => {
+                let lines = self.lock_projection().lines_for_order(order_id);
+                Self::class_bases(&lines)?
+            }
+            None => Vec::new(),
+        };
+        if class_bases.is_empty() {
+            // Nothing ordered — a seated table before its first line, or one whose every line was
+            // voided. `assemble` refuses an empty bill (there is nothing to allocate across), and
+            // rightly so; but "owes nothing" is a real answer for a screen to show, not an error.
+            return Ok(Self::nothing_owed(session.currency));
+        }
+        Ok(billing::assemble(&Self::bill_input(
+            &session,
+            &class_bases,
+        ))?)
+    }
+
+    /// A zeroed set of totals in `currency`, for a table with nothing on it.
+    fn nothing_owed(currency: CurrencyCode) -> BillTotals {
+        let zero = Money::zero(currency);
+        BillTotals {
+            subtotal: zero,
+            discount_total: zero,
+            comp_total: zero,
+            service_charge: zero,
+            tax_lines: Vec::new(),
+            tax_total: zero,
+            rounding_adjustment: zero,
+            total_due: zero,
+        }
     }
 
     /// Opens a bill on the order a table holds (`billing.bill.opened`) and moves the table to

@@ -9,6 +9,7 @@ import type {
   BillResponse,
   BumpRequest,
   BumpResponse,
+  CheckResponse,
   CountShiftRequest,
   FireRequest,
   FloorResponse,
@@ -134,6 +135,11 @@ export const api = {
   // The store's published floor plan and kitchen stations (ADR-0072). The app reads this at start to
   // draw the store's real tables and resolve fires to the store's default station.
   floor: () => request<FloorResponse>("GET", "/api/floor"),
+
+  // What a table owes right now, assembled by the edge (roadmap-v3 E5). The till reads this rather
+  // than adding up lines and applying a tax rate of its own — the figure shown to the guest and the
+  // figure the bill settles against are then the same calculation.
+  check: (tableId: string) => request<CheckResponse>("GET", `/api/tables/${tableId}/check`),
 
   // The store's published price book (roadmap-v3 E5, ADR-0063). Empty until the cloud publishes a
   // menu — a store never guesses a price, and neither does the till.

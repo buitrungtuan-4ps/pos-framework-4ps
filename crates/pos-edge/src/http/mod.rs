@@ -13,6 +13,7 @@
 pub mod assets;
 pub mod auth;
 pub mod bills;
+pub mod check;
 pub mod floor;
 pub mod health;
 pub mod kds;
@@ -99,6 +100,9 @@ where
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
         .route("/api/tables/{id}", get(tables::get::<S>))
+        // What the table owes right now, assembled by the edge — the till displays the figure it is
+        // going to settle against rather than computing one of its own (roadmap-v3 E5).
+        .route("/api/tables/{id}/check", get(check::read::<S>))
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))

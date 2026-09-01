@@ -7,7 +7,13 @@ import { createStore, produce } from "solid-js/store";
 
 import { api } from "../api/client";
 import type { LinkStatus, ServerEvent } from "../api/live";
-import type { BillResponse, LineRequest, MenuItemResponse, PaymentRequest } from "../api/types";
+import type {
+  BillResponse,
+  CheckResponse,
+  LineRequest,
+  MenuItemResponse,
+  PaymentRequest,
+} from "../api/types";
 import { type Money } from "../lib/money";
 
 export interface OrderLine {
@@ -153,17 +159,12 @@ export function openBillFor(tableId: string): string | undefined {
 
 // The bill total the operator collects, computed client-side from the captured line totals and the
 // bootstrap's single 10% standard rate — the same arithmetic the edge does for one tax class. Tax
-// rounds half-up on the whole subtotal, with integer math only so it matches the edge to the đồng.
-export function billTotalMinor(tableId: string): {
-  subtotal: number;
-  tax: number;
-  total: number;
-} {
-  const subtotal = linesForTable(tableId)
-    .filter((line) => line.state !== "ORDER_LINE_STATE_VOIDED")
-    .reduce((sum, line) => sum + line.lineTotal.amount_minor, 0);
-  const tax = Math.floor((subtotal * 1000 + 5000) / 10000);
-  return { subtotal, tax, total: subtotal + tax };
+// What the table owes right now, asked of the edge (roadmap-v3 E5). The till used to add the lines up
+// itself and apply a tax rate hardcoded at 10%, so a store on any other rate — or with more than one
+// tax class — showed the guest one number and settled against another. The edge assembles this with
+// the same `billing::assemble` the settle path runs, so there is one calculation, in the domain.
+export async function loadCheck(tableId: string): Promise<CheckResponse> {
+  return api.check(tableId);
 }
 
 // ---- small payload readers (fan-out payloads are untyped JSON) --------------

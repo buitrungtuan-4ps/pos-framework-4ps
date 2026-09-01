@@ -99,6 +99,15 @@ export interface MenuResponse {
   items: MenuItemResponse[];
 }
 
+// What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the
+// edge from the order's live lines against the store's own tax table — the same calculation the bill
+// settles against, so the till displays a figure rather than deriving one.
+export interface CheckResponse {
+  subtotal: Money;
+  tax_total: Money;
+  total_due: Money;
+}
+
 export interface BumpRequest {
   order_id: string;
   station_id: string;
