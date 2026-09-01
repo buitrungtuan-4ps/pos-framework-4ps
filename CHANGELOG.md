@@ -79,6 +79,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   edge UI. Headless-Linux reboot durability (a TPM-sealed credential via `systemd-creds`) stays the
   flagged hardware gate the deferral named. **Upgrade note:** none — this PR records the decision; the
   adapter, composition, and `/setup` screen land in the E2 implementation slices.
+- **The OS-keyring `KeyVault` adapter** (roadmap v3, slice E2;
+  [ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md)). A new `key-vault-keyring` crate
+  implements the `KeyVault` port over the OS credential store via the maintained cross-platform
+  `keyring` crate — Windows Credential Manager, macOS Keychain, and on Linux the kernel keyring
+  (keyutils) via the `linux-native` backend, which needs no D-Bus session and so works under the
+  headless store service user. The socket sits behind a `KeyringBackend` seam, so the adapter's
+  mapping and semantics (a `SecretName` to a keyring entry, binary-safe `Secret` round-trip, error
+  translation, and every one of the shared `key_vault` contract cases) are proven in the fast
+  pull-request gate against an in-memory backend; the real OS store is proven by the same suite behind
+  a `--features integration` gate, run on real hardware (a booted box, not a bare CI container, where
+  a kernel keyring has no usable session — the hardware handoff ADR-0086 flags). A new
+  `SecretName::SyncKey` variant is added for the edge's tenant-scoped `read_config` key (used when the
+  composition slice moves it off the environment). This is the first new runtime dependency since the
+  HTTP/DB stacks; it passes `cargo deny` (bans, licences, advisories) with no new duplicate-version
+  exemption. **Upgrade note:** additive only — a new adapter crate and an additive `#[non_exhaustive]`
+  `SecretName` variant; no wire, protocol, or migration change, and nothing composes it into the
+  shipped binary yet (that is the next E2 slice).
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
