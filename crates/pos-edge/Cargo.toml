@@ -96,7 +96,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"]
 # The WebSocket fan-out test binds an ephemeral port and connects a real client.
 # tokio-tungstenite is pinned to the version axum already resolves, so it adds no
 # duplicate; no TLS features (the LAN socket is plaintext ws://).
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 # The application layer runs against the in-memory fakes in tests, exactly as it will against
 # store-sqlite in the field.
