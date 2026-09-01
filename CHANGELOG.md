@@ -33,6 +33,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   migration, or dependency change; the core is already vendor-neutral, so the gate ratifies and
   guards the existing state.
 
+### Changed
+- **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
+  The `contract` job in `main.yml` was a placeholder `echo`; it now runs `cargo test --workspace
+  --test contract`, so every adapter's port contract suite (the `pos-contract-tests` harness) runs on
+  each push — "swappable" is a checked fact, not a claim. The nightly `soak` job likewise ran nothing;
+  it now runs the `pos-simulator` scenario tests (which assert the published capacity-and-reliability
+  envelope) and prints the report, so a modelled-throughput regression fails the build. A new
+  `.github/dependabot.yml` opens weekly, grouped, capped dependency PRs for the Cargo workspace, the
+  GitHub Actions pins, and both pnpm front-ends (`ui`, `dashboard`) — each landing on the same `pr.yml`
+  gate (`cargo deny`, tests, the pinned-SHA check) so a bad bump cannot merge. **Upgrade note:** none —
+  CI and tooling only; no code, schema, protocol, or permission change.
+
 ### Security
 - **The edge now requires a paired device token on every domain route** (roadmap v3, slice S0;
   [ADR-0084](docs/adr/0084-device-authentication.md), amending

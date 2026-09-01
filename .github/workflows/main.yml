@@ -124,6 +124,11 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: ./.github/actions/rust-setup
+      # Every adapter's `tests/contract.rs` runs the shared suite for its port
+      # (`pos-contract-tests`), so `--test contract` runs them all and skips the
+      # crates that have no such target. The suites here need no service — the
+      # network adapters' heavier suites gate behind `--features integration` and
+      # run in the integration job — so this is a fast, deterministic signal that
+      # "swappable" holds for every fake and file-backed adapter.
       - name: port contract suites
-        run: |
-          echo "Contract suites arrive with pos-contract-tests in P2. See docs/roadmap.md."
+        run: cargo test --workspace --locked --test contract
