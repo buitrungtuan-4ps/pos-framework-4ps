@@ -65,6 +65,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   edge with neither runs LAN-only and spawns no cloud loops, exactly as before. The config-pull loop
   polls on an interval (the cloud does not long-poll yet, ADR-0039), so a publish reaches a store
   within ~30s.
+- **The decision for the edge's OS-keyring KeyVault and activation wiring** (roadmap v3, slice E2;
+  [ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md)). The edge's activation flow (ADR-0050) —
+  type a one-time code, exchange it for a device credential, store it in the OS key store — has been
+  written and tested since P9 but never composed into the shipped binary: there is no real `KeyVault`
+  adapter (only the in-memory fake), and `activation_router`/`boot_standing` are dangling. ADR-0086
+  settles how E2 closes that: a new `key-vault-keyring` adapter over the `keyring` crate (Windows
+  Credential Manager, macOS Keychain, and Linux kernel keyutils via `linux-native` — no D-Bus subtree,
+  works under the headless service user), contract-suite-verified in the gated integration lane; the
+  activation router + a `cloud-sync-http` `CloudSync` composed into `serve()`; a boot gate that gates
+  cloud sync but never local trading (offline-first holds); the E1 `read_config` key moved into the
+  vault under a new `SecretName::SyncKey` (env override kept); and a `/setup` activation screen in the
+  edge UI. Headless-Linux reboot durability (a TPM-sealed credential via `systemd-creds`) stays the
+  flagged hardware gate the deferral named. **Upgrade note:** none — this PR records the decision; the
+  adapter, composition, and `/setup` screen land in the E2 implementation slices.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
