@@ -36,6 +36,8 @@
   "order.fired": "Đã báo bếp",
   "order.take_payment": "Thanh toán",
   "order.menu": "Thực đơn",
+  "order.menu_empty": "Cửa hàng này chưa có thực đơn được công bố.",
+  "order.unavailable": "Không bán",
 
   "pay.amount_due": "Số tiền cần thu",
   "pay.cash": "Tiền mặt",

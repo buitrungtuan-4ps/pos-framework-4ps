@@ -186,6 +186,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   no URL, an unactivated box, or an unreachable stream, the edge logs it and publishes nothing while
   the store trades exactly as before and keeps every event (ADR-0001). Configure both, on a store
   whose stream matches the cloud's consumer, and its events start arriving.
+- **The till sells the store's own menu** (roadmap v3, slice E5;
+  [ADR-0063](docs/adr/0063-store-menu-catalog.md), [ADR-0064](docs/adr/0064-edge-order-in.md)).
+  Publishing a menu from the console used to change every channel *except* the till in front of the
+  guest: the operator UI carried six pizzas compiled into the app. A new `GET /api/menu` serves the
+  store's price book from the same live session an inbound order is repriced against, and the UI
+  reads it — `ui/src/lib/menu.ts` is gone. Each item arrives with its price **and** the tax rate
+  resolved from the store's own table for the channel a walk-in sale arrives on, so the line the till
+  sends carries what the guest was actually shown. An item whose tax class has **no row** in the
+  table comes back with no rate and marked unavailable: a missing rate is a configuration error, and
+  quietly quoting a guest zero tax is the kind of bug an audit finds rather than a test. The screen
+  shows such an item, and an 86'd one, greyed out rather than hidden, so staff can see why it cannot
+  be ordered. A store with nothing published says so instead of offering a fictional menu. This also
+  takes the first bite out of E5's other half: the app no longer builds any `Money` of its own on this
+  path — it hands the edge's own amounts straight back. **Upgrade note:** no wire, protocol,
+  permission, or migration change; the route is additive and unauthenticated callers still hit the
+  device-token gate like every other domain route. A store that has not published a menu now shows an
+  empty menu on the till, where it previously showed six hardcoded items — publish the store's
+  catalogue from the console to fill it.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).

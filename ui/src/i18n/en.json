@@ -36,6 +36,8 @@
   "order.fired": "Fired",
   "order.take_payment": "Take payment",
   "order.menu": "Menu",
+  "order.menu_empty": "No menu published for this store yet.",
+  "order.unavailable": "Unavailable",
 
   "pay.amount_due": "Amount due",
   "pay.cash": "Cash",

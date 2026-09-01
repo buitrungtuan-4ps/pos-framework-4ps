@@ -14,6 +14,7 @@ import type {
   FloorResponse,
   LineRequest,
   LineResponse,
+  MenuResponse,
   OpenShiftRequest,
   PairAccepted,
   SettleRequest,
@@ -133,6 +134,10 @@ export const api = {
   // The store's published floor plan and kitchen stations (ADR-0072). The app reads this at start to
   // draw the store's real tables and resolve fires to the store's default station.
   floor: () => request<FloorResponse>("GET", "/api/floor"),
+
+  // The store's published price book (roadmap-v3 E5, ADR-0063). Empty until the cloud publishes a
+  // menu — a store never guesses a price, and neither does the till.
+  menu: () => request<MenuResponse>("GET", "/api/menu"),
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),

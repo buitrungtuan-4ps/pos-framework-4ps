@@ -17,6 +17,7 @@ pub mod floor;
 pub mod health;
 pub mod kds;
 pub mod lines;
+pub mod menu;
 pub mod pair;
 pub mod shifts;
 pub mod tables;
@@ -91,6 +92,9 @@ where
         // The store's published floor plan + kitchen stations, for the UI to render real tables and
         // route fires (ADR-0072).
         .route("/api/floor", get(floor::plan::<S>))
+        // The store's published price book, so the till prices from what the console published
+        // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
+        .route("/api/menu", get(menu::catalog::<S>))
         // The floor: seat, clean, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))

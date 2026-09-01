@@ -7,9 +7,8 @@ import { createStore, produce } from "solid-js/store";
 
 import { api } from "../api/client";
 import type { LinkStatus, ServerEvent } from "../api/live";
-import type { BillResponse, LineRequest, PaymentRequest } from "../api/types";
-import { CURRENCY, type MenuItem } from "../lib/menu";
-import { money, type Money } from "../lib/money";
+import type { BillResponse, LineRequest, MenuItemResponse, PaymentRequest } from "../api/types";
+import { type Money } from "../lib/money";
 
 export interface OrderLine {
   orderLineId: string;
@@ -48,6 +47,10 @@ interface StoreShape {
   orderTable: Record<string, string>;
   lines: Record<string, OrderLine>;
   openBill: Record<string, string>;
+  // The store's own price book, from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Empty until the edge
+  // serves it — a store never guesses a price, so the till shows nothing to sell rather than a list
+  // compiled into the app.
+  menu: MenuItemResponse[];
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
@@ -76,6 +79,7 @@ const [state, setState] = createStore<StoreShape>({
   orderTable: {},
   lines: {},
   openBill: {},
+  menu: [],
   bumped: {},
   shift: null,
 });
@@ -354,15 +358,24 @@ export async function clean(tableId: string): Promise<void> {
   setState("tableState", tableId, response.state);
 }
 
-export async function addItem(tableId: string, item: MenuItem): Promise<void> {
+// Adds one of the store's own menu items to a table. Every amount on the line is the edge's, passed
+// straight back rather than recomputed here: the price and the rate are what the store published and
+// what the guest was shown (roadmap-v3 E5). An item the edge reported unavailable is refused before
+// the round-trip — the button is disabled too, but the guard belongs with the action.
+export async function addItem(tableId: string, item: MenuItemResponse): Promise<void> {
+  if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
+    throw new Error(`${item.display_name} is not sellable`);
+  }
   const line: LineRequest = {
-    menu_item_id: item.id,
-    display_name: item.name,
+    menu_item_id: item.menu_item_id,
+    display_name: item.display_name,
     quantity: { milli: 1000 },
-    unit_price: money(CURRENCY, item.unitPriceMinor),
-    line_total: money(CURRENCY, item.unitPriceMinor),
-    tax_class_id: item.taxClassId,
-    tax_rate: item.taxRate,
+    unit_price: item.unit_price,
+    // One unit, so the line total is the unit price — the only quantity the till offers today, and
+    // the edge is the authority on the figure either way.
+    line_total: item.unit_price,
+    tax_class_id: item.tax_class_id,
+    tax_rate: item.tax_rate,
     note_present: false,
   };
   const response = await api.addLine(tableId, line);
@@ -373,13 +386,25 @@ export async function addItem(tableId: string, item: MenuItem): Promise<void> {
       draft.lines[response.order_line_id] = {
         orderLineId: response.order_line_id,
         orderId: response.order_id,
-        name: item.name,
+        name: item.display_name,
         quantityMilli: 1000,
-        lineTotal: money(CURRENCY, item.unitPriceMinor),
+        lineTotal: item.unit_price,
         state: response.state,
       };
     }),
   );
+}
+
+// Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
+// failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
+// empty menu is a real answer — the store has published none — and the screen says so.
+export async function loadMenu(): Promise<void> {
+  try {
+    const response = await api.menu();
+    setState("menu", response.items);
+  } catch {
+    // The counter keeps whatever it last loaded; the next boot or reload tries again.
+  }
 }
 
 export async function fire(lineId: string): Promise<void> {

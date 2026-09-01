@@ -14,7 +14,7 @@ import { Setup } from "./screens/Setup";
 import { Shift } from "./screens/Shift";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { fold, loadFloor, setLink } from "./state/store";
+import { fold, loadFloor, loadMenu, setLink } from "./state/store";
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
@@ -63,9 +63,11 @@ export function App() {
           sendTo("/signin");
           return;
         }
-        // Signed in: draw the store's real floor and resolve fires to its default station (ADR-0072);
-        // a failure or an empty plan leaves the never-blank fallback in place.
+        // Signed in: draw the store's real floor and resolve fires to its default station (ADR-0072),
+        // and load the store's own price book so the till sells what the console published (E5).
+        // A failure or an empty plan leaves the never-blank fallback in place.
         void loadFloor();
+        void loadMenu();
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {
