@@ -44,20 +44,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   public half. **Upgrade note:** none for the running product — this is release tooling; before the
   first release a maintainer provisions the `MINISIGN_SECRET_KEY` secret (a documented human gate).
   Windows and the OTA artifact server follow in E4 and R2.
-- **The decision for how the edge dials its cloud** (roadmap v3, slice E1;
-  [ADR-0085](docs/adr/0085-edge-cloud-sync-transport.md)). The edge already carries the config-pull
-  and heartbeat loops as pure, seam-based, fake-tested library code, but `serve()` spawns none of them
-  and no real transport exists — so a shipped edge connects to its cloud only at activation and then
-  goes dark: a menu published from the dashboard never reaches the counter, and the fleet view shows
-  every store as never-seen. ADR-0085 settles the outbound-transport choice before the wiring slice:
-  the field transports live in `pos-edge` over the tree's standard `hyper` + `tokio-rustls` (`ring`)
-  stack — the same pin five crates already carry, so no new crate, version, or `cargo-deny` entry;
-  `cloud_url` becomes an optional `EdgeConfig` field (absent = LAN-only, no cloud loops, exactly as
-  today); and the loops authenticate with the tenant-scoped `read_config` API key the `/sync` routes
-  verify today (ADR-0037/0039), supplied from a mode-0600 env file — never committed, never in
-  `config.toml` — with the OS-keyring home (E2) and the `posdev_` device-credential identity (a later
-  P9 cloud-auth change) both flagged as follow-ups. **Upgrade note:** none — this PR records the
-  decision; the config-pull and heartbeat wiring lands in the E1 implementation slice.
+- **The edge now dials its cloud: config-pull and heartbeat loops run** (roadmap v3, slice E1;
+  [ADR-0085](docs/adr/0085-edge-cloud-sync-transport.md)). The edge already carried the config-pull
+  and heartbeat loops as pure, seam-based, fake-tested library code, but `serve()` spawned none of
+  them and no real transport existed — so a shipped edge connected to its cloud only at activation and
+  then went dark: a menu published from the dashboard never reached the counter, and the fleet view
+  showed every store as never-seen. This slice makes them run. A new `cloud_http` module implements
+  the two transports over the tree's standard `hyper` + `tokio-rustls` (`ring`) stack — the same pin
+  the webhook sender (ADR-0038) and `cloud-sync-http` (ADR-0054) use, already in the lock, so no new
+  crate, version, or `cargo-deny` entry — and `serve()` spawns `ConfigClient` and `HeartbeatClient`
+  under its graceful-shutdown signal. A published menu/permission/tax/locale change now reaches the
+  counter without a restart (config-pull hot-swaps the live session), and a quiet store still reads as
+  online (heartbeat). A new optional `cloud_url` field on `EdgeConfig` names the store's cloud; the
+  loops authenticate with the tenant-scoped `read_config` API key the `/sync` routes verify today
+  (ADR-0037/0039), read from `POS_EDGE_SYNC_KEY` — supplied by the service unit from a mode-0600 env
+  file, never committed and never in `config.toml`. The OS-keyring home for the key (E2) and the
+  `posdev_` device-credential identity for `/sync` (a later P9 cloud-auth change) stay flagged behind
+  the seam. **Upgrade note:** no wire, protocol, `pos-proto`, or migration change. A provisioned store
+  gains a `cloud_url` in its `config.toml` and a `POS_EDGE_SYNC_KEY` in its service unit's env file; an
+  edge with neither runs LAN-only and spawns no cloud loops, exactly as before. The config-pull loop
+  polls on an interval (the cloud does not long-poll yet, ADR-0039), so a publish reaches a store
+  within ~30s.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).

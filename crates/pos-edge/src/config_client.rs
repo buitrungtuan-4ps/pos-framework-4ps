@@ -313,8 +313,8 @@ impl ConfigTransportError {
 /// tested without a socket; the field implementation is an HTTPS client authenticated with the
 /// store's scoped API key.
 pub trait ConfigTransport: Send + Sync {
-    /// Fetches the effective config, or `None` if `held_version` is already current — the long-poll
-    /// the store initiates ([ADR-0058](../../../docs/adr/0058-config-pull.md)).
+    /// Fetches the effective config, or `None` if `held_version` is already current — the pull the
+    /// store initiates ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
     ///
     /// # Errors
     ///
@@ -377,9 +377,17 @@ where
         Ok(Some(synced.config_version_id))
     }
 
-    /// Runs the config-pull loop until `shutdown` resolves. A transport error is logged and retried
-    /// after a backoff — the store keeps trading on its last-known-good session while the link is down.
-    pub async fn run<F>(self, shutdown: F)
+    /// Runs the config-pull loop until `shutdown` resolves: pull, apply anything new, wait
+    /// `poll_interval`, repeat. A transport error is logged and retried after a shorter backoff
+    /// instead — the store keeps trading on its last-known-good session while the link is down.
+    ///
+    /// The cloud answers a pull immediately (it does not yet park the connection until the config
+    /// changes), so the loop paces itself with `poll_interval` rather than pulling in a tight spin;
+    /// a published change reaches the counter within one interval. Server-side long-poll is a later
+    /// optimisation ([ADR-0039](../../../docs/adr/0039-config-delivery.md)); the seam does not change
+    /// when it lands. Both the interval wait and the error backoff are cut short by `shutdown`, so a
+    /// stop drains promptly.
+    pub async fn run<F>(self, poll_interval: Duration, shutdown: F)
     where
         F: Future<Output = ()> + Send,
     {
@@ -388,12 +396,16 @@ where
             tokio::select! {
                 () = &mut shutdown => break,
                 result = self.pump_once() => {
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "config pull failed; backing off");
-                        tokio::select! {
-                            () = &mut shutdown => break,
-                            () = tokio::time::sleep(RETRY_BACKOFF) => {}
+                    let wait = match result {
+                        Ok(_) => poll_interval,
+                        Err(error) => {
+                            tracing::warn!(%error, "config pull failed; backing off");
+                            RETRY_BACKOFF
                         }
+                    };
+                    tokio::select! {
+                        () = &mut shutdown => break,
+                        () = tokio::time::sleep(wait) => {}
                     }
                 }
             }

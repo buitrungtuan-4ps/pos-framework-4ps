@@ -1,0 +1,506 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The edge's outbound cloud HTTP client and the config-pull / heartbeat transports
+//! ([ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md)).
+//!
+//! The config-pull ([`config_client`](crate::config_client)) and heartbeat
+//! ([`heartbeat_client`](crate::heartbeat_client)) loops each hide their HTTP behind a seam so the
+//! loop logic is tested with no socket. This module is the field implementation of those seams: one
+//! small rustls/hyper client ([`CloudHttpClient`]) — the same stack the webhook sender
+//! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)) and `cloud-sync-http`
+//! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)) pin — reused by
+//! [`ConfigHttpTransport`] and [`HeartbeatHttpTransport`].
+//!
+//! It dials exactly one trusted host — the store's own cloud, its base URL set at provisioning — so,
+//! like `cloud-sync-http`, it resolves and connects the ordinary way; there is no SSRF surface to
+//! defend. Every request carries the store's scoped `read_config` API key as a bearer (ADR-0037/0039),
+//! the credential the `/sync` routes verify today; the key is supplied out-of-band (never in
+//! `config.toml`, never committed — ADR-0085) and the caller passes it here.
+//!
+//! The socket lives in [`CloudHttpClient::request`]; everything the tests need — the request line the
+//! path and query produce, and the interpretation of a config-sync response — is a pure function
+//! beside it, so the branching is checked in the fast gate without a peer.
+
+use core::time::Duration;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::Request;
+use hyper::header::{AUTHORIZATION, CONTENT_TYPE, HOST};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+
+use pos_proto::ids::StoreId;
+
+use crate::config_client::{ConfigTransport, ConfigTransportError, SyncedConfig};
+use crate::heartbeat_client::{HeartbeatError, HeartbeatTransport};
+
+/// How long any one request may take, end to end (resolve → connect → handshake → send → read). A
+/// black-hole cloud must never wedge a loop; a timeout is an ordinary transport failure the loop
+/// backs off from, and the store keeps trading locally meanwhile (ADR-0001).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A failure of the outbound cloud transport — the cloud could not be reached, or answered in a way
+/// the client could not use. Carries a human-readable reason for the store's log; configuration and
+/// heartbeats carry no personal data, so the reason is safe to log.
+#[derive(Debug, thiserror::Error)]
+#[error("the cloud transport failed: {0}")]
+pub struct CloudHttpError(String);
+
+impl CloudHttpError {
+    /// Wraps a reason.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+/// One HTTPS client to the store's own cloud, reused across calls.
+///
+/// Cheap to clone — it holds a shared rustls [`ClientConfig`], the parsed base URL, and the bearer
+/// key — so the edge builds one and hands a clone to each transport.
+#[derive(Debug, Clone)]
+pub struct CloudHttpClient {
+    base: url::Url,
+    bearer: Arc<str>,
+    tls: Arc<ClientConfig>,
+    timeout: Duration,
+}
+
+impl CloudHttpClient {
+    /// Builds a client pointed at `base_url` (the store's cloud), presenting `bearer` (the scoped
+    /// `read_config` API key) on every request, trusting the bundled Mozilla roots.
+    ///
+    /// The `ring` crypto provider is selected explicitly, not via the ambient default, so feature
+    /// unification can never pull `aws-lc-rs` (ADR-0038).
+    ///
+    /// # Errors
+    ///
+    /// [`CloudHttpError`] if `base_url` is not an `https` URL with a host, or if the `ring` provider
+    /// cannot supply the safe default TLS versions (a build-time impossibility, a `Result` only to
+    /// keep the constructor panic-free per the workspace lints).
+    pub fn new(base_url: &url::Url, bearer: impl Into<String>) -> Result<Self, CloudHttpError> {
+        if base_url.scheme() != "https" {
+            return Err(CloudHttpError::new("the cloud base URL must use https"));
+        }
+        if base_url.host_str().is_none() {
+            return Err(CloudHttpError::new("the cloud base URL has no host"));
+        }
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls = ClientConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|error| {
+            CloudHttpError::new(format!(
+                "the ring provider rejected the safe defaults: {error}"
+            ))
+        })?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        Ok(Self {
+            base: base_url.clone(),
+            bearer: Arc::from(bearer.into()),
+            tls: Arc::new(tls),
+            timeout: REQUEST_TIMEOUT,
+        })
+    }
+
+    /// The absolute request URL for an origin-rooted `path` (e.g. `/sync/stores/…/config`) and an
+    /// optional raw `query` (e.g. `held_version=…`). The base is treated as an origin — its own path,
+    /// if any, is replaced — because the cloud's `/sync` routes are rooted at the origin.
+    fn target(&self, path: &str, query: Option<&str>) -> url::Url {
+        let mut target = self.base.clone();
+        target.set_path(path);
+        target.set_query(query);
+        target
+    }
+
+    /// Performs one request under the timeout: resolve → connect → TLS handshake against the hostname
+    /// → one HTTP/1.1 request carrying the bearer → read the whole body. Returns the status and body.
+    ///
+    /// # Errors
+    ///
+    /// [`CloudHttpError`] for any transport failure (resolution, connection, handshake, timeout, or a
+    /// body that could not be read). A non-2xx *response* is not an error here — it comes back in the
+    /// status for the caller to map.
+    async fn request(
+        &self,
+        method: &hyper::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<u8>), CloudHttpError> {
+        match tokio::time::timeout(self.timeout, self.send(method, path, query, body)).await {
+            Ok(result) => result,
+            Err(_elapsed) => Err(CloudHttpError::new("the request to the cloud timed out")),
+        }
+    }
+
+    /// The unbounded body of one request; [`Self::request`] wraps it in the timeout.
+    async fn send(
+        &self,
+        method: &hyper::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<u8>), CloudHttpError> {
+        let target = self.target(path, query);
+        let host = target
+            .host_str()
+            .ok_or_else(|| CloudHttpError::new("the request URL has no host"))?
+            .to_owned();
+        let port = target.port_or_known_default().unwrap_or(443);
+        let request_target = request_line(&target);
+
+        let stream = Self::connect(&host, port).await?;
+        // SNI and certificate verification bind to the hostname, not the dialed address.
+        let server_name = ServerName::try_from(host.clone())
+            .map_err(|_ignored| CloudHttpError::new("the cloud host is not a valid TLS name"))?;
+        let connector = TlsConnector::from(Arc::clone(&self.tls));
+        let tls = connector
+            .connect(server_name, stream)
+            .await
+            .map_err(|error| CloudHttpError::new(format!("the TLS handshake failed: {error}")))?;
+
+        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+            .await
+            .map_err(|error| CloudHttpError::new(format!("the HTTP handshake failed: {error}")))?;
+        // The connection future must be driven for the request to progress; it ends when the request
+        // completes and `sender` drops.
+        tokio::spawn(async move {
+            let _ignored = connection.await;
+        });
+
+        let has_body = !body.is_empty();
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(&request_target)
+            .header(HOST, host.as_str())
+            .header(AUTHORIZATION, format!("Bearer {}", self.bearer));
+        if has_body {
+            builder = builder.header(CONTENT_TYPE, "application/json");
+        }
+        let request = builder
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|error| {
+                CloudHttpError::new(format!("building the request failed: {error}"))
+            })?;
+
+        let response = sender
+            .send_request(request)
+            .await
+            .map_err(|error| CloudHttpError::new(format!("sending the request failed: {error}")))?;
+        let status = response.status().as_u16();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|error| {
+                CloudHttpError::new(format!("reading the response body failed: {error}"))
+            })?
+            .to_bytes();
+        Ok((status, bytes.to_vec()))
+    }
+
+    /// Connects to the first resolved address that accepts a TCP connection.
+    async fn connect(host: &str, port: u16) -> Result<TcpStream, CloudHttpError> {
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|error| {
+                CloudHttpError::new(format!("resolving the cloud host failed: {error}"))
+            })?
+            .collect();
+        let mut last_error = None;
+        for address in &addresses {
+            match TcpStream::connect(address).await {
+                Ok(stream) => return Ok(stream),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(CloudHttpError::new(match last_error {
+            Some(error) => format!("connecting to the cloud failed: {error}"),
+            None => "the cloud host resolved to no addresses".to_owned(),
+        }))
+    }
+}
+
+/// The origin-form request target for a URL: its path, plus `?query` when there is one. Pure, so the
+/// path-and-query the transports build is checked without a socket.
+fn request_line(target: &url::Url) -> String {
+    match target.query() {
+        Some(query) => format!("{}?{}", target.path(), query),
+        None => target.path().to_owned(),
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Config-pull transport
+// -------------------------------------------------------------------------------------------------
+
+/// The store-facing config-sync response, mirroring `pos_cloud`'s `ConfigSyncResponse` (the edge must
+/// not depend on the cloud crate). Only the two shapes the transport acts on are modelled.
+#[derive(serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ConfigSyncWire {
+    /// The store already holds the current version; apply nothing.
+    UpToDate,
+    /// The store should apply this update.
+    Update {
+        /// A full snapshot or a one-version delta.
+        update: ConfigUpdateWire,
+    },
+}
+
+/// The update inside an [`ConfigSyncWire::Update`], mirroring `pos_ports::config_store::ConfigUpdate`
+/// (tag `update_kind`). A `Delta` is a patch the edge cannot apply without the prior document (which
+/// it does not yet persist — ADR-0085), so its fields are ignored: the transport re-pulls a full
+/// snapshot instead.
+#[derive(serde::Deserialize)]
+#[serde(tag = "update_kind", rename_all = "snake_case")]
+enum ConfigUpdateWire {
+    /// A complete document at a version — always applicable.
+    Snapshot {
+        /// The version this document is.
+        config_version_id: String,
+        /// The full effective config tree (merged Tenant→Brand→Store→Device).
+        document: serde_json::Value,
+    },
+    /// A forward patch from one version to the next — not applied here.
+    Delta {},
+}
+
+/// What one config pull told the transport to do.
+enum ConfigPull {
+    /// The store is current; nothing to apply.
+    UpToDate,
+    /// A full document to apply, at its version.
+    Full(SyncedConfig),
+    /// The cloud sent a delta; the edge needs a full snapshot instead (re-pull holding nothing).
+    NeedFullSnapshot,
+}
+
+/// Maps a parsed config-sync response to the action to take. Pure, so the delta/snapshot/up-to-date
+/// branching is a socket-free test.
+fn interpret(wire: ConfigSyncWire) -> ConfigPull {
+    match wire {
+        ConfigSyncWire::UpToDate => ConfigPull::UpToDate,
+        ConfigSyncWire::Update {
+            update:
+                ConfigUpdateWire::Snapshot {
+                    config_version_id,
+                    document,
+                },
+        } => ConfigPull::Full(SyncedConfig {
+            config_version_id,
+            document,
+        }),
+        ConfigSyncWire::Update {
+            update: ConfigUpdateWire::Delta {},
+        } => ConfigPull::NeedFullSnapshot,
+    }
+}
+
+/// The field [`ConfigTransport`]: pulls the store's effective config from the cloud over HTTPS
+/// ([ADR-0039](../../../docs/adr/0039-config-delivery.md), [ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md)).
+///
+/// The cloud may answer a pull with a full snapshot or a one-version delta. The edge does not yet
+/// persist the last document, so it cannot apply a delta; on one, this re-pulls as a store holding
+/// nothing, which the cloud must answer with a full snapshot — correct, at the cost of one extra
+/// round-trip on an incremental publish. (Applying deltas in place is the flagged store-sqlite
+/// follow-up, ADR-0085.)
+#[derive(Debug, Clone)]
+pub struct ConfigHttpTransport {
+    client: CloudHttpClient,
+    store_id: StoreId,
+}
+
+impl ConfigHttpTransport {
+    /// Builds a config transport over `client` for `store_id`.
+    #[must_use]
+    pub fn new(client: CloudHttpClient, store_id: StoreId) -> Self {
+        Self { client, store_id }
+    }
+
+    /// One `GET /sync/stores/{store_id}/config`, reporting the held version if any.
+    async fn pull(&self, held_version: Option<&str>) -> Result<ConfigPull, ConfigTransportError> {
+        let path = format!("/sync/stores/{}/config", self.store_id);
+        let query = held_version.map(|held| format!("held_version={held}"));
+        let (status, body) = self
+            .client
+            .request(&hyper::Method::GET, &path, query.as_deref(), Vec::new())
+            .await
+            .map_err(|error| ConfigTransportError::new(error.to_string()))?;
+        match status {
+            200 => {
+                let wire = serde_json::from_slice::<ConfigSyncWire>(&body).map_err(|error| {
+                    ConfigTransportError::new(format!("the config response did not parse: {error}"))
+                })?;
+                Ok(interpret(wire))
+            }
+            // 404 is a store with nothing published yet — no config to apply, not a fault. Treat it as
+            // "up to date with nothing" so the loop backs off calmly rather than erroring every pull.
+            404 => Ok(ConfigPull::UpToDate),
+            other => Err(ConfigTransportError::new(format!(
+                "the cloud refused the config pull with status {other}"
+            ))),
+        }
+    }
+}
+
+impl ConfigTransport for ConfigHttpTransport {
+    async fn fetch(
+        &self,
+        held_version: Option<&str>,
+    ) -> Result<Option<SyncedConfig>, ConfigTransportError> {
+        match self.pull(held_version).await? {
+            ConfigPull::UpToDate => Ok(None),
+            ConfigPull::Full(synced) => Ok(Some(synced)),
+            ConfigPull::NeedFullSnapshot => match self.pull(None).await? {
+                ConfigPull::Full(synced) => Ok(Some(synced)),
+                // Holding nothing, the cloud answers a published store with a snapshot; up-to-date or a
+                // second delta would mean the config vanished under us — treat as nothing to apply.
+                ConfigPull::UpToDate | ConfigPull::NeedFullSnapshot => Ok(None),
+            },
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Heartbeat transport
+// -------------------------------------------------------------------------------------------------
+
+/// The field [`HeartbeatTransport`]: POSTs the store's liveness ping over HTTPS
+/// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md), ADR-0085). The cloud advances `last_seen_at`
+/// and answers `204`; anything else is a transport failure the loop retries next tick.
+#[derive(Debug, Clone)]
+pub struct HeartbeatHttpTransport {
+    client: CloudHttpClient,
+    store_id: StoreId,
+}
+
+impl HeartbeatHttpTransport {
+    /// Builds a heartbeat transport over `client` for `store_id`.
+    #[must_use]
+    pub fn new(client: CloudHttpClient, store_id: StoreId) -> Self {
+        Self { client, store_id }
+    }
+}
+
+impl HeartbeatTransport for HeartbeatHttpTransport {
+    async fn beat(&self) -> Result<(), HeartbeatError> {
+        let path = format!("/sync/stores/{}/heartbeat", self.store_id);
+        let (status, _body) = self
+            .client
+            .request(&hyper::Method::POST, &path, None, Vec::new())
+            .await
+            .map_err(|error| HeartbeatError::new(error.to_string()))?;
+        match status {
+            204 => Ok(()),
+            other => Err(HeartbeatError::new(format!(
+                "the cloud refused the heartbeat with status {other}"
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CloudHttpClient, ConfigPull, ConfigSyncWire, interpret, request_line};
+
+    fn client() -> CloudHttpClient {
+        CloudHttpClient::new(
+            &url::Url::parse("https://acme.pos.example").expect("a valid base"),
+            "pos_key_secret",
+        )
+        .expect("an https base builds")
+    }
+
+    #[test]
+    fn a_plain_http_base_is_rejected() {
+        let built = CloudHttpClient::new(
+            &url::Url::parse("http://cloud.example").expect("parse"),
+            "pos_key",
+        );
+        assert!(built.is_err(), "the cloud base URL must be https");
+    }
+
+    #[test]
+    fn the_request_target_is_origin_rooted_with_the_query() {
+        // The config pull's path and held-version query become the origin-form request line, whatever
+        // path the base URL carried (the /sync routes live at the origin).
+        let based = CloudHttpClient::new(
+            &url::Url::parse("https://acme.pos.example/ignored/base/path").expect("parse"),
+            "pos_key",
+        )
+        .expect("builds");
+        let target = based.target("/sync/stores/01STORE/config", Some("held_version=01V"));
+        assert_eq!(target.host_str(), Some("acme.pos.example"));
+        assert_eq!(
+            request_line(&target),
+            "/sync/stores/01STORE/config?held_version=01V",
+        );
+    }
+
+    #[test]
+    fn a_request_target_without_a_query_is_just_the_path() {
+        let target = client().target("/sync/stores/01STORE/heartbeat", None);
+        assert_eq!(request_line(&target), "/sync/stores/01STORE/heartbeat");
+    }
+
+    #[test]
+    fn an_up_to_date_response_is_nothing_to_apply() {
+        let wire =
+            serde_json::from_str::<ConfigSyncWire>(r#"{"status":"up_to_date"}"#).expect("parses");
+        assert!(matches!(interpret(wire), ConfigPull::UpToDate));
+    }
+
+    #[test]
+    fn a_snapshot_response_becomes_a_full_document() {
+        let body = r#"{
+            "status": "update",
+            "update": {
+                "update_kind": "snapshot",
+                "config_version_id": "01VERSION",
+                "store_id": "01STORE",
+                "document": { "menu": { "channels": {} } }
+            }
+        }"#;
+        let wire = serde_json::from_str::<ConfigSyncWire>(body).expect("parses");
+        match interpret(wire) {
+            ConfigPull::Full(synced) => {
+                assert_eq!(synced.config_version_id, "01VERSION");
+                assert!(
+                    synced.document.get("menu").is_some(),
+                    "the full document is carried"
+                );
+            }
+            _ => panic!("a snapshot must interpret as a full document"),
+        }
+    }
+
+    #[test]
+    fn a_delta_response_asks_for_a_full_snapshot() {
+        // The edge cannot apply a delta yet, so a delta must route to a snapshot re-pull, never be
+        // mistaken for a full document.
+        let body = r#"{
+            "status": "update",
+            "update": {
+                "update_kind": "delta",
+                "from_config_version_id": "01FROM",
+                "to_config_version_id": "01TO",
+                "store_id": "01STORE",
+                "patch": { "menu": {} }
+            }
+        }"#;
+        let wire = serde_json::from_str::<ConfigSyncWire>(body).expect("parses");
+        assert!(matches!(interpret(wire), ConfigPull::NeedFullSnapshot));
+    }
+}
