@@ -82,11 +82,14 @@ Each till, printer, and kitchen display becomes a named device that trades on it
    device credential, stores it in the OS keyring, and is activated from then on. A spent code is
    refused — one code, one device ([ADR-0050](../adr/0050-activation-code-exchange.md)).
 
-> **Status today.** The device-credential exchange and the automatic cloud config-pull are landing
-> progressively (roadmap P9e / WS-B): the activation route and the pull loop exist and are tested as
-> library code, and are being composed into the shipping `pos_edge` binary as their adapters (OS keyring,
-> cloud-sync HTTP) are selected. Until that composition is switched on for your build, a store still
-> **sells fully offline from Step 3**; activation and live config-pull are what connect it to the fleet.
+> **Status today.** Activation and the cloud loops are composed into the shipping `pos_edge` binary
+> (roadmap-v3 E1/E2, [ADR-0086](../adr/0086-edge-keyvault-and-activation.md)): with `cloud_url` set in
+> `config.toml`, the box serves `POST /api/activate`, stores the device credential in the OS keyring,
+> and — once activated — pulls config and heartbeats automatically. Two flagged gaps remain: on a
+> **headless Linux** box the kernel keyring is not durable across a reboot (the TPM-sealed hardening is
+> the tracked hardware handoff), and the sync loops authenticate with the store's scoped `read_config`
+> key (the keyring's `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential
+> is accepted on `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
 
 ## Step 5 — Publish the store's configuration
 

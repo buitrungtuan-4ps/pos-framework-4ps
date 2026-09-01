@@ -96,6 +96,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   exemption. **Upgrade note:** additive only — a new adapter crate and an additive `#[non_exhaustive]`
   `SecretName` variant; no wire, protocol, or migration change, and nothing composes it into the
   shipped binary yet (that is the next E2 slice).
+- **Activation is composed into the shipped edge** (roadmap v3, slice E2;
+  [ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md)). The activation flow that has been
+  written-but-dark since P9 is now reachable in the real binary: when `cloud_url` is set, `serve()`
+  builds the OS-keyring vault (`key-vault-keyring`) and the `cloud-sync-http` `CloudSync`, mounts
+  `POST /api/activate` / `GET /api/activation`, and runs the boot gate — a box holding a device
+  credential starts the config-pull and heartbeat loops; a fresh box serves the LAN offline and waits
+  to be activated (the gate withholds cloud sync, never local trading, ADR-0001). The E1 sync key
+  moves to **vault-first**: the loops read the scoped `read_config` key from the keyring
+  (`SecretName::SyncKey`) and fall back to `POS_EDGE_SYNC_KEY`, which the service unit now supplies
+  from an optional root-owned mode-0600 `/etc/pos-edge/env`. The deploy README and the
+  bring-a-store-online guide are updated to match (the old "being composed" status note is gone).
+  **Upgrade note:** no wire, protocol, or migration change. A LAN-only edge (no `cloud_url`) behaves
+  exactly as before. On a provisioned box, activation now works end to end via `POST /api/activate`;
+  the `/setup` operator screen lands in the next slice, and headless-Linux keyring reboot-durability
+  remains the flagged hardware gate.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
