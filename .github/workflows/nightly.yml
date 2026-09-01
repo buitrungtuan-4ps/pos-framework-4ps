@@ -56,13 +56,16 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: ./.github/actions/rust-setup
-      - name: fleet simulator soak
-        run: |
-          echo "pos-simulator arrives in P12. See docs/roadmap.md."
-          echo "It reproduces the published envelope in capacity-and-reliability.md:"
-          echo "  222 events/s sustained ingest with 500-700 bursts"
-          echo "  200 stores offline for a day, ~800k events drained in ~9 minutes"
-          echo "  1,000 stores each applying a config version in under a second"
+      # The `pos-simulator` scenario tests assert the published capacity-and-reliability
+      # envelope (222 ev/s sustained ingest with 500-700 bursts; ~200 stores draining a
+      # day's backlog; 1,000 stores each applying a config version within a second): a
+      # regression that breaks a threshold fails this job. The report run then prints the
+      # same numbers to the log for a human to eyeball. This is the model-based soak; the
+      # real-hardware soak stays an ops gate (roadmap-v3 A·P5).
+      - name: fleet simulator scenarios (capacity envelope)
+        run: cargo test -p pos-simulator --locked
+      - name: fleet simulator report
+        run: cargo run -q -p pos-simulator
 
   # Exercises the cloud-database restore path for real (P8, ADR-0046): seed a service Postgres,
   # then deploy/restore-drill.sh dumps it, restores into a throwaway database, and reconciles every

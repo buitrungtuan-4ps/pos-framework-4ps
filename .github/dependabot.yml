@@ -1,0 +1,63 @@
+# Dependabot keeps the dependency surface current between the nightly `cargo audit`
+# (which only *reports* advisories) and a human bump (which rarely happens on time).
+# It opens PRs against the same `pr.yml` gate every other change passes — `cargo deny`
+# (licences, bans, advisories), the full test and contract suites, and the pinned-SHA
+# check — so a proposed bump that breaks a rule never merges. Weekly, grouped, and
+# capped, so it is a trickle to review, not a flood (roadmap-v3 C1).
+version: 2
+updates:
+  # The Rust workspace. One PR per week grouping all non-major bumps; a major bump
+  # (which can break a build or a licence) comes as its own PR to review on its own.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      cargo-minor:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions. Every action is pinned to a commit SHA (the `actions-pinned`
+  # xtask gate enforces it); Dependabot bumps the SHA and keeps the `# vX.Y.Z`
+  # comment in step, so the pin stays both current and auditable.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  # The operator UI (SolidJS/pnpm). Grouped non-major bumps; the `ui` CI job
+  # (`--frozen-lockfile`, tsc, i18n-lint, WCAG, vite build) gates each one.
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      ui-minor:
+        update-types:
+          - minor
+          - patch
+
+  # The back-office dashboard (SolidJS/pnpm). Same shape as the operator UI; the
+  # `dashboard` CI job gates each one.
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      dashboard-minor:
+        update-types:
+          - minor
+          - patch
