@@ -32,6 +32,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   law. It runs in `just preflight` and the PR workflow. **Upgrade note:** no wire, permission,
   migration, or dependency change; the core is already vendor-neutral, so the gate ratifies and
   guards the existing state.
+- **Signed edge releases** (roadmap v3, slice R1; debate D1,
+  [ADR-0047](docs/adr/0047-minisign-verification.md),
+  [docs/release-runbook.md](docs/release-runbook.md)). A new `release` workflow cross-compiles the
+  `pos-edge` binary for both store architectures (amd64 and arm64), builds the real operator-UI
+  bundle into it, signs every artifact with **minisign**, and publishes the artifacts and their
+  `.minisig` signatures to a GitHub Release — the same signature the edge verifies before it installs
+  an update (ADR-0047). CI builds and signs; the signing key lives only in a GitHub Actions secret and
+  never touches a VPS or a store (D1). Cutting a release is gated behind the `production` Environment's
+  required reviewer, and the runbook covers generating the keypair and telling the fleet to trust its
+  public half. **Upgrade note:** none for the running product — this is release tooling; before the
+  first release a maintainer provisions the `MINISIGN_SECRET_KEY` secret (a documented human gate).
+  Windows and the OTA artifact server follow in E4 and R2.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).

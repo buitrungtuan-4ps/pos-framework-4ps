@@ -1,0 +1,151 @@
+name: release
+
+# Cut a signed edge release (roadmap-v3 R1; debate D1 — "CI builds and signs; the cloud
+# distributes. Signing keys never touch the VPS"). Tagging `vX.Y.Z` (or dispatching with a tag)
+# cross-compiles the `pos-edge` binary for the store architectures on the runner, signs each
+# artifact with minisign, and publishes them to a GitHub Release. The edge verifies that same
+# minisign signature before it installs an update ([ADR-0047](../../docs/adr/0047-minisign-verification.md));
+# the OTA server that later serves these artifacts is a dumb host that never needs the key
+# (roadmap-v3 R2). The signing key lives only in a GitHub Actions secret — see
+# docs/release-runbook.md for generating it and trusting its public half.
+#
+# Windows (x86_64-pc-windows-msvc) is a real edge target but needs the MSVC toolchain and a
+# Windows runner; it joins this release with the Windows service wrapper (roadmap-v3 E4). This
+# slice ships the two Linux targets — amd64 and arm64 (Ampere/Graviton), the same pair the cloud
+# deploy cross-compiles.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v1.2.0"
+        required: true
+
+# Publishing a Release and uploading its assets needs write; nothing else does.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    # The `production` Environment gates a signed release behind the same required reviewer as a
+    # deploy (ADR-0044/ADR-0045): cutting an artifact every store will trust and install is a
+    # two-human action. Referencing it is safe even before the protection rule is configured.
+    environment: production
+    # Headroom over the ~10-15 minute cold cross-toolchain build; no emulation (native amd64
+    # runner emits the arm64 binary through the aarch64 GNU linker, the same trick as deploy.yml).
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # A tag push checks out the tag; a manual run checks out the tag the operator named.
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Resolve the release tag
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::release tag must look like vX.Y.Z, got '$tag'"; exit 1 ;;
+          esac
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Fail early if the signing key is absent
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::error::the MINISIGN_SECRET_KEY secret is not set — a release is never published unsigned. See docs/release-runbook.md."
+            exit 1
+          fi
+
+      - uses: ./.github/actions/rust-setup
+
+      - name: Cross toolchain for arm64
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-unknown-linux-gnu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu minisign
+
+      - name: Build the operator UI
+        # A shipped edge embeds the real SolidJS bundle (rust-embed); a fresh checkout has none
+        # (ui/dist is gitignored) and would embed the placeholder. Build it first so the release
+        # binary serves the real UI.
+        working-directory: ui
+        run: |
+          npm install --global pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Cross-compile pos-edge for both store architectures
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p pos-edge --target x86_64-unknown-linux-gnu
+          cargo build --release --locked -p pos-edge --target aarch64-unknown-linux-gnu
+
+      - name: Stage and checksum the artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            stage="pos-edge-${TAG}-${target}"
+            mkdir -p "$stage"
+            cp "target/${target}/release/pos-edge" "$stage/"
+            cp LICENSE "$stage/" 2>/dev/null || true
+            tar -czf "dist/${stage}.tar.gz" "$stage"
+            rm -rf "$stage"
+          done
+          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
+          ls -l dist
+
+      - name: Sign every artifact with minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          # Optional: leave unset for a passwordless CI key (minisign -G -W). See the runbook.
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > minisign.key
+          # minisign reads the password from stdin when stdin is not a TTY (it is not, here); a
+          # passwordless key ignores the piped line. The trusted comment carries the release tag,
+          # so a signature names what it signed.
+          for f in dist/*.tar.gz dist/SHA256SUMS; do
+            minisign -S -s minisign.key -m "$f" \
+              -t "pos-edge ${TAG}" -c "pos-edge ${TAG} $(basename "$f")" \
+              <<<"${MINISIGN_PASSWORD:-}"
+          done
+          rm -f minisign.key
+          ls -l dist
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Idempotent: create the release if it is new, otherwise upload (clobbering) onto it, so a
+          # re-run after a transient failure does not wedge. `gh` ships on the runner — no extra
+          # action to pin.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --title "pos-edge ${TAG}" \
+              --notes "Signed edge build for ${TAG}. Verify each artifact with its \`.minisig\` against the trusted minisign public key (see docs/release-runbook.md); the edge does the same before it installs an update (ADR-0047)."
+          fi
