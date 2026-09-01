@@ -4,9 +4,8 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { MENU } from "../lib/menu";
 import { formatMoney } from "../lib/money";
-import { addItem, fire, linesForTable, openBill, tableState } from "../state/store";
+import { addItem, fire, linesForTable, openBill, state, tableState } from "../state/store";
 
 // A table's order: the running check on the left, the menu on the right (the tablet layout with a
 // sliding bill). Tapping a menu item adds it optimistically; a fresh line can be fired to the
@@ -89,16 +88,17 @@ export function Order() {
       <aside>
         <h2 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
         <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
-          <For each={MENU}>
+          <For each={state.menu} fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}>
             {(item) => (
               <button
                 type="button"
-                class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left"
+                class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
+                disabled={!item.available}
                 onClick={() => void guard(() => addItem(params.id, item))}
               >
-                <span>{item.name}</span>
+                <span>{item.display_name}</span>
                 <span class="tabular-nums text-ink-muted">
-                  {formatMoney({ currency_code: "VND", amount_minor: item.unitPriceMinor })}
+                  {item.available ? formatMoney(item.unit_price) : t("order.unavailable")}
                 </span>
               </button>
             )}

@@ -80,6 +80,25 @@ export interface FloorResponse {
   stations: StationPlan;
 }
 
+// The store's own price book from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Every amount is the
+// edge's, already in the store's currency — the app displays it and hands it straight back on a
+// line, and never computes one of its own.
+export interface MenuItemResponse {
+  menu_item_id: string;
+  display_name: string;
+  unit_price: Money;
+  tax_class_id: string;
+  // Absent when the store's rate table has no row for this item's class. That is a configuration
+  // error, not a zero rate, so the edge also reports the item unavailable.
+  tax_rate?: Ratio | null;
+  available: boolean;
+}
+
+export interface MenuResponse {
+  currency: string;
+  items: MenuItemResponse[];
+}
+
 export interface BumpRequest {
   order_id: string;
   station_id: string;
