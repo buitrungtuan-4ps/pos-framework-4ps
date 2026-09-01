@@ -1,0 +1,52 @@
+# ADR-0088 — The cloud hosts the update artifact, and stays a dumb host
+
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-01
+**Relates to** [ADR-0003](0003-cattle-not-pets.md) (replace the box, don't nurse it) · [ADR-0037](0037-api-keys.md) (the scoped store key) · [ADR-0044](0044-fork-and-deploy.md) (what runs on the VPS) · [ADR-0047](0047-minisign-verification.md) (the edge verifies the signature, always) · [ADR-0048](0048-ota-rollout-model.md) (rings, revocation, the rollout decision) · [ADR-0053](0053-cloud-sync-port.md) (`CloudSync::fetch_update`) · [ADR-0054](0054-edge-cloud-http-client.md) (the adapter that calls it) · [ADR-0078](0078-sync-and-ota-closure.md) (`report()` and the rollout progress model) · `docs/release-runbook.md` (R1: how an artifact is built and signed) · `docs/roadmap-v3.md` (roadmap v3, slice R2)
+
+**Context.** The over-the-air path is built at both ends and joined in the middle by nothing.
+
+The **edge** end is complete: `OtaUpdater` decides against the published rollout ([ADR-0048](0048-ota-rollout-model.md)), calls `CloudSync::fetch_update(release)` for the bytes, verifies the detached minisign signature against its trusted keys before staging anything ([ADR-0047](0047-minisign-verification.md)), runs the self-test, and rolls back on failure. The `cloud-sync-http` adapter implements that call as `POST /internal/ota/artifact` with a release tag. The **cloud** end publishes the rollout through the config tree and ingests the outcome at `/internal/ota/report` (O3). **`/internal/ota/artifact` does not exist.** A store that decides it should update asks for the bytes and gets a 404: the OTA path is dark at exactly the place the order relay and the outbox were before E3.
+
+R1 fixed the other half of the supply chain: the release workflow cross-compiles for both store architectures, signs every artifact with minisign — keys in GitHub secrets, never on a VPS (debate D1) — and publishes the artifacts and their `.minisig` files to a GitHub Release. So signed artifacts exist; nothing serves them to a store.
+
+Two things make this more than "add a route". First, hosting binaries is a **new responsibility** for the cloud, with a storage cost and a bandwidth profile (a fleet of a thousand boxes fetching a 30 MB binary in a ring is 30 GB) that the single-VPS deployment ([ADR-0044](0044-fork-and-deploy.md)) has to absorb. Second, an endpoint that serves executable bytes is a **security surface**, and the tree's rule is that a transport is not a trust boundary — so the question is not "how do we make the download trustworthy" but "what is the blast radius when it is not".
+
+**Decision.**
+
+- **The cloud stores artifacts in Garage over the existing `BlobStore` port.** No new dependency and no new infrastructure: `blob-garage` is in the tree and Garage is already deployed for media ([ADR-0044](0044-fork-and-deploy.md)). An artifact is one blob per (release, architecture), keyed by a stable, path-safe convention, with its detached signature stored beside it as a second blob. Postgres holds the small row that says a release exists and which blobs it points at; the bytes never go in the database.
+
+- **`POST /internal/ota/artifact` serves the bytes, exactly as the edge already asks for them.** The route the `cloud-sync-http` adapter calls today is the route the cloud grows. No wire change, no adapter change to the request shape, no `PROTOCOL_VERSION` bump — the reason the edge's OTA path can go from dark to live without touching `pos-proto`.
+
+- **The artifact route requires the store's scoped key.** It joins the store-facing family and authenticates like the rest of it ([ADR-0037](0037-api-keys.md)): the box already holds a key for config-pull, heartbeat, and the relay, so this costs no new provisioning. It is *not* about keeping the binary secret — it is signed, and secrecy is not what protects it — but about not running an open binary-distribution host on the VPS that anyone can point a downloader at. Which scope it takes is settled below.
+
+- **The cloud never signs, and never becomes a trust boundary.** It stores bytes an operator uploaded and hands them back. The edge verifies the minisign signature against its own trusted keys before staging ([ADR-0047](0047-minisign-verification.md)), so a compromised cloud, a swapped blob, or a spoofed host can make an update *fail*, never make a box install code. That is what "the cloud stays a dumb host" means in the roadmap, and it is the property that makes hosting binaries an acceptable thing for the cloud to do at all.
+
+- **Uploading is an admin action, and so is promoting.** `POST /admin/ota/releases` takes the artifact and its `.minisig` (the pair R1's workflow produced) and records the release; promote-release moves it through the rings the rollout model already defines ([ADR-0048](0048-ota-rollout-model.md)), over the config-tree publish that already exists. Both are audited like every other `/admin` write (G2). The operator's job is to move a *signed* pair from the release to the cloud; the cloud's job is to remember and serve it.
+
+- **A release is immutable once uploaded.** Re-uploading the same release tag with different bytes is refused, not overwritten. An artifact a ring has already installed must keep meaning the same thing, or a rollback target stops being a known quantity — and silently redefining a version is how a fleet ends up in a state nobody can describe.
+
+**Deliberately deferred (flagged, not silently dropped).**
+
+- **Streaming rather than buffering.** The `BlobStore` port is `get(&BlobKey) -> Vec<u8>`, so serving a 30 MB artifact holds it in memory for the length of the response. That is tolerable for a ring of a few boxes and wrong for a fleet-wide push; a streaming `get` is a port change with its own contract-suite work and belongs to the performance wave, not to making the path exist. The first implementation buffers, and says so at the call site.
+- **Which scope the route takes.** `read_config` is what every provisioned box already carries, so requiring it makes the path work with no re-provisioning; a dedicated `fetch_update` scope is cleaner and is what a fleet with untrusted stores would want. This ADR requires *a* valid store key and leaves the exact scope to the implementation slice, which will state its choice in the changelog — because the answer depends on whether we are willing to re-issue keys, which is an operational question, not an architectural one.
+- **The adapter's bearer.** `cloud-sync-http`'s transport sends no `Authorization` header today (activation is deliberately unauthenticated, and it was the only caller). Giving it the store key for this one call is part of the implementation slice.
+- **Bandwidth and egress.** A ring of a thousand boxes pulling 30 MB is 30 GB off one VPS. Rings already stagger that ([ADR-0048](0048-ota-rollout-model.md)); a CDN or a peer-to-peer tier is a real answer if the fleet outgrows the staggering, and is not this slice.
+- **Garbage-collecting old artifacts.** Releases accumulate. A retention rule (keep the current ring targets and the last known-good rollback target) belongs with the retention runner that already exists, once there is more than one release to collect.
+
+**Rejected.**
+
+- **Pointing the edge at GitHub Releases.** Tempting — the artifacts are already there, and it costs no storage. Rejected: it makes every store's update path depend on a third party being reachable from the shop's network, which is exactly the dependency ADR-0001 spends the rest of the system avoiding; it leaks the fleet's update cadence to an outside observer; and it puts a URL the cloud does not control on the path that installs code. The cloud already has to be reachable for the store to know an update exists at all, so serving the bytes adds no new dependency.
+- **Serving the artifact unauthenticated.** The bytes are signed, so this is not a confidentiality failure — but it turns the VPS into an open download host, and the cost of avoiding it is zero because the box already holds a key.
+- **Having the cloud verify (or re-sign) the artifact.** Rejected twice over: verification at the cloud proves nothing to the edge (the edge must verify anyway, or the cloud becomes a trust boundary), and signing at the cloud would put a signing key on the VPS, which debate D1 settled — keys never touch a VPS.
+- **Storing artifacts in Postgres.** A 30 MB blob per release per architecture in the transactional database, backed up in every WAL archive, for data that is immutable and content-addressable. Garage exists for exactly this.
+- **A new port for artifact storage.** `BlobStore` is already the tree's "bytes by key" seam and `blob-garage` already passes its contract suite. A second seam for the same shape would be a port with one implementor and no distinct contract.
+- **Mutable releases.** Covered above: a version that can change under a fleet is not a version.
+
+**Consequences.**
+
+- **The OTA path stops being dark.** With this slice a store that decides to update can actually fetch the artifact, verify it, install it, self-test, and report the outcome — every one of those already built, and the chain finally joined. It is the third "written but never wired" gap this program has closed, after the order relay and the outbox.
+- **No wire, protocol, or `pos-proto` change.** The route is the one the adapter already calls; the rollout model, the report ingest, and the signature verification are as ADR-0047/0048/0078 built them. Additive routes and one Postgres table.
+- **No new dependency.** `blob-garage` and the `BlobStore` port are in the tree; Garage is already deployed.
+- **The VPS gains a storage and bandwidth cost** proportional to release size × architectures × retained releases, and a per-ring egress spike. Both are bounded by the deferred retention rule and by rings, and both are named here so the first operator to see the disk graph knows why.
+- **An operator gains one step in the release runbook**: move the signed pair from the GitHub Release to the cloud, then promote. The runbook is updated in the implementation slice.
+- **Delivery shape.** This ADR is PR A. The implementation follows as: artifact storage + the `/internal/ota/artifact` route + the adapter's bearer (so an edge can fetch), then the `/admin` upload and promote-release with their audit entries and the runbook update.

@@ -220,6 +220,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   edge's total while the operator taps — a subtraction of two figures they can see — with the
   authoritative `change_given` recorded per payment at settle. The shift screen's opening float still
   assumes `VND`; that is the one place left and it is its own slice.
+- **ADR-0088 decides how the cloud hosts an update artifact** (roadmap v3, slice R2;
+  [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). The over-the-air path is built at both ends and
+  joined in the middle by nothing: the edge decides against the published rollout, fetches, verifies
+  the minisign signature, installs, self-tests and reports — and the route it fetches from,
+  `POST /internal/ota/artifact`, **does not exist** in the cloud. A store that decides it should
+  update gets a 404. The decision: store artifacts in Garage over the `BlobStore` port already in the
+  tree (no new dependency, no new infrastructure), serve them at the route the edge's adapter already
+  calls (so no wire change and no `PROTOCOL_VERSION` bump), authenticate with the store key the box
+  already holds, and keep the cloud a **dumb host** — it never signs and never verifies, because the
+  edge must verify anyway or the cloud becomes a trust boundary; a compromised cloud can make an
+  update fail, never make a box install code. Uploading and promoting are audited `/admin` actions,
+  and a release is immutable once uploaded, because a version that changes under a fleet is not a
+  version. Rejected explicitly: pointing stores at GitHub Releases (it puts a third party on the path
+  that installs code, and leaks the fleet's update cadence), signing at the cloud (keys never touch a
+  VPS — debate D1), and 30 MB blobs in Postgres. Flagged for later: streaming rather than buffering
+  the response, the exact scope the route requires, artifact garbage collection, and the egress a
+  fleet-wide ring implies. **Upgrade note:** documentation only — no runtime change.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
