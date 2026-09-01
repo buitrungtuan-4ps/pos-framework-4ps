@@ -136,3 +136,19 @@ export interface PairRequest {
 export interface PairAccepted {
   device_token: string;
 }
+
+// The first-boot activation exchange (ADR-0050), mounted only when the store server is provisioned
+// for a cloud (ADR-0086) — a LAN-only edge serves neither route.
+export interface ActivateRequest {
+  code: string;
+}
+
+// What a successful activation grants. The device credential itself never reaches the browser: the
+// edge stores it in the operating system's keyring and answers with the identity alone.
+export interface ActivateAccepted {
+  device_id: string;
+}
+
+export interface ActivationStanding {
+  activated: boolean;
+}

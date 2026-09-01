@@ -78,14 +78,17 @@ Each till, printer, and kitchen display becomes a named device that trades on it
    device** (name + kind — POS terminal, printer, kitchen display, tablet). It is created in the
    registry — no ULID typed.
 2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**. Give it to that device.
-3. On the device, enter the code (`POST /api/activate`). It exchanges the code with the cloud for a
-   device credential, stores it in the OS keyring, and is activated from then on. A spent code is
-   refused — one code, one device ([ADR-0050](../adr/0050-activation-code-exchange.md)).
+3. On the device, open the store's address in the browser. An unactivated box lands straight on
+   **`/setup`**; type the code there. It exchanges the code with the cloud for a device credential,
+   stores it in the OS keyring, and is activated from then on. A spent code is refused — one code,
+   one device ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous
+   glyphs (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the
+   counter rather than after a round-trip.
 
 > **Status today.** Activation and the cloud loops are composed into the shipping `pos_edge` binary
 > (roadmap-v3 E1/E2, [ADR-0086](../adr/0086-edge-keyvault-and-activation.md)): with `cloud_url` set in
-> `config.toml`, the box serves `POST /api/activate`, stores the device credential in the OS keyring,
-> and — once activated — pulls config and heartbeats automatically. Two flagged gaps remain: on a
+> `config.toml`, the box serves `/setup` and `POST /api/activate`, stores the device credential in the
+> OS keyring, and — once activated — pulls config and heartbeats automatically. Two flagged gaps remain: on a
 > **headless Linux** box the kernel keyring is not durable across a reboot (the TPM-sealed hardening is
 > the tracked hardware handoff), and the sync loops authenticate with the store's scoped `read_config`
 > key (the keyring's `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential
