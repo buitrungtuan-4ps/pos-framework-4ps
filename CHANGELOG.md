@@ -111,6 +111,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   exactly as before. On a provisioned box, activation now works end to end via `POST /api/activate`;
   the `/setup` operator screen lands in the next slice, and headless-Linux keyring reboot-durability
   remains the flagged hardware gate.
+- **A `/setup` screen activates a store server without a terminal** (roadmap v3, slice E2;
+  [ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md),
+  [ADR-0050](docs/adr/0050-activation-code-exchange.md)). The operator UI now completes the
+  activation flow the previous entry composed: the app's boot gate asks the box whether it is
+  activated and, if not, lands on **`/setup`**, where the `XXXX-XXXX-XXXX` code from the store
+  server's setup sheet is typed into a field that folds Crockford's ambiguous glyphs and groups the
+  symbols exactly as the box parses them — so a mistyped code is caught by the checksum on the
+  counter rather than after a round-trip. On success the store is activated once and for all and the
+  browser moves on to pairing (or straight to the floor if it is already paired); the device
+  credential never reaches the browser. A store server with no cloud does not mount the activation
+  routes at all, and the screen says so plainly instead of showing a form that cannot work. **Upgrade
+  note:** no wire, protocol, permission, or migration change; the new route is additive and the
+  activation check never blocks trading — a box that answers "not applicable" or errors carries
+  straight on to the counter (ADR-0001).
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).

@@ -4,6 +4,8 @@
 // it as an `ApiError` the screens can show without guessing.
 
 import type {
+  ActivateAccepted,
+  ActivationStanding,
   BillResponse,
   BumpRequest,
   BumpResponse,
@@ -158,6 +160,17 @@ export const api = {
     setDeviceToken(accepted.device_token);
     return accepted;
   },
+
+  // Whether this store server holds its device credential yet (ADR-0050, ADR-0086). A store that is
+  // not provisioned for a cloud does not mount the route at all, so a rejection here means "there is
+  // nothing to activate", not "the store is broken" — the caller carries on to the counter, which
+  // trades offline regardless (ADR-0001).
+  activation: () => request<ActivationStanding>("GET", "/api/activation"),
+
+  // Exchange the activation code from the store's setup sheet for the box's device credential
+  // (ADR-0050). Unauthenticated, like pairing: a fresh box holds no token yet. The credential stays
+  // on the box — the answer carries the device id alone.
+  activate: (code: string) => request<ActivateAccepted>("POST", "/api/activate", { code }),
 
   // Who (if anyone) is signed in on this device (S0b). Throws `isUnauthorized` if the device is not
   // paired, which the app treats the same as a missing token — route to pairing.

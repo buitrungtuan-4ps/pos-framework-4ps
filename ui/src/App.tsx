@@ -10,6 +10,7 @@ import { Kds } from "./screens/Kds";
 import { Order } from "./screens/Order";
 import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
+import { Setup } from "./screens/Setup";
 import { Shift } from "./screens/Shift";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
@@ -26,6 +27,14 @@ function Shell(props: ParentProps) {
   );
 }
 
+// Send the browser somewhere without stacking a history entry, and without looping when it is already
+// there — the boot gate's one way of moving the operator on.
+function sendTo(path: string): void {
+  if (window.location.pathname !== path) {
+    window.location.replace(path);
+  }
+}
+
 export function App() {
   const link = new LiveLink({
     onEvent: fold,
@@ -35,14 +44,13 @@ export function App() {
     },
     onStatus: setLink,
   });
-  onMount(() => {
-    link.start();
+  // The device half of the boot gate, once the store server itself is known to be usable: pair, then
+  // sign in, then draw the store.
+  const routeDevice = () => {
     // An unpaired device cannot reach the edge at all (ADR-0084); send it to pair before it tries to
     // draw the store, rather than letting the first call fail.
     if (deviceToken() === null) {
-      if (window.location.pathname !== "/pair") {
-        window.location.replace("/pair");
-      }
+      sendTo("/pair");
       return;
     }
     // Paired, but a command needs a signed-in employee (S0b): confirm one is signed in before drawing
@@ -52,9 +60,7 @@ export function App() {
       .session()
       .then((session) => {
         if (!session.signed_in) {
-          if (window.location.pathname !== "/signin") {
-            window.location.replace("/signin");
-          }
+          sendTo("/signin");
           return;
         }
         // Signed in: draw the store's real floor and resolve fires to its default station (ADR-0072);
@@ -63,11 +69,28 @@ export function App() {
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {
-          if (window.location.pathname !== "/pair") {
-            window.location.replace("/pair");
-          }
+          sendTo("/pair");
         }
       });
+  };
+
+  onMount(() => {
+    link.start();
+    // A store server provisioned for a cloud must be activated once before it can sync (ADR-0050,
+    // ADR-0086); until then the operator belongs on `/setup`. Activation is checked ahead of pairing
+    // because it is the box's own standing, not this device's — but it never blocks trading: a store
+    // server with no cloud does not mount the route at all, and a keyring that cannot be read answers
+    // an error, so a rejection here carries straight on to the counter (ADR-0001).
+    void api
+      .activation()
+      .then((standing) => {
+        if (!standing.activated) {
+          sendTo("/setup");
+          return;
+        }
+        routeDevice();
+      })
+      .catch(() => routeDevice());
   });
   onCleanup(() => link.stop());
 
@@ -81,6 +104,7 @@ export function App() {
       <Route path="/today" component={Today} />
       <Route path="/shift" component={Shift} />
       <Route path="/pair" component={Pairing} />
+      <Route path="/setup" component={Setup} />
       <Route path="/signin" component={SignIn} />
     </Router>
   );
