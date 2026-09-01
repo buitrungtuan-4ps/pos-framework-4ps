@@ -49,6 +49,28 @@ pub struct EdgeConfig {
     /// Relative to the working directory the service unit sets. Defaults to `store.sqlite`.
     #[serde(default = "default_store_path")]
     pub store_path: PathBuf,
+    /// Where this store publishes its committed events
+    /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)). Absent means the edge
+    /// runs no event-publish loop: it still trades, and its outbox simply grows until a stream is
+    /// configured. The server **URL** is deliberately not here — it is the one field that would carry
+    /// a credential, so it comes from the environment (see [`NatsConfig`]).
+    #[serde(default)]
+    pub nats: Option<NatsConfig>,
+}
+
+/// The JetStream stream this store publishes into
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
+///
+/// Both fields must match the cloud consumer's `stream` / `filter_subject`, or the events land
+/// somewhere nothing reads. Neither is a secret, which is why they live in `config.toml` while the
+/// server URL does not.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NatsConfig {
+    /// The stream name — one per store, e.g. `POS_STORE_<id>`.
+    pub stream: String,
+    /// The subject every event is published to.
+    pub subject: String,
 }
 
 impl EdgeConfig {
@@ -61,6 +83,7 @@ impl EdgeConfig {
             advertised_ip: None,
             cloud_url: None,
             store_path: default_store_path(),
+            nats: None,
         }
     }
 
@@ -161,5 +184,39 @@ mod tests {
             config.cloud_url.as_ref().map(url::Url::as_str),
             Some("https://acme.pos.example/"),
         );
+    }
+
+    #[test]
+    fn nats_defaults_to_none() {
+        // No stream configured is a store that trades and keeps its events locally (ADR-0087); the
+        // outbox grows rather than the box refusing to boot.
+        let config =
+            EdgeConfig::from_toml_str("store_id = \"01JQ0000000000000000000001\"").expect("parses");
+        assert!(config.nats.is_none());
+    }
+
+    #[test]
+    fn a_nats_section_parses_stream_and_subject() {
+        let text = "store_id = \"01JQ0000000000000000000001\"\n\
+                    [nats]\n\
+                    stream = \"POS_STORE_01JQ0000000000000000000001\"\n\
+                    subject = \"pos.store.01JQ0000000000000000000001.events\"";
+        let config = EdgeConfig::from_toml_str(text).expect("parses");
+        let nats = config.nats.expect("the section is present");
+        assert_eq!(nats.stream, "POS_STORE_01JQ0000000000000000000001");
+        assert_eq!(nats.subject, "pos.store.01JQ0000000000000000000001.events");
+    }
+
+    #[test]
+    fn a_nats_url_in_config_is_rejected() {
+        // The server URL is the one field that would carry a credential, so it comes from the
+        // environment and `deny_unknown_fields` makes putting it here a load-time error rather than a
+        // secret quietly committed to `config.toml` (ADR-0086, ADR-0087).
+        let text = "store_id = \"01JQ0000000000000000000001\"\n\
+                    [nats]\n\
+                    stream = \"S\"\n\
+                    subject = \"s\"\n\
+                    url = \"nats://user:secret@cloud.example:4222\"";
+        assert!(EdgeConfig::from_toml_str(text).is_err());
     }
 }

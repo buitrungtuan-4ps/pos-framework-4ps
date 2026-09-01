@@ -52,6 +52,13 @@ store-sqlite = { path = "../adapters/store-sqlite" }
 cloud-sync-http  = { path = "../adapters/cloud-sync-http" }
 key-vault-keyring = { path = "../adapters/key-vault-keyring" }
 
+# The store's outbound event stream (ADR-0087): the `MessageLink` half of the outbox, the
+# same adapter whose consumer `pos_cloud` already runs. A workspace path crate — its
+# `async-nats` subtree is already in the lock through the cloud, so this adds no new
+# third-party dependency. Constructed only when a `[nats]` section and a server URL are
+# both present, so the on-fakes example never touches it.
+link-nats = { path = "../adapters/link-nats" }
+
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018). The
 # dependency-rule test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }

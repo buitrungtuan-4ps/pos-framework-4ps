@@ -10,22 +10,25 @@ use tokio::net::TcpListener;
 
 use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
 use key_vault_keyring::{KeyringVault, OsKeyring};
+use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, StoreId};
+use pos_proto::text::ReleaseTag;
 
 use crate::activation::{activation_router, boot_standing};
 use crate::app::Edge;
 use crate::cloud_http::{
     CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, RelayHttpTransport,
 };
-use crate::config::EdgeConfig;
+use crate::config::{EdgeConfig, NatsConfig};
 use crate::config_client::ConfigClient;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::error::EdgeError;
+use crate::event_publish::EventPublisher;
 use crate::heartbeat_client::HeartbeatClient;
 use crate::order_in::EdgeOrderIn;
 use crate::pairing::pairing_url;
@@ -38,6 +41,21 @@ use crate::state::AppState;
 /// from a mode-0600 env file — never in `config.toml`, never committed. Absent (or empty) means the
 /// edge runs LAN-only and spawns no cloud loops, exactly as an unset `cloud_url` does.
 const SYNC_KEY_ENV: &str = "POS_EDGE_SYNC_KEY";
+
+/// The environment variable carrying the event stream's server URL
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)). It lives here rather than in
+/// `config.toml` because it is where a credential would be embedded (`nats://user:pass@host`), and a
+/// credential never goes in `config.toml` (ADR-0086) — the same mode-0600 env file carries it. Absent
+/// (or empty) means the outbox is not published; the store trades and keeps every event.
+const NATS_URL_ENV: &str = "POS_EDGE_NATS_URL";
+
+/// The stream limits the edge asks for when it ensures its own stream exists. Matched to the
+/// store-box envelope in `docs/capacity-and-reliability.md`: a few days of a busy store's events, so
+/// a weekend of cloud downtime drains rather than discards.
+const NATS_MAX_MESSAGES: i64 = 1_000_000;
+
+/// The byte ceiling for the same stream — 1 GiB, sized alongside [`NATS_MAX_MESSAGES`].
+const NATS_MAX_BYTES: i64 = 1_073_741_824;
 
 /// How often the config-pull loop pulls when nothing is failing. The cloud answers immediately (no
 /// server-side long-poll yet, ADR-0039), so this paces the loop; a published change reaches the
@@ -101,6 +119,7 @@ where
     // whether the config-pull and heartbeat loops run (ADR-0085).
     let cloud_url = config.cloud_url.clone();
     let store_id = config.store_id;
+    let nats = config.nats.clone();
     // Share the edge's fan-out with the /ws route so a committed change reaches every device.
     let state = AppState::with_fanout(config, edge.fanout().clone());
 
@@ -153,8 +172,16 @@ where
     // loops. An unactivated or LAN-only box still binds, pairs, and serves the counter offline
     // (ADR-0001); the gate withholds cloud sync, never local trading.
     if let Some(cloud_url) = cloud_url {
-        app = compose_cloud_surface(app, &cloud_url, store_id, &config_edge, queue, &shutdown_rx)
-            .await;
+        app = compose_cloud_surface(
+            app,
+            &cloud_url,
+            store_id,
+            &config_edge,
+            queue,
+            nats.as_ref(),
+            &shutdown_rx,
+        )
+        .await;
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
@@ -189,6 +216,7 @@ async fn compose_cloud_surface<S, Q>(
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
+    nats: Option<&NatsConfig>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> axum::Router
 where
@@ -224,6 +252,10 @@ where
         Ok(ActivationStanding::Activated) => {
             let sync_key = resolve_sync_key(&*vault).await;
             spawn_cloud_loops(cloud_url, store_id, edge, queue, sync_key, shutdown_rx);
+            // The event stream is a second rail with its own endpoint and its own credential, so it
+            // is spawned beside the `/sync` loops rather than inside them: a store with no sync key
+            // still ships the events it has committed (ADR-0087).
+            spawn_event_publish(edge, nats, shutdown_rx).await;
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
@@ -311,6 +343,70 @@ fn spawn_cloud_loops<S, Q>(
     tracing::info!(
         %cloud_url,
         "cloud sync enabled: config-pull, heartbeat, and order-relay loops running"
+    );
+}
+
+/// Spawns the event-publish loop for an activated store, when a stream is configured
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
+///
+/// Needs two things the operator supplies separately: the `[nats]` stream and subject from
+/// `config.toml` (not secrets, and they must match the cloud consumer's `stream`/`filter_subject`),
+/// and the server URL from [`NATS_URL_ENV`] — the one field that would carry a credential, so it
+/// stays out of `config.toml` exactly as the sync key does (ADR-0086). Either missing is logged and
+/// skipped: the store trades, and its outbox holds until a stream exists.
+async fn spawn_event_publish<S>(
+    edge: &Arc<Edge<S>>,
+    nats: Option<&NatsConfig>,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(nats) = nats else {
+        tracing::info!(
+            "no [nats] section; the outbox is not being published (the store still trades and keeps every event)"
+        );
+        return;
+    };
+    let Some(url) = std::env::var(NATS_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    else {
+        tracing::warn!(
+            "a [nats] stream is configured but {NATS_URL_ENV} is unset; the outbox is not being published"
+        );
+        return;
+    };
+
+    let config = StreamConfig {
+        stream: nats.stream.clone(),
+        subject: nats.subject.clone(),
+        max_messages: NATS_MAX_MESSAGES,
+        max_bytes: NATS_MAX_BYTES,
+    };
+    // Connecting is I/O and can fail on a box whose network is not up yet. That is not fatal: the
+    // events are durable in the outbox, so the box trades and the next boot (or the next slice's
+    // reconnect) picks them up.
+    let link = match NatsLink::connect(url.trim(), config).await {
+        Ok(link) => link,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "could not connect to the event stream; the outbox holds and the store keeps trading"
+            );
+            return;
+        }
+    };
+
+    let publisher = EventPublisher::new(
+        Arc::clone(edge),
+        link,
+        ReleaseTag::new(env!("CARGO_PKG_VERSION")),
+    );
+    tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())));
+    tracing::info!(
+        stream = %nats.stream,
+        subject = %nats.subject,
+        "event publish enabled: the outbox is draining to the cloud"
     );
 }
 

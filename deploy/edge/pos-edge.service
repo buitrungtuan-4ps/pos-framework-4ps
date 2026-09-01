@@ -26,9 +26,12 @@ StateDirectory=pos-edge
 WorkingDirectory=/var/lib/pos-edge
 Environment=POS_EDGE_CONFIG=/var/lib/pos-edge/config.toml
 Environment=RUST_LOG=info
-# The scoped read_config sync key (POS_EDGE_SYNC_KEY) as a headless bring-up override (ADR-0085/0086).
-# The durable home is the OS keyring (SecretName::SyncKey); when the key lives there, this file can be
-# absent — the leading '-' makes it optional. If used: root-owned, mode 0600, never committed.
+# Two credentials the edge reads from the environment, never from config.toml (ADR-0085/0086/0087):
+#   POS_EDGE_SYNC_KEY  the scoped read_config + relay_orders key, as a headless bring-up override.
+#                      Its durable home is the OS keyring (SecretName::SyncKey).
+#   POS_EDGE_NATS_URL  the event stream's server URL, which is where a NATS credential would live.
+# Both optional — the leading '-' means the file may be absent. If used: root-owned, mode 0600,
+# never committed.
 EnvironmentFile=-/etc/pos-edge/env
 ExecStart=/usr/local/bin/pos-edge
 # SIGTERM triggers graceful shutdown; give in-flight requests time to drain before SIGKILL.

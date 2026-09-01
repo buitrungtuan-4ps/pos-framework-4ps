@@ -46,6 +46,14 @@ read from the keyring (`sync_key`) or, as a headless bring-up override, from `PO
 (the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in `config.toml`, never
 committed). Without `cloud_url` the edge runs LAN-only, exactly as before.
 
+**Publishing the store's events** takes one more pair of settings
+([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): a `[nats]` section in
+`config.toml` naming the `stream` and `subject` — which must match the cloud consumer's `stream` and
+`filter_subject` — and the server URL in `POS_EDGE_NATS_URL`, from the same mode-0600 env file. The
+URL is the field that would carry a credential (`nats://user:pass@host`), which is why it is not in
+`config.toml`. With either missing the edge logs it and publishes nothing: the store trades and its
+outbox holds every event until a stream exists, which is also what happens while the cloud is down.
+
 **The store key needs two scopes**, `read_config` **and** `relay_orders`
 ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): the first for config-pull and the
 heartbeat, the second for the order relay, which pulls the store's cloud-placed orders and acks each
