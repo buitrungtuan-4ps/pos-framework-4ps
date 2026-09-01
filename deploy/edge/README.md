@@ -34,5 +34,14 @@ A wrapper such as NSSM works equally well and adds log rotation. Configure the s
 ## Configuration
 
 Both platforms point `POS_EDGE_CONFIG` at a `config.toml` holding the bootstrap configuration
-(`bind`, `store_id`, and optionally `advertised_ip`). Everything else is the cloud-owned configuration
-the edge syncs and hot-reloads at runtime ([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
+(`bind`, `store_id`, optionally `advertised_ip`, and — for a store connected to a cloud — `cloud_url`).
+Everything else is the cloud-owned configuration the edge syncs and hot-reloads at runtime
+([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
+
+With `cloud_url` set the edge serves the activation routes (`POST /api/activate`), keeps the device
+credential in the OS credential store (Credential Manager on Windows, the kernel keyring on Linux —
+[ADR-0086](../../docs/adr/0086-edge-keyvault-and-activation.md)), and — once activated — runs the
+config-pull and heartbeat loops. Those loops authenticate with the store's scoped `read_config` key,
+read from the keyring (`sync_key`) or, as a headless bring-up override, from `POS_EDGE_SYNC_KEY`
+(the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in `config.toml`, never
+committed). Without `cloud_url` the edge runs LAN-only, exactly as before.

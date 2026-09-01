@@ -46,6 +46,12 @@ pos-country-zz = { path = "../../countries/zz", optional = true }
 # example composes pos-fakes instead.
 store-sqlite = { path = "../adapters/store-sqlite" }
 
+# The real edge composes its CloudSync channel (activation exchange, ADR-0054) and its OS-keyring
+# KeyVault (the device credential + the scoped sync key, ADR-0086); serve() builds them only when a
+# `cloud_url` is configured, so the on-fakes example never constructs them.
+cloud-sync-http  = { path = "../adapters/cloud-sync-http" }
+key-vault-keyring = { path = "../adapters/key-vault-keyring" }
+
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018). The
 # dependency-rule test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
