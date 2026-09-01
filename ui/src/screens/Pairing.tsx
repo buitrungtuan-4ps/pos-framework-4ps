@@ -9,7 +9,8 @@ import { t } from "../i18n";
 // the QR link, which lands here with the code pre-filled). Redeeming is single-use; an unknown or
 // expired code gets the same answer, so a wrong guess learns nothing (ADR-0030). The issued token is
 // persisted by the API client (`api.pair`) and carried on every later domain call, which the edge now
-// requires (ADR-0084); once paired, the device goes straight to the floor.
+// requires (ADR-0084); once paired, the device goes to sign-in, where a member of staff signs in
+// before the floor accepts a command (S0b).
 export function Pairing() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -23,8 +24,9 @@ export function Pairing() {
     try {
       await api.pair(code().trim());
       setPaired(true);
-      // The device now holds a token; land on the floor, where the app can read and command.
-      navigate("/", { replace: true });
+      // The device now holds a token, but a command needs a signed-in employee (S0b/ADR-0084); land
+      // on sign-in, not the floor.
+      navigate("/signin", { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }

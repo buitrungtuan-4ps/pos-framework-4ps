@@ -15,15 +15,15 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{CourseId, DeviceId, MenuItemId, OrderLineId, StationId, TableId, TaxClassId};
+use pos_proto::ids::{CourseId, MenuItemId, OrderLineId, StationId, TableId, TaxClassId};
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 
 use crate::app::{Edge, LineDraft, LineView};
-use crate::http::auth::device_actor;
 use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A line as a device asks for it to be added — the amounts captured from the menu it holds.
@@ -92,7 +92,7 @@ impl From<LineView> for LineResponse {
 /// `POST /api/tables/{id}/lines` — add a line to the order the table holds.
 pub(crate) async fn add<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
     Json(request): Json<LineRequest>,
 ) -> Response
@@ -102,16 +102,13 @@ where
     let Some(table_id) = parse_ulid(&id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
-    respond(
-        edge.add_line(device_actor(device_id), table_id, request.into())
-            .await,
-    )
+    respond(edge.add_line(actor, table_id, request.into()).await)
 }
 
 /// `POST /api/lines/{id}/fire` — fire a line to its station.
 pub(crate) async fn fire<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
     Json(request): Json<FireRequest>,
 ) -> Response
@@ -122,7 +119,7 @@ where
         return bad_request("an order line id is a ULID");
     };
     respond(
-        edge.fire_line(device_actor(device_id), order_line_id, request.station_id)
+        edge.fire_line(actor, order_line_id, request.station_id)
             .await,
     )
 }

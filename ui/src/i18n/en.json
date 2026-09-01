@@ -63,9 +63,19 @@
 
   "pair.title": "Pair this device",
   "pair.paired": "Paired",
-  "pair.paired_hint": "This device is now trusted by the store.",
+  "pair.paired_hint": "This device is now trusted by the store. Sign in to start.",
   "pair.hint": "Enter the six-digit code shown on the store server.",
   "pair.submit": "Pair",
+
+  "signin.title": "Sign in",
+  "signin.hint": "Enter your staff code and PIN to start your shift.",
+  "signin.code": "Staff code",
+  "signin.pin": "PIN",
+  "signin.submit": "Sign in",
+  "signin.wrong": "Wrong staff code or PIN.",
+  "signin.wrong_remaining": "Wrong PIN — {count, plural, one {# try left} other {# tries left}} before this account is locked.",
+  "signin.locked": "Too many attempts. Wait a few minutes and try again.",
+  "nav.signout": "Sign out",
 
   "kds.title": "Kitchen",
   "kds.empty": "Nothing firing.",
