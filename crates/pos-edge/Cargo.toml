@@ -72,6 +72,21 @@ serde_json = { workspace = true }
 thiserror  = { workspace = true }
 toml       = "1"
 
+# The edge's outbound cloud client (config-pull + heartbeat, ADR-0085): the same
+# raw hyper/tokio-rustls stack the webhook sender (ADR-0038) and cloud-sync-http
+# (ADR-0054) pin, and that pos-cloud + async-nats already put in the lock. These
+# are direct-dependency lines, not a new subtree, so no new cargo-deny entry — the
+# `ring` provider is pinned so feature unification cannot pull aws-lc-rs, and roots
+# are the bundled webpki-roots Mozilla set, hermetic for a fork-and-deploy edge.
+hyper          = { version = "1", features = ["client", "http1"] }
+hyper-util     = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes          = "1"
+tokio-rustls   = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots   = "1"
+# `serde` so `EdgeConfig.cloud_url` (an `Option<Url>`) deserializes from the TOML string.
+url            = { version = "2", features = ["serde"] }
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with
 # ServiceExt::oneshot.

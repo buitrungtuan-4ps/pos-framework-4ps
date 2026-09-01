@@ -36,6 +36,7 @@ pub mod active_config;
 pub mod app;
 pub mod auth;
 pub mod clock;
+pub mod cloud_http;
 pub mod config;
 pub mod config_client;
 pub mod countries;

@@ -37,6 +37,14 @@ pub struct EdgeConfig {
     /// interface, and otherwise the operator reads the IP off the console.
     #[serde(default)]
     pub advertised_ip: Option<IpAddr>,
+    /// The base URL of this store's cloud ([ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md)),
+    /// written into `config.toml` at provisioning ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+    /// When set, the edge runs its config-pull and heartbeat loops against it (authenticated with the
+    /// scoped `read_config` key from `POS_EDGE_SYNC_KEY`); when absent, the edge runs LAN-only and
+    /// spawns no cloud loops, exactly as a demo or a not-yet-provisioned box does. It is not a secret —
+    /// the credential is — so it lives here rather than in the environment.
+    #[serde(default)]
+    pub cloud_url: Option<url::Url>,
     /// Where the SQLite event store lives ([ADR-0015](../../../docs/adr/0015-sqlite-access.md)).
     /// Relative to the working directory the service unit sets. Defaults to `store.sqlite`.
     #[serde(default = "default_store_path")]
@@ -51,6 +59,7 @@ impl EdgeConfig {
             bind,
             store_id,
             advertised_ip: None,
+            cloud_url: None,
             store_path: default_store_path(),
         }
     }
@@ -132,5 +141,25 @@ mod tests {
         // deny_unknown_fields: a typo in a config key is a mistake to surface at load, not to ignore.
         let text = "store_id = \"01JQ0000000000000000000001\"\nlisten = \"0.0.0.0:80\"";
         assert!(EdgeConfig::from_toml_str(text).is_err());
+    }
+
+    #[test]
+    fn cloud_url_defaults_to_none() {
+        // A config that names no cloud is LAN-only — the edge spawns no cloud loops (ADR-0085), which
+        // keeps the on-fakes example and a not-yet-provisioned box booting exactly as before.
+        let config =
+            EdgeConfig::from_toml_str("store_id = \"01JQ0000000000000000000001\"").expect("parses");
+        assert!(config.cloud_url.is_none());
+    }
+
+    #[test]
+    fn a_cloud_url_parses_when_present() {
+        let text =
+            "store_id = \"01JQ0000000000000000000001\"\ncloud_url = \"https://acme.pos.example\"";
+        let config = EdgeConfig::from_toml_str(text).expect("parses");
+        assert_eq!(
+            config.cloud_url.as_ref().map(url::Url::as_str),
+            Some("https://acme.pos.example/"),
+        );
     }
 }
