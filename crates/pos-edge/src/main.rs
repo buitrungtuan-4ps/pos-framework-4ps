@@ -29,6 +29,10 @@ async fn main() -> Result<(), EdgeError> {
     // The store's own writer thread is the gapless receipt authority (ADR-0025); a clone shares it,
     // so the loop that appends the settled event and the authority that numbers it are one store.
     let receipts = Arc::new(store.clone());
+    // The same single writer thread is the durable daily queue-number authority (ADR-0064), so a
+    // relayed takeaway order gets a number that survives a restart; another clone carries it into
+    // `serve`, which builds the relay's intake from it (ADR-0087).
+    let queue = store.clone();
     let edge = Arc::new(
         Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
             .map_err(EdgeError::Entropy)?,
@@ -38,5 +42,5 @@ async fn main() -> Result<(), EdgeError> {
     // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
     edge.rebuild().await.map_err(EdgeError::Rebuild)?;
 
-    serve(config, edge).await
+    serve(config, edge, queue).await
 }

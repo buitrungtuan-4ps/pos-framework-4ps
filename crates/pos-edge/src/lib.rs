@@ -75,6 +75,7 @@ pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutc
 pub use pairing::{Code, DeviceToken, Pairing};
 pub use queue::{InMemoryQueueNumbers, QueueNumberAuthority};
 pub use receipt::{InMemoryReceipts, ReceiptAuthority};
-pub use server::serve;
+pub use relay_client::{RelayClient, RelayTransport, RelayTransportError};
+pub use server::{serve, system_device_id};
 pub use sntp::{Drift, assess as assess_drift};
 pub use state::{AppState, BuildInfo};

@@ -12,18 +12,25 @@ use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
 use key_vault_keyring::{KeyringVault, OsKeyring};
 use pos_core::activation::ActivationStanding;
 use pos_ports::event_store::EventStore;
+use pos_ports::intake_ledger::IntakeLedger;
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_proto::ClockSource;
+use pos_proto::ids::{DeviceId, StoreId};
 
 use crate::activation::{activation_router, boot_standing};
 use crate::app::Edge;
-use crate::cloud_http::{CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport};
+use crate::cloud_http::{
+    CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, RelayHttpTransport,
+};
 use crate::config::EdgeConfig;
 use crate::config_client::ConfigClient;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::error::EdgeError;
 use crate::heartbeat_client::HeartbeatClient;
+use crate::order_in::EdgeOrderIn;
 use crate::pairing::pairing_url;
+use crate::queue::QueueNumberAuthority;
+use crate::relay_client::RelayClient;
 use crate::state::AppState;
 
 /// The environment variable carrying the store's scoped `read_config` API key
@@ -46,6 +53,22 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 /// one-time, operator-driven action, not a hot path.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The box's own device identity, for the events it writes with no human behind them.
+///
+/// A relayed order came from the cloud, not from a paired till, so the honest answer to "which device
+/// did this" is *the store server itself* — and the events an inbound order writes need a
+/// [`DeviceId`] because there is no signed-in employee ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
+/// Deriving it from the [`StoreId`] makes it **stable across restarts** (so one box's system events all
+/// carry one id) and **unique per store** (so two shops never collide in the cloud's own analytics),
+/// in the spirit of [`StoreIdentity::for_store`](crate::StoreIdentity::for_store)'s documented bootstrap
+/// ids. Carrying the device id the cloud granted at activation is the durable answer and is the flagged
+/// follow-up ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)); the cloud's device
+/// registry remains the authority on fleet identity either way.
+#[must_use]
+pub const fn system_device_id(store_id: StoreId) -> DeviceId {
+    DeviceId::new(store_id.as_ulid())
+}
+
 /// Builds the state and router, binds the configured address, and serves until a shutdown signal.
 ///
 /// The composed [`Edge`] is generic over the store `S`, so the same server runs against `pos-fakes`
@@ -61,9 +84,10 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve<S>(config: EdgeConfig, edge: Arc<Edge<S>>) -> Result<(), EdgeError>
+pub async fn serve<S, Q>(config: EdgeConfig, edge: Arc<Edge<S>>, queue: Q) -> Result<(), EdgeError>
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
 {
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
     // build can serve (ADR-0027).
@@ -129,7 +153,8 @@ where
     // loops. An unactivated or LAN-only box still binds, pairs, and serves the counter offline
     // (ADR-0001); the gate withholds cloud sync, never local trading.
     if let Some(cloud_url) = cloud_url {
-        app = compose_cloud_surface(app, &cloud_url, store_id, &config_edge, &shutdown_rx).await;
+        app = compose_cloud_surface(app, &cloud_url, store_id, &config_edge, queue, &shutdown_rx)
+            .await;
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
@@ -158,15 +183,17 @@ where
 /// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
 /// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
 /// box still binds, pairs, and serves the LAN, and the operator UI routes it to `/setup`.
-async fn compose_cloud_surface<S>(
+async fn compose_cloud_surface<S, Q>(
     app: axum::Router,
     cloud_url: &url::Url,
-    store_id: pos_proto::ids::StoreId,
+    store_id: StoreId,
     edge: &Arc<Edge<S>>,
+    queue: Q,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> axum::Router
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
 {
     // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
     let vault = Arc::new(KeyringVault::new(OsKeyring::new()));
@@ -196,7 +223,7 @@ where
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
             let sync_key = resolve_sync_key(&*vault).await;
-            spawn_cloud_loops(cloud_url, store_id, edge, sync_key, shutdown_rx);
+            spawn_cloud_loops(cloud_url, store_id, edge, queue, sync_key, shutdown_rx);
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
@@ -227,18 +254,20 @@ async fn resolve_sync_key<V: KeyVault>(vault: &V) -> Option<String> {
         .filter(|key| !key.trim().is_empty())
 }
 
-/// Spawns the config-pull and heartbeat loops for an activated store, keyed by `sync_key`. A `None`
-/// key (neither in the vault nor the environment) is logged and skipped — the box is activated but has
-/// nothing to authenticate the `/sync` surface with, so it trades locally and awaits a provisioned
-/// key. The loops share the passed shutdown, so they drain with the server.
-fn spawn_cloud_loops<S>(
+/// Spawns the config-pull, heartbeat, and order-relay loops for an activated store, keyed by
+/// `sync_key`. A `None` key (neither in the vault nor the environment) is logged and skipped — the box
+/// is activated but has nothing to authenticate the `/sync` surface with, so it trades locally and
+/// awaits a provisioned key. The loops share the passed shutdown, so they drain with the server.
+fn spawn_cloud_loops<S, Q>(
     cloud_url: &url::Url,
-    store_id: pos_proto::ids::StoreId,
+    store_id: StoreId,
     edge: &Arc<Edge<S>>,
+    queue: Q,
     sync_key: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
 {
     let Some(sync_key) = sync_key else {
         tracing::warn!(
@@ -264,12 +293,25 @@ fn spawn_cloud_loops<S>(
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     let heartbeat_client = HeartbeatClient::new(
-        HeartbeatHttpTransport::new(client, store_id),
+        HeartbeatHttpTransport::new(client.clone(), store_id),
         HEARTBEAT_INTERVAL,
     );
     tokio::spawn(heartbeat_client.run(wait_for_shutdown(shutdown_rx.clone())));
 
-    tracing::info!(%cloud_url, "cloud sync enabled: config-pull and heartbeat loops running");
+    // The order relay (ADR-0061, ADR-0087): pull the store's parked orders, make each one through the
+    // edge's own `OrderIn` — repriced from this store's menu, deduped in the order's transaction — and
+    // ack the outcome. The same scoped key as the loops above, which must also carry `relay_orders`.
+    // The relay paces itself on the cloud's long-poll, so it takes no interval of its own.
+    let relay_client = RelayClient::new(
+        RelayHttpTransport::new(client, store_id),
+        EdgeOrderIn::new(Arc::clone(edge), queue, system_device_id(store_id)),
+    );
+    tokio::spawn(relay_client.run(wait_for_shutdown(shutdown_rx.clone())));
+
+    tracing::info!(
+        %cloud_url,
+        "cloud sync enabled: config-pull, heartbeat, and order-relay loops running"
+    );
 }
 
 /// Resolves when the shutdown flag flips true (or its sender drops) — one per background consumer.
@@ -303,4 +345,29 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutdown signal received; draining in-flight requests");
+}
+
+#[cfg(test)]
+mod tests {
+    use pos_proto::ids::StoreId;
+    use pos_proto::ulid::Ulid;
+
+    use super::system_device_id;
+
+    #[test]
+    fn the_system_device_id_is_stable_for_a_store() {
+        // One box, one identity: every system event this store writes carries the same device id, so
+        // the cloud can group them however many times the box restarts.
+        let store_id = StoreId::new(Ulid::from_u128(7));
+        assert_eq!(system_device_id(store_id), system_device_id(store_id));
+    }
+
+    #[test]
+    fn two_stores_never_share_a_system_device_id() {
+        // The reason it is derived from the store rather than a fixed sentinel: two shops must not
+        // collide in the cloud's own analytics.
+        let one = system_device_id(StoreId::new(Ulid::from_u128(7)));
+        let other = system_device_id(StoreId::new(Ulid::from_u128(8)));
+        assert_ne!(one, other);
+    }
 }

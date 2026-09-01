@@ -1,16 +1,19 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The edge's outbound cloud HTTP client and the config-pull / heartbeat transports
-//! ([ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md)).
+//! The edge's outbound cloud HTTP client and the config-pull, heartbeat, and order-relay transports
+//! ([ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md),
+//! [ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
 //!
-//! The config-pull ([`config_client`](crate::config_client)) and heartbeat
-//! ([`heartbeat_client`](crate::heartbeat_client)) loops each hide their HTTP behind a seam so the
-//! loop logic is tested with no socket. This module is the field implementation of those seams: one
+//! The config-pull ([`config_client`](crate::config_client)), heartbeat
+//! ([`heartbeat_client`](crate::heartbeat_client)), and order-relay
+//! ([`relay_client`](crate::relay_client)) loops each hide their HTTP behind a seam so the loop logic
+//! is tested with no socket. This module is the field implementation of those seams: one
 //! small rustls/hyper client ([`CloudHttpClient`]) — the same stack the webhook sender
 //! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)) and `cloud-sync-http`
 //! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)) pin — reused by
-//! [`ConfigHttpTransport`] and [`HeartbeatHttpTransport`].
+//! [`ConfigHttpTransport`], [`HeartbeatHttpTransport`], and the order relay's
+//! [`RelayHttpTransport`] ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
 //!
 //! It dials exactly one trusted host — the store's own cloud, its base URL set at provisioning — so,
 //! like `cloud-sync-http`, it resolves and connects the ordinary way; there is no SSRF surface to
@@ -40,11 +43,18 @@ use pos_proto::ids::StoreId;
 
 use crate::config_client::{ConfigTransport, ConfigTransportError, SyncedConfig};
 use crate::heartbeat_client::{HeartbeatError, HeartbeatTransport};
+use crate::relay_client::{PendingOrderDto, RelayTransport, RelayTransportError, StoreOutcome};
 
 /// How long any one request may take, end to end (resolve → connect → handshake → send → read). A
 /// black-hole cloud must never wedge a loop; a timeout is an ordinary transport failure the loop
 /// backs off from, and the store keeps trading locally meanwhile (ADR-0001).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long a relay pull may take. The cloud **parks** a pull with nothing to give for up to 20
+/// seconds ([ADR-0061](../../../docs/adr/0061-order-relay.md)) before answering with an empty batch,
+/// so the ordinary [`REQUEST_TIMEOUT`] would cut every poll short and a quiet store would never see a
+/// parked order (ADR-0087). This allows the full park plus margin.
+const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A failure of the outbound cloud transport — the cloud could not be reached, or answered in a way
 /// the client could not use. Carries a human-readable reason for the store's log; configuration and
@@ -111,6 +121,18 @@ impl CloudHttpClient {
             tls: Arc::new(tls),
             timeout: REQUEST_TIMEOUT,
         })
+    }
+
+    /// The same client with a different per-request timeout.
+    ///
+    /// One route on the `/sync` surface — the relay pull — is deliberately slow, because the cloud
+    /// parks it until an order arrives (ADR-0061). Rather than raise the timeout for every caller,
+    /// each transport takes the client it wants: config-pull and heartbeat keep [`REQUEST_TIMEOUT`],
+    /// the relay takes [`RELAY_REQUEST_TIMEOUT`].
+    #[must_use]
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// The absolute request URL for an origin-rooted `path` (e.g. `/sync/stores/…/config`) and an
@@ -411,9 +433,101 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
     }
 }
 
+// -------------------------------------------------------------------------------------------------
+// Order-relay transport
+// -------------------------------------------------------------------------------------------------
+
+/// The field [`RelayTransport`]: pulls the store's parked orders and acks each outcome over HTTPS
+/// ([ADR-0061](../../../docs/adr/0061-order-relay.md), [ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
+///
+/// Outbound-only, like every other rail the store runs: the cloud never dials the shop. The pull is a
+/// long-poll — the cloud holds it open until an order arrives or its cap elapses — so this transport
+/// carries [`RELAY_REQUEST_TIMEOUT`] rather than the client's ordinary one. Both routes require the
+/// store key to hold the `relay_orders` scope alongside `read_config`; a key without it is answered
+/// `403`, which surfaces here as an ordinary transport failure the loop backs off from (ADR-0087).
+#[derive(Debug, Clone)]
+pub struct RelayHttpTransport {
+    client: CloudHttpClient,
+    store_id: StoreId,
+}
+
+impl RelayHttpTransport {
+    /// Builds a relay transport over `client` for `store_id`, lengthening the client's timeout to
+    /// outlast the cloud's park.
+    #[must_use]
+    pub fn new(client: CloudHttpClient, store_id: StoreId) -> Self {
+        Self {
+            client: client.with_timeout(RELAY_REQUEST_TIMEOUT),
+            store_id,
+        }
+    }
+}
+
+/// The pull route for a store. Pure, so the path the transport builds is checked without a socket.
+fn relay_pull_path(store_id: StoreId) -> String {
+    format!("/sync/stores/{store_id}/orders")
+}
+
+/// The ack route for one pulled order. Pure, for the same reason.
+fn relay_ack_path(store_id: StoreId, queued_id: &str) -> String {
+    format!("/sync/stores/{store_id}/orders/{queued_id}/ack")
+}
+
+impl RelayTransport for RelayHttpTransport {
+    async fn pull(&self) -> Result<Vec<PendingOrderDto>, RelayTransportError> {
+        let path = relay_pull_path(self.store_id);
+        let (status, body) = self
+            .client
+            .request(&hyper::Method::GET, &path, None, Vec::new())
+            .await
+            .map_err(|error| RelayTransportError::new(error.to_string()))?;
+        match status {
+            200 => serde_json::from_slice::<Vec<PendingOrderDto>>(&body).map_err(|error| {
+                RelayTransportError::new(format!("the pull response did not parse: {error}"))
+            }),
+            other => Err(RelayTransportError::new(format!(
+                "the cloud refused the order pull with status {other}"
+            ))),
+        }
+    }
+
+    async fn ack(
+        &self,
+        queued_id: &str,
+        outcome: &StoreOutcome,
+    ) -> Result<(), RelayTransportError> {
+        let path = relay_ack_path(self.store_id, queued_id);
+        let body = serde_json::to_vec(outcome).map_err(|error| {
+            RelayTransportError::new(format!("the ack body could not be encoded: {error}"))
+        })?;
+        let (status, _body) = self
+            .client
+            .request(&hyper::Method::POST, &path, None, body)
+            .await
+            .map_err(|error| RelayTransportError::new(error.to_string()))?;
+        match status {
+            // The cloud answers 204 whether or not the row was still pending: acking twice is not an
+            // error, which is what makes at-least-once redelivery safe.
+            204 => Ok(()),
+            other => Err(RelayTransportError::new(format!(
+                "the cloud refused the order ack with status {other}"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CloudHttpClient, ConfigPull, ConfigSyncWire, interpret, request_line};
+    use core::time::Duration;
+
+    use pos_proto::ids::StoreId;
+    use pos_proto::ulid::Ulid;
+
+    use super::{
+        CloudHttpClient, ConfigPull, ConfigSyncWire, RELAY_REQUEST_TIMEOUT, REQUEST_TIMEOUT,
+        RelayHttpTransport, interpret, relay_ack_path, relay_pull_path, request_line,
+    };
+    use crate::relay_client::StoreOutcome;
 
     fn client() -> CloudHttpClient {
         CloudHttpClient::new(
@@ -502,5 +616,47 @@ mod tests {
         }"#;
         let wire = serde_json::from_str::<ConfigSyncWire>(body).expect("parses");
         assert!(matches!(interpret(wire), ConfigPull::NeedFullSnapshot));
+    }
+
+    #[test]
+    fn the_relay_routes_are_the_clouds_sync_paths() {
+        let store_id = StoreId::new(Ulid::from_u128(1));
+        assert_eq!(
+            relay_pull_path(store_id),
+            format!("/sync/stores/{store_id}/orders"),
+        );
+        assert_eq!(
+            relay_ack_path(store_id, "queued-7"),
+            format!("/sync/stores/{store_id}/orders/queued-7/ack"),
+        );
+    }
+
+    #[test]
+    fn the_relay_transport_outlasts_the_clouds_long_poll() {
+        // The regression this guards: the ordinary 15s timeout is shorter than the cloud's 20s park,
+        // so a relay built on an unmodified client would time out every poll on a quiet store and
+        // never see an order (ADR-0087).
+        let transport = RelayHttpTransport::new(client(), StoreId::new(Ulid::from_u128(1)));
+        assert_eq!(transport.client.timeout, RELAY_REQUEST_TIMEOUT);
+        assert!(
+            RELAY_REQUEST_TIMEOUT > Duration::from_secs(20),
+            "the relay timeout must outlast the cloud's long-poll cap",
+        );
+        // The other transports are untouched: only the parked route pays for the longer wait.
+        assert_eq!(client().timeout, REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn an_ack_body_is_the_shape_the_cloud_parses() {
+        // The cloud reads `StoreOutcome` with `#[serde(tag = "outcome")]`; a refusal must carry its
+        // class and reason at the top level, not nested.
+        let body = serde_json::to_value(StoreOutcome::Rejected {
+            status: "invalid_argument".to_owned(),
+            message: "an order must have at least one line".to_owned(),
+        })
+        .expect("the outcome serialises");
+        assert_eq!(body["outcome"], "rejected");
+        assert_eq!(body["status"], "invalid_argument");
+        assert_eq!(body["message"], "an order must have at least one line");
     }
 }
