@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule actions-pinned links mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core actions-pinned links mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -101,6 +101,11 @@ links:
 # gate) must stay byte-identical — the substitute for a shared module they cannot import.
 mirrored-files:
     cargo run -q -p xtask -- mirrored-files
+
+# No external vendor's brand name may appear in pos-core / pos-proto production code — the
+# automated half of the integration doctrine (ADR-0083).
+vendor-neutral-core:
+    cargo run -q -p xtask -- vendor-neutral-core
 
 # Regenerate the committed snapshots and generated docs from the code that owns them.
 snapshot:

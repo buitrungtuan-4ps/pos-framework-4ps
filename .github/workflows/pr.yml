@@ -49,6 +49,8 @@ jobs:
         run: cargo run -q -p xtask -- countries
       - name: files mirrored across the front-end build roots stay identical
         run: cargo run -q -p xtask -- mirrored-files
+      - name: no vendor brand name in pos-core / pos-proto production code
+        run: cargo run -q -p xtask -- vendor-neutral-core
       - name: nothing removed from a committed snapshot
         run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
       - name: migrations are additive-only
