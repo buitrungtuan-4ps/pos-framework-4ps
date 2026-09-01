@@ -16,6 +16,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **Roadmap v3 and the integration doctrine** (roadmap v3, Wave B9.1;
+  [ADR-0083](docs/adr/0083-integration-doctrine.md), [`docs/roadmap-v3.md`](docs/roadmap-v3.md)).
+  `docs/roadmap-v3.md` lands the approved plan — two parallel programs (Ship the Edge; Complete the
+  Domain) across four milestones (v1.0 Ship & Safe → v1.3 Production International) — as the repo's
+  durable source of truth. ADR-0083 states the rule the plan's plug-and-play principle rests on: the
+  core (`pos-core`, `pos-proto`) holds only the POS invariant, and every external system — a
+  marketplace, a card terminal, an e-invoice provider, an external KDS — plugs in through exactly one
+  of three points (a port + adapter, the scoped `/v1` API, or the event stream), never as a branch in
+  core logic. A new `xtask` check, `vendor-neutral-core`, enforces the automated half: it scans the
+  production source of `pos-core` and `pos-proto` (comments and `#[cfg(test)]` code excluded, where
+  example data and prose legitimately name vendors) for a curated denylist of vendor brand names and
+  fails the build if one appears — the same way the dependency rule (ADR-0013) turned layering into
+  law. It runs in `just preflight` and the PR workflow. **Upgrade note:** no wire, permission,
+  migration, or dependency change; the core is already vendor-neutral, so the gate ratifies and
+  guards the existing state.
+
 ### Security
 - **A console admin can re-enrol their authenticator and hold one-time recovery codes** (roadmap v2,
   Track G, G1 slice 6; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `POST /admin/totp`
