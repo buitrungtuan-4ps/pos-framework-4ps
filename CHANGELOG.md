@@ -17,6 +17,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The OTA release registry — the cloud can finally say a release exists** (roadmap v3, slice R2;
+  [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). `pos_cloud::ota` records, for each release tag
+  and build target, how big the artifact is and what its SHA-256 digest is, over a `ReleaseStore`
+  seam with a `store-postgres` adapter (migration `0038_ota_releases.sql`). Three things worth
+  knowing:
+  - **The bytes are not in the row.** They live in the object store at
+    `releases/{tag}/{target}/pos-edge`, with the detached signature beside them as
+    `pos-edge.minisig`, derived from the tag and target by `ota::artifact_key` rather than stored —
+    so a row and its blobs cannot disagree about where the bytes are. A release tag is free text
+    (`ReleaseTag` deliberately does not validate), so it is checked here, at the point where it stops
+    being a label and becomes a path segment: `..`, `/`, and an over-long tag are all refused before
+    a key is composed.
+  - **A release is immutable.** Re-recording a tag/target with *different* bytes is refused;
+    re-recording the identical digest is a no-op, so re-running a release step is not an error. The
+    rule lives in one pure function (`ota::admit_artifact`), consulted by the adapter rather than
+    duplicated in SQL, so the registry cannot drift from the tests that pin it.
+  - **The digest is not a trust boundary.** It catches a truncated upload or a corrupted blob;
+    nothing more. Only the detached minisign signature makes an artifact safe to install, and only
+    the edge verifies it ([ADR-0047](docs/adr/0047-minisign-verification.md)). The cloud never signs
+    and never verifies, which is what makes hosting binaries an acceptable job for it at all.
+
+  `ota_releases` is deliberately the one table in the cloud schema with no `tenant_id` and no
+  row-level security: a release is fleet-wide, carries no tenant data, and only the trusted admin
+  connection reads it.
+- **ADR-0088 corrected against the tree** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). Two
+  claims in the merged ADR did not survive contact with the code and are corrected in place rather
+  than worked around, because both change what the remaining R2 slices must do. Garage is deployed
+  for **backups**, not for media (media renditions are Postgres `bytea` per
+  [ADR-0042](docs/adr/0042-image-pipeline.md)), so "no new dependency" was too strong — the
+  artifact-storage slice has to add `blob-garage` to `pos-cloud` along with S3 credentials the
+  deployment does not yet provision. And the pinned `fetch_update` request
+  ([ADR-0054](docs/adr/0054-edge-cloud-http-client.md)) carries only a release tag, while the release
+  workflow builds two targets — so the route slice must add an additive `arch` field, which is a wire
+  change the ADR said would not be needed. No `PROTOCOL_VERSION` bump either way.
 - **Roadmap v3 and the integration doctrine** (roadmap v3, Wave B9.1;
   [ADR-0083](docs/adr/0083-integration-doctrine.md), [`docs/roadmap-v3.md`](docs/roadmap-v3.md)).
   `docs/roadmap-v3.md` lands the approved plan — two parallel programs (Ship the Edge; Complete the

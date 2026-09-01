@@ -123,6 +123,9 @@ const MIGRATION_0036: &str = include_str!("../migrations/0036_reconcile_runs.sql
 /// Inventory authoring: ingredients, recipes, suppliers ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
 const MIGRATION_0037: &str = include_str!("../migrations/0037_inventory.sql");
 
+/// The OTA release registry ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
+const MIGRATION_0038: &str = include_str!("../migrations/0038_ota_releases.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -330,6 +333,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0037)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0038)
+            .await
             .map_err(unavailable)
     }
 
@@ -414,6 +421,14 @@ impl PostgresStore {
     #[must_use]
     pub fn reconcile(&self) -> crate::reconcile::PostgresReconcile {
         crate::reconcile::PostgresReconcile::new(self.pool.clone())
+    }
+
+    /// The OTA release registry over this pool ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReleaseStore` seam over it.
+    #[must_use]
+    pub fn releases(&self) -> crate::ota::PostgresReleases {
+        crate::ota::PostgresReleases::new(self.pool.clone())
     }
 
     /// The device-proposal store over this pool ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).

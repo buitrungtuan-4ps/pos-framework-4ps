@@ -31,10 +31,11 @@ use store_postgres::{
     PostgresAlerts, PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog,
     PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory,
     PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry,
-    PostgresRollups, PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers,
-    PostgresWebhooks, RoleTemplateRow, RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
+    PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReleaseArtifactRow, RoleTemplateRow,
+    RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow,
+    TenantRow,
 };
 
 use pos_ports::PortError;
@@ -90,6 +91,9 @@ use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
+use crate::ota::{
+    RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple, admit_artifact,
+};
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
     EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
@@ -3529,4 +3533,87 @@ impl CatalogStore for PostgresCatalog {
         .await
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
+}
+
+/// The OTA release registry over PostgreSQL ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md),
+/// roadmap-v3 slice R2).
+///
+/// The immutability rule is [`admit_artifact`]'s, consulted here with the digest the table already
+/// holds — so the registry and the rule cannot drift, and the refusal a re-upload gets is the one the
+/// unit tests pin rather than a second copy of it written in SQL.
+impl ReleaseStore for PostgresReleases {
+    async fn record_artifact(
+        &self,
+        artifact: &ReleaseArtifact,
+    ) -> Result<RecordOutcome, ReleaseStoreError> {
+        let target = artifact.target.to_string();
+        let stored = self
+            .stored_digest(&artifact.release, &target)
+            .await
+            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+        let outcome = admit_artifact(stored.as_deref(), artifact)?;
+        if outcome == RecordOutcome::AlreadyRecorded {
+            return Ok(outcome);
+        }
+        self.insert_artifact(&ReleaseArtifactRow {
+            release: artifact.release.clone(),
+            target,
+            size_bytes: artifact.size_bytes,
+            sha256: artifact.sha256.clone(),
+            recorded_at: artifact.recorded_at.as_milliseconds_since_epoch(),
+        })
+        .await
+        .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+        Ok(outcome)
+    }
+
+    async fn find_artifact(
+        &self,
+        release: &str,
+        target: &TargetTriple,
+    ) -> Result<Option<ReleaseArtifact>, ReleaseStoreError> {
+        // Fully qualified deliberately: the inherent method and this trait method share a name, and
+        // resolution silently prefers the inherent one. Spelling it out means renaming the inherent
+        // method is a compile error rather than an infinite recursion.
+        let row = PostgresReleases::find_artifact(self, release, target.as_str())
+            .await
+            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+        row.map(release_artifact_from_row).transpose()
+    }
+
+    async fn list_artifacts(
+        &self,
+        release: &str,
+    ) -> Result<Vec<ReleaseArtifact>, ReleaseStoreError> {
+        // Fully qualified for the same reason, and more sharply: the inherent `list_artifacts` has
+        // the *identical* signature to this one, so a bare `self.list_artifacts(release)` would
+        // recurse forever the moment the inherent method went away.
+        let rows = PostgresReleases::list_artifacts(self, release)
+            .await
+            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+        rows.into_iter().map(release_artifact_from_row).collect()
+    }
+}
+
+/// Rehydrates a stored row into a [`ReleaseArtifact`].
+///
+/// A target or timestamp that no longer parses means the row was written by something that did not
+/// go through this seam, so it is reported as a registry failure rather than skipped — a release the
+/// cloud cannot describe must not silently look like a release that was never uploaded.
+fn release_artifact_from_row(
+    row: ReleaseArtifactRow,
+) -> Result<ReleaseArtifact, ReleaseStoreError> {
+    let target = TargetTriple::parse(&row.target).map_err(|error| {
+        ReleaseStoreError::unavailable(format!("a stored release target is invalid: {error}"))
+    })?;
+    let recorded_at = Timestamp::from_milliseconds_since_epoch(row.recorded_at).map_err(|_| {
+        ReleaseStoreError::unavailable("a stored release recorded_at is out of range")
+    })?;
+    Ok(ReleaseArtifact {
+        release: row.release,
+        target,
+        size_bytes: row.size_bytes,
+        sha256: row.sha256,
+        recorded_at,
+    })
 }
