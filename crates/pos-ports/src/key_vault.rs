@@ -47,6 +47,10 @@ pub enum SecretName {
     WebhookSigningKey,
     /// The per-tenant API key a cloud deployment uses against a vendor.
     VendorApiKey,
+    /// The tenant-scoped `read_config` API key the edge presents to the cloud's `/sync` surface
+    /// (config-pull and heartbeat, ADR-0085). Held in the vault so it need not live in a service-unit
+    /// environment file; the edge falls back to `POS_EDGE_SYNC_KEY` for a headless bring-up (ADR-0086).
+    SyncKey,
 }
 
 impl SecretName {
@@ -60,6 +64,7 @@ impl SecretName {
         Self::LeaseToken,
         Self::WebhookSigningKey,
         Self::VendorApiKey,
+        Self::SyncKey,
     ];
 
     /// The `snake_case` name under which the secret is stored.
@@ -70,6 +75,7 @@ impl SecretName {
             Self::LeaseToken => "lease_token",
             Self::WebhookSigningKey => "webhook_signing_key",
             Self::VendorApiKey => "vendor_api_key",
+            Self::SyncKey => "sync_key",
         }
     }
 }
@@ -244,7 +250,7 @@ mod tests {
     fn every_secret_name_is_enumerable_so_revocation_can_wipe_them_all() {
         // The revocation path in ADR-0003 needs a list, not a guess about what a machine
         // might be holding.
-        assert_eq!(SecretName::ALL.len(), 4);
+        assert_eq!(SecretName::ALL.len(), 5);
         let mut labels: Vec<&str> = SecretName::ALL.iter().map(|name| name.as_label()).collect();
         let count = labels.len();
         labels.sort_unstable();

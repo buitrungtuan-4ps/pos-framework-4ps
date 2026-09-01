@@ -1,0 +1,46 @@
+[package]
+name        = "key-vault-keyring"
+version     = "0.1.0"
+description = "The edge's KeyVault adapter: device credentials in the OS credential store (ADR-0086)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[features]
+# The contract suite against a real OS keyring is gated so the pull-request `test` job (which has no
+# usable credential store) neither compiles nor runs it; the merge-to-`main` integration lane turns it
+# on. The adapter's own logic — SecretName -> entry mapping, Secret binary-safety, error translation —
+# is proven in the fast gate against an in-memory backend, exactly as cloud-sync-http proves its
+# mapping against a stub transport (ADR-0086, ADR-0054).
+integration = []
+
+[dependencies]
+# The backbone this adapter implements: the KeyVault port, its PortError, the Secret and SecretName.
+pos-ports = { path = "../../pos-ports" }
+
+thiserror = { workspace = true }
+
+# ADR-0086: the OS credential store, behind one maintained cross-platform crate rather than three
+# hand-rolled platform FFIs (ADR-0007). Only the native backend per platform is selected — no D-Bus /
+# Secret Service subtree — so the adapter works under the headless store service user (linux keyutils)
+# and on Windows (Credential Manager) and macOS (Keychain, for development).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["linux-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[dev-dependencies]
+# The shared KeyVault contract suite (invoked over the in-memory backend in the fast gate and the
+# real OS keyring under `--features integration`), and `run_ready` — the poll-once executor the
+# other adapters' contract tests use, since this adapter's keyring calls are inline and ready.
+pos-contract-tests = { path = "../../pos-contract-tests" }
+pos-fakes = { path = "../../pos-fakes" }
+
+[lints]
+workspace = true

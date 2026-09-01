@@ -16,6 +16,7 @@ members = [
     "crates/adapters/printer-escpos",
     "crates/adapters/updater-minisign",
     "crates/adapters/cloud-sync-http",
+    "crates/adapters/key-vault-keyring",
     "crates/adapters/shipping-ahamove",
     "crates/adapters/shipping-grabexpress",
     "crates/adapters/erp-sap",
