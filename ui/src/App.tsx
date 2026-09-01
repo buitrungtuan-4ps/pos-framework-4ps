@@ -1,6 +1,7 @@
 import { onCleanup, onMount, type ParentProps } from "solid-js";
 import { Route, Router } from "@solidjs/router";
 
+import { deviceToken } from "./api/client";
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
 import { Expo } from "./screens/Expo";
@@ -35,6 +36,14 @@ export function App() {
   });
   onMount(() => {
     link.start();
+    // An unpaired device cannot command or read the edge (ADR-0084); send it to pair before it tries
+    // to draw the store, rather than letting the first call 401.
+    if (deviceToken() === null) {
+      if (window.location.pathname !== "/pair") {
+        window.location.replace("/pair");
+      }
+      return;
+    }
     // Draw the store's real floor and resolve fires to its default station (ADR-0072); a failure or an
     // empty plan leaves the never-blank fallback in place.
     void loadFloor();

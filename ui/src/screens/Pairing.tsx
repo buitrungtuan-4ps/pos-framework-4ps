@@ -1,5 +1,5 @@
 import { Show, createSignal } from "solid-js";
-import { useSearchParams } from "@solidjs/router";
+import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { PageHeader } from "../components/ui";
@@ -7,10 +7,12 @@ import { t } from "../i18n";
 
 // Pairing a device: the operator reads a six-digit code off the edge and enters it here (or opens
 // the QR link, which lands here with the code pre-filled). Redeeming is single-use; an unknown or
-// expired code gets the same answer, so a wrong guess learns nothing (ADR-0030). The token is kept
-// only in memory for now — persisting it in the device keystore is the auth-integration follow-up.
+// expired code gets the same answer, so a wrong guess learns nothing (ADR-0030). The issued token is
+// persisted by the API client (`api.pair`) and carried on every later domain call, which the edge now
+// requires (ADR-0084); once paired, the device goes straight to the floor.
 export function Pairing() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const initial = typeof params["code"] === "string" ? params["code"] : "";
   const [code, setCode] = createSignal(initial);
   const [error, setError] = createSignal<string | null>(null);
@@ -21,6 +23,8 @@ export function Pairing() {
     try {
       await api.pair(code().trim());
       setPaired(true);
+      // The device now holds a token; land on the floor, where the app can read and command.
+      navigate("/", { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
