@@ -14,26 +14,56 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pos_edge::{Edge, EdgeSession, InMemoryReceipts, Pairing, StoreIdentity, SystemClock};
+use pos_core::permission::PermissionSet;
+use pos_edge::{
+    Edge, EdgeSession, InMemoryReceipts, Pairing, StaffAuth, StaffRoster, StoreIdentity,
+    SystemClock,
+};
 use pos_fakes::FakeStore;
 use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
-use pos_proto::ids::{MenuItemId, StationId, StoreId, TableId};
+use pos_proto::ids::{EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::ulid::Ulid;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-/// The domain router plus a bearer token for a device paired against it — every command route now
-/// requires one (ADR-0084).
-fn app() -> (Router, String) {
+/// The badge code + PIN seeded into the store's roster, and the employee they sign in as.
+const STAFF_CODE: &str = "C01";
+const STAFF_PIN: &str = "2468";
+
+/// A real Argon2id PHC hash of `pin`, computed with a fixed salt so the test needs no RNG — the same
+/// recipe the offline-auth unit tests use.
+fn hash_of(pin: &str) -> String {
+    use argon2::Argon2;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let salt = SaltString::encode_b64(b"fixed-test-salt!").expect("salt");
+    Argon2::default()
+        .hash_password(pin.as_bytes(), &salt)
+        .expect("hash")
+        .to_string()
+}
+
+/// The domain router plus a bearer token for a device that is paired *and signed in* — every command
+/// route now requires both (S0b, ADR-0084). The store is seeded with one staff member so the device
+/// can sign in over the real route.
+async fn app() -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
+    let mut roster = StaffRoster::new();
+    roster.insert(
+        STAFF_CODE,
+        StaffAuth {
+            employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+            permissions: PermissionSet::default(),
+            pin_phc: Some(hash_of(STAFF_PIN)),
+        },
+    );
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
             identity,
-            EdgeSession::bootstrap(),
+            EdgeSession::bootstrap().with_staff(roster),
             Arc::new(InMemoryReceipts::new()),
         )
         .expect("seed"),
@@ -47,7 +77,18 @@ fn app() -> (Router, String) {
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();
-    (pos_edge::http::domain_router(edge, pairing), token)
+    let service = pos_edge::http::domain_router(edge, pairing);
+    // Sign the paired device in, so the command routes below run under a real employee.
+    let (status, _) = send(
+        service.clone(),
+        &token,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": STAFF_CODE, "pin": STAFF_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the seeded staff signs in");
+    (service, token)
 }
 
 async fn send(
@@ -96,7 +137,7 @@ fn a_line_body() -> Value {
 
 #[tokio::test]
 async fn a_table_sells_end_to_end_over_http() {
-    let (app, token) = app();
+    let (app, token) = app().await;
     let table = TableId::new(Ulid::from_u128(700));
 
     // Seat: the table opens.
@@ -190,7 +231,7 @@ async fn a_table_sells_end_to_end_over_http() {
 
 #[tokio::test]
 async fn underpaying_a_bill_over_http_is_a_conflict() {
-    let (app, token) = app();
+    let (app, token) = app().await;
     let table = TableId::new(Ulid::from_u128(701));
     send(
         app.clone(),
@@ -239,7 +280,7 @@ async fn underpaying_a_bill_over_http_is_a_conflict() {
 
 #[tokio::test]
 async fn an_unknown_payment_method_is_a_bad_request() {
-    let (app, token) = app();
+    let (app, token) = app().await;
     let table = TableId::new(Ulid::from_u128(702));
     send(
         app.clone(),
@@ -288,7 +329,7 @@ async fn an_unknown_payment_method_is_a_bad_request() {
 
 #[tokio::test]
 async fn a_shift_opens_counts_blind_and_closes_over_http() {
-    let (app, token) = app();
+    let (app, token) = app().await;
 
     // Open with a 500k float.
     let (status, opened) = send(

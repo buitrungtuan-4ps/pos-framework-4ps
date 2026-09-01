@@ -1,7 +1,7 @@
 import { onCleanup, onMount, type ParentProps } from "solid-js";
 import { Route, Router } from "@solidjs/router";
 
-import { deviceToken } from "./api/client";
+import { ApiError, api, deviceToken } from "./api/client";
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
 import { Expo } from "./screens/Expo";
@@ -11,6 +11,7 @@ import { Order } from "./screens/Order";
 import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Shift } from "./screens/Shift";
+import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
 import { fold, loadFloor, setLink } from "./state/store";
 
@@ -36,17 +37,37 @@ export function App() {
   });
   onMount(() => {
     link.start();
-    // An unpaired device cannot command or read the edge (ADR-0084); send it to pair before it tries
-    // to draw the store, rather than letting the first call 401.
+    // An unpaired device cannot reach the edge at all (ADR-0084); send it to pair before it tries to
+    // draw the store, rather than letting the first call fail.
     if (deviceToken() === null) {
       if (window.location.pathname !== "/pair") {
         window.location.replace("/pair");
       }
       return;
     }
-    // Draw the store's real floor and resolve fires to its default station (ADR-0072); a failure or an
-    // empty plan leaves the never-blank fallback in place.
-    void loadFloor();
+    // Paired, but a command needs a signed-in employee (S0b): confirm one is signed in before drawing
+    // the store, and route to sign-in if not. A `401` here means the token is stale — the device must
+    // re-pair.
+    void api
+      .session()
+      .then((session) => {
+        if (!session.signed_in) {
+          if (window.location.pathname !== "/signin") {
+            window.location.replace("/signin");
+          }
+          return;
+        }
+        // Signed in: draw the store's real floor and resolve fires to its default station (ADR-0072);
+        // a failure or an empty plan leaves the never-blank fallback in place.
+        void loadFloor();
+      })
+      .catch((caught) => {
+        if (caught instanceof ApiError && caught.isUnauthorized) {
+          if (window.location.pathname !== "/pair") {
+            window.location.replace("/pair");
+          }
+        }
+      });
   });
   onCleanup(() => link.stop());
 
@@ -60,6 +81,7 @@ export function App() {
       <Route path="/today" component={Today} />
       <Route path="/shift" component={Shift} />
       <Route path="/pair" component={Pairing} />
+      <Route path="/signin" component={SignIn} />
     </Router>
   );
 }

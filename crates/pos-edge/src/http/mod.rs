@@ -35,6 +35,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ulid::Ulid;
 
 use crate::app::{AppError, Edge};
+use crate::auth::{Lockout, Sessions};
 use crate::pairing::Pairing;
 use crate::state::AppState;
 
@@ -63,12 +64,30 @@ pub fn router(state: AppState) -> Router {
 /// Builds the domain routes over the application [`Edge`].
 ///
 /// Generic over the store `S`, so the identical routes run against `pos-fakes` and `store-sqlite`
-/// (ADR-0013). Merged with [`router`] at composition; its state is the shared `Arc<Edge<S>>`.
+/// (ADR-0013). Merged with [`router`] at composition.
+///
+/// Two auth gates guard the surface (ADR-0084), and the router is split so each carries the right
+/// one:
+/// - **Guarded** — the floor, order, bill, shift and KDS routes — needs a paired device *and* an
+///   employee signed in on it, so every read and command runs under a real
+///   [`Actor`](pos_core::decision::Actor). It carries both middlewares.
+/// - **Session** — sign-in, sign-out, and "who is signed in" — needs a paired device but *not* a
+///   sign-in (signing in is how a device passes the second gate). It carries only the first.
+///
+/// The signed-in bindings ([`Sessions`]) and the PIN lockout ([`Lockout`]) are created here and shared
+/// between the session routes (which write them) and the sign-in gate (which reads them); an edge
+/// restart clears them, the same in-memory lifetime as the pairing tokens (ADR-0084).
 pub fn domain_router<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>) -> Router
 where
     S: EventStore + Send + Sync + 'static,
 {
-    Router::new()
+    let sessions = Arc::new(Sessions::new());
+    let lockout = Arc::new(Lockout::new());
+
+    // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
+    // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
+    // the signed-in gate reads.
+    let guarded = Router::new()
         // The store's published floor plan + kitchen stations, for the UI to render real tables and
         // route fires (ADR-0072).
         .route("/api/floor", get(floor::plan::<S>))
@@ -88,14 +107,33 @@ where
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
-        // Every domain route requires a paired device (ADR-0084). The check runs here, over the
-        // pairing state, so it guards reads and writes alike before any handler; the middleware
-        // carries its own `Arc<Pairing>` state, independent of the routes' `Arc<Edge<S>>`.
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&sessions),
+            auth::require_signed_in,
+        ))
+        .with_state(Arc::clone(&edge));
+
+    // Session: a paired device signs a person in and out here, so these sit behind the paired gate but
+    // not the signed-in one.
+    let session = Router::new()
+        .route("/api/session", get(auth::current::<S>))
+        .route("/api/session/sign-in", post(auth::sign_in::<S>))
+        .route("/api/session/sign-out", post(auth::sign_out::<S>))
+        .with_state(auth::SignInDeps {
+            edge,
+            sessions,
+            lockout,
+        });
+
+    // Every domain route requires a paired device (ADR-0084). The check runs once here, over the
+    // pairing state, so it guards reads, writes and the session routes alike before any handler; the
+    // middleware carries its own `Arc<Pairing>` state, independent of the routes' own state.
+    guarded
+        .merge(session)
         .layer(axum::middleware::from_fn_with_state(
             pairing,
             auth::require_paired_device,
         ))
-        .with_state(edge)
 }
 
 /// Parses a ULID from a path segment. `None` if it is not a ULID, which every handler turns into a

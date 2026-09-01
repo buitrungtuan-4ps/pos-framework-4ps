@@ -1,6 +1,7 @@
 import { For, Show, createSignal } from "solid-js";
 import { A } from "@solidjs/router";
 
+import { api } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { state } from "../state/store";
 
@@ -35,6 +36,13 @@ export function StatusBar() {
     const next = theme() === "dark" ? "light" : "dark";
     document.documentElement.dataset["theme"] = next;
     setTheme(next);
+  };
+
+  // End the shift on this device: sign out and return to the sign-in screen (S0b, ADR-0084). The
+  // device stays paired, so the next person only signs in.
+  const signOut = async () => {
+    await api.signOut();
+    window.location.replace("/signin");
   };
 
   return (
@@ -81,6 +89,13 @@ export function StatusBar() {
         onClick={cycleTheme}
       >
         {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
+      </button>
+      <button
+        type="button"
+        class="rounded-token border border-line px-3 py-1 text-ink"
+        onClick={() => void signOut()}
+      >
+        {t("nav.signout")}
       </button>
     </header>
   );

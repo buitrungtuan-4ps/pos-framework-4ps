@@ -39,6 +39,13 @@ export class ApiError extends Error {
   get isUnauthorized(): boolean {
     return this.status === 401;
   }
+
+  // The device is paired but nobody is signed in: the edge refuses a command until an employee signs
+  // in (S0b, ADR-0084). Distinct from `isUnauthorized` so the app shows the sign-in screen rather than
+  // sending the operator back to pair.
+  get needsSignIn(): boolean {
+    return this.status === 403;
+  }
 }
 
 // The bearer token a device was issued when it paired (ADR-0084). Kept in localStorage so it
@@ -69,22 +76,30 @@ function clearDeviceToken(): void {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+// The headers every call carries: JSON content-type when there is a body, and the device bearer token
+// when one is stored (ADR-0084).
+function authHeaders(hasBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) {
+  if (hasBody) {
     headers["content-type"] = "application/json";
   }
   const token = deviceToken();
   if (token !== null) {
     headers["authorization"] = `Bearer ${token}`;
   }
+  return headers;
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
-    headers,
+    headers: authHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    // A stale or missing token means this device must pair again; drop it so the app can route there.
+    // A `401` means the device token is stale or missing — this device must pair again, so drop the
+    // token and let the app route to pairing. A `403` means the token is fine but nobody is signed in
+    // (S0b): keep the token, and the app routes to sign-in instead.
     if (response.status === 401) {
       clearDeviceToken();
     }
@@ -93,6 +108,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   return (await response.json()) as T;
 }
+
+// Who is signed in on this device, as `GET /api/session` reports it (S0b, ADR-0084).
+export interface SessionState {
+  signed_in: boolean;
+  employee_id?: string;
+}
+
+// The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
+// (a wrong code/PIN, or a lockout with the instant it lifts). Never leaks whether a code exists.
+export type SignInResult =
+  | { ok: true; employeeId: string }
+  | { ok: false; outcome: "wrong" | "locked_out"; remaining?: number; untilMs?: number };
 
 export const api = {
   seatTable: (tableId: string) =>
@@ -130,5 +157,52 @@ export const api = {
     const accepted = await request<PairAccepted>("POST", "/api/pair", { code });
     setDeviceToken(accepted.device_token);
     return accepted;
+  },
+
+  // Who (if anyone) is signed in on this device (S0b). Throws `isUnauthorized` if the device is not
+  // paired, which the app treats the same as a missing token — route to pairing.
+  session: () => request<SessionState>("GET", "/api/session"),
+
+  // Sign a member of staff in with their badge code and PIN (S0b, ADR-0084). Returns a structured
+  // result rather than throwing on a wrong PIN, so the screen can show the attempts left or the
+  // lockout countdown. The PIN is sent once and never stored.
+  signIn: async (code: string, pin: string): Promise<SignInResult> => {
+    const response = await fetch("/api/session/sign-in", {
+      method: "POST",
+      headers: authHeaders(true),
+      body: JSON.stringify({ code, pin }),
+    });
+    if (response.ok) {
+      const body = (await response.json()) as { employee_id: string };
+      return { ok: true, employeeId: body.employee_id };
+    }
+    // A `401` here means the device itself is unpaired (the paired gate, not the sign-in check); let
+    // it surface so the app routes to pairing.
+    if (response.status === 401) {
+      clearDeviceToken();
+      throw new ApiError(401, "pair this device to reach the edge");
+    }
+    const refusal = (await response
+      .json()
+      .catch(() => ({}))) as {
+      outcome?: "wrong" | "locked_out";
+      remaining?: number;
+      locked_until_ms?: number;
+    };
+    return {
+      ok: false,
+      outcome: refusal.outcome ?? "wrong",
+      remaining: refusal.remaining,
+      untilMs: refusal.locked_until_ms,
+    };
+  },
+
+  // Sign the current employee out on this device (S0b). The device stays paired; the next command
+  // needs a fresh sign-in.
+  signOut: async (): Promise<void> => {
+    await fetch("/api/session/sign-out", {
+      method: "POST",
+      headers: authHeaders(false),
+    });
   },
 };

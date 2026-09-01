@@ -63,9 +63,19 @@
 
   "pair.title": "Ghép nối thiết bị",
   "pair.paired": "Đã ghép nối",
-  "pair.paired_hint": "Thiết bị này đã được cửa hàng tin cậy.",
+  "pair.paired_hint": "Thiết bị này đã được cửa hàng tin cậy. Đăng nhập để bắt đầu.",
   "pair.hint": "Nhập mã sáu chữ số hiển thị trên máy chủ cửa hàng.",
   "pair.submit": "Ghép nối",
+
+  "signin.title": "Đăng nhập",
+  "signin.hint": "Nhập mã nhân viên và mã PIN để bắt đầu ca làm.",
+  "signin.code": "Mã nhân viên",
+  "signin.pin": "Mã PIN",
+  "signin.submit": "Đăng nhập",
+  "signin.wrong": "Sai mã nhân viên hoặc mã PIN.",
+  "signin.wrong_remaining": "Sai mã PIN — còn {count, plural, other {# lần}} trước khi tài khoản bị khóa.",
+  "signin.locked": "Quá nhiều lần thử. Vui lòng đợi vài phút rồi thử lại.",
+  "nav.signout": "Đăng xuất",
 
   "kds.title": "Bếp",
   "kds.empty": "Không có món đang chờ.",

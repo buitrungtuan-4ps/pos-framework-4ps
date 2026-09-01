@@ -14,12 +14,12 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{DeviceId, TableId};
+use pos_proto::ids::TableId;
 
 use crate::app::{AppError, Edge, TableView};
-use crate::http::auth::device_actor;
 use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A table as returned to a device.
@@ -43,7 +43,7 @@ impl From<TableView> for TableResponse {
 /// `POST /api/tables/{id}/seat` — seat guests and open an order.
 pub(crate) async fn seat<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
 ) -> Response
 where
@@ -52,13 +52,13 @@ where
     let Some(table_id) = parse_table(&id) else {
         return bad_request("a table id is a ULID");
     };
-    respond(edge.seat_table(device_actor(device_id), table_id).await)
+    respond(edge.seat_table(actor, table_id).await)
 }
 
 /// `POST /api/tables/{id}/clean` — clean the table down and release it.
 pub(crate) async fn clean<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
 ) -> Response
 where
@@ -67,7 +67,7 @@ where
     let Some(table_id) = parse_table(&id) else {
         return bad_request("a table id is a ULID");
     };
-    respond(edge.clean_table(device_actor(device_id), table_id).await)
+    respond(edge.clean_table(actor, table_id).await)
 }
 
 /// `GET /api/tables/{id}` — the table's current projected state.

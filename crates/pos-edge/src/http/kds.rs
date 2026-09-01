@@ -15,11 +15,11 @@ use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{DeviceId, OrderId, OrderLineId, StationId};
+use pos_proto::ids::{OrderId, OrderLineId, StationId};
 
 use crate::app::{BumpView, Edge};
-use crate::http::auth::device_actor;
 use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A bump as a KDS asks for it: the order, the station, and the lines it made.
@@ -55,7 +55,7 @@ impl From<BumpView> for BumpResponse {
 /// `POST /api/kds/bump` — a station marks a ticket's lines prepared.
 pub(crate) async fn bump<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Json(request): Json<BumpRequest>,
 ) -> Response
 where
@@ -75,12 +75,7 @@ where
         order_line_ids.push(line_id);
     }
     match edge
-        .bump_ticket(
-            device_actor(device_id),
-            order_id,
-            station_id,
-            order_line_ids,
-        )
+        .bump_ticket(actor, order_id, station_id, order_line_ids)
         .await
     {
         Ok(view) => Json(BumpResponse::from(view)).into_response(),

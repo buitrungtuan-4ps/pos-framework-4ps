@@ -50,6 +50,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   token set is in memory (an edge restart re-pairs). **Upgrade note:** a device must pair before it
   can use the edge; no cloud protocol, migration, or `pos-proto` change — the `POST /api/pair` request
   and response shapes are unchanged, only presenting the token they carry is now required.
+- **A member of staff must sign in on a paired device before it can act** (roadmap v3, slice S0b;
+  [ADR-0084](docs/adr/0084-device-authentication.md) amendment). S0a authenticated the *device* but
+  every command still ran as a placeholder employee. Now a paired device commands nothing until
+  someone signs in with their badge code and PIN: `POST /api/session/sign-in` verifies the PIN offline
+  against the synced roster through the existing five-fail/five-minute lockout (ADR-0030) and binds the
+  device to that employee, so every sale, void, and shift is attributable to who did it; `POST
+  /api/session/sign-out` and `GET /api/session` complete the flow. A `require_signed_in` middleware
+  resolves the signed-in employee into each command's actor, and a paired device with nobody signed in
+  is refused `403` (distinct from the unpaired `401`) — the placeholder `device_actor` is deleted. The
+  edge reads the employee id the `permissions` node already publishes (ADR-0070); an unknown code and a
+  wrong PIN answer identically, so a probe cannot enumerate staff codes. The operator UI adds a sign-in
+  screen after pairing and a sign-out control on the status bar. **Deliberately scoped:** the acting
+  employee is now real, but *what* they may do still reads the store default grant, not the person's
+  own permission set (per-actor enforcement lands with the capability pass); the sign-in binding is
+  in-memory (an edge restart re-signs-in) and logs only the employee id and outcome, never the PIN.
+  **Upgrade note:** a paired device must now sign a staff member in before any command; no cloud
+  protocol, migration, or `pos-proto` change — the edge reads a field the published `permissions` node
+  already carries.
 - **A console admin can re-enrol their authenticator and hold one-time recovery codes** (roadmap v2,
   Track G, G1 slice 6; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `POST /admin/totp`
   rotates the TOTP secret the sign-in verifies — after re-confirming the current password, so a

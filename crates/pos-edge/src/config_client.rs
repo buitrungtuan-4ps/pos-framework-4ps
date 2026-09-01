@@ -46,11 +46,14 @@ use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
-/// One staff member as the published `permissions` node carries them (ADR-0070). The edge reads only
-/// what it authorises against — the `code`, the granted permission ids, and the PIN hash; `id` and
-/// `name` are present on the wire but not needed here, and serde ignores them.
+/// One staff member as the published `permissions` node carries them (ADR-0070). The edge reads the
+/// `id` (the employee a sign-in acts as, S0b/ADR-0084), the `code` a person types, the granted
+/// permission ids, and the PIN hash. `name` is present on the wire but not used here, and serde
+/// ignores it.
 #[derive(serde::Deserialize)]
 struct PublishedStaff {
+    #[serde(default)]
+    id: Option<String>,
     code: String,
     #[serde(default)]
     permissions: Vec<String>,
@@ -138,6 +141,13 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             roster.insert(
                 member.code,
                 StaffAuth {
+                    // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
+                    // malformed id leaves it `None`, and the roster then refuses to sign that code in
+                    // rather than acting as a fabricated identity.
+                    employee_id: member
+                        .id
+                        .as_deref()
+                        .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
                     permissions: permission_set_from_ids(&member.permissions),
                     pin_phc: member.pin_phc,
                 },
@@ -517,6 +527,16 @@ mod tests {
         assert!(alice.permissions.contains(Permission::ApplyDiscount));
         assert!(!alice.permissions.contains(Permission::VoidFiredLine));
 
+        // The published employee id is read, so a sign-in acts as the real person (S0b/ADR-0084).
+        assert_eq!(
+            alice.employee_id,
+            Some(
+                "01EMP0000000000000000000A1"
+                    .parse::<pos_proto::ids::EmployeeId>()
+                    .expect("a valid employee ULID")
+            ),
+        );
+
         // A correct PIN authorises and yields the granted set; a wrong PIN does not.
         let granted = rebuilt
             .authorise_staff("C01", "2468")
@@ -545,6 +565,7 @@ mod tests {
         roster.insert(
             "C09",
             StaffAuth {
+                employee_id: None,
                 permissions: [Permission::AddOpenItem].into_iter().collect(),
                 pin_phc: Some(hash_of("1234")),
             },

@@ -14,13 +14,13 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{DeviceId, ShiftId};
+use pos_proto::ids::ShiftId;
 use pos_proto::money::Money;
 
 use crate::app::{Edge, ShiftView};
-use crate::http::auth::device_actor;
 use crate::http::{bad_request, error_response, parse_ulid};
 
 /// Opening a shift with a starting float.
@@ -68,22 +68,19 @@ impl From<ShiftView> for ShiftResponse {
 /// `POST /api/shifts` — open a shift with a starting float.
 pub(crate) async fn open<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Json(request): Json<OpenRequest>,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
-    respond(
-        edge.open_shift(device_actor(device_id), request.opening_float)
-            .await,
-    )
+    respond(edge.open_shift(actor, request.opening_float).await)
 }
 
 /// `POST /api/shifts/{id}/count` — enter the blind count.
 pub(crate) async fn count<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
     Json(request): Json<CountRequest>,
 ) -> Response
@@ -94,7 +91,7 @@ where
         return bad_request("a shift id is a ULID");
     };
     respond(
-        edge.count_shift(device_actor(device_id), shift_id, request.counted_minor)
+        edge.count_shift(actor, shift_id, request.counted_minor)
             .await,
     )
 }
@@ -102,7 +99,7 @@ where
 /// `POST /api/shifts/{id}/close` — close a counted shift, revealing the variance.
 pub(crate) async fn close<S>(
     State(edge): State<Arc<Edge<S>>>,
-    Extension(device_id): Extension<DeviceId>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
 ) -> Response
 where
@@ -111,7 +108,7 @@ where
     let Some(shift_id) = parse_ulid(&id).map(ShiftId::new) else {
         return bad_request("a shift id is a ULID");
     };
-    respond(edge.close_shift(device_actor(device_id), shift_id).await)
+    respond(edge.close_shift(actor, shift_id).await)
 }
 
 /// Maps a shift command outcome to a response.

@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordVerifier};
-use pos_proto::ids::EmployeeId;
+use pos_proto::ids::{DeviceId, EmployeeId};
 use pos_proto::time::Timestamp;
 
 /// Consecutive wrong PINs that trigger a lockout.
@@ -155,6 +155,58 @@ impl Lockout {
     }
 }
 
+/// Who is signed in on each paired device (S0b, [ADR-0084](../../../docs/adr/0084-device-authentication.md)).
+///
+/// Device authentication ([`crate::pairing`]) proves *which tablet* is talking to the edge; this
+/// records *which employee* is acting on it, so a command runs under a real
+/// [`Actor`](pos_core::decision::Actor) rather than a placeholder. A device signs one employee in at a
+/// time; signing another in replaces the first, and signing out clears the binding.
+///
+/// In memory only, like the pairing tokens it sits beside: an edge restart clears every binding, so a
+/// device that was signed in re-authenticates its person the same way it re-pairs (persisting these is
+/// the same flagged follow-up as persisting tokens, ADR-0084). It holds identifiers only — never a PIN
+/// or a hash.
+#[derive(Debug, Default)]
+pub struct Sessions {
+    by_device: Mutex<HashMap<DeviceId, EmployeeId>>,
+}
+
+impl Sessions {
+    /// No device signed in.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Binds `device` to the signed-in `employee`, replacing any earlier sign-in on that device.
+    pub fn sign_in(&self, device: DeviceId, employee: EmployeeId) {
+        self.by_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(device, employee);
+    }
+
+    /// Clears the sign-in on `device`, if any. Idempotent — signing out a device that is not signed in
+    /// is a no-op, not an error.
+    pub fn sign_out(&self, device: DeviceId) {
+        self.by_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&device);
+    }
+
+    /// The employee signed in on `device`, or `None` if no one is — which is what the command gate
+    /// (ADR-0084) turns into a `401`, so an unsigned device commands nothing.
+    #[must_use]
+    pub fn employee_for(&self, device: DeviceId) -> Option<EmployeeId> {
+        self.by_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&device)
+            .copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Lockout, MAX_FAILURES, SignIn, verify_pin};
@@ -275,5 +327,34 @@ mod tests {
                 remaining: MAX_FAILURES - 1
             }
         );
+    }
+
+    #[test]
+    fn a_device_signs_one_employee_in_and_out() {
+        use super::Sessions;
+        use pos_proto::ids::DeviceId;
+
+        let sessions = Sessions::new();
+        let device = DeviceId::new(Ulid::from_u128(0xD));
+        let alice = EmployeeId::new(Ulid::from_u128(1));
+        let bao = EmployeeId::new(Ulid::from_u128(2));
+
+        assert_eq!(
+            sessions.employee_for(device),
+            None,
+            "nobody is signed in yet"
+        );
+
+        sessions.sign_in(device, alice);
+        assert_eq!(sessions.employee_for(device), Some(alice));
+
+        // Signing another employee in replaces the first — one person per device.
+        sessions.sign_in(device, bao);
+        assert_eq!(sessions.employee_for(device), Some(bao));
+
+        sessions.sign_out(device);
+        assert_eq!(sessions.employee_for(device), None);
+        // Signing out an already-signed-out device is a no-op, not a panic.
+        sessions.sign_out(device);
     }
 }

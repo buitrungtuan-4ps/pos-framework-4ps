@@ -43,8 +43,8 @@ use pos_proto::events::{
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, DeviceId, MenuItemId, OrderId, OrderLineId, PaymentId, ShiftId,
-    StationId, StoreId, TableId, TaxClassId, TenantId,
+    BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
+    ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::MenuCatalog;
@@ -95,6 +95,11 @@ impl StoreIdentity {
 /// published `permissions` config node — the store never invents them.
 #[derive(Debug, Clone)]
 pub struct StaffAuth {
+    /// The employee this badge code signs in as — the identity a command runs under once they sign in
+    /// (S0b, [ADR-0084](../../../docs/adr/0084-device-authentication.md)). `None` if the published node
+    /// carried no (or a malformed) id, in which case the member cannot sign in — the edge never invents
+    /// an identity to act as.
+    pub employee_id: Option<EmployeeId>,
     /// What the person's role grants (§9).
     pub permissions: PermissionSet,
     /// The Argon2id PHC hash of their PIN, or `None` if none is set (they cannot sign in until one is).
@@ -149,6 +154,17 @@ impl StaffRoster {
         let auth = self.by_code.get(code)?;
         let phc = auth.pin_phc.as_deref()?;
         crate::auth::verify_pin(phc, pin).then_some(auth.permissions)
+    }
+
+    /// The sign-in credentials under `code`: the employee the code acts as and the Argon2id hash to
+    /// verify the PIN against. `None` for an unknown code, a member with no id, or one with no PIN set
+    /// — the three cases a sign-in cannot proceed from. The rate-limited verification itself is
+    /// [`crate::auth::Lockout::authenticate`] (ADR-0030); this only resolves what to verify against, so
+    /// the HTTP sign-in route holds no roster detail (S0b, ADR-0084).
+    #[must_use]
+    pub fn credentials(&self, code: &str) -> Option<(EmployeeId, &str)> {
+        let auth = self.by_code.get(code)?;
+        Some((auth.employee_id?, auth.pin_phc.as_deref()?))
     }
 }
 
