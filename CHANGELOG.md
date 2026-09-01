@@ -144,6 +144,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   wire, protocol, permission, or migration change, and no new third-party dependency (`async-nats` is
   already in the lock via the cloud). One operational consequence to note now: a store key issued with
   `read_config` alone will leave the relay dark — it needs `relay_orders` as well.
+- **A cloud-placed order now reaches the kitchen** (roadmap v3, slice E3;
+  [ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md),
+  [ADR-0061](docs/adr/0061-order-relay.md), [ADR-0064](docs/adr/0064-edge-order-in.md)). The order
+  relay is wired into the shipped binary. An activated store with a `cloud_url` now runs a third
+  background loop beside config-pull and heartbeat: it long-polls its parked orders from the cloud,
+  makes each one through the edge's own intake — repriced against **this store's** menu, deduped on
+  the caller's reference inside the order's own transaction, and given a daily queue number that
+  survives a restart — and acks the outcome, refusals included, so nothing is silently re-delivered
+  for ever. `EdgeOrderIn`, contract-tested since ADR-0064 but never constructed outside a test, gets
+  its first production caller; the marketplace / `POST /v1/orders` / QR path runs end to end for the
+  first time. The pull carries its own 30-second timeout: the client's ordinary 15 seconds cut under
+  the cloud's 20-second long-poll, so a quiet store would have timed out every poll and never seen a
+  parked order. Events written by a relayed order carry the box's own stable, store-derived device
+  id, because there is no signed-in employee and the order came from the cloud rather than a paired
+  till. **Upgrade note:** no wire, protocol, permission, or migration change, and the gate is
+  unchanged — no `cloud_url`, not activated, or no sync key still means no relay, and a cloud that is
+  down leaves the orders parked while the counter keeps selling (ADR-0001). Two operational notes:
+  the store's scoped key must carry **`relay_orders`** as well as `read_config` (without it the edge
+  logs a `403` on each pull and the relay stays dark), and `serve()` now takes the queue-number
+  authority as a third argument — a source change for anything embedding `pos_edge` directly (the
+  real binary passes its SQLite store, the on-fakes example `InMemoryQueueNumbers`).
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).

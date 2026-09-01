@@ -86,13 +86,17 @@ Each till, printer, and kitchen display becomes a named device that trades on it
    counter rather than after a round-trip.
 
 > **Status today.** Activation and the cloud loops are composed into the shipping `pos_edge` binary
-> (roadmap-v3 E1/E2, [ADR-0086](../adr/0086-edge-keyvault-and-activation.md)): with `cloud_url` set in
-> `config.toml`, the box serves `/setup` and `POST /api/activate`, stores the device credential in the
-> OS keyring, and — once activated — pulls config and heartbeats automatically. Two flagged gaps remain: on a
+> (roadmap-v3 E1/E2/E3, [ADR-0086](../adr/0086-edge-keyvault-and-activation.md),
+> [ADR-0087](../adr/0087-edge-relay-and-event-publish.md)): with `cloud_url` set in `config.toml`, the
+> box serves `/setup` and `POST /api/activate`, stores the device credential in the OS keyring, and —
+> once activated — pulls config, heartbeats, and pulls its cloud-placed orders automatically.
+>
+> The store's scoped key must carry **`relay_orders` as well as `read_config`**; with only the latter
+> the relay is dark and the edge logs a `403` on every pull. Two flagged gaps remain: on a
 > **headless Linux** box the kernel keyring is not durable across a reboot (the TPM-sealed hardening is
-> the tracked hardware handoff), and the sync loops authenticate with the store's scoped `read_config`
-> key (the keyring's `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential
-> is accepted on `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
+> the tracked hardware handoff), and the loops authenticate with that scoped key (the keyring's
+> `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential is accepted on
+> `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
 
 ## Step 5 — Publish the store's configuration
 

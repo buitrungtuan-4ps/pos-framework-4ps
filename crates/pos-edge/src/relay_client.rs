@@ -192,7 +192,8 @@ impl RelayTransportError {
 /// The HTTP the relay client rides — a long-poll pull and an ack post, to the store's own cloud.
 ///
 /// A seam so the client's loop is testable without a socket; the field implementation is an HTTPS
-/// client authenticated with the store's own scoped API key ([ADR-0054](../../../docs/adr/0054-cloud-sync-http.md)).
+/// client authenticated with the store's own scoped API key ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)) —
+/// [`RelayHttpTransport`](crate::cloud_http::RelayHttpTransport), composed in `serve()` (ADR-0087).
 pub trait RelayTransport: Send + Sync {
     /// Long-polls the store's pending batch, oldest first. An empty vector means "nothing yet".
     ///

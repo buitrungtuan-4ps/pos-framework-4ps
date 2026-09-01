@@ -41,7 +41,15 @@ Everything else is the cloud-owned configuration the edge syncs and hot-reloads 
 With `cloud_url` set the edge serves the activation routes (`POST /api/activate`), keeps the device
 credential in the OS credential store (Credential Manager on Windows, the kernel keyring on Linux —
 [ADR-0086](../../docs/adr/0086-edge-keyvault-and-activation.md)), and — once activated — runs the
-config-pull and heartbeat loops. Those loops authenticate with the store's scoped `read_config` key,
+config-pull, heartbeat, and order-relay loops. Those loops authenticate with the store's scoped key,
 read from the keyring (`sync_key`) or, as a headless bring-up override, from `POS_EDGE_SYNC_KEY`
 (the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in `config.toml`, never
 committed). Without `cloud_url` the edge runs LAN-only, exactly as before.
+
+**The store key needs two scopes**, `read_config` **and** `relay_orders`
+([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): the first for config-pull and the
+heartbeat, the second for the order relay, which pulls the store's cloud-placed orders and acks each
+outcome. A key issued with `read_config` alone leaves the relay dark — the symptom is a repeated
+`the cloud refused the order pull with status 403` in the edge log, every five seconds. Nothing else
+is affected: the counter trades, config syncs, and the orders stay parked in the cloud until the
+scope is granted.

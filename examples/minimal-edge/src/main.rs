@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use pos_edge::{
-    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryReceipts, StoreIdentity, serve, telemetry,
+    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts,
+    StoreIdentity, serve, telemetry,
 };
 use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;
@@ -37,5 +38,12 @@ async fn main() -> Result<(), EdgeError> {
 
     let bind = "127.0.0.1:8787".parse().expect("a valid loopback address");
     tracing::info!("minimal-edge is coming up — open http://{bind}/ (Ctrl-C to stop)");
-    serve(EdgeConfig::new(bind, store_id), edge).await
+    // The queue-number authority the relay's intake would use; the example has no `cloud_url`, so no
+    // relay runs and it is never allocated from — a real store passes its SQLite writer (ADR-0064).
+    serve(
+        EdgeConfig::new(bind, store_id),
+        edge,
+        InMemoryQueueNumbers::default(),
+    )
+    .await
 }
