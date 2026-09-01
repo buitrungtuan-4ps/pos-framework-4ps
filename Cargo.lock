@@ -1666,6 +1666,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "key-vault-keyring",
+ "link-nats",
  "pos-contract-tests",
  "pos-core",
  "pos-country",

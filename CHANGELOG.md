@@ -165,6 +165,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   logs a `403` on each pull and the relay stays dark), and `serve()` now takes the queue-number
   authority as a third argument — a source change for anything embedding `pos_edge` directly (the
   real binary passes its SQLite store, the on-fakes example `InMemoryQueueNumbers`).
+- **A committed sale now leaves the box** (roadmap v3, slice E3;
+  [ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md),
+  [ADR-0015](docs/adr/0015-sqlite-access.md)). The store's **outbox** stops being a write-only table.
+  Every event the counter commits has always landed there in commit order, but nothing published it:
+  the cloud has been running its consumer since P7 with no publisher on the other end, and
+  `outbox_batch`/`acknowledge_outbox` had no production callers at all. An activated store that names
+  a stream now drains its outbox over the `MessageLink` port: publish a batch, acknowledge exactly the
+  prefix the far side accepted, re-send the rest. That prefix rule is the point — the port reports
+  acceptance as a count from the start of the batch, so acknowledging the whole batch on a partial
+  accept would silently drop the tail, and re-sending the whole batch would make a link that is 60%
+  healthy behave like one that is 0% healthy. Delivery is at-least-once by design (there is no
+  transaction spanning the stream and SQLite) and the cloud's ingest is already idempotent by event
+  id. The stream is configured by a new optional `[nats]` section (`stream` and `subject`, which must
+  match the cloud consumer's `stream`/`filter_subject`); the **server URL comes from
+  `POS_EDGE_NATS_URL`**, because that is the field where a credential would be embedded and a
+  credential never belongs in `config.toml`. **Upgrade note:** no wire, protocol, permission, or
+  migration change, and no new third-party dependency — `link-nats` is a workspace crate whose
+  `async-nats` subtree the cloud already puts in the lock. Entirely opt-in: with no `[nats]` section,
+  no URL, an unactivated box, or an unreachable stream, the edge logs it and publishes nothing while
+  the store trades exactly as before and keeps every event (ADR-0001). Configure both, on a store
+  whose stream matches the cloud's consumer, and its events start arriving.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
