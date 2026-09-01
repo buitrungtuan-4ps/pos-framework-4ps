@@ -125,6 +125,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   note:** no wire, protocol, permission, or migration change; the new route is additive and the
   activation check never blocks trading — a box that answers "not applicable" or errors carries
   straight on to the counter (ADR-0001).
+- **ADR-0087 decides how the store's two outbound rails get connected** (roadmap v3, slice E3;
+  [ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md)). Two things the architecture has always
+  assumed are still not wired in the shipped binary, and this records how they will be. The **order
+  relay** ([ADR-0061](docs/adr/0061-order-relay.md)) has a durable per-store queue in the cloud and a
+  tested `RelayClient` and `EdgeOrderIn` at the edge, but no transport and no production caller — so a
+  cloud-placed order reaches the queue and stops. **Event publish** has a live cloud consumer and an
+  outbox table whose `outbox_batch`/`acknowledge_outbox` have zero production callers — so a committed
+  sale never leaves the box. The decision keeps both on rails that already exist: the relay becomes a
+  third transport on E1's `CloudHttpClient` (with its own longer timeout, because the client's 15s cut
+  under the cloud's 20s long-poll and would have missed every parked order), and the edge publishes its
+  outbox over the `MessageLink` port with `link-nats` as the adapter, acknowledging exactly the accepted
+  prefix. Both spawn behind E2's boot gate, both are outbound-only, and neither may ever block the
+  counter — a cloud that is down grows the outbox and leaves the queue parked while the store keeps
+  selling (ADR-0001). Flagged for later, not dropped: escalating backoff when the cloud *refuses* rather
+  than fails to answer (both loops share the flaw today), NATS credentials moving into the keyring, and
+  carrying the cloud-granted device id forward instead of deriving a system one. **Upgrade note:** no
+  wire, protocol, permission, or migration change, and no new third-party dependency (`async-nats` is
+  already in the lock via the cloud). One operational consequence to note now: a store key issued with
+  `read_config` alone will leave the relay dark — it needs `relay_orders` as well.
 
 ### Changed
 - **The contract and soak CI jobs now run for real, and Dependabot is on** (roadmap v3, slice C1).
