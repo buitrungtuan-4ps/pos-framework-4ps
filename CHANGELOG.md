@@ -34,6 +34,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   guards the existing state.
 
 ### Security
+- **The edge now requires a paired device token on every domain route** (roadmap v3, slice S0;
+  [ADR-0084](docs/adr/0084-device-authentication.md), amending
+  [ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)). Until now the edge issued a device token
+  when a tablet paired but never checked it: every order, bill, and shift route resolved a fixed
+  `dev_actor()` (employee 1 / device 1) and accepted any caller on the store LAN, so any host on the
+  store network could seat tables, settle bills, close shifts, and read the floor. Pairing now binds
+  each issued token to a `DeviceId`, and a `require_paired_device` middleware validates the
+  `Authorization: Bearer <token>` on the whole domain router — reads and writes alike — answering a
+  generic `401` for an absent, malformed, or unknown token, and stamping the resolved device onto the
+  command's actor. The operator UI stores the token it receives on pairing, sends it on every call,
+  routes an unpaired device to the pairing screen, and drops a stale token on a `401` to re-pair.
+  **Deliberately scoped:** this authenticates the *device*; the acting *employee* stays a placeholder
+  until PIN sign-in (a following slice), `/ws` read-auth lands with its own slice, and the issued
+  token set is in memory (an edge restart re-pairs). **Upgrade note:** a device must pair before it
+  can use the edge; no cloud protocol, migration, or `pos-proto` change — the `POST /api/pair` request
+  and response shapes are unchanged, only presenting the token they carry is now required.
 - **A console admin can re-enrol their authenticator and hold one-time recovery codes** (roadmap v2,
   Track G, G1 slice 6; [ADR-0067](docs/adr/0067-multi-admin-console-rbac.md)). `POST /admin/totp`
   rotates the TOTP secret the sign-in verifies — after re-confirming the current password, so a

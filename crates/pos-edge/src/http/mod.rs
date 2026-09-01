@@ -11,6 +11,7 @@
 //! to a status — a refused command is the caller's fault (`409`), an unreachable store is `503`.
 
 pub mod assets;
+pub mod auth;
 pub mod bills;
 pub mod floor;
 pub mod health;
@@ -30,12 +31,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
-use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{DeviceId, EmployeeId};
 use pos_proto::ulid::Ulid;
 
 use crate::app::{AppError, Edge};
+use crate::pairing::Pairing;
 use crate::state::AppState;
 
 /// Builds the router over the shared [`AppState`].
@@ -64,7 +64,7 @@ pub fn router(state: AppState) -> Router {
 ///
 /// Generic over the store `S`, so the identical routes run against `pos-fakes` and `store-sqlite`
 /// (ADR-0013). Merged with [`router`] at composition; its state is the shared `Arc<Edge<S>>`.
-pub fn domain_router<S>(edge: Arc<Edge<S>>) -> Router
+pub fn domain_router<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>) -> Router
 where
     S: EventStore + Send + Sync + 'static,
 {
@@ -88,6 +88,13 @@ where
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
+        // Every domain route requires a paired device (ADR-0084). The check runs here, over the
+        // pairing state, so it guards reads and writes alike before any handler; the middleware
+        // carries its own `Arc<Pairing>` state, independent of the routes' `Arc<Edge<S>>`.
+        .layer(axum::middleware::from_fn_with_state(
+            pairing,
+            auth::require_paired_device,
+        ))
         .with_state(edge)
 }
 
@@ -126,15 +133,5 @@ pub(crate) fn error_response(error: &AppError) -> Response {
             "the edge could not apply the command",
         )
             .into_response(),
-    }
-}
-
-/// A fixed development actor, until the paired device token and signed-in employee are resolved from
-/// the request ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)); the auth-integration
-/// follow-up replaces it.
-pub(crate) fn dev_actor() -> Actor {
-    Actor {
-        employee_id: EmployeeId::new(Ulid::from_u128(1)),
-        device_id: DeviceId::new(Ulid::from_u128(1)),
     }
 }

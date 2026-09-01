@@ -73,7 +73,10 @@ where
     // raw-IP pairing URL above still works (ADR-0030).
     NoopAdvertiser.advertise("pos", bind.port());
 
-    let app = crate::http::router(state).merge(crate::http::domain_router(edge));
+    // The domain routes share the same pairing state the infra router serves, so the device-token
+    // check (ADR-0084) validates tokens against the very set `/api/pair` issues them into.
+    let pairing = state.pairing.clone();
+    let app = crate::http::router(state).merge(crate::http::domain_router(edge, pairing));
 
     let listener = TcpListener::bind(bind)
         .await

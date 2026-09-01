@@ -33,15 +33,61 @@ export class ApiError extends Error {
   get isConflict(): boolean {
     return this.status === 409;
   }
+
+  // The device is not (or no longer) paired: the edge refuses a domain call without a valid device
+  // token (ADR-0084). A screen sees this and sends the operator to pair.
+  get isUnauthorized(): boolean {
+    return this.status === 401;
+  }
+}
+
+// The bearer token a device was issued when it paired (ADR-0084). Kept in localStorage so it
+// survives a reload; every wrapper is defensive because a private window or blocked storage throws.
+const DEVICE_TOKEN_KEY = "pos-edge.device-token";
+
+export function deviceToken(): string | null {
+  try {
+    return localStorage.getItem(DEVICE_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setDeviceToken(token: string): void {
+  try {
+    localStorage.setItem(DEVICE_TOKEN_KEY, token);
+  } catch {
+    // A device that cannot persist its token re-pairs each session; that is degraded, not broken.
+  }
+}
+
+function clearDeviceToken(): void {
+  try {
+    localStorage.removeItem(DEVICE_TOKEN_KEY);
+  } catch {
+    // Nothing to do — the next domain call will 401 and route the operator to pair anyway.
+  }
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+  const token = deviceToken();
+  if (token !== null) {
+    headers["authorization"] = `Bearer ${token}`;
+  }
   const response = await fetch(path, {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
+    // A stale or missing token means this device must pair again; drop it so the app can route there.
+    if (response.status === 401) {
+      clearDeviceToken();
+    }
     const text = await response.text().catch(() => "");
     throw new ApiError(response.status, text.trim() || response.statusText);
   }
@@ -78,5 +124,11 @@ export const api = {
   closeShift: (shiftId: string) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`),
 
-  pair: (code: string) => request<PairAccepted>("POST", "/api/pair", { code }),
+  // Redeem a pairing code for a device token, and keep the token so every later domain call carries
+  // it (ADR-0084). Pairing itself is unauthenticated — it is how a device obtains the token.
+  pair: async (code: string): Promise<PairAccepted> => {
+    const accepted = await request<PairAccepted>("POST", "/api/pair", { code });
+    setDeviceToken(accepted.device_token);
+    return accepted;
+  },
 };

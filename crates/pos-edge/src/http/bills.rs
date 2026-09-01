@@ -11,19 +11,20 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use pos_core::billing::Payment;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, TableId};
+use pos_proto::ids::{BillId, DeviceId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use crate::app::{BillView, Edge};
-use crate::http::{bad_request, dev_actor, error_response, parse_ulid};
+use crate::http::auth::device_actor;
+use crate::http::{bad_request, error_response, parse_ulid};
 
 /// One payment a device applies to a bill: how it was paid, what the guest handed over, and what was
 /// put against the total. Change lives in the gap between `tendered` and `applied_to_bill`.
@@ -88,19 +89,24 @@ impl From<BillView> for BillResponse {
 }
 
 /// `POST /api/tables/{id}/bill` — open a bill on the order the table holds.
-pub(crate) async fn open<S>(State(edge): State<Arc<Edge<S>>>, Path(id): Path<String>) -> Response
+pub(crate) async fn open<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(device_id): Extension<DeviceId>,
+    Path(id): Path<String>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     let Some(table_id) = parse_ulid(&id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
-    respond(edge.open_bill(dev_actor(), table_id).await)
+    respond(edge.open_bill(device_actor(device_id), table_id).await)
 }
 
 /// `POST /api/bills/{id}/settle` — settle a bill with the applied payments.
 pub(crate) async fn settle<S>(
     State(edge): State<Arc<Edge<S>>>,
+    Extension(device_id): Extension<DeviceId>,
     Path(id): Path<String>,
     Json(request): Json<SettleRequest>,
 ) -> Response
@@ -129,7 +135,7 @@ where
         return bad_request("this store does not accept one of those payment methods as tender");
     }
     respond(
-        edge.settle_bill(dev_actor(), bill_id, payments, request.tips)
+        edge.settle_bill(device_actor(device_id), bill_id, payments, request.tips)
             .await,
     )
 }

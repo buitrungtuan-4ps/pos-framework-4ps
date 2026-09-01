@@ -23,7 +23,9 @@ use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use pos_proto::ids::DeviceId;
 use pos_proto::time::Timestamp;
+use pos_proto::ulid::Ulid;
 
 /// How long a freshly minted pairing code stays valid.
 pub const CODE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -86,6 +88,19 @@ impl DeviceToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Parses a presented token: exactly the 32 lowercase hex characters [`from_entropy`] produces.
+    ///
+    /// `None` for anything else, so a malformed token is rejected before it reaches the issued table
+    /// — a token is looked up by equality, and only a well-formed one can match an issued one.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let well_formed = text.len() == 32
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        well_formed.then(|| Self(text.to_owned()))
+    }
 }
 
 /// The raw-IP pairing URL an operator scans or types — the discovery path that needs no name
@@ -100,8 +115,10 @@ pub fn pairing_url(host: IpAddr, port: u16, code: &Code) -> String {
 pub struct Pairing {
     /// Active codes to their expiry (ms since epoch).
     codes: Mutex<HashMap<Code, i64>>,
-    /// Tokens issued to paired devices.
-    issued: Mutex<Vec<DeviceToken>>,
+    /// Tokens issued to paired devices, each bound to the device id it authenticates as. In memory
+    /// only: a restart clears them, so every device re-pairs (persisting the table is a flagged
+    /// follow-up, ADR-0084).
+    issued: Mutex<HashMap<DeviceToken, DeviceId>>,
 }
 
 impl Pairing {
@@ -153,14 +170,31 @@ impl Pairing {
         if !live {
             return Ok(None);
         }
-        let mut bytes = [0_u8; 16];
-        getrandom::fill(&mut bytes)?;
-        let token = DeviceToken::from_entropy(bytes);
+        // Sixteen bytes seed the bearer token; ten more seed the device id it binds to. Two fixed
+        // arrays rather than one sliced buffer, so no indexing or unwrap can panic here.
+        let mut token_bytes = [0_u8; 16];
+        getrandom::fill(&mut token_bytes)?;
+        let token = DeviceToken::from_entropy(token_bytes);
+        let mut device_bytes = [0_u8; 10];
+        getrandom::fill(&mut device_bytes)?;
+        let device_id = mint_device_id(now, &device_bytes);
         self.issued
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(token.clone());
+            .insert(token.clone(), device_id);
         Ok(Some(token))
+    }
+
+    /// The device a presented token authenticates as, or `None` if it was never issued (or was
+    /// issued by a since-restarted edge process — tokens are in-memory). This is the check every
+    /// command route makes before acting (ADR-0084).
+    #[must_use]
+    pub fn device_for(&self, token: &DeviceToken) -> Option<DeviceId> {
+        self.issued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(token)
+            .copied()
     }
 
     /// How many devices have been paired — for the pairing screen and tests.
@@ -171,6 +205,18 @@ impl Pairing {
             .unwrap_or_else(PoisonError::into_inner)
             .len()
     }
+}
+
+/// Mints a device id for a freshly paired device: a ULID timestamped `now`, with 80 random bits
+/// drawn from the same OS entropy the token took. Unique per pairing; the cloud's approved-device
+/// registry (propose→approve) is a separate identity this local id does not claim to be.
+fn mint_device_id(now: Timestamp, randomness: &[u8]) -> DeviceId {
+    let ms = u64::try_from(now.as_milliseconds_since_epoch()).unwrap_or(0);
+    let random = randomness
+        .iter()
+        .take(10)
+        .fold(0_u128, |acc, &byte| (acc << 8) | u128::from(byte));
+    DeviceId::new(Ulid::from_parts(ms, random))
 }
 
 #[cfg(test)]
@@ -243,5 +289,38 @@ mod tests {
         let pairing = Pairing::new();
         let stranger = Code::from_entropy([1, 2, 3]);
         assert!(pairing.redeem(&stranger, at(0)).expect("redeem").is_none());
+    }
+
+    #[test]
+    fn parse_accepts_the_shape_from_entropy_produces_and_rejects_others() {
+        let issued = DeviceToken::from_entropy([0xAB; 16]);
+        assert_eq!(DeviceToken::parse(issued.as_str()), Some(issued));
+        assert!(DeviceToken::parse("").is_none());
+        assert!(DeviceToken::parse("tooshort").is_none());
+        assert!(
+            DeviceToken::parse("ABABABABABABABABABABABABABABABAB").is_none(),
+            "uppercase is not the lowercase hex from_entropy emits"
+        );
+        assert!(
+            DeviceToken::parse("zbababababababababababababababab").is_none(),
+            "a non-hex character is rejected"
+        );
+    }
+
+    #[test]
+    fn a_redeemed_token_resolves_to_its_device_and_a_stranger_does_not() {
+        let pairing = Pairing::new();
+        let code = pairing.mint(at(0)).expect("mint");
+        let token = pairing
+            .redeem(&code, at(1_000))
+            .expect("redeem")
+            .expect("a fresh code pairs");
+
+        let device = pairing.device_for(&token);
+        assert!(device.is_some(), "the issued token authenticates a device");
+
+        // A well-formed but never-issued token authenticates nothing.
+        let stranger = DeviceToken::from_entropy([0x11; 16]);
+        assert_eq!(pairing.device_for(&stranger), None);
     }
 }

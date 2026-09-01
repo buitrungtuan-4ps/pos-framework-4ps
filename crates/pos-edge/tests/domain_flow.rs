@@ -14,8 +14,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
+use pos_edge::{Edge, EdgeSession, InMemoryReceipts, Pairing, StoreIdentity, SystemClock};
 use pos_fakes::FakeStore;
+use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
 use pos_proto::ids::{MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
@@ -24,7 +25,9 @@ use pos_proto::ulid::Ulid;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-fn app() -> Router {
+/// The domain router plus a bearer token for a device paired against it — every command route now
+/// requires one (ADR-0084).
+fn app() -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let edge = Arc::new(
         Edge::new(
@@ -35,15 +38,31 @@ fn app() -> Router {
         )
         .expect("seed"),
     );
-    pos_edge::http::domain_router(edge)
+    let pairing = Arc::new(Pairing::new());
+    let now = SystemClock.now();
+    let code = pairing.mint(now).expect("mint a pairing code");
+    let token = pairing
+        .redeem(&code, now)
+        .expect("redeem")
+        .expect("a fresh code pairs a device")
+        .as_str()
+        .to_owned();
+    (pos_edge::http::domain_router(edge, pairing), token)
 }
 
-async fn send(app: Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn send(
+    app: Router,
+    token: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let body = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
     let request = Request::builder()
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(body)
         .expect("request builds");
     let response = app.oneshot(request).await.expect("router responds");
@@ -77,12 +96,13 @@ fn a_line_body() -> Value {
 
 #[tokio::test]
 async fn a_table_sells_end_to_end_over_http() {
-    let app = app();
+    let (app, token) = app();
     let table = TableId::new(Ulid::from_u128(700));
 
     // Seat: the table opens.
     let (status, view) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/seat"),
         None,
@@ -94,6 +114,7 @@ async fn a_table_sells_end_to_end_over_http() {
     // Add a line, then fire it to a station.
     let (status, line) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/lines"),
         Some(a_line_body()),
@@ -109,6 +130,7 @@ async fn a_table_sells_end_to_end_over_http() {
     let station = StationId::new(Ulid::from_u128(9));
     let (status, fired) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/lines/{line_id}/fire"),
         Some(json!({ "station_id": station })),
@@ -120,6 +142,7 @@ async fn a_table_sells_end_to_end_over_http() {
     // Open the bill: the table moves to awaiting payment.
     let (status, bill) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/bill"),
         None,
@@ -140,6 +163,7 @@ async fn a_table_sells_end_to_end_over_http() {
     });
     let (status, settled) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/bills/{bill_id}/settle"),
         Some(settle_body),
@@ -154,6 +178,7 @@ async fn a_table_sells_end_to_end_over_http() {
     // Clean it down: the table returns to free.
     let (status, cleaned) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/clean"),
         None,
@@ -165,10 +190,11 @@ async fn a_table_sells_end_to_end_over_http() {
 
 #[tokio::test]
 async fn underpaying_a_bill_over_http_is_a_conflict() {
-    let app = app();
+    let (app, token) = app();
     let table = TableId::new(Ulid::from_u128(701));
     send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/seat"),
         None,
@@ -176,6 +202,7 @@ async fn underpaying_a_bill_over_http_is_a_conflict() {
     .await;
     send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/lines"),
         Some(a_line_body()),
@@ -183,6 +210,7 @@ async fn underpaying_a_bill_over_http_is_a_conflict() {
     .await;
     let (_, bill) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/bill"),
         None,
@@ -200,6 +228,7 @@ async fn underpaying_a_bill_over_http_is_a_conflict() {
     });
     let (status, _) = send(
         app,
+        &token,
         "POST",
         &format!("/api/bills/{bill_id}/settle"),
         Some(body),
@@ -210,10 +239,11 @@ async fn underpaying_a_bill_over_http_is_a_conflict() {
 
 #[tokio::test]
 async fn an_unknown_payment_method_is_a_bad_request() {
-    let app = app();
+    let (app, token) = app();
     let table = TableId::new(Ulid::from_u128(702));
     send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/seat"),
         None,
@@ -221,6 +251,7 @@ async fn an_unknown_payment_method_is_a_bad_request() {
     .await;
     send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/lines"),
         Some(a_line_body()),
@@ -228,6 +259,7 @@ async fn an_unknown_payment_method_is_a_bad_request() {
     .await;
     let (_, bill) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/tables/{table}/bill"),
         None,
@@ -245,6 +277,7 @@ async fn an_unknown_payment_method_is_a_bad_request() {
     });
     let (status, _) = send(
         app,
+        &token,
         "POST",
         &format!("/api/bills/{bill_id}/settle"),
         Some(body),
@@ -255,11 +288,12 @@ async fn an_unknown_payment_method_is_a_bad_request() {
 
 #[tokio::test]
 async fn a_shift_opens_counts_blind_and_closes_over_http() {
-    let app = app();
+    let (app, token) = app();
 
     // Open with a 500k float.
     let (status, opened) = send(
         app.clone(),
+        &token,
         "POST",
         "/api/shifts",
         Some(json!({ "opening_float": vnd(500_000) })),
@@ -272,6 +306,7 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     // Count: blind, so the response reveals no expectation and no variance.
     let (status, counted) = send(
         app.clone(),
+        &token,
         "POST",
         &format!("/api/shifts/{shift_id}/count"),
         Some(json!({ "counted_minor": 500_000 })),
@@ -286,7 +321,14 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     assert!(counted.get("variance").is_none(), "the count is blind");
 
     // Close: now the expected amount and the (zero) variance are revealed.
-    let (status, closed) = send(app, "POST", &format!("/api/shifts/{shift_id}/close"), None).await;
+    let (status, closed) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(closed["state"], "SHIFT_STATE_CLOSED");
     assert_eq!(closed["expected_amount"], json!(vnd(500_000)));
