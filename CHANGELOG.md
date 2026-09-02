@@ -17,6 +17,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **The store-facing surface answers in the AIP-193 envelope too** — `/sync`, `/internal`,
+  `/activate`, the order relay and the QR guest pages (#132). Q3b slice 2, after slice 1 did `/v1`.
+
+  Every refusal on these routes now carries `{"error":{"code","status","message"}}`, with `details`
+  naming the field at fault. Where a route can refuse for more than one field — `/sync/stores/{id}/config`
+  can object to the path's store id *or* the query's `held_version` — the answer now says **which**.
+
+- **A second copy of the status→HTTP-code map is gone.** `relay.rs`'s `relay_error` re-implemented
+  the map `ErrorStatus::http_code` owns, exactly as `orders.rs`'s `intake_error` did before slice 1
+  deleted that one. Finding it **twice** is what makes it a pattern rather than an oversight — the
+  shape was being copied from one route module to the next — so the map has one home again.
+
+- **A refusal about two fields now names only the ones actually missing.** `propose_device` refuses
+  when either `name` or `address` is blank, and told every caller to check both. A store that sent a
+  name and forgot the address is now told about the address alone. The condition is unchanged; only
+  the answer got specific.
+
+  The four QR guest rejections are converted together, in the one `match` that maps them, so the
+  guest page has a single shape to render whatever went wrong. None of them carries `details`: an
+  unrecognised table code deliberately says nothing field-level, because that is the one arm where
+  naming what was wrong would help someone guessing at codes.
+
+  As in slice 1, **these bodies had no test coverage** — the pos-cloud suite passed unchanged
+  through the conversion. Three new tests cover the multi-field cases, the per-field improvement is
+  mutation-verified, and `/admin` (the bulk of what remains) is the next slice. The edge's own
+  routes stay deliberately out of scope: their only consumer is the embedded UI on the store LAN.
+
+### Changed
 - **Every `/v1` refusal now comes back in the documented AIP-193 envelope** rather than as plain
   text (#131). Q3b slice 1, over the helper Q3a built.
 
