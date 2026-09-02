@@ -132,7 +132,9 @@ where
 {
     let tenants = registry.list_tenants().await.map_err(|e| e.to_string())?;
     let mut inputs = Vec::with_capacity(tenants.len());
-    for tenant in tenants {
+    // The evaluator reads identity only; the version each row was read at is for a writer
+    // (ADR-0094), and this loop never writes.
+    for tenant in tenants.into_iter().map(|versioned| versioned.record) {
         let fleet_rows = fleet
             .list_fleet(tenant.tenant_id)
             .await

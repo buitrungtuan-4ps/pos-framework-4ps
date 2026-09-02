@@ -103,6 +103,15 @@ HTTP header names use hyphens by convention — this is HTTP, not a violation of
 
 Canonical statuses: `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNAUTHENTICATED`, `FAILED_PRECONDITION`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `INTERNAL`.
 
+Two statuses are ours, not AIP's, and both are safe because `status` parses openly — a client built before either one reads it as unrecognised and still gets an intact `code`, `message` and `details`:
+
+| Status | HTTP | Why it exists |
+|---|---|---|
+| `UNSPECIFIED` | `500` | The naming standard's rule that every enum has one. Nothing emits it; it is what an older client sees in place of a status a newer server added. |
+| `VERSION_MISMATCH` | `412` | A conditional write whose `If-Match` names a version the resource no longer holds ([ADR-0094](adr/0094-console-optimistic-concurrency.md)). No canonical status maps to `412`, and it is deliberately not called `PRECONDITION_FAILED` — beside `FAILED_PRECONDITION` (`409`) that would be two tokens differing only in word order with different codes. |
+
+**Optimistic concurrency** (ADR-0094): a read that can be written back carries an opaque version — an `ETag` header on a single resource, an `etag` field per row on a list, byte-identical either way. A mutating request sends it back in `If-Match`; the header is **required**, its absence is an `INVALID_ARGUMENT` naming the `if-match` field, and a stale value is `VERSION_MISMATCH`. The token is opaque: never parse it, never compare two for ordering, never construct one.
+
 ## 5. Events
 
 Event names are `domain.resource.action`, `snake_case`, action in the **past tense** — the same taxonomy as permission ids. The full catalogue is in [pos-spec.md](pos-spec.md) §18.

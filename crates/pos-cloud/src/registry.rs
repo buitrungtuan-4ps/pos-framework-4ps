@@ -21,6 +21,8 @@ use serde::Serialize;
 use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
+use crate::version::{UpdateOutcome, Version, Versioned};
+
 /// A brand's public identifier — a ULID minted at creation. The other three entities already have id
 /// types in [`pos_proto::ids`]; a brand is new here, so its id is defined alongside the seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -143,84 +145,98 @@ pub struct DeviceRecord {
 
 /// Persists and reads the org registry.
 ///
-/// Each entity has the same shape: `create` (a freshly-minted record), `list` (scoped to its parent),
-/// and `update` (rename and/or set status, by the id in the record — returning whether a row changed,
-/// so a handler can answer `404` for an unknown id). `create_*`/`update_*` never author configuration;
-/// they only record identity and naming.
+/// Each entity has the same shape: `create` (a freshly-minted record), `list` (scoped to its parent,
+/// each row carrying the [`Version`] it was read at), and `update` (rename and/or set status, by the
+/// id in the record, applied only if the stored version still equals the one the caller expected —
+/// [ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). `create_*`/`update_*`
+/// never author configuration; they only record identity and naming.
+///
+/// # The version is the adapter's, and opaque
+///
+/// An implementation mints whatever token its engine can compare atomically — `store-postgres` uses
+/// the `xmin` system column, so the compare and the swap are one statement — and this trait never
+/// looks inside one. That is what lets a fork on another engine satisfy the same contract without
+/// changing a line above the seam. The contract in one sentence: **an update given an expected
+/// version applies only if the stored version equals it, and does so atomically.** An
+/// implementation that reads-then-writes instead has a window, and the window is the whole defect.
 pub trait RegistryStore {
-    /// Inserts a tenant.
+    /// Inserts a tenant, returning the [`Version`] it starts at.
     fn create_tenant(
         &self,
         tenant: &TenantRecord,
-    ) -> impl Future<Output = Result<(), RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, RegistryStoreError>> + Send;
 
     /// Lists every tenant.
     fn list_tenants(
         &self,
-    ) -> impl Future<Output = Result<Vec<TenantRecord>, RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<TenantRecord>>, RegistryStoreError>> + Send;
 
-    /// Renames a tenant and/or sets its status. Returns whether a row was found and changed.
+    /// Renames a tenant and/or sets its status. Applies only at `expected`.
     fn update_tenant(
         &self,
         tenant: &TenantRecord,
-    ) -> impl Future<Output = Result<bool, RegistryStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, RegistryStoreError>> + Send;
 
-    /// Inserts a brand under a tenant.
+    /// Inserts a brand under a tenant, returning the [`Version`] it starts at.
     fn create_brand(
         &self,
         brand: &BrandRecord,
-    ) -> impl Future<Output = Result<(), RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, RegistryStoreError>> + Send;
 
     /// Lists a tenant's brands.
     fn list_brands(
         &self,
         tenant_id: TenantId,
-    ) -> impl Future<Output = Result<Vec<BrandRecord>, RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<BrandRecord>>, RegistryStoreError>> + Send;
 
-    /// Renames a brand and/or sets its status, within its tenant. Returns whether a row changed.
+    /// Renames a brand and/or sets its status, within its tenant. Applies only at `expected`.
     fn update_brand(
         &self,
         brand: &BrandRecord,
-    ) -> impl Future<Output = Result<bool, RegistryStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, RegistryStoreError>> + Send;
 
-    /// Inserts a store under a tenant, with an optional brand.
+    /// Inserts a store under a tenant, with an optional brand, returning the [`Version`] it starts at.
     fn create_store(
         &self,
         store: &StoreRecord,
-    ) -> impl Future<Output = Result<(), RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, RegistryStoreError>> + Send;
 
     /// Lists a tenant's stores.
     fn list_stores(
         &self,
         tenant_id: TenantId,
-    ) -> impl Future<Output = Result<Vec<StoreRecord>, RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<StoreRecord>>, RegistryStoreError>> + Send;
 
     /// Renames a store, (re)assigns or clears its brand, and/or sets its status, within its tenant.
-    /// Returns whether a row changed.
+    /// Applies only at `expected`.
     fn update_store(
         &self,
         store: &StoreRecord,
-    ) -> impl Future<Output = Result<bool, RegistryStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, RegistryStoreError>> + Send;
 
-    /// Inserts a device under a store.
+    /// Inserts a device under a store, returning the [`Version`] it starts at.
     fn create_device(
         &self,
         device: &DeviceRecord,
-    ) -> impl Future<Output = Result<(), RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, RegistryStoreError>> + Send;
 
     /// Lists a store's devices, within its tenant.
     fn list_devices(
         &self,
         tenant_id: TenantId,
         store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<DeviceRecord>, RegistryStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<DeviceRecord>>, RegistryStoreError>> + Send;
 
-    /// Renames a device, sets its kind, and/or sets its status, within its tenant. Returns whether a
-    /// row changed.
+    /// Renames a device, sets its kind, and/or sets its status, within its tenant. Applies only at
+    /// `expected`.
     fn update_device(
         &self,
         device: &DeviceRecord,
-    ) -> impl Future<Output = Result<bool, RegistryStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, RegistryStoreError>> + Send;
 }
 
 /// A failure of the registry store itself — the database is unreachable.

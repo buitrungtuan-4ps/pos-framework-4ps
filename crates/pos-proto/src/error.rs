@@ -15,16 +15,26 @@
 //! One shape means a client writes one error path rather than one per endpoint, and a
 //! store's status bar can render any failure without knowing what produced it.
 //!
-//! # A deliberate deviation, and why it is safe
+//! # Two deliberate deviations, and why they are safe
 //!
-//! The canonical AIP statuses carry no prefix and AIP defines no `*_UNSPECIFIED`
-//! member, which sits awkwardly beside the naming standard's rule that every enum has
-//! one. [`ErrorStatus`] resolves it by implementing
+//! **`UNSPECIFIED`.** The canonical AIP statuses carry no prefix and AIP defines no
+//! `*_UNSPECIFIED` member, which sits awkwardly beside the naming standard's rule that
+//! every enum has one. [`ErrorStatus`] resolves it by implementing
 //! [`WireEnum`](crate::wire_enum::WireEnum) by hand, with an `UNSPECIFIED` token that
 //! AIP does not list. Nothing emits it; it exists so that a status added by a newer
 //! server degrades in an older client instead of failing the whole response parse —
 //! which for an *error* response would replace a useful message with a parse error, the
 //! worst possible moment to lose information.
+//!
+//! **`VERSION_MISMATCH`.** A conditional write whose `If-Match` does not match owes
+//! `412`, which RFC 9110 fixes and no canonical status maps to
+//! ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). It is
+//! deliberately not named `PRECONDITION_FAILED`: beside the existing
+//! [`FailedPrecondition`](ErrorStatus::FailedPrecondition) (`409`) that would be two
+//! tokens differing only in word order with different HTTP codes, which is a defect
+//! waiting to be written by someone reading quickly. It is safe for the same reason
+//! `UNSPECIFIED` is: a client built before it reads it as unrecognised and still gets an
+//! intact `code`, `message` and `details`.
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +67,12 @@ pub enum ErrorStatus {
     Unavailable,
     /// Something broke on our side.
     Internal,
+    /// The caller's `If-Match` names a version the resource no longer holds
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+    ///
+    /// Not retryable as sent: the same stale token would fail again. The caller re-reads,
+    /// shows the reader what changed, and writes against the version it got back.
+    VersionMismatch,
 }
 
 impl WireEnum for ErrorStatus {
@@ -73,6 +89,7 @@ impl WireEnum for ErrorStatus {
         Self::ResourceExhausted,
         Self::Unavailable,
         Self::Internal,
+        Self::VersionMismatch,
     ];
 
     fn as_wire(self) -> &'static str {
@@ -87,6 +104,7 @@ impl WireEnum for ErrorStatus {
             Self::ResourceExhausted => "RESOURCE_EXHAUSTED",
             Self::Unavailable => "UNAVAILABLE",
             Self::Internal => "INTERNAL",
+            Self::VersionMismatch => "VERSION_MISMATCH",
         }
     }
 
@@ -111,6 +129,7 @@ impl ErrorStatus {
             Self::PermissionDenied => 403,
             Self::NotFound => 404,
             Self::AlreadyExists | Self::FailedPrecondition => 409,
+            Self::VersionMismatch => 412,
             Self::ResourceExhausted => 429,
             // An unrecognised status is a server-side problem by elimination.
             Self::Unspecified | Self::Internal => 500,
@@ -245,7 +264,37 @@ mod tests {
                 "{token} is missing from the canonical set"
             );
         }
-        assert_eq!(ErrorStatus::ALL.len(), 10, "nine statuses plus UNSPECIFIED");
+        assert_eq!(
+            ErrorStatus::ALL.len(),
+            11,
+            "nine canonical statuses plus the two documented deviations, UNSPECIFIED and \
+             VERSION_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn a_stale_conditional_write_is_the_only_412_and_is_not_the_409() {
+        // The two are a homonym pair by construction — `FAILED_PRECONDITION` and
+        // `VERSION_MISMATCH` both describe a precondition that did not hold — so the thing
+        // worth pinning is that they never collapse into one answer. A second settlement
+        // owes 409; a write against a version the row no longer holds owes 412, which is
+        // what RFC 9110 requires of a failed `If-Match`.
+        assert_eq!(ErrorStatus::VersionMismatch.http_code(), 412);
+        assert_eq!(ErrorStatus::FailedPrecondition.http_code(), 409);
+        assert_eq!(ErrorStatus::VersionMismatch.as_wire(), "VERSION_MISMATCH");
+        assert_eq!(
+            ErrorStatus::from_wire("PRECONDITION_FAILED"),
+            None,
+            "the word-order twin must not exist: two tokens differing only in word order, \
+             with different HTTP codes, is a defect waiting to be written"
+        );
+    }
+
+    #[test]
+    fn a_stale_conditional_write_does_not_invite_a_retry() {
+        // Retrying with the same `If-Match` fails identically. The caller has to re-read
+        // first, so telling it to back off and try again would be telling it to spin.
+        assert!(!ErrorStatus::VersionMismatch.is_retryable());
     }
 
     #[test]

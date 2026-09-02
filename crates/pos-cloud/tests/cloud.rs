@@ -81,6 +81,7 @@ use pos_cloud::relay::{
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
+use pos_cloud::version::{UpdateOutcome, Version, Versioned};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
@@ -1016,6 +1017,41 @@ fn patch_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Reque
         .uri(uri)
         .header("content-type", "application/json")
         .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A PATCH request carrying both a `Cookie` and the `If-Match` a mutating `/admin` route requires
+/// (ADR-0094). `etag` is the token as read back, without the quotes the header wants.
+fn patch_with_etag(uri: &str, body: &serde_json::Value, cookie: &str, etag: &str) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .header("if-match", format!("\"{etag}\""))
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// As [`patch_with_etag`], but sending `if-match` exactly as given — for the cases where the point
+/// is that the header is *not* a well-formed strong entity-tag.
+fn patch_with_raw_if_match(
+    uri: &str,
+    body: &serde_json::Value,
+    cookie: &str,
+    raw: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .header("if-match", raw)
         .body(Body::from(
             serde_json::to_vec(body).expect("serialise the body"),
         ))
@@ -4253,130 +4289,202 @@ async fn pulling_orders_requires_the_relay_orders_scope() {
 // --- The org registry (ADR-0065) ---------------------------------------------------------------
 
 /// The registry as four flat lists, mirroring how the real tables read and scope by tenant.
+///
+/// Each row carries the [`Version`] it is at, minted from one shared counter — the fake's stand-in
+/// for Postgres's `xmin` (ADR-0094). The point is not to imitate `xmin`'s shape but to satisfy the
+/// same contract: a version that changes on every successful update, and an update that applies
+/// only when the caller's version still matches. That is what lets the `412` path be proven in the
+/// in-process suite on every pull request, where no database is running.
 #[derive(Clone, Default)]
 struct FakeRegistry {
-    tenants: Arc<Mutex<Vec<TenantRecord>>>,
-    brands: Arc<Mutex<Vec<BrandRecord>>>,
-    stores: Arc<Mutex<Vec<StoreRecord>>>,
-    devices: Arc<Mutex<Vec<DeviceRecord>>>,
+    tenants: Arc<Mutex<Vec<Versioned<TenantRecord>>>>,
+    brands: Arc<Mutex<Vec<Versioned<BrandRecord>>>>,
+    stores: Arc<Mutex<Vec<Versioned<StoreRecord>>>>,
+    devices: Arc<Mutex<Vec<Versioned<DeviceRecord>>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeRegistry {
+    /// The next version, as the store-postgres adapter's `xmin::text` is: a token, not a number the
+    /// caller may reason about.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 impl RegistryStore for FakeRegistry {
-    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<(), RegistryStoreError> {
-        self.tenants.lock().expect("lock").push(tenant.clone());
-        Ok(())
+    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<Version, RegistryStoreError> {
+        let version = self.mint();
+        self.tenants
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(tenant.clone(), version.clone()));
+        Ok(version)
     }
 
-    async fn list_tenants(&self) -> Result<Vec<TenantRecord>, RegistryStoreError> {
+    async fn list_tenants(&self) -> Result<Vec<Versioned<TenantRecord>>, RegistryStoreError> {
         Ok(self.tenants.lock().expect("lock").clone())
     }
 
-    async fn update_tenant(&self, tenant: &TenantRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_tenant(
+        &self,
+        tenant: &TenantRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
+        let version = self.mint();
         let mut rows = self.tenants.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.tenant_id == tenant.tenant_id {
-                row.name.clone_from(&tenant.name);
-                row.status = tenant.status;
-                return Ok(true);
+            if row.record.tenant_id == tenant.tenant_id {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&tenant.name);
+                row.record.status = tenant.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_brand(&self, brand: &BrandRecord) -> Result<(), RegistryStoreError> {
-        self.brands.lock().expect("lock").push(brand.clone());
-        Ok(())
+    async fn create_brand(&self, brand: &BrandRecord) -> Result<Version, RegistryStoreError> {
+        let version = self.mint();
+        self.brands
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(brand.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_brands(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<BrandRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<BrandRecord>>, RegistryStoreError> {
         Ok(self
             .brands
             .lock()
             .expect("lock")
             .iter()
-            .filter(|brand| brand.tenant_id == tenant_id)
+            .filter(|brand| brand.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
 
-    async fn update_brand(&self, brand: &BrandRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_brand(
+        &self,
+        brand: &BrandRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
+        let version = self.mint();
         let mut rows = self.brands.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.brand_id == brand.brand_id && row.tenant_id == brand.tenant_id {
-                row.name.clone_from(&brand.name);
-                row.status = brand.status;
-                return Ok(true);
+            if row.record.brand_id == brand.brand_id && row.record.tenant_id == brand.tenant_id {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&brand.name);
+                row.record.status = brand.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_store(&self, store: &StoreRecord) -> Result<(), RegistryStoreError> {
-        self.stores.lock().expect("lock").push(store.clone());
-        Ok(())
+    async fn create_store(&self, store: &StoreRecord) -> Result<Version, RegistryStoreError> {
+        let version = self.mint();
+        self.stores
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(store.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_stores(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<StoreRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<StoreRecord>>, RegistryStoreError> {
         Ok(self
             .stores
             .lock()
             .expect("lock")
             .iter()
-            .filter(|store| store.tenant_id == tenant_id)
+            .filter(|store| store.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
 
-    async fn update_store(&self, store: &StoreRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_store(
+        &self,
+        store: &StoreRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
+        let version = self.mint();
         let mut rows = self.stores.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.store_id == store.store_id && row.tenant_id == store.tenant_id {
-                row.name.clone_from(&store.name);
-                row.brand_id = store.brand_id;
-                row.status = store.status;
-                return Ok(true);
+            if row.record.store_id == store.store_id && row.record.tenant_id == store.tenant_id {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&store.name);
+                row.record.brand_id = store.brand_id;
+                row.record.status = store.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_device(&self, device: &DeviceRecord) -> Result<(), RegistryStoreError> {
-        self.devices.lock().expect("lock").push(device.clone());
-        Ok(())
+    async fn create_device(&self, device: &DeviceRecord) -> Result<Version, RegistryStoreError> {
+        let version = self.mint();
+        self.devices
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(device.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_devices(
         &self,
         tenant_id: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<DeviceRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<DeviceRecord>>, RegistryStoreError> {
         Ok(self
             .devices
             .lock()
             .expect("lock")
             .iter()
-            .filter(|device| device.tenant_id == tenant_id && device.store_id == store_id)
+            .filter(|device| {
+                device.record.tenant_id == tenant_id && device.record.store_id == store_id
+            })
             .cloned()
             .collect())
     }
 
-    async fn update_device(&self, device: &DeviceRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_device(
+        &self,
+        device: &DeviceRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
+        let version = self.mint();
         let mut rows = self.devices.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.device_id == device.device_id && row.tenant_id == device.tenant_id {
-                row.name.clone_from(&device.name);
-                row.kind.clone_from(&device.kind);
-                row.status = device.status;
-                return Ok(true);
+            if row.record.device_id == device.device_id && row.record.tenant_id == device.tenant_id
+            {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&device.name);
+                row.record.kind.clone_from(&device.kind);
+                row.record.status = device.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 }
 
@@ -5216,35 +5324,281 @@ async fn registry_renames_a_tenant_and_404s_an_unknown_one() {
         ))
         .await
         .expect("route create");
+    let created_body = json_body(created).await;
+    let tenant_id = created_body["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+    // A create hands back the version it starts at, so an edit needs no second round trip
+    // (ADR-0094).
+    let etag = created_body["etag"].as_str().expect("an etag").to_owned();
+
+    // Rename it, naming the version being replaced.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+            &etag,
+        ))
+        .await
+        .expect("route rename");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed_body = json_body(renamed).await;
+    assert_eq!(renamed_body["name"], "Pizza 4P's");
+    let next_etag = renamed_body["etag"].as_str().expect("a new etag");
+    assert_ne!(
+        next_etag, etag,
+        "an applied update moves the version, or the next write would be unguarded"
+    );
+
+    // Renaming an unknown tenant is a 404, not a silent success.
+    let missing = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/tenants/{}", Ulid::from_u128(9_999)),
+            &serde_json::json!({ "name": "Nope", "status": "active" }),
+            &cookie,
+            &etag,
+        ))
+        .await
+        .expect("route rename missing");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Optimistic concurrency on `/admin` (Q3c, ADR-0094) -----------------------------------------
+//
+// Before this, every `/admin` PATCH was last-write-wins: the body carries the whole record, so an
+// admin saving a form they loaded a minute ago wrote their stale copy of every *other* field back
+// over whoever edited in between, and both saw success. These cover the mechanism that closes it —
+// the refusal, what it protects, and the two headers a client could get wrong.
+
+/// The defect ADR-0094 closes, end to end: a second writer holding a stale copy is refused, and the
+/// first writer's edit is still there afterwards.
+///
+/// The second assertion is the one that matters. A `412` that still let the write through would be
+/// worse than no check at all, because the caller would be told it had been stopped.
+#[tokio::test]
+async fn a_second_writer_holding_a_stale_version_is_refused_and_clobbers_nothing() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Placeholder" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    let created_body = json_body(created).await;
+    let tenant_id = created_body["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+    // Both admins load the record at the same version.
+    let both_read = created_body["etag"].as_str().expect("an etag").to_owned();
+
+    // The first admin saves.
+    let first = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+            &both_read,
+        ))
+        .await
+        .expect("route the first save");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    // The second admin saves, still holding the version they read before the first save.
+    let second = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Stale Overwrite", "status": "archived" }),
+            &cookie,
+            &both_read,
+        ))
+        .await
+        .expect("route the second save");
+    assert_eq!(second.status(), StatusCode::PRECONDITION_FAILED);
+    let body = json_body(second).await;
+    assert_eq!(body["error"]["code"], 412, "got {body}");
+    assert_eq!(body["error"]["status"], "VERSION_MISMATCH");
+    assert!(
+        body["error"]["details"].is_null(),
+        "the caller's fields were all fine; what went stale is its copy: {body}"
+    );
+
+    // And the first admin's edit survived.
+    let listed = router
+        .oneshot(get_with_cookie("/admin/tenants", &cookie))
+        .await
+        .expect("route the listing");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows[0]["name"], "Pizza 4P's",
+        "the refused write must not have applied: {rows}"
+    );
+    assert_eq!(
+        rows[0]["status"], "active",
+        "nor any other field it carried: {rows}"
+    );
+}
+
+/// A list row's `etag` is the token a write sends back, unchanged.
+///
+/// A header cannot carry a version per row, so a list carries one per row in the body. If the two
+/// forms were not the same string a client would have to know which endpoint it read from before it
+/// could write, which is exactly the coupling the opaque token exists to avoid.
+#[tokio::test]
+async fn the_etag_a_listing_hands_out_is_the_one_a_write_sends_back() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Placeholder" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
     let tenant_id = json_body(created).await["tenant_id"]
         .as_str()
         .expect("a tenant id")
         .to_owned();
 
-    // Rename it.
-    let renamed = router
+    let listed = router
         .clone()
+        .oneshot(get_with_cookie("/admin/tenants", &cookie))
+        .await
+        .expect("route the listing");
+    let rows = json_body(listed).await;
+    let from_list = rows[0]["etag"].as_str().expect("a row etag").to_owned();
+
+    let renamed = router
+        .oneshot(patch_with_etag(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+            &from_list,
+        ))
+        .await
+        .expect("route the rename");
+    assert_eq!(
+        renamed.status(),
+        StatusCode::OK,
+        "the token read from a list row is accepted verbatim as an If-Match"
+    );
+    // And the write answers with an `ETag` header carrying the same string as the body's `etag`,
+    // so a client has one thing to remember rather than two that could drift.
+    let header = renamed
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("an ETag header")
+        .to_owned();
+    let after = json_body(renamed).await["etag"]
+        .as_str()
+        .expect("an etag")
+        .to_owned();
+    assert_eq!(header, format!("\"{after}\""));
+}
+
+/// An absent `If-Match` is an ordinary missing-field refusal, not a status of its own.
+///
+/// And it is a refusal at all: treating "no opinion" as "overwrite" would leave the silent clobber
+/// in place as the default for every caller that had not been updated.
+#[tokio::test]
+async fn a_write_without_if_match_is_refused_and_names_the_header_as_the_field() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Placeholder" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create");
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    let refused = router
         .oneshot(patch_with_cookie(
             &format!("/admin/tenants/{tenant_id}"),
             &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
             &cookie,
         ))
         .await
-        .expect("route rename");
-    assert_eq!(renamed.status(), StatusCode::OK);
-    assert_eq!(json_body(renamed).await["name"], "Pizza 4P's");
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["details"][0]["field"], "if-match");
+    assert_eq!(body["error"]["details"][0]["reason"], "REQUIRED");
+}
 
-    // Renaming an unknown tenant is a 404, not a silent success.
-    let missing = router
+/// `If-Match: *` is refused, and refused *differently* from a malformed one.
+///
+/// It is the one header that would quietly restore last-write-wins while looking like compliance,
+/// so the caller is told what is wrong with it rather than that it could not be parsed.
+#[tokio::test]
+async fn a_wildcard_if_match_is_refused_on_its_own_terms() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let created = router
         .clone()
-        .oneshot(patch_with_cookie(
-            &format!("/admin/tenants/{}", Ulid::from_u128(9_999)),
-            &serde_json::json!({ "name": "Nope", "status": "active" }),
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Placeholder" }),
             &cookie,
         ))
         .await
-        .expect("route rename missing");
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        .expect("route create");
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    let refused = router
+        .clone()
+        .oneshot(patch_with_raw_if_match(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "if-match");
+    assert_eq!(
+        body["error"]["details"][0]["reason"], "WILDCARD_NOT_ACCEPTED",
+        "distinct from INVALID_FORMAT: the header parses, it just asks for the wrong thing"
+    );
+
+    let malformed = router
+        .oneshot(patch_with_raw_if_match(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "active" }),
+            &cookie,
+            "W/\"1\"",
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(malformed).await;
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_FORMAT");
 }
 
 #[tokio::test]
@@ -10892,11 +11246,15 @@ async fn an_absence_is_enveloped_and_names_no_field() {
             .parse()
             .expect("a valid test ULID"),
     );
+    // A well-formed `If-Match` for a row that does not exist: the answer is that the store is
+    // absent (`404`), not that the version is stale (`412`). The two are distinguishable, which is
+    // the point of the seam returning three outcomes rather than a bool (ADR-0094).
     let refused = router
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/stores/{}", missing.as_ulid()),
             &serde_json::json!({ "tenant_id": tenant_id, "name": "Bến Thành", "status": "active" }),
             &cookie,
+            "1",
         ))
         .await
         .expect("route the update");

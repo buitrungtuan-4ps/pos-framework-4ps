@@ -93,6 +93,7 @@ pub mod retention;
 pub mod scheduling;
 pub mod tax;
 pub mod translations;
+pub mod version;
 pub mod vouchers;
 pub mod webhook;
 

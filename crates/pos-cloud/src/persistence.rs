@@ -34,8 +34,8 @@ use store_postgres::{
     PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
     PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReleaseArtifactRow, RoleTemplateRow,
-    RoutingRuleRow, ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow,
-    TenantRow,
+    RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow,
+    TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -115,6 +115,7 @@ use crate::scheduling::{
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
+use crate::version::{UpdateOutcome, Version, Versioned};
 use crate::vouchers::{NewVoucher, VoucherRecord, VoucherStatus, VoucherStore, VoucherStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
@@ -1266,56 +1267,88 @@ fn parse_registry_device(text: &str) -> Result<DeviceId, RegistryStoreError> {
     })
 }
 
-fn tenant_record(row: TenantRow) -> Result<TenantRecord, RegistryStoreError> {
-    Ok(TenantRecord {
-        tenant_id: parse_registry_tenant(&row.tenant_id)?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+fn tenant_record(row: TenantRow) -> Result<Versioned<TenantRecord>, RegistryStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        TenantRecord {
+            tenant_id: parse_registry_tenant(&row.tenant_id)?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn brand_record(row: BrandRow) -> Result<BrandRecord, RegistryStoreError> {
-    Ok(BrandRecord {
-        brand_id: parse_registry_brand(&row.brand_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+fn brand_record(row: BrandRow) -> Result<Versioned<BrandRecord>, RegistryStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        BrandRecord {
+            brand_id: parse_registry_brand(&row.brand_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn store_record(row: StoreRow) -> Result<StoreRecord, RegistryStoreError> {
+fn store_record(row: StoreRow) -> Result<Versioned<StoreRecord>, RegistryStoreError> {
     let brand_id = match row.brand_id {
         Some(text) => Some(parse_registry_brand(&text)?),
         None => None,
     };
-    Ok(StoreRecord {
-        store_id: parse_registry_store(&row.store_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)?,
-        brand_id,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        StoreRecord {
+            store_id: parse_registry_store(&row.store_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)?,
+            brand_id,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn device_record(row: DeviceRow) -> Result<DeviceRecord, RegistryStoreError> {
-    Ok(DeviceRecord {
-        device_id: parse_registry_device(&row.device_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)?,
-        store_id: parse_registry_store(&row.store_id)?,
-        name: row.name,
-        kind: row.kind,
-        status: EntityStatus::from_db(&row.status),
-    })
+fn device_record(row: DeviceRow) -> Result<Versioned<DeviceRecord>, RegistryStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        DeviceRecord {
+            device_id: parse_registry_device(&row.device_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)?,
+            store_id: parse_registry_store(&row.store_id)?,
+            name: row.name,
+            kind: row.kind,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
+}
+
+/// Carries the adapter's conditional-write result across the seam
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+///
+/// The two types are deliberately separate rather than one shared enum: `RowUpdate` names a
+/// database row and `UpdateOutcome` names a seam's answer, and this crate is the only place that
+/// knows both. Collapsing them would put a `store-postgres` type in the seam every fork has to
+/// implement.
+fn registry_outcome(update: RowUpdate) -> UpdateOutcome {
+    match update {
+        RowUpdate::Updated(version) => UpdateOutcome::Updated(Version::new(version)),
+        RowUpdate::VersionMismatch => UpdateOutcome::VersionMismatch,
+        RowUpdate::NotFound => UpdateOutcome::NotFound,
+    }
 }
 
 impl RegistryStore for PostgresRegistry {
-    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<(), RegistryStoreError> {
+    async fn create_tenant(&self, tenant: &TenantRecord) -> Result<Version, RegistryStoreError> {
         self.insert_tenant(&tenant.tenant_id.to_string(), &tenant.name)
             .await
+            .map(Version::new)
             .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
-    async fn list_tenants(&self) -> Result<Vec<TenantRecord>, RegistryStoreError> {
+    async fn list_tenants(&self) -> Result<Vec<Versioned<TenantRecord>>, RegistryStoreError> {
         let rows = self
             .fetch_tenants()
             .await
@@ -1323,30 +1356,37 @@ impl RegistryStore for PostgresRegistry {
         rows.into_iter().map(tenant_record).collect()
     }
 
-    async fn update_tenant(&self, tenant: &TenantRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_tenant(
+        &self,
+        tenant: &TenantRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
         self.set_tenant(
             &tenant.tenant_id.to_string(),
             &tenant.name,
             tenant.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(registry_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
-    async fn create_brand(&self, brand: &BrandRecord) -> Result<(), RegistryStoreError> {
+    async fn create_brand(&self, brand: &BrandRecord) -> Result<Version, RegistryStoreError> {
         self.insert_brand(
             &brand.brand_id.to_string(),
             &brand.tenant_id.to_string(),
             &brand.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
     async fn list_brands(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<BrandRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<BrandRecord>>, RegistryStoreError> {
         let rows = self
             .fetch_brands(&tenant_id.to_string())
             .await
@@ -1354,18 +1394,24 @@ impl RegistryStore for PostgresRegistry {
         rows.into_iter().map(brand_record).collect()
     }
 
-    async fn update_brand(&self, brand: &BrandRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_brand(
+        &self,
+        brand: &BrandRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
         self.set_brand(
             &brand.tenant_id.to_string(),
             &brand.brand_id.to_string(),
             &brand.name,
             brand.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(registry_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
-    async fn create_store(&self, store: &StoreRecord) -> Result<(), RegistryStoreError> {
+    async fn create_store(&self, store: &StoreRecord) -> Result<Version, RegistryStoreError> {
         let brand = store.brand_id.map(|brand_id| brand_id.to_string());
         self.insert_store(
             &store.store_id.to_string(),
@@ -1374,13 +1420,14 @@ impl RegistryStore for PostgresRegistry {
             &store.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
     async fn list_stores(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<StoreRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<StoreRecord>>, RegistryStoreError> {
         let rows = self
             .fetch_stores(&tenant_id.to_string())
             .await
@@ -1388,7 +1435,11 @@ impl RegistryStore for PostgresRegistry {
         rows.into_iter().map(store_record).collect()
     }
 
-    async fn update_store(&self, store: &StoreRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_store(
+        &self,
+        store: &StoreRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
         let brand = store.brand_id.map(|brand_id| brand_id.to_string());
         self.set_store(
             &store.tenant_id.to_string(),
@@ -1396,12 +1447,14 @@ impl RegistryStore for PostgresRegistry {
             brand.as_deref(),
             &store.name,
             store.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(registry_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
-    async fn create_device(&self, device: &DeviceRecord) -> Result<(), RegistryStoreError> {
+    async fn create_device(&self, device: &DeviceRecord) -> Result<Version, RegistryStoreError> {
         self.insert_device(
             &device.device_id.to_string(),
             &device.tenant_id.to_string(),
@@ -1410,6 +1463,7 @@ impl RegistryStore for PostgresRegistry {
             &device.kind,
         )
         .await
+        .map(Version::new)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
@@ -1417,7 +1471,7 @@ impl RegistryStore for PostgresRegistry {
         &self,
         tenant_id: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<DeviceRecord>, RegistryStoreError> {
+    ) -> Result<Vec<Versioned<DeviceRecord>>, RegistryStoreError> {
         let rows = self
             .fetch_devices(&tenant_id.to_string(), &store_id.to_string())
             .await
@@ -1425,15 +1479,21 @@ impl RegistryStore for PostgresRegistry {
         rows.into_iter().map(device_record).collect()
     }
 
-    async fn update_device(&self, device: &DeviceRecord) -> Result<bool, RegistryStoreError> {
+    async fn update_device(
+        &self,
+        device: &DeviceRecord,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RegistryStoreError> {
         self.set_device(
             &device.tenant_id.to_string(),
             &device.device_id.to_string(),
             &device.name,
             &device.kind,
             device.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(registry_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 }

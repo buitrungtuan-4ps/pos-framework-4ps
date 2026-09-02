@@ -207,6 +207,10 @@ fn activation_error(error: &PortError) -> Response {
         ErrorStatus::Unauthenticated => StatusCode::UNAUTHORIZED,
         ErrorStatus::NotFound => StatusCode::NOT_FOUND,
         ErrorStatus::AlreadyExists | ErrorStatus::FailedPrecondition => StatusCode::CONFLICT,
+        // Unreachable on this path — nothing here is a conditional write (ADR-0094) — but named
+        // rather than folded into a catch-all, so the next status added to the envelope fails the
+        // build here instead of silently becoming a `500`.
+        ErrorStatus::VersionMismatch => StatusCode::PRECONDITION_FAILED,
         ErrorStatus::Unavailable | ErrorStatus::ResourceExhausted => {
             StatusCode::SERVICE_UNAVAILABLE
         }

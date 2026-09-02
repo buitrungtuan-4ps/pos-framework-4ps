@@ -15,7 +15,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
 /// A tenant as listed — the root of the tree.
 #[derive(Clone, Debug)]
@@ -26,6 +26,10 @@ pub struct TenantRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A brand as listed — grouped under a tenant.
@@ -39,6 +43,10 @@ pub struct BrandRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A store as listed — grouped under a tenant and, optionally, a brand.
@@ -54,6 +62,10 @@ pub struct StoreRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A device as listed — the canonical device identity, grouped under a store.
@@ -71,6 +83,10 @@ pub struct DeviceRow {
     pub kind: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The org-registry store over a shared pool. Built by
@@ -87,21 +103,21 @@ impl PostgresRegistry {
 
     // --- tenants (root; no tenant filter — administered by the trusted connection) ---
 
-    /// Inserts a tenant.
+    /// Inserts a tenant, returning the `xmin` it starts at (ADR-0094).
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
-    pub async fn insert_tenant(&self, tenant_id: &str, name: &str) -> Result<(), PortError> {
+    pub async fn insert_tenant(&self, tenant_id: &str, name: &str) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO tenants (tenant_id, name) VALUES ($1, $2)",
+        let row = connection
+            .query_one(
+                "INSERT INTO tenants (tenant_id, name) VALUES ($1, $2) RETURNING xmin::text",
                 &[&tenant_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists every tenant, newest first.
@@ -113,7 +129,8 @@ impl PostgresRegistry {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT tenant_id, name, status FROM tenants ORDER BY created_at DESC",
+                "SELECT tenant_id, name, status, xmin::text FROM tenants \
+                 ORDER BY created_at DESC",
                 &[],
             )
             .await
@@ -124,11 +141,12 @@ impl PostgresRegistry {
                 tenant_id: row.get(0),
                 name: row.get(1),
                 status: row.get(2),
+                version: row.get(3),
             })
             .collect())
     }
 
-    /// Renames a tenant and sets its status. Returns whether a row was found and changed.
+    /// Renames a tenant and sets its status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -138,21 +156,34 @@ impl PostgresRegistry {
         tenant_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
-                "UPDATE tenants SET name = $2, status = $3, updated_at = now() WHERE tenant_id = $1",
-                &[&tenant_id, &name, &status],
+        let updated = connection
+            .query_opt(
+                "UPDATE tenants SET name = $2, status = $3, updated_at = now() \
+                 WHERE tenant_id = $1 AND xmin::text = $4 RETURNING xmin::text",
+                &[&tenant_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt("SELECT 1 FROM tenants WHERE tenant_id = $1", &[&tenant_id])
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- brands (tenant-scoped) ---
 
-    /// Inserts a brand under a tenant.
+    /// Inserts a brand under a tenant, returning the `xmin` it starts at (ADR-0094).
     ///
     /// # Errors
     ///
@@ -162,16 +193,17 @@ impl PostgresRegistry {
         brand_id: &str,
         tenant_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO brands (brand_id, tenant_id, name) VALUES ($1, $2, $3)",
+        let row = connection
+            .query_one(
+                "INSERT INTO brands (brand_id, tenant_id, name) VALUES ($1, $2, $3) \
+                 RETURNING xmin::text",
                 &[&brand_id, &tenant_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's brands, newest first.
@@ -183,7 +215,7 @@ impl PostgresRegistry {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT brand_id, tenant_id, name, status FROM brands \
+                "SELECT brand_id, tenant_id, name, status, xmin::text FROM brands \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -196,11 +228,12 @@ impl PostgresRegistry {
                 tenant_id: row.get(1),
                 name: row.get(2),
                 status: row.get(3),
+                version: row.get(4),
             })
             .collect())
     }
 
-    /// Renames a brand and sets its status, within its tenant. Returns whether a row changed.
+    /// Renames a brand and sets its status, within its tenant. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -211,22 +244,38 @@ impl PostgresRegistry {
         brand_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE brands SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND brand_id = $2",
-                &[&tenant_id, &brand_id, &name, &status],
+                 WHERE tenant_id = $1 AND brand_id = $2 AND xmin::text = $5 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &brand_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM brands WHERE tenant_id = $1 AND brand_id = $2",
+                &[&tenant_id, &brand_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- stores (tenant-scoped) ---
 
-    /// Inserts a store under a tenant, with an optional brand.
+    /// Inserts a store under a tenant, with an optional brand, returning its starting `xmin`.
     ///
     /// # Errors
     ///
@@ -237,16 +286,17 @@ impl PostgresRegistry {
         tenant_id: &str,
         brand_id: Option<&str>,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO stores (store_id, tenant_id, brand_id, name) VALUES ($1, $2, $3, $4)",
+        let row = connection
+            .query_one(
+                "INSERT INTO stores (store_id, tenant_id, brand_id, name) \
+                 VALUES ($1, $2, $3, $4) RETURNING xmin::text",
                 &[&store_id, &tenant_id, &brand_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's stores, newest first.
@@ -258,7 +308,7 @@ impl PostgresRegistry {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT store_id, tenant_id, brand_id, name, status FROM stores \
+                "SELECT store_id, tenant_id, brand_id, name, status, xmin::text FROM stores \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -272,12 +322,13 @@ impl PostgresRegistry {
                 brand_id: row.get(2),
                 name: row.get(3),
                 status: row.get(4),
+                version: row.get(5),
             })
             .collect())
     }
 
     /// Renames a store, (re)assigns or clears its brand, and sets its status, within its tenant.
-    /// Returns whether a row changed.
+    /// Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -289,22 +340,38 @@ impl PostgresRegistry {
         brand_id: Option<&str>,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE stores SET brand_id = $3, name = $4, status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND store_id = $2",
-                &[&tenant_id, &store_id, &brand_id, &name, &status],
+                 WHERE tenant_id = $1 AND store_id = $2 AND xmin::text = $6 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &store_id, &brand_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM stores WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant_id, &store_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- devices (tenant-scoped) ---
 
-    /// Inserts a device under a store.
+    /// Inserts a device under a store, returning the `xmin` it starts at (ADR-0094).
     ///
     /// # Errors
     ///
@@ -316,17 +383,17 @@ impl PostgresRegistry {
         store_id: &str,
         name: &str,
         kind: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO devices (device_id, tenant_id, store_id, name, kind) \
-                 VALUES ($1, $2, $3, $4, $5)",
+                 VALUES ($1, $2, $3, $4, $5) RETURNING xmin::text",
                 &[&device_id, &tenant_id, &store_id, &name, &kind],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a store's devices within a tenant, newest first.
@@ -342,8 +409,8 @@ impl PostgresRegistry {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT device_id, tenant_id, store_id, name, kind, status FROM devices \
-                 WHERE tenant_id = $1 AND store_id = $2 ORDER BY created_at DESC",
+                "SELECT device_id, tenant_id, store_id, name, kind, status, xmin::text \
+                 FROM devices WHERE tenant_id = $1 AND store_id = $2 ORDER BY created_at DESC",
                 &[&tenant_id, &store_id],
             )
             .await
@@ -357,12 +424,13 @@ impl PostgresRegistry {
                 name: row.get(3),
                 kind: row.get(4),
                 status: row.get(5),
+                version: row.get(6),
             })
             .collect())
     }
 
-    /// Renames a device, sets its kind, and sets its status, within its tenant. Returns whether a row
-    /// changed.
+    /// Renames a device, sets its kind, and sets its status, within its tenant. Applies only if the row is
+    /// still at `expected`.
     ///
     /// # Errors
     ///
@@ -374,16 +442,32 @@ impl PostgresRegistry {
         name: &str,
         kind: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE devices SET name = $3, kind = $4, status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND device_id = $2",
-                &[&tenant_id, &device_id, &name, &kind, &status],
+                 WHERE tenant_id = $1 AND device_id = $2 AND xmin::text = $6 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &device_id, &name, &kind, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM devices WHERE tenant_id = $1 AND device_id = $2",
+                &[&tenant_id, &device_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 }
