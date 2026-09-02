@@ -3655,6 +3655,95 @@ async fn orders_for_an_unknown_store_is_not_found() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// Every `/v1` refusal comes back in the documented envelope, not as plain text
+/// (`docs/naming-and-api.md` §4, AIP-193).
+///
+/// `/v1` is the surface with callers outside this repository, so it is the one where the shape of a
+/// refusal is a contract rather than a detail. Before this slice the bodies were plain strings and
+/// **nothing asserted them** — which is how they stayed plain while the envelope existed — so these
+/// assertions are the coverage, not just a regression guard.
+#[tokio::test]
+async fn a_v1_refusal_comes_back_in_the_documented_envelope() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+
+    // A store the caller's tenant does not own: one generic 404, and now a structured one.
+    let response = orders_app(keys, None)
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("api-envelope", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the unknown-store order");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], 404, "got {body}");
+    assert_eq!(body["error"]["status"], "NOT_FOUND");
+    assert_eq!(body["error"]["message"], "no such store");
+    assert!(
+        body["error"]["details"].is_null(),
+        "a refusal that is not about a field carries no details at all, rather than an empty \
+         array: {body}"
+    );
+}
+
+/// A field-level refusal names the field and a stable reason.
+///
+/// The `message` is prose a person reads and may be reworded; `reason` is the token a client
+/// branches on. Asserting both is what keeps them from collapsing into one.
+#[tokio::test]
+async fn a_v1_refusal_about_a_field_names_the_field_and_a_stable_reason() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadRollups]);
+
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys,
+    ))
+    .oneshot(get("/v1/stores/not-a-ulid/rollups/daily", Some(&token)))
+    .await
+    .expect("route the request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], 400, "got {body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(body["error"]["details"][0]["field"], "store_id");
+    assert_eq!(body["error"]["details"][0]["reason"], "NOT_A_ULID");
+}
+
+/// The `401` keeps its `WWW-Authenticate` header now that its body is built by the shared helper.
+///
+/// The header is the part a conversion like this quietly drops: it is set on the response *after*
+/// the body is built, so replacing the body construction is exactly where it would be lost. A
+/// client that cannot see the scheme does not know how to present a key at all.
+#[tokio::test]
+async fn an_unauthenticated_v1_call_is_enveloped_and_still_names_the_scheme() {
+    let response = http::router(app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    ))
+    .oneshot(get("/v1/stores/whatever/rollups/daily", None))
+    .await
+    .expect("route the request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        response.headers().contains_key("www-authenticate"),
+        "the challenge header survives the envelope"
+    );
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], 401, "got {body}");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert!(
+        body["error"]["details"].is_null(),
+        "no field-level reason on a credential failure — that would be the oracle the one generic \
+         401 exists to avoid: {body}"
+    );
+}
+
 #[tokio::test]
 async fn orders_without_the_place_orders_scope_is_forbidden() {
     let keys = FakeKeys::default();

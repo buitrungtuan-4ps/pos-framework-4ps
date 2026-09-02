@@ -13441,7 +13441,11 @@ where
     let store_id = match store_id.parse::<Ulid>() {
         Ok(ulid) => StoreId::new(ulid),
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "the store id is not a ULID",
+                &[("store_id", "NOT_A_ULID")],
+            );
         }
     };
     let window = match window.into_window() {
@@ -16498,12 +16502,35 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
 /// Field-level detail has no caller yet — the inline validation sites that will carry it are the
 /// next slice — so it is not a parameter either. When it arrives, `ErrorResponse::with_detail` is
 /// already fluent and the door is a second constructor, not a widened signature.
-fn api_error(status: ErrorStatus, message: impl Into<String>) -> Response {
+pub(crate) fn api_error(status: ErrorStatus, message: impl Into<String>) -> Response {
     (
         http_status(status),
         Json(ErrorResponse::new(status, message)),
     )
         .into_response()
+}
+
+/// The same envelope, naming **which** field was wrong and why
+/// (`docs/naming-and-api.md` §4).
+///
+/// This is the door [`api_error`] deliberately left open rather than widening its own signature: a
+/// refusal that is not about a particular field cannot grow an empty `details` array by accident,
+/// and a caller cannot pass one where none belongs.
+///
+/// `reason` is a stable `SCREAMING_SNAKE` token; `message` is prose for a person. They are separate
+/// because they change at different rates — the message can be reworded or translated freely, while
+/// the reason is what a client branches on, and wording a client depends on is wording that can no
+/// longer be improved.
+pub(crate) fn api_error_with_details(
+    status: ErrorStatus,
+    message: impl Into<String>,
+    details: &[(&str, &str)],
+) -> Response {
+    let body = details.iter().fold(
+        ErrorResponse::new(status, message),
+        |body, (field, reason)| body.with_detail(*field, *reason),
+    );
+    (http_status(status), Json(body)).into_response()
 }
 
 /// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.

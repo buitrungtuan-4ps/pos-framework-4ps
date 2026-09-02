@@ -16,6 +16,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **Every `/v1` refusal now comes back in the documented AIP-193 envelope** rather than as plain
+  text (#131). Q3b slice 1, over the helper Q3a built.
+
+  `/v1` is the surface with callers outside this repository, so the shape of a refusal there is a
+  contract rather than a detail — and it was the one surface still answering with a bare string. The
+  bodies of `POST /v1/orders`, `GET /v1/orders`, `GET /v1/stores/{id}/rollups/daily` and the shared
+  bearer gate are now `{"error":{"code","status","message"}}`, with `details` naming the field and a
+  stable reason where a field is at fault.
+
+  Per the fork owner's standing decision, `/v1` bodies may change shape freely because nothing
+  consumes them yet, and **`pos-api-version` is deliberately not pulled forward** by this change.
+
+- **A duplicated status→HTTP-code map is gone.** `orders.rs`'s `intake_error` re-implemented the
+  map that `ErrorStatus::http_code` owns — the very thing `api_error`'s contract exists to prevent
+  ("the HTTP status is not a parameter: it is derived from `status` … which is where the mapping is
+  stated once"). Both copies agreed on every arm, which I verified, so this was a drift hazard
+  rather than a live defect; but the place it would have surfaced is the surface with third-party
+  callers, where a code disagreeing with its body is a client reading a different error from the one
+  the server meant.
+
+  `reason` in `details` is a stable `SCREAMING_SNAKE` token and `message` is prose for a person.
+  They are separate on purpose: the message can be reworded or translated freely, while the reason
+  is what a client branches on — wording a client depends on is wording that can no longer be
+  improved.
+
+  **These bodies had no test coverage at all**, which is how they stayed plain while the envelope
+  existed beside them. They have it now, including that the `401` keeps its `WWW-Authenticate`
+  header (set after the body is built, so replacing the body construction is exactly where it would
+  have been lost) and that a credential failure carries **no** field-level detail, which would be
+  the oracle the one generic `401` exists to avoid.
+
+  `/sync`, `/internal`, the QR guest surface and `/admin` still answer in plain text; they are later
+  slices. The edge's own routes are deliberately out of scope — their only consumer is the embedded
+  UI on the store LAN, which already parses plain text, so there is no third party on the other end.
+
 ### Added
 - **A counter screen, so a cashier can find a takeaway order and charge it** (#130). The second half
   of [ADR-0093](docs/adr/0093-bill-keyed-on-order.md): #129 made a tableless order chargeable
