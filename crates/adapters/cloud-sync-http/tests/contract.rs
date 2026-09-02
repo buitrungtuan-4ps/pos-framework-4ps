@@ -145,12 +145,23 @@ impl HttpTransport for StubCloud {
             }
             "/internal/ota/report" => {
                 // A well-formed report is accepted; parsing proves the adapter sent the fields the
-                // cloud expects.
-                let has_fields = request.get("store_id").is_some()
-                    && request.get("installed").is_some()
-                    && request.get("self_test_passed").is_some();
+                // cloud expects. `self_test_passed` is deliberately NOT required (ADR-0078
+                // Amendment 1): the real route reads it as `#[serde(default)]`, so a store that has
+                // never self-tested omits it and still reports which binary it runs. This stub
+                // required it until the amendment, which is what the suite's new case caught.
+                let has_fields =
+                    request.get("store_id").is_some() && request.get("installed").is_some();
+                // When the verdict *is* sent it must be a boolean, not a string or a number — the
+                // shape the cloud will deserialize into `Option<bool>`.
+                let verdict_well_formed = request
+                    .get("self_test_passed")
+                    .is_none_or(serde_json::Value::is_boolean);
                 HttpResponse {
-                    status: if has_fields { 204 } else { 400 },
+                    status: if has_fields && verdict_well_formed {
+                        204
+                    } else {
+                        400
+                    },
                     body: Vec::new(),
                     ..HttpResponse::default()
                 }
@@ -200,7 +211,7 @@ impl CloudSyncHarness for HttpHarness {
             tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
             store: StoreId::new(Ulid::from_u128(0x570E)),
             installed: ReleaseTag::new(KNOWN_RELEASE),
-            self_test_passed: true,
+            self_test_passed: Some(true),
         }
     }
 }

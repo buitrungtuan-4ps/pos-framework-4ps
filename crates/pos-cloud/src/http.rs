@@ -819,8 +819,11 @@ struct OtaReportRequest {
     store_id: String,
     /// The release the store is now running (a version string, e.g. `v1.2.3`).
     installed: String,
-    /// Whether the post-install self-test passed.
-    self_test_passed: bool,
+    /// Whether the post-install self-test passed, absent when the store has never self-tested
+    /// (ADR-0078 Amendment 1). Optional on the wire, so an edge built before the amendment posts the
+    /// same body and its `true`/`false` is read unchanged.
+    #[serde(default)]
+    self_test_passed: Option<bool>,
 }
 
 /// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),

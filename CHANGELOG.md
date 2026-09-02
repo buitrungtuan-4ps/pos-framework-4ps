@@ -16,6 +16,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **An OTA report can now say "no self-test yet"** — `UpdateReport.self_test_passed` and the
+  `/internal/ota/report` field become `Option<bool>` / optional, implementing
+  [ADR-0078](docs/adr/0078-sync-and-ota-closure.md) Amendment 1 (merged first, because this changes
+  a port).
+
+  Three states where there were two: `Some(true)` passed, `Some(false)` failed and should be
+  surfaced, `None` never self-tested. That last one is the state most of a fleet is in most of the
+  time, and it had to become expressible before the reporting loop could be honest — a report exists
+  chiefly to say *which binary a store is running*, which matters from a store's first boot, and a
+  two-state field would force the edge to invent a verdict it never earned.
+
+  This makes the read model's existing `Option<bool>` reachable for the case the console was already
+  written to render. `FleetStore.self_test_ok`, the nullable `self_test_ok` column, and "Not
+  reported" in the OTA screen all pre-date this change; before it, that `None` only ever meant "has
+  never reported at all", so a store that *had* reported could never show it. The console needed no
+  change — verified, not assumed.
+
+  Threaded through: `pos-ports`, the cloud route (`#[serde(default)]`), `OtaReportStore::record_report`,
+  `store-postgres` (writing SQL `NULL`), the `cloud-sync-http` request (the field is omitted rather
+  than sent as `null`, keeping the body byte-identical to the old shape for any store that does have
+  a verdict), `pos-fakes`, and the `CloudSync` contract suite, which gains a sixth case binding every
+  implementation to accept a report with no self-test.
+
+  **The `/internal/ota/report` route had no tests at all**, which is how a two-state field survived
+  into a three-state read model unnoticed; it now has a capturing fake and route tests for all three
+  states plus the two refusals.
+
+  Additive and no `PROTOCOL_VERSION` bump: `/internal` is unversioned, the field became optional
+  rather than retyped, and an edge built before this posts the same body with its `true`/`false` read
+  unchanged.
+
 ### Added
 - **ADR-0078 Amendment 1 — an OTA report says "no self-test yet" instead of guessing**
   ([ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). No behaviour change in this entry: the record

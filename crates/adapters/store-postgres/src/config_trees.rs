@@ -131,7 +131,7 @@ impl PostgresConfigTrees {
         tenant: TenantId,
         store_id: StoreId,
         installed: &str,
-        self_test_passed: bool,
+        self_test_passed: Option<bool>,
         reported_at_ms: i64,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;

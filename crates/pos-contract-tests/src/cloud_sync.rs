@@ -32,6 +32,7 @@ macro_rules! cloud_sync_suite {
                 fetch_update_returns_the_published_artifact,
                 an_unpublished_release_is_not_found,
                 a_well_formed_report_is_accepted,
+                a_report_with_no_self_test_is_accepted,
             ]
         }
     };
@@ -156,5 +157,32 @@ pub async fn a_well_formed_report_is_accepted<H: CloudSyncHarness>(
     obligation().require(
         outcome.is_ok(),
         "a well-formed update report is accepted, so the edge can tell the cloud what it is running",
+    )
+}
+
+/// A report carrying **no** self-test is accepted too
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md) Amendment 1).
+///
+/// This is the shape most of a fleet is in most of the time: a store that has never installed an
+/// update has no verdict, and a report exists chiefly to say which binary it is running. An
+/// implementation that treated the absent verdict as malformed — refusing it, or requiring the field
+/// on the wire — would leave the installed-version column empty for every store until its first
+/// rollout, which is exactly when an operator most wants to see it. Binding it here means every
+/// future `CloudSync` carries the obligation, not just today's adapter.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_report_with_no_self_test_is_accepted<H: CloudSyncHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let channel = harness.fresh().await?;
+    let mut report = harness.sample_report();
+    report.self_test_passed = None;
+    let outcome = channel.report(&report).await;
+    obligation().require(
+        outcome.is_ok(),
+        "a report with no self-test is accepted, so a store that has never updated can still say \
+         which binary it runs",
     )
 }

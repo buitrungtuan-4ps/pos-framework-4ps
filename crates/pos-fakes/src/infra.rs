@@ -560,7 +560,7 @@ impl FakeCloudSync {
             tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
             store: StoreId::new(Ulid::from_u128(0x570E)),
             installed: ReleaseTag::new(Self::KNOWN_RELEASE),
-            self_test_passed: true,
+            self_test_passed: Some(true),
         }
     }
 }
