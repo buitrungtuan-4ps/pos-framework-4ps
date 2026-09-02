@@ -16,6 +16,58 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **ADR-0094 — the console stops losing edits**
+  ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)). No behaviour change in this entry:
+  the record lands first because it adds a status to the `pos-proto` error envelope and changes the
+  shape of every mutating `/admin` seam, and roadmap v3 **Q3c** books it that way.
+
+  **Every master-data edit in the console is last-write-wins, silently.** Two managers open the same
+  item; one saves a price, the other saves a name from a form loaded thirty seconds earlier. The
+  `PATCH` body carries every field, so the second save writes the stale price back over the first.
+  Both see success, and the audit trail records two updates with no hint that one erased the other.
+  Measured: **24 mutating `/admin` routes** (15 `PATCH`, 9 `PUT`) with no concurrency control, and
+  **nothing anywhere in the tree** — cloud, console or edge — that sends or reads `ETag`/`If-Match`.
+  The worst case is the config tree, whose `save` replaces a store's whole four-layer document, so
+  two admins publishing *different nodes* concurrently lose a whole node rather than a field.
+
+  The decision: a `Version(String)` **opaque token minted by the adapter** and never interpreted
+  above it, with Postgres `xmin` beneath — one atomic
+  `UPDATE … WHERE id = $1 AND xmin = $2 RETURNING xmin`, no extra round trip on the happy path, and
+  **no migration**, since the column is already on every row including ones a fork adds later. Zero
+  rows means the write did not apply; one probe then separates `NotFound` from `VersionMismatch`, so
+  a `404` and a `412` stay distinguishable. The Postgres tie lives in one adapter, which is the
+  direct mitigation for the fork cost the basis carries.
+
+  On the wire: a **strong** `ETag: "<token>"` on read-one, the same byte-identical token as an
+  additive `etag` field on each row of a list (a header cannot carry per-row versions), `If-Match`
+  **required** on write, and `412` on mismatch. An absent `If-Match` is an ordinary `400` with
+  `details: [{"field": "if-match", "reason": "REQUIRED"}]` rather than a tenth status.
+
+  **`ErrorStatus` gains one variant, `VERSION_MISMATCH` → `412`** — the envelope maps to
+  400/401/403/404/409/429/500/503 and could not express `412` at all, the same gap the Q3b sweep hit
+  with `422`. It is deliberately *not* named `PRECONDITION_FAILED`: beside the existing
+  `FAILED_PRECONDITION` (409) that is two tokens differing only in word order with different codes.
+  Safe by construction — `status` is `Open<ErrorStatus>`, so an older client reads it as unrecognised
+  and still gets an intact `code`, `message` and `details`.
+
+  **Two corrections recorded rather than glossed.** (1) The scoping pass that framed the choice
+  reported `updated_at` as unmaintained on the catalog tables, "21 of 35" `UPDATE`s not setting it.
+  Re-measured: **38 `UPDATE`s, 23 setting it, 15 not** — and all 15 are state transitions (revoke,
+  resolve, accept, mask, cancel), not master-data edits. `updated_at` is still rejected, but for the
+  correct reason: it is a *convention* nothing enforces, so it fails **open** — a future write that
+  forgets it would let a stale `If-Match` match and the clobber proceed with the client believing it
+  was protected. (2) The previewed token was `W/"xmin-1847302"`; the shipped form is `"1847302"`.
+  RFC 9110 compares `If-Match` strongly, under which a weak validator never matches, and naming the
+  mechanism in the token would put "this is Postgres" on the wire — the very cost the opaque seam
+  exists to contain.
+
+  Those same 15 transition writes are also what the decision is modelled on: they already
+  compare-and-swap in the `WHERE` clause (`AND revoked = false`, `AND resolved_at IS NULL`,
+  `AND status = 'PENDING'`). The tree knows the technique; what it lacked was a predicate for the
+  case where the expected prior state is the whole record. That case now has one.
+
+
 ### Changed
 - **The last 48 refusals answer in the AIP-193 envelope, and Q3b is closed** (#136). Slice 4c.
 
