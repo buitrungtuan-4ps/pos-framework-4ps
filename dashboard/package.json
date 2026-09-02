@@ -14,7 +14,7 @@
     "i18n:parity": "node scripts/i18n-parity.mjs"
   },
   "dependencies": {
-    "@solidjs/router": "^0.15.3",
+    "@solidjs/router": "^1.0.0",
     "intl-messageformat": "^10.7.18",
     "solid-js": "^1.9.5"
   },
