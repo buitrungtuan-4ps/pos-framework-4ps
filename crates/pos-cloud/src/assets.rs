@@ -10,10 +10,14 @@
 //! here. Under the `dev-ui` feature the same paths are read from disk instead, so a UI change is a
 //! browser refresh rather than a Rust rebuild.
 
-use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::http::{HeaderValue, Uri, header};
 use axum::response::{IntoResponse, Response};
 #[cfg(not(feature = "dev-ui"))]
 use rust_embed::RustEmbed;
+
+use pos_proto::error::ErrorStatus;
+
+use crate::http::api_error;
 
 /// The embedded dashboard. `debug-embed` (see `Cargo.toml`) makes this embed in every profile, so the
 /// tests exercise the shipped serving path. Under `dev-ui` the assets are read from disk instead, so
@@ -45,11 +49,10 @@ pub async fn serve(uri: Uri) -> Response {
     if let Some(bytes) = bytes_of("index.html") {
         return respond("index.html", bytes);
     }
-    (
-        StatusCode::NOT_FOUND,
+    api_error(
+        ErrorStatus::NotFound,
         "no dashboard is embedded in this build",
     )
-        .into_response()
 }
 
 /// Builds a response with the right content type and cache policy. The MIME comes from the extension

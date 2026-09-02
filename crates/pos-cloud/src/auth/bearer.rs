@@ -22,7 +22,7 @@
 //! its identity — it is not a probe.
 
 use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 
 use pos_proto::determinism::ClockSource;
@@ -92,11 +92,12 @@ pub struct ScopeDenied;
 
 impl IntoResponse for ScopeDenied {
     fn into_response(self) -> Response {
-        (
-            StatusCode::FORBIDDEN,
+        // An authorisation refusal carries no `details`: which scope was missing is exactly what a
+        // caller probing the key's reach would want to learn.
+        api_error(
+            ErrorStatus::PermissionDenied,
             "the API key is not authorised for this action",
         )
-            .into_response()
     }
 }
 

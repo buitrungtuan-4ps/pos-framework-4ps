@@ -17,6 +17,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **The last 48 refusals answer in the AIP-193 envelope, and Q3b is closed** (#136). Slice 4c.
+
+  These are the per-handler tail: no repeated family, so this one really is a conversion rather
+  than a helper. A field detail wherever a field is at fault, reusing the tokens the earlier slices
+  established (`REQUIRED`, `OUT_OF_RANGE`, `INVALID_ENUM_VALUE`) before adding `INVALID_FORMAT`,
+  `UNKNOWN_REFERENCE`, `DUPLICATE`, `WRONG_KIND`, `MUTUALLY_EXCLUSIVE` and `ALREADY_EXISTS`.
+
+  **Two deliberate absences.** No `details` on any credential or authorisation refusal — naming the
+  missing permission tells a caller probing its own reach exactly which grant to go after — and none
+  on a server fault, where there is nothing the caller did wrong and nothing it can change.
+
+  **One deliberate exception.** `/admin/assignments` wants exactly one of `store_id` or
+  `employee_id`, and its refusal names **both**. Every other multi-field refusal in Q3b was narrowed
+  to name only what was wrong; here the *pair* is the mistake and neither field alone is at fault.
+
+  Seven of the 48 were outside `http.rs` — the sign-in and session rejections, the API-key scope
+  denial, the embedded-dashboard fallback and the QR-disabled page — and only a sweep across the
+  whole crate found them. `StatusCode` is now an unused import in three of those files.
+
+### Known limitation
+- **Three refusals cannot join the envelope: it has no `422`.** `ErrorStatus` maps to
+  400/401/403/404/409/429/500/503 and nothing else, so `"the password is too short"` (two routes)
+  and `"the image could not be reduced within the size budget"` stay as they are rather than have
+  their status quietly changed to `400`. `422` is the honest code for all three — the request is
+  well-formed and still unprocessable. Adding a variant is a `pos-proto` change and wants an ADR
+  first, so this is recorded rather than decided.
+
 - **An absent entity and a down dependency each answer in one shape** — 103 sites (#135). Q3b
   slice 4b, and the last of the cloud's repeated refusal families.
 
