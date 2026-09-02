@@ -20,7 +20,9 @@ use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{CurrencyCode, OrderLineState, PaymentMethod, ShiftState, TableState};
+use pos_proto::{
+    CurrencyCode, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState, TableState,
+};
 
 fn actor() -> Actor {
     Actor {
@@ -45,6 +47,20 @@ fn a_line() -> pos_edge::LineDraft {
         seat: None,
         course_id: None,
         note_present: false,
+    }
+}
+
+/// One already-priced line, in the shape the intake path hands to `open_inbound_order`.
+fn a_priced_line() -> pos_core::menu::PricedLine {
+    pos_core::menu::PricedLine {
+        menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+        display_name: DisplayName::new("Margherita"),
+        quantity: Quantity::ONE,
+        unit_price: vnd(150_000),
+        line_total: vnd(150_000),
+        tax_class_id: EdgeSession::standard_tax_class(),
+        tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+        repriced: false,
     }
 }
 
@@ -185,5 +201,59 @@ fn a_bump_survives_a_restart() {
             vec![line_id],
             "the bump was folded back from the log, so the ticket stays made across a restart"
         );
+    });
+}
+
+#[test]
+fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
+    // The fold arm that records a bill used to sit inside `if let Some(table_id) =
+    // table_for_order(..)`, because a bill was assumed to have a table. A counter order has none
+    // ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)), so on every rebuild the bill was
+    // silently dropped: a box that restarted between opening a takeaway bill and settling it came
+    // back not knowing the bill existed, and the guest could no longer be charged. Keyed on the
+    // order, it comes back.
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+
+        // Session one: a relayed counter order, and a bill opened on it. No table anywhere.
+        let bill_id = {
+            let edge = edge_over(store.clone());
+            let (order_id, _business_date) = edge
+                .open_inbound_order(
+                    actor().device_id,
+                    Open::from_known(SalesChannel::Takeaway),
+                    None,
+                    &[(a_priced_line(), false)],
+                    None,
+                )
+                .await
+                .expect("a counter order opens");
+            edge.open_bill_for_order(actor(), order_id)
+                .await
+                .expect("and takes a bill")
+                .bill_id
+        };
+
+        // Session two, over the same log: the restart. Settling proves the bill came back *and*
+        // that its order's lines came back with it — the total is assembled from them, so a bill
+        // recovered without its order would fail here rather than pass quietly.
+        let edge = edge_over(store.clone());
+        edge.rebuild().await.expect("rebuilds from the log");
+        let settled = edge
+            .settle_bill(
+                actor(),
+                bill_id,
+                vec![Payment {
+                    method: PaymentMethod::Cash,
+                    tendered: vnd(165_000),
+                    applied_to_bill: vnd(165_000),
+                }],
+                vec![],
+            )
+            .await
+            .expect("the counter bill is still there after the restart, and settles");
+        assert_eq!(settled.total_due, Some(vnd(165_000)));
+        assert_eq!(settled.receipt_number, Some(1));
+        assert_eq!(settled.table_state, None, "it never had a table to cycle");
     });
 }

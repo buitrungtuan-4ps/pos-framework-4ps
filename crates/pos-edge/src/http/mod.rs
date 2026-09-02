@@ -144,13 +144,17 @@ where
         // What the table owes right now, assembled by the edge — the till displays the figure it is
         // going to settle against rather than computing one of its own (roadmap-v3 E5).
         .route("/api/tables/{id}/check", get(check::read::<S>))
+        // The same read keyed on the order, for a counter order that sits on no table (ADR-0093).
+        .route("/api/orders/{id}/check", get(check::read_for_order::<S>))
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))
         // The kitchen display: bump a ticket (mark lines prepared), durable and fanned out.
         .route("/api/kds/bump", post(kds::bump::<S>))
-        // The bill: open on a table, settle.
+        // The bill: open on a table, open on an order, settle. The order-keyed route is what makes
+        // a takeaway order chargeable — it has no table to open a bill against (ADR-0093).
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
+        .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))
         // The cash shift: open, blind count, close.
         .route("/api/shifts", post(shifts::open::<S>))
@@ -209,6 +213,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         AppError::NoOpenOrder
         | AppError::UnknownLine
         | AppError::UnroutableLine
+        | AppError::UnknownOrder
+        | AppError::BillAlreadyOpen
         | AppError::UnknownBill
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen => (StatusCode::CONFLICT, error.to_string()).into_response(),
