@@ -50,7 +50,7 @@ use pos_proto::{SalesChannel, Ulid};
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
-use crate::http::{api_error, api_error_with_details};
+use crate::http::{api_error, parse_ulid_fields};
 use crate::orders::StoreDirectory;
 
 /// The default the relay parks for when a store publishes no `store.order_relay.wait_ms`.
@@ -645,12 +645,9 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::RelayOrders) {
         return forbidden.into_response();
     }
-    let Ok(store_id) = store_id.parse::<StoreId>() else {
-        return api_error_with_details(
-            pos_proto::error::ErrorStatus::InvalidArgument,
-            "store_id is not a ULID",
-            &[("store_id", "NOT_A_ULID")],
-        );
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
 
     // Answer immediately if anything is pending; otherwise hold the request open, re-checking, until
@@ -700,16 +697,11 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::RelayOrders) {
         return forbidden.into_response();
     }
-    let (Ok(store_id), Ok(queued_id)) = (
-        store_id.parse::<StoreId>(),
-        queued_id.parse::<Ulid>().map(OrderQueueId::new),
-    ) else {
-        return api_error_with_details(
-            pos_proto::error::ErrorStatus::InvalidArgument,
-            "store_id or queued_id is not a ULID",
-            &[("store_id", "NOT_A_ULID"), ("queued_id", "NOT_A_ULID")],
-        );
-    };
+    let (store_id, queued_id) =
+        match parse_ulid_fields([("store_id", &store_id), ("queued_id", &queued_id)]) {
+            Ok([store_id, queued_id]) => (StoreId::new(store_id), OrderQueueId::new(queued_id)),
+            Err(refusal) => return refusal,
+        };
 
     match state
         .queue
