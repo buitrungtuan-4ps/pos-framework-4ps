@@ -10759,3 +10759,104 @@ async fn an_admin_refusal_about_two_bad_ids_names_both_of_them() {
         "one detail per failed field, no more: {body}"
     );
 }
+
+// --- Closed-set and range refusals on `/admin` (Q3b slice 4) ------------------------------------
+//
+// 22 refusals were about a value outside a closed set, and each spelled the set into its own
+// sentence — `"status must be active or archived"` alone at eighteen routes. `enum_refusal` builds
+// the prose from the set it is handed, and each set now has one home on its own enum with the
+// parser derived from it too; `crates/pos-cloud/src/http.rs`'s `closed_set_tests` pins that the
+// prose still reads as it did and that every listed token is one the parser accepts. These two
+// cover what only HTTP can show: the body a caller receives.
+
+/// A closed-set refusal names the field, carries a stable reason, and lists what is accepted.
+#[tokio::test]
+async fn a_closed_set_refusal_names_the_field_and_a_stable_reason() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    let refused = router
+        .oneshot(patch_with_cookie(
+            &format!("/admin/tenants/{tenant_id}"),
+            &serde_json::json!({ "name": "Pizza 4P's", "status": "retired" }),
+            &cookie,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(
+        body["error"]["message"], "status must be active or archived",
+        "generated from EntityStatus::ALL, and unchanged from the hand-written sentence"
+    );
+    assert_eq!(body["error"]["details"][0]["field"], "status");
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+}
+
+/// A range refusal about two fields names only the one actually out of range.
+///
+/// `"open_hour and close_hour must be in 0..=23"` had the same over-naming the ULID refusals did,
+/// in a different guise: it named both hours whichever one was wrong. A range is not a set, so
+/// there is no prose to generate and the message is unchanged — but `details` now says which.
+#[tokio::test]
+async fn a_range_refusal_about_two_fields_names_only_the_one_out_of_range() {
+    let admin = provisioned_admin();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        FakeConfigTrees::default(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/qr",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "enabled": true,
+                "staff_confirmation_required": true,
+                "per_table_limit": 5,
+                "rate_window_secs": 60,
+                // A sane opening hour and an impossible closing one.
+                "business_hours": { "open_hour": 9, "close_hour": 99 },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "close_hour",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    assert!(
+        body["error"]["details"][1].is_null(),
+        "open_hour was 9, which is in range, so it is not named: {body}"
+    );
+}

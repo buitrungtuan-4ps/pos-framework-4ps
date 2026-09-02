@@ -118,6 +118,10 @@ pub enum AdminStatus {
 }
 
 impl AdminStatus {
+    /// Both statuses. [`Self::from_token`] and the refusal that lists what `status` accepts are both
+    /// derived from this, so adding a variant updates them instead of leaving them stale.
+    pub const ALL: &'static [Self] = &[Self::Active, Self::Suspended];
+
     /// The token stored in PostgreSQL and carried on the wire.
     #[must_use]
     pub const fn as_token(self) -> &'static str {
@@ -127,14 +131,14 @@ impl AdminStatus {
         }
     }
 
-    /// Parses a stored token, or `None` if it names no known status.
+    /// Parses a stored token, or `None` if it names no known status. Derived from [`Self::ALL`] and
+    /// [`Self::as_token`] rather than a second hand-written match, as [`AdminRole::from_token`] is.
     #[must_use]
     pub fn from_token(token: &str) -> Option<Self> {
-        match token {
-            "active" => Some(Self::Active),
-            "suspended" => Some(Self::Suspended),
-            _ => None,
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|status| status.as_token() == token)
     }
 }
 

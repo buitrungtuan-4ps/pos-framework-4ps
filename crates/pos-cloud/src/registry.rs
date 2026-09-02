@@ -58,6 +58,10 @@ pub enum EntityStatus {
 }
 
 impl EntityStatus {
+    /// Both statuses. The wire parser and the refusal that lists what `status` accepts are both
+    /// derived from this, so adding a variant updates them instead of leaving them stale.
+    pub const ALL: &'static [Self] = &[Self::Active, Self::Archived];
+
     /// The column value stored in PostgreSQL.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

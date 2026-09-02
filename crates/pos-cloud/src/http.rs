@@ -1697,7 +1697,7 @@ where
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
     }
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     // Read the current row for the audit `before` (id/code/status, never the name) and to answer 404.
     let existing = match state.people.get(tenant_id, employee_id).await {
@@ -1775,7 +1775,11 @@ where
         Err(refusal) => return refusal,
     };
     if !pin_is_well_formed(&request.pin) {
-        return (StatusCode::BAD_REQUEST, "the PIN must be 4 to 8 digits").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the PIN must be 4 to 8 digits",
+            &[("pin", "OUT_OF_RANGE")],
+        );
     }
     let Some(pin_phc) = hash_pin(&request.pin) else {
         return people_entropy_unavailable();
@@ -1995,7 +1999,7 @@ where
             .into_response();
     }
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let update = RoleTemplateUpdate {
         role_template_id,
@@ -2795,7 +2799,11 @@ where
         return (StatusCode::BAD_REQUEST, "timezone is not a valid IANA name").into_response();
     }
     if CutoffHour::new(request.cutoff_hour).is_err() {
-        return (StatusCode::BAD_REQUEST, "cutoff_hour must be in 0..=23").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cutoff_hour must be in 0..=23",
+            &[("cutoff_hour", "OUT_OF_RANGE")],
+        );
     }
     let mut locale_value = serde_json::json!({
         "currency_code": request.currency_code,
@@ -3333,12 +3341,19 @@ where
         "rate_window_secs": request.rate_window_secs,
     });
     if let Some(hours) = request.business_hours {
-        if hours.open_hour > 23 || hours.close_hour > 23 {
-            return (
-                StatusCode::BAD_REQUEST,
+        let mut out_of_range: Vec<(&str, &str)> = Vec::with_capacity(2);
+        if hours.open_hour > 23 {
+            out_of_range.push(("open_hour", "OUT_OF_RANGE"));
+        }
+        if hours.close_hour > 23 {
+            out_of_range.push(("close_hour", "OUT_OF_RANGE"));
+        }
+        if !out_of_range.is_empty() {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "open_hour and close_hour must be in 0..=23",
-            )
-                .into_response();
+                &out_of_range,
+            );
         }
         if let serde_json::Value::Object(map) = &mut node {
             map.insert(
@@ -3846,7 +3861,7 @@ where
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
     }
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let update = AreaUpdate {
         area_id,
@@ -4065,7 +4080,7 @@ where
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
     }
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let update = TableUpdate {
         table_id,
@@ -4287,7 +4302,7 @@ where
         return ulid_refusal(&["backup_station_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let update = StationUpdate {
         station_id,
@@ -5457,11 +5472,10 @@ fn registry_entropy_unavailable() -> Response {
 
 /// Parses a status word from a request body; `None` (a `400`) for anything but the two known values.
 fn parse_entity_status(value: &str) -> Option<EntityStatus> {
-    match value {
-        "active" => Some(EntityStatus::Active),
-        "archived" => Some(EntityStatus::Archived),
-        _ => None,
-    }
+    EntityStatus::ALL
+        .iter()
+        .copied()
+        .find(|status| status.as_str() == value)
 }
 
 /// A super-admin lists every tenant.
@@ -5571,7 +5585,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = TenantRecord {
         tenant_id,
@@ -5718,7 +5732,7 @@ where
             Err(refusal) => return refusal,
         };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = BrandRecord {
         brand_id,
@@ -5885,7 +5899,7 @@ where
         return ulid_refusal(&["brand_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = StoreRecord {
         store_id,
@@ -6047,7 +6061,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = DeviceRecord {
         device_id,
@@ -9063,7 +9077,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.count == 0 || request.count > MAX_VOUCHER_BATCH {
-        return (StatusCode::BAD_REQUEST, "count must be between 1 and 10000").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "count must be between 1 and 10000",
+            &[("count", "OUT_OF_RANGE")],
+        );
     }
     // The campaign must exist and be a voucher-kind — a code only makes sense for one the engine
     // evaluates as a voucher.
@@ -9296,11 +9314,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.effective_at_ms <= state.clock.now().as_milliseconds_since_epoch() {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "effective_at_ms must be in the future",
-        )
-            .into_response();
+            &[("effective_at_ms", "OUT_OF_RANGE")],
+        );
     }
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
         Ok(campaigns) => campaigns,
@@ -10509,7 +10527,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let Ok(item_category_id) = parse_optional_category(request.item_category_id.as_deref()) else {
         return ulid_refusal(&["item_category_id"]);
@@ -10673,7 +10691,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = TaxClass {
         tax_class_id,
@@ -10824,7 +10842,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = ItemCategory {
         item_category_id,
@@ -10984,7 +11002,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = ItemSubcategory {
         item_subcategory_id,
@@ -11136,7 +11154,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = DisplayCategory {
         display_category_id,
@@ -11296,7 +11314,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = DisplaySubcategory {
         display_subcategory_id,
@@ -11632,7 +11650,7 @@ where
         return ulid_refusal(&["attached_item_ids"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = ModifierGroup {
         modifier_group_id,
@@ -11788,7 +11806,7 @@ where
         return ulid_refusal(&["parent_menu_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = Menu {
         menu_id,
@@ -11948,7 +11966,7 @@ where
         Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
-        return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
+        return entity_status_refusal();
     };
     let record = MenuSection {
         menu_section_id,
@@ -14720,11 +14738,7 @@ where
         Err(denied) => return denied,
     };
     let Some(role) = AdminRole::from_token(&request.role) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "role must be owner, admin, ops, or viewer",
-        )
-            .into_response();
+        return enum_refusal("role", AdminRole::ALL.iter().map(|role| role.as_token()));
     };
     // No privilege escalation: only an owner may mint another owner.
     if role == AdminRole::Owner && context.admin.role != AdminRole::Owner {
@@ -15066,11 +15080,7 @@ where
         Err(denied) => return denied,
     };
     let Some(role) = AdminRole::from_token(&request.role) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "role must be owner, admin, ops, or viewer",
-        )
-            .into_response();
+        return enum_refusal("role", AdminRole::ALL.iter().map(|role| role.as_token()));
     };
     if let Err(response) = guard_last_owner_change(&app.admin, &id, role != AdminRole::Owner).await
     {
@@ -15136,11 +15146,10 @@ where
         Err(denied) => return denied,
     };
     let Some(status) = AdminStatus::from_token(&request.status) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "status must be active or suspended",
-        )
-            .into_response();
+        return enum_refusal(
+            "status",
+            AdminStatus::ALL.iter().map(|status| status.as_token()),
+        );
     };
     if let Err(response) =
         guard_last_owner_change(&app.admin, &id, status == AdminStatus::Suspended).await
@@ -15233,11 +15242,10 @@ where
             Err(refusal) => return refusal,
         };
     let Some(level) = parse_config_level(&level) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "level must be one of tenant, brand, store, device",
-        )
-            .into_response();
+        return enum_refusal(
+            "level",
+            ConfigLevel::ORDER.iter().map(|level| level.as_str()),
+        );
     };
 
     // Rehydrate the store's tree (or start a fresh one), authoring against the §10-aware validator.
@@ -16193,13 +16201,9 @@ fn config_store_error_response(error: &crate::config_tree::ConfigStoreError) -> 
 
 /// Parses a config-tree level from its path segment, or `None` for an unknown one.
 fn parse_config_level(level: &str) -> Option<ConfigLevel> {
-    match level {
-        "tenant" => Some(ConfigLevel::Tenant),
-        "brand" => Some(ConfigLevel::Brand),
-        "store" => Some(ConfigLevel::Store),
-        "device" => Some(ConfigLevel::Device),
-        _ => None,
-    }
+    ConfigLevel::ORDER
+        .into_iter()
+        .find(|candidate| candidate.as_str() == level)
 }
 
 /// Parses wire scope names strictly, returning the first unknown name rather than dropping it — the
@@ -16376,6 +16380,52 @@ fn ulid_refusal(bad: &[&str]) -> Response {
         [] => "a field is not a ULID".to_owned(),
     };
     api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
+}
+
+/// The refusal for a field whose value is outside a **closed set**: `INVALID_ARGUMENT`, an
+/// `INVALID_ENUM_VALUE` detail naming the field, and prose listing what is accepted.
+///
+/// The set is passed in rather than spelled into the message, so every caller derives it from the
+/// enum that owns it — `EntityStatus::ALL`, `AdminRole::ALL`, `AdminStatus::ALL`,
+/// `ConfigLevel::ORDER`. Adding a variant then updates the refusal, where before it would have left
+/// a sentence listing the old set: `"status must be active or archived"` was written out at eighteen
+/// routes, so a third status would have needed eighteen edits and got none.
+///
+/// The prose it builds matches what those sites already said, so only the `details` array is new.
+fn enum_refusal<'token>(field: &str, accepted: impl IntoIterator<Item = &'token str>) -> Response {
+    let tokens: Vec<&str> = accepted.into_iter().collect();
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        format!("{field} must be {}", accepted_list(&tokens)),
+        &[(field, "INVALID_ENUM_VALUE")],
+    )
+}
+
+/// Reads a closed set as English: `"active or archived"`, `"owner, admin, ops, or viewer"`.
+///
+/// Separate from [`enum_refusal`] because this is the part with arities to get wrong, and a `String`
+/// can be asserted where a `Response` body needs an async read. Both spellings match what the
+/// hand-written sentences used, which is why generating them changed no message.
+fn accepted_list(tokens: &[&str]) -> String {
+    match tokens {
+        [only] => (*only).to_owned(),
+        [first, last] => format!("{first} or {last}"),
+        [head @ .., last] => format!("{}, or {last}", head.join(", ")),
+        // Unreachable: a closed set with nothing in it accepts nothing, so no value could be
+        // refused *against* it.
+        [] => "one of the accepted values".to_owned(),
+    }
+}
+
+/// The refusal for a `status` field that is not an [`EntityStatus`] token.
+///
+/// Eighteen routes read this one field, which is why it gets a name of its own: the eighteen call
+/// sites now say *which* refusal they mean rather than each restating the accepted set.
+fn entity_status_refusal() -> Response {
+    enum_refusal(
+        "status",
+        EntityStatus::ALL.iter().map(|status| status.as_str()),
+    )
 }
 
 /// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.
@@ -16637,6 +16687,126 @@ mod preview_diff_tests {
                 .iter()
                 .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
             "the preview surfaces the real conflict: {violations:?}",
+        );
+    }
+}
+
+#[cfg(test)]
+mod closed_set_tests {
+    //! What a closed-set refusal lists, and the property that keeps it true.
+    //!
+    //! `"status must be active or archived"` was written out at eighteen routes. The sentence and the
+    //! parser were two separate statements of one set, so a third status would have needed eighteen
+    //! edits and got none of them: eighteen routes would have gone on refusing a value they now
+    //! accepted, naming a set that no longer existed.
+    //!
+    //! [`enum_refusal`] builds the prose from the set it is handed and every caller hands it the enum's
+    //! own list, so the message is generated. These tests pin that: the prose still reads the way the
+    //! eighteen hand-written sentences did, and every token any of the four refusals lists is a token
+    //! its parser actually accepts — which is the half a reviewer cannot check by eye.
+
+    use super::{
+        AdminRole, AdminStatus, ConfigLevel, EntityStatus, accepted_list, entity_status_refusal,
+        parse_config_level, parse_entity_status,
+    };
+    use axum::http::StatusCode;
+
+    /// Every token the `status` refusal lists is one [`parse_entity_status`] accepts.
+    #[test]
+    fn every_status_token_listed_is_one_the_parser_accepts() {
+        for status in EntityStatus::ALL {
+            assert_eq!(
+                parse_entity_status(status.as_str()),
+                Some(*status),
+                "{} is listed, so it must parse",
+                status.as_str()
+            );
+        }
+        assert_eq!(
+            parse_entity_status("retired"),
+            None,
+            "and nothing else does"
+        );
+    }
+
+    /// Every token the `level` refusal lists is one [`parse_config_level`] accepts.
+    #[test]
+    fn every_level_token_listed_is_one_the_parser_accepts() {
+        for level in ConfigLevel::ORDER {
+            assert_eq!(
+                parse_config_level(level.as_str()),
+                Some(level),
+                "{} is listed, so it must parse",
+                level.as_str()
+            );
+        }
+        assert_eq!(parse_config_level("region"), None, "and nothing else does");
+    }
+
+    /// The two admin enums round-trip their own tokens, which is what the `role` and admin `status`
+    /// refusals list.
+    #[test]
+    fn the_admin_enums_round_trip_the_tokens_their_refusals_list() {
+        for role in AdminRole::ALL {
+            assert_eq!(AdminRole::from_token(role.as_token()), Some(*role));
+        }
+        for status in AdminStatus::ALL {
+            assert_eq!(AdminStatus::from_token(status.as_token()), Some(*status));
+        }
+    }
+
+    /// The prose reads exactly as the hand-written sentences did, at both arities the four fields
+    /// use — which is what makes generating it a no-op for every existing client.
+    #[test]
+    fn the_prose_reads_the_way_the_hand_written_sentences_did() {
+        assert_eq!(
+            accepted_list(
+                &EntityStatus::ALL
+                    .iter()
+                    .map(|status| status.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            "active or archived",
+            "the eighteen `status` routes said this"
+        );
+        assert_eq!(
+            accepted_list(
+                &AdminRole::ALL
+                    .iter()
+                    .map(|role| role.as_token())
+                    .collect::<Vec<_>>()
+            ),
+            "owner, admin, ops, or viewer",
+            "the two `role` routes said this"
+        );
+        assert_eq!(
+            accepted_list(
+                &AdminStatus::ALL
+                    .iter()
+                    .map(|s| s.as_token())
+                    .collect::<Vec<_>>()
+            ),
+            "active or suspended"
+        );
+        assert_eq!(
+            accepted_list(
+                &ConfigLevel::ORDER
+                    .iter()
+                    .map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            "tenant, brand, store, or device",
+            "reworded from \"one of tenant, brand, store, device\" onto the one shape"
+        );
+        assert_eq!(
+            accepted_list(&["only"]),
+            "only",
+            "and a one-value set is not a list"
+        );
+        assert_eq!(
+            entity_status_refusal().status(),
+            StatusCode::BAD_REQUEST,
+            "a closed-set refusal is the caller's fault"
         );
     }
 }
