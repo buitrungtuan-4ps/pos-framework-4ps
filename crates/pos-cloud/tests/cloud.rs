@@ -10691,9 +10691,10 @@ async fn an_admin_refusal_about_one_id_names_the_field_and_a_stable_reason() {
 /// A request carrying **two** ids, one of them wrong, names only the wrong one.
 ///
 /// This is the defect the helper exists to make unwriteable. `PATCH /admin/stores/{store_id}` parses
-/// the path's store id and the body's `tenant_id` together, and used to refuse with "the store id or
-/// tenant_id is not a ULID" whichever one had failed — so an operator whose tenant id was fine was
-/// told to go and check it. The console cannot mark a field from a message like that either.
+/// the path's store id and the body's `tenant_id` together, and used to refuse with
+/// `"the store id or tenant_id is not a ULID"` whichever one had failed — so an operator whose
+/// tenant id was fine was told to go and check it. The console cannot mark a field from a message
+/// like that either.
 #[tokio::test]
 async fn an_admin_refusal_about_two_ids_names_only_the_one_that_was_wrong() {
     let router = registry_app(provisioned_admin(), FakeRegistry::default());
