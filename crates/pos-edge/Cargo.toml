@@ -80,6 +80,14 @@ argon2 = "0.5"
 # The OS CSPRNG (ADR-0030), for the single-use pairing code and device tokens.
 getrandom = "0.3"
 
+# Hashes a device token before it is stored (ADR-0091): the registry keeps a
+# SHA-256, never the token, so a stolen pos.db yields no working credential. Same
+# RustCrypto line pos-cloud and blob-garage already pin (sha2 0.11), so this adds
+# no new third-party crate to the lock. A plain digest and not a password KDF: the
+# token is 128 bits from the OS CSPRNG, and this sits on the gate every request
+# crosses.
+sha2 = "0.11"
+
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

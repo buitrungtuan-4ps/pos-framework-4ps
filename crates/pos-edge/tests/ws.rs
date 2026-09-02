@@ -32,7 +32,7 @@ const SUBPROTOCOL: &str = "pos-edge.v1";
 
 /// A state whose pairing table already holds one issued device token — what a device has after it
 /// redeemed a code, and what `/ws` now requires.
-fn state_with_paired_device(store: u128) -> (AppState, String) {
+async fn state_with_paired_device(store: u128) -> (AppState, String) {
     let store = StoreId::new(Ulid::from_u128(store));
     let config = EdgeConfig::new("127.0.0.1:0".parse().expect("valid addr"), store);
     let state = AppState::new(config);
@@ -41,6 +41,7 @@ fn state_with_paired_device(store: u128) -> (AppState, String) {
     let token = state
         .pairing
         .redeem(&code, now)
+        .await
         .expect("redeem does not fail")
         .expect("a live code yields a token");
     (state, token.as_str().to_owned())
@@ -64,7 +65,7 @@ fn request_with_subprotocol(
 
 #[tokio::test]
 async fn a_published_event_reaches_a_connected_device() {
-    let (state, token) = state_with_paired_device(1);
+    let (state, token) = state_with_paired_device(1).await;
     let fanout = state.fanout.clone();
     let app = pos_edge::http::router(state);
 
@@ -127,7 +128,7 @@ async fn a_published_event_reaches_a_connected_device() {
 #[tokio::test]
 async fn two_devices_both_receive_the_same_change() {
     // The dine-in exit criterion has two devices on one table; both must see a change.
-    let (state, token) = state_with_paired_device(2);
+    let (state, token) = state_with_paired_device(2).await;
     let fanout = state.fanout.clone();
     let app = pos_edge::http::router(state);
 
@@ -175,7 +176,7 @@ async fn two_devices_both_receive_the_same_change() {
 async fn an_unpaired_host_on_the_lan_is_refused() {
     // The hole S0c closed. `/ws` streams every committed event — orders, bills, settlements — so a
     // laptop plugged into the store switch reading it was a data breach with no command needed.
-    let (state, _token) = state_with_paired_device(3);
+    let (state, _token) = state_with_paired_device(3).await;
     let fanout = state.fanout.clone();
     let app = pos_edge::http::router(state);
 
@@ -208,7 +209,7 @@ async fn an_unpaired_host_on_the_lan_is_refused() {
 async fn a_token_that_was_never_issued_is_refused() {
     // Well-formed but unknown: 32 lowercase hex characters that no pairing minted. It must land on
     // the same 401 as an absent token, so a probe cannot tell a bad token from no token.
-    let (state, _token) = state_with_paired_device(4);
+    let (state, _token) = state_with_paired_device(4).await;
     let app = pos_edge::http::router(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -232,7 +233,7 @@ async fn a_token_that_was_never_issued_is_refused() {
 async fn a_non_browser_consumer_may_use_the_authorization_header() {
     // A browser cannot set this header, which is why the subprotocol channel exists — but a
     // third-party KDS or a script is not a browser, and should not have to learn the workaround.
-    let (state, token) = state_with_paired_device(5);
+    let (state, token) = state_with_paired_device(5).await;
     let fanout = state.fanout.clone();
     let app = pos_edge::http::router(state);
 

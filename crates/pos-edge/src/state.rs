@@ -70,6 +70,18 @@ impl AppState {
         Self::with_fanout(config, Fanout::new())
     }
 
+    /// Replaces the pairing state with one the caller already built and loaded.
+    ///
+    /// `serve` uses this: it constructs a *durable* [`Pairing`] over the store's device registry and
+    /// refills it from disk before the first request can arrive (ADR-0091), then hands it to the
+    /// state so `/api/pair` and both auth gates read the same table. Tests and the on-fakes example
+    /// keep the in-memory default.
+    #[must_use]
+    pub fn with_pairing(mut self, pairing: Arc<Pairing>) -> Self {
+        self.pairing = pairing;
+        self
+    }
+
     /// Builds the shared state over an existing fan-out.
     ///
     /// The composed edge shares one fan-out between the application loop (which publishes) and the

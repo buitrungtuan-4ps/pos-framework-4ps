@@ -12,6 +12,7 @@ use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
 use key_vault_keyring::{KeyringVault, OsKeyring};
 use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
+use pos_ports::device_registry::DeviceRegistry;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
 use pos_ports::key_vault::{KeyVault, SecretName};
@@ -21,17 +22,20 @@ use pos_proto::text::ReleaseTag;
 
 use crate::activation::{activation_router, boot_standing};
 use crate::app::Edge;
+use crate::auth::Sessions;
+use crate::clock::SystemClock;
 use crate::cloud_http::{
     CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, RelayHttpTransport,
 };
 use crate::config::{EdgeConfig, NatsConfig};
 use crate::config_client::ConfigClient;
 use crate::discovery::{Advertiser, NoopAdvertiser};
+use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
 use crate::event_publish::EventPublisher;
 use crate::heartbeat_client::HeartbeatClient;
 use crate::order_in::EdgeOrderIn;
-use crate::pairing::pairing_url;
+use crate::pairing::{Pairing, pairing_url};
 use crate::queue::QueueNumberAuthority;
 use crate::relay_client::RelayClient;
 use crate::state::AppState;
@@ -104,9 +108,11 @@ pub const fn system_device_id(store_id: StoreId) -> DeviceId {
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
 pub async fn serve<S, Q>(config: EdgeConfig, edge: Arc<Edge<S>>, queue: Q) -> Result<(), EdgeError>
 where
-    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
+    // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
+    config.validate()?;
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
     // build can serve (ADR-0027).
     let countries = crate::countries::registry();
@@ -120,8 +126,34 @@ where
     let cloud_url = config.cloud_url.clone();
     let store_id = config.store_id;
     let nats = config.nats.clone();
-    // Share the edge's fan-out with the /ws route so a committed change reaches every device.
-    let state = AppState::with_fanout(config, edge.fanout().clone());
+    let idle_timeout = config.sign_in_idle_timeout();
+    // Pairing and sign-in are recorded in the store's own database, so a power blip, an OTA install
+    // or a `systemctl restart` no longer unpairs every tablet in the shop (ADR-0091). The registry
+    // is the edge's existing store, reached through the seam in `crate::durable_auth` — no new
+    // parameter, and `main.rs` is unchanged.
+    let registry: Arc<dyn DurableAuth> = Arc::new(EdgeRegistry(Arc::clone(&edge)));
+    let pairing = Arc::new(Pairing::durable(Arc::clone(&registry)));
+    let sessions = Arc::new(Sessions::durable(registry, idle_timeout));
+
+    // Load both tables before the first request can arrive. Fatal if either fails: starting with an
+    // empty pairing table would silently unpair a store that *is* paired, and an operator would then
+    // re-pair every till to fix a problem that was never theirs.
+    let restored_devices = pairing.load().await.map_err(EdgeError::DeviceRegistry)?;
+    let restored_sessions = sessions
+        .load(SystemClock.now())
+        .await
+        .map_err(EdgeError::DeviceRegistry)?;
+    tracing::info!(
+        devices = restored_devices,
+        sign_ins = restored_sessions,
+        idle_timeout_minutes = idle_timeout.as_secs() / 60,
+        "restored device pairings and sign-ins from the store"
+    );
+
+    // Share the edge's fan-out with the /ws route so a committed change reaches every device, and
+    // the loaded pairing state so `/api/pair` and the gates agree.
+    let state =
+        AppState::with_fanout(config, edge.fanout().clone()).with_pairing(Arc::clone(&pairing));
 
     // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
     // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
@@ -153,9 +185,12 @@ where
     // check (ADR-0084) validates tokens against the very set `/api/pair` issues them into. The config
     // loop keeps its own handle on the edge, so a menu published from the cloud hot-swaps the live
     // session the same routes serve.
-    let pairing = state.pairing.clone();
     let config_edge = Arc::clone(&edge);
-    let mut app = crate::http::router(state).merge(crate::http::domain_router(edge, pairing));
+    let mut app = crate::http::router(state).merge(crate::http::domain_router(
+        edge,
+        Arc::clone(&pairing),
+        sessions,
+    ));
 
     // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM drains
     // them together. A task translates the OS signal into a watched flag; each consumer waits on its

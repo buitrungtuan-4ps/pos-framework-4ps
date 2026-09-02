@@ -17,6 +17,50 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A restart no longer unpairs the store, and no longer signs everyone out**
+  ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md), roadmap v3 slice **S0d-2**). The half that
+  changes behaviour. `Pairing` and `Sessions` now write through to the `DeviceRegistry` S0d-1 added
+  and load from it at boot, so a power blip, an OTA install (ADR-0055 restarts the edge on purpose)
+  or a `systemctl restart` stops being the Friday-evening scene it was: every tablet unpaired at
+  once, an operator walking to the console to read six-digit codes while the queue builds.
+
+  **Reads stay in memory.** The gate on the front of every request answers from a map, as it always
+  did; only *changes* touch the database. Loading is fatal if the registry cannot be read — starting
+  with an empty table would silently unpair a store that *is* paired, and an operator would then
+  re-pair every till to fix a problem that was never theirs.
+
+  **The edge now holds no device token anywhere.** The live map is keyed by digest, like the durable
+  table — it has to be, because a restart can only restore what was stored — so a token exists only
+  for as long as it takes `redeem` to hand it to the device that will keep it. That is a property
+  ADR-0091 asked for on disk and this gets in memory too.
+
+  **Sign-in survives a restart, bounded by `sign_in_idle_timeout_minutes` (default 30).** Past the
+  window a device is reported signed out and gets the same `403` an unsigned one gets. The rule is a
+  pure comparison and it **fails closed on a clock that misbehaves**: a negative interval (the clock
+  went backwards) or an implausibly large one both expire the session, because no SNTP poll runs on
+  the edge today and an NTP daemon or a person with `date` can step the host clock either way. A
+  clock that jumps must never be a way to hold a session open. `0` is refused at startup rather than
+  accepted — a zero window signs a device out between its own two requests.
+
+  **Revocation is now reachable**, since a restart is no longer doing it by accident: `POST
+  /api/pair/revoke` retires one device or all of them (the break-glass that reproduces the old
+  behaviour deliberately), and `GET /api/pair/devices` reports the count and whether it is durable —
+  an operator planning a reboot mid-service needs to know whether it will cost them the fleet. Both
+  sit behind the paired-device gate: as strong as pairing and no stronger, because the edge has no
+  operator identity offline.
+
+  Write ordering is deliberate and **not** uniform, which is worth knowing when reading the code.
+  Pairing and sign-in record durably *before* they are believed, so a failure refuses rather than
+  handing out a credential the box may forget. Sign-*out* is the opposite — memory clears first and
+  unconditionally — because a half-failed sign-out must leave the till locked on this box; an
+  operator told a device is signed out when it is not is the worse error.
+
+  **Upgrade note:** nothing to do. An upgrading store starts with both tables empty, which is exactly
+  today's post-restart state, so the first boot behaves as before and the *second* is when the
+  improvement shows. A fork that composes no registry (the on-fakes example, the test suite) keeps
+  the pre-S0d in-memory behaviour, and there is a test that says so. One new setting,
+  `sign_in_idle_timeout_minutes`; one new dependency on `pos-edge`, `sha2` 0.11 — the same
+  RustCrypto line `pos-cloud` and `blob-garage` already pin, so no new crate enters the lock.
 - **`DeviceRegistry` — the eighteenth port, so pairing and sign-in can survive a restart**
   ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md), roadmap v3 slice **S0d-1**). The port half
   of S0d: the trait, its contract suite, the fake, and the real `store-sqlite` adapter with an

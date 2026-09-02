@@ -1679,6 +1679,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "store-sqlite",
  "thiserror",
  "tokio",

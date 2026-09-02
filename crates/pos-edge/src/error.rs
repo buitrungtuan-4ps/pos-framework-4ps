@@ -26,6 +26,18 @@ pub enum EdgeError {
     #[error("could not parse config: {0}")]
     ConfigParse(toml::de::Error),
 
+    /// The configuration parsed but a value would misbehave, so the edge refuses to start with it.
+    #[error("invalid config: {0}")]
+    Config(String),
+
+    /// The durable device registry could not be read at boot (ADR-0091).
+    ///
+    /// Fatal on purpose: starting with an empty pairing table would silently unpair a store that is
+    /// in fact paired, and an operator would then re-pair every till to fix a problem that was
+    /// never theirs.
+    #[error("could not load the device registry: {0}")]
+    DeviceRegistry(pos_ports::error::PortError),
+
     /// The listen address could not be bound — most often already in use.
     #[error("could not bind {addr}: {source}")]
     Bind {

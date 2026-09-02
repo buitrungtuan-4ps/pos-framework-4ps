@@ -14,7 +14,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::PermissionSet;
 use pos_edge::{
-    Edge, EdgeSession, InMemoryReceipts, Pairing, StaffAuth, StaffRoster, StoreIdentity,
+    Edge, EdgeSession, InMemoryReceipts, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity,
     SystemClock,
 };
 use pos_fakes::FakeStore;
@@ -41,7 +41,7 @@ fn hash_of(pin: &str) -> String {
 
 /// The domain router (seeded with one staff member) and a device token that is **paired but not yet
 /// signed in** — enough to reach the session routes, not the command routes (S0b, ADR-0084).
-fn paired() -> (Router, String) {
+async fn paired() -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)));
     let mut roster = StaffRoster::new();
     roster.insert(
@@ -66,11 +66,15 @@ fn paired() -> (Router, String) {
     let code = pairing.mint(now).expect("mint a pairing code");
     let token = pairing
         .redeem(&code, now)
+        .await
         .expect("redeem")
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();
-    (pos_edge::http::domain_router(edge, pairing), token)
+    (
+        pos_edge::http::domain_router(edge, pairing, Arc::new(Sessions::new())),
+        token,
+    )
 }
 
 /// Posts a sign-in for `token` with the given code and PIN, returning the status and raw body.
@@ -103,7 +107,7 @@ async fn post_sign_in(app: &Router, token: &str, code: &str, pin: &str) -> (Stat
 
 /// A paired device with the seeded staff **signed in** — every command route accepts it.
 async fn app() -> (Router, String) {
-    let (app, token) = paired();
+    let (app, token) = paired().await;
     let (status, _) = post_sign_in(&app, &token, STAFF_CODE, STAFF_PIN).await;
     assert_eq!(status, StatusCode::OK, "the seeded staff signs in");
     (app, token)
@@ -195,7 +199,7 @@ async fn a_paired_device_with_nobody_signed_in_commands_nothing() {
     // The second gate (S0b, ADR-0084): a paired device whose token is valid but that has no employee
     // signed in is refused a command — and a store read — before the handler, so nothing runs under a
     // forged identity. The device is genuinely paired: the same token signs in successfully below.
-    let (app, token) = paired();
+    let (app, token) = paired().await;
     for (method, uri) in [("POST", table_path("/seat")), ("GET", table_path(""))] {
         let (status, _) = send(app.clone(), &token, method, &uri).await;
         assert_eq!(
@@ -214,7 +218,7 @@ async fn a_paired_device_with_nobody_signed_in_commands_nothing() {
 
 #[tokio::test]
 async fn a_wrong_pin_does_not_sign_in() {
-    let (app, token) = paired();
+    let (app, token) = paired().await;
     let (status, body) = post_sign_in(&app, &token, STAFF_CODE, "0000").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let refused: serde_json::Value = serde_json::from_str(&body).expect("json");
@@ -230,7 +234,7 @@ async fn a_wrong_pin_does_not_sign_in() {
 async fn an_unknown_code_is_refused_without_revealing_it() {
     // An unknown code answers exactly like a wrong PIN — no `remaining`, no distinct status — so a
     // probe cannot tell an existing badge code from a missing one.
-    let (app, token) = paired();
+    let (app, token) = paired().await;
     let (status, body) = post_sign_in(&app, &token, "NOPE", STAFF_PIN).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let refused: serde_json::Value = serde_json::from_str(&body).expect("json");

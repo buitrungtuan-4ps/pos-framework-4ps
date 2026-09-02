@@ -25,12 +25,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
+use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, EventId, StoreId};
+use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId};
+use pos_proto::time::Timestamp;
 
+use crate::infra::FakeDeviceRegistry;
 use crate::lock;
 
 /// How many undelivered events a fake store holds before pushing back.
@@ -66,10 +69,18 @@ struct StoreState {
     intake: BTreeMap<(StoreId, String, String), IntakeRecord>,
 }
 
-/// An in-memory `EventStore` and `ConfigStore`.
+/// An in-memory `EventStore`, `ConfigStore`, `IntakeLedger` and `DeviceRegistry`.
+///
+/// The device registry is a delegated [`FakeDeviceRegistry`] rather than more fields on
+/// [`StoreState`], because the real `store-sqlite` adapter keeps it in the same database but shares
+/// no transaction with the event log ([ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)
+/// explains why it is not `Transactional`). Composing the two fakes the same way keeps the
+/// separation visible, and means the registry's thirteen contract cases exercise the same code
+/// whichever fake a suite is handed.
 #[derive(Debug, Clone, Default)]
 pub struct FakeStore {
     state: Arc<Mutex<StoreState>>,
+    devices: FakeDeviceRegistry,
 }
 
 impl FakeStore {
@@ -87,6 +98,9 @@ impl FakeStore {
     pub fn reopen(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            // The registry is in the same database, so a reopen sees the same rows — which is what
+            // makes "a restart no longer unpairs the store" testable through this fake at all.
+            devices: self.devices.clone(),
         }
     }
 }
@@ -382,5 +396,47 @@ impl IntakeLedger for FakeStore {
                 external_reference.to_owned(),
             ))
             .cloned())
+    }
+}
+
+impl DeviceRegistry for FakeStore {
+    async fn record_pairing(&self, device: PairedDevice) -> Result<(), PortError> {
+        self.devices.record_pairing(device).await
+    }
+
+    async fn device_for_token(&self, digest: TokenDigest) -> Result<Option<DeviceId>, PortError> {
+        self.devices.device_for_token(digest).await
+    }
+
+    async fn paired_devices(&self) -> Result<Vec<PairedDevice>, PortError> {
+        self.devices.paired_devices().await
+    }
+
+    async fn revoke_device(&self, device_id: DeviceId) -> Result<(), PortError> {
+        self.devices.revoke_device(device_id).await
+    }
+
+    async fn revoke_all_devices(&self) -> Result<(), PortError> {
+        self.devices.revoke_all_devices().await
+    }
+
+    async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {
+        self.devices.record_sign_in(session).await
+    }
+
+    async fn sign_in_for(&self, device_id: DeviceId) -> Result<Option<DeviceSession>, PortError> {
+        self.devices.sign_in_for(device_id).await
+    }
+
+    async fn sign_ins(&self) -> Result<Vec<DeviceSession>, PortError> {
+        self.devices.sign_ins().await
+    }
+
+    async fn touch_session(&self, device_id: DeviceId, now: Timestamp) -> Result<(), PortError> {
+        self.devices.touch_session(device_id, now).await
+    }
+
+    async fn clear_sign_in(&self, device_id: DeviceId) -> Result<(), PortError> {
+        self.devices.clear_sign_in(device_id).await
     }
 }

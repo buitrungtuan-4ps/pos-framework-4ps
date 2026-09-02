@@ -68,12 +68,26 @@ pub fn router(state: AppState) -> Router {
         ))
         .with_state(state.clone());
 
+    let state_for_revoke = state.clone();
     Router::new()
         .route("/healthz", get(health::healthz))
         .merge(live)
         // Redeem a pairing code for a device token (ADR-0030). The human-facing `/pair?code=` URL is
         // a GET that falls through to the single-page app, which posts the code here.
         .route("/api/pair", post(pair::pair))
+        // Retiring a device, and reporting how many are paired (ADR-0091). Behind the
+        // paired-device gate rather than open: a device that is itself paired can retire another,
+        // which is as strong as pairing and no stronger — the edge has no operator identity offline.
+        .merge(
+            Router::new()
+                .route("/api/pair/devices", get(pair::devices))
+                .route("/api/pair/revoke", post(pair::revoke))
+                .layer(axum::middleware::from_fn_with_state(
+                    Arc::clone(&state_for_revoke.pairing),
+                    auth::require_paired_device,
+                ))
+                .with_state(state_for_revoke),
+        )
         // Anything not matched is a UI asset; an unknown path falls back to index.html so a
         // client-routed path (the P6 single-page app) still loads.
         .fallback(assets::serve)
@@ -96,14 +110,21 @@ pub fn router(state: AppState) -> Router {
 /// - **Session** — sign-in, sign-out, and "who is signed in" — needs a paired device but *not* a
 ///   sign-in (signing in is how a device passes the second gate). It carries only the first.
 ///
-/// The signed-in bindings ([`Sessions`]) and the PIN lockout ([`Lockout`]) are created here and shared
-/// between the session routes (which write them) and the sign-in gate (which reads them); an edge
-/// restart clears them, the same in-memory lifetime as the pairing tokens (ADR-0084).
-pub fn domain_router<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>) -> Router
+/// The signed-in bindings ([`Sessions`]) are supplied by the caller, because `serve` builds a
+/// *durable* one over the store's device registry and loads it before the first request arrives
+/// (ADR-0091) — so a restart no longer makes every member of staff re-enter a PIN. A caller with no
+/// registry (a test, the on-fakes example) passes `Arc::new(Sessions::new())` and gets the
+/// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
+/// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
+/// successes).
+pub fn domain_router<S>(
+    edge: Arc<Edge<S>>,
+    pairing: Arc<Pairing>,
+    sessions: Arc<Sessions>,
+) -> Router
 where
     S: EventStore + Send + Sync + 'static,
 {
-    let sessions = Arc::new(Sessions::new());
     let lockout = Arc::new(Lockout::new());
 
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
