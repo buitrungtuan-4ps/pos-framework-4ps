@@ -9,6 +9,10 @@
 //! bill and shift routes. Each domain route is a thin shell: parse the path, call the synchronous
 //! `pos_core` decision the [`crate::app`] loop applies inside one transaction, and map the outcome
 //! to a status — a refused command is the caller's fault (`409`), an unreachable store is `503`.
+//!
+//! The infra router is *mostly* unauthenticated by necessity — a health probe, and the pairing
+//! exchange a device needs before it has any credential — with `/ws` the exception: it carries the
+//! paired-device gate, because what it streams is the store's committed event log.
 
 pub mod assets;
 pub mod auth;
@@ -47,10 +51,26 @@ use crate::state::AppState;
 /// [`tower::ServiceExt::oneshot`](https://docs.rs/tower/latest/tower/trait.ServiceExt.html) and never
 /// touch the network — the same reason the logic lives in the library, not in `main`.
 pub fn router(state: AppState) -> Router {
+    // One WebSocket per device, fed by the fan-out (ADR-0018) — behind the paired-device gate
+    // (roadmap-v3 S0c). It is a sub-router precisely so the gate covers `/ws` and nothing else here:
+    // `/healthz` must answer an unauthenticated probe, `/api/pair` is how a device *gets* a token,
+    // and the asset fallback serves the app that does the pairing.
+    //
+    // Before S0c this route sat on the ungated router and streamed every committed event — orders,
+    // bills, settlements — to any host that could route to the box. ADR-0084 deferred the fix to
+    // B6.1; the 2026-09-02 tree audit ruled it a live hole rather than a deferral. The read-only
+    // *scope* and the per-event-type filter still belong to B6.1.
+    let live = Router::new()
+        .route("/ws", get(ws::handler))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.pairing),
+            auth::require_paired_device_ws,
+        ))
+        .with_state(state.clone());
+
     Router::new()
         .route("/healthz", get(health::healthz))
-        // One WebSocket per device, fed by the fan-out (ADR-0018).
-        .route("/ws", get(ws::handler))
+        .merge(live)
         // Redeem a pairing code for a device token (ADR-0030). The human-facing `/pair?code=` URL is
         // a GET that falls through to the single-page app, which posts the code here.
         .route("/api/pair", post(pair::pair))

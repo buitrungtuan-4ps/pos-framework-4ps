@@ -1,6 +1,6 @@
 # ADR-0084 — Device authentication: the edge enforces the pairing token on every domain route
 
-**Status** Accepted · **Owner** @maintainers-edge · **Last reviewed** 2026-09-01
+**Status** Accepted · **Owner** @maintainers-edge · **Last reviewed** 2026-09-02
 **Amends** [ADR-0030](0030-pairing-and-offline-auth.md) (pairing issued a device token; this ADR makes presenting it mandatory) · **Relates to** [ADR-0018](0018-http-websocket-stack.md) (the HTTP/WS surface this gates) · `docs/roadmap-v3.md` (roadmap v3, slice S0 — the security fix that gates the pilot)
 
 **Context.** ADR-0030 built device pairing: a tablet reads a six-digit code off the edge's console and redeems it for an opaque device token. But nothing ever checked that token. Every domain route resolved a **fixed** actor — `dev_actor()`, hardcoded to employee 1 / device 1 — regardless of who called, and the WebSocket fan-out and the domain routes accepted any caller on the store LAN. The consequence, found in the roadmap-v3 audit: **any host on the store network could seat tables, settle bills, close shifts, and read the floor**, all recorded as employee 1. A pairing token was minted and thrown away; the permission model, the audit trail, and the fraud controls the later waves build all rest on an identity that was forged. Nothing downstream is meaningful until a command is known to come from a device the store admitted.
@@ -16,7 +16,7 @@
 **Deliberately deferred (flagged, not silently dropped).**
 
 - **~~The employee is still a placeholder.~~** *Resolved by S0b — see the amendment below.* This slice (S0a) authenticated the *device*; the *employee* an action runs as was a fixed placeholder until PIN sign-in resolved a real one.
-- **`/ws` is not yet gated.** Closing the read-side eavesdrop on the WebSocket fan-out needs the browser-side subprotocol handshake and lands with the slice that owns `/ws` auth, scope, and event-type filtering (roadmap-v3 W6·B6.1). This ADR gates the command surface — the injection hole — now.
+- **~~`/ws` is not yet gated.~~** *Resolved by S0c — see the second amendment below.* Deferring the read-side eavesdrop to the integration slice was the wrong urgency: what `/ws` streams is the store's whole committed-event log, so this was a live exposure, not a missing feature. The browser-side subprotocol handshake it names is exactly how S0c carries the token. Only the *scope* and event-type filter stay with W6·B6.1.
 - **Tokens are in memory.** The issued set is not persisted, so an edge restart clears it and every device re-pairs. Persisting it (an edge-local table, or the OS keyring alongside activation) is a follow-up; it is an operability concern, not a security one — enforcement is strictly safer than the prior state either way.
 
 **Consequences.**
@@ -46,4 +46,57 @@
 
 - **Authority still comes from the store default, not the person.** S0b fixes *who* a command runs as (the `Actor`'s employee); *what* they may do still reads the store-level granted set, not the signed-in employee's own `PermissionSet` (which the roster now carries but the decision path does not yet consult). Per-actor permission enforcement lands with the capability-enforcement pass (roadmap-v3 B2.3 / B5.3).
 - **Sign-in is device-local and in memory.** The binding lives beside the pairing tokens; an edge restart clears it and staff sign in again. Persisting it and emitting a durable `security.*` sign-in event (today the outcome is a `tracing` line, employee id only, never the PIN) are follow-ups.
-- **`/ws` read-auth** remains as S0a left it (roadmap-v3 B6.1).
+- **~~`/ws` read-auth~~** ~~remains as S0a left it (roadmap-v3 B6.1).~~ *Resolved by S0c — see the amendment below.* A device that has paired reaches `/ws`; narrowing what a *consumer* may read there is still B6.1.
+
+---
+
+## Amendment — S0c: `/ws` requires the paired device token (2026-09-02)
+
+**Context.** This record deferred the `/ws` gate to W6·B6.1 as "the read-side eavesdrop", grouped with
+the scope and event-type filtering a third-party KDS integration needs. That grouping was wrong about
+the *urgency*, not the *work*: `/ws` streams every committed event the store produces — orders, bills,
+settlements, shift closes — to any host that can route to the box. A laptop plugged into the store
+switch read the whole trading day with no command sent and no token presented, which is a live data
+exposure, not a missing integration feature. The 2026-09-02 tree audit reclassified it and roadmap v3
+pulled it forward as **S0c**. The read-only *scope* and the per-event-type filter stay with B6.1 —
+those are what an integration needs; this is what a store needs closed.
+
+**Decision.** `/ws` sits behind the paired-device gate, on the same terms as the domain routes: an
+absent, malformed, or unknown token is `401` before the upgrade, and a refused connection never
+subscribes to the fan-out.
+
+1. **A sub-router carries the gate, not the whole infra router.** `router()` builds a one-route
+   `Router` for `/ws` with `require_paired_device_ws` layered on it and merges that in. The other
+   infra routes must stay open: `/healthz` answers an unauthenticated probe, `/api/pair` is how a
+   device *gets* a token, and the asset fallback serves the app that does the pairing. The middleware
+   runs over `AppState`'s `pairing`, so no signature changed.
+
+2. **The token reaches the gate through `Sec-WebSocket-Protocol`.** The browser `WebSocket` API
+   cannot set request headers, so `Authorization` is not available to the store UI on an upgrade. The
+   client offers `[<name>, <token>]` and the server selects **only the name** (`pos-edge.v1`), so the
+   credential never travels back in the handshake response. Picking the token out of the offered list
+   is unambiguous by shape: `DeviceToken::parse` accepts exactly 32 lowercase hex characters, which no
+   protocol name is.
+
+3. **`Authorization` still works, and is tried first.** A non-browser consumer — the third-party KDS
+   B6.1 anticipates, or a script — can set the header and should not have to learn the workaround. A
+   client that offers no subprotocol negotiates none, which RFC 6455 permits.
+
+**Rejected: the token as a query parameter** (`/ws?token=…`). It is the common workaround and it is
+wrong here for a reason this repository has already committed to: the edge logs the request path on
+every request, so the token would be written into a log — the exact "no secret in a log" rule
+`http/auth.rs` states, and one careless retention setting away from being permanent. A header is not
+logged, and a subprotocol is a header.
+
+**Consequences.**
+
+- The read-side exposure is closed. The fan-out tests now pair before connecting, and three new cases
+  prove the refusals: an unpaired host, a well-formed token that was never issued, and the bearer
+  path a non-browser consumer uses. Before this slice those same fan-out tests passed *without* a
+  token — the fan-out was proven to work and never proven to be closed, which is how the hole
+  survived two auth slices.
+- **Upgrade note:** an operator UI older than this edge cannot open `/ws` (it sends no subprotocol and
+  no header), so it will show as disconnected and fall back to its polling path. The UI and the edge
+  ship together in one OTA artifact, so this only bites a hand-mixed pair.
+- The in-memory token set of the deferral above still applies, and now reaches further: an edge
+  restart drops every `/ws` connection until each device re-pairs. That is **S0d**.
