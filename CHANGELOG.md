@@ -16,6 +16,52 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **A store provisioned by the wizard can now actually reach its cloud** (roadmap v3, slice **E6**).
+  Three defects, one chain:
+  - **`config.toml` had no `cloud_url`.** `serve()` composes the cloud surface only
+    `if let Some(cloud_url)`, so a box built exactly as the runbook said booted LAN-only: no
+    config-pull, no heartbeat, no relay, and `/api/activation` answering 404 so the `/setup` screen
+    could not even be reached. The generator now always emits it.
+
+    Worth naming the cause rather than just the fix: the generator's own comment asserted that
+    `deny_unknown_fields` *would reject a cloud URL here*. That was true when the wizard was written
+    and stopped being true when E1 added the field — so the omission looked deliberate for four
+    merged slices. A comment making a claim about another crate's schema goes stale silently, and this
+    one is now gone rather than corrected.
+  - **`relay_orders` was in no scope picker.** The cloud has enforced it on both `/sync` order routes
+    since E3, but neither the wizard nor the API-keys screen offered it, so **no operator could grant
+    it from the console** — the relay was unreachable by construction. Both pickers now list it, and
+    the wizard pre-selects it beside `read_config`, because a key with only the latter produces a
+    store that syncs its configuration and looks healthy while the relay answers `403` on every poll:
+    cloud-placed orders never reach the kitchen and the only symptom is a log line.
+  - **There was no way to set a non-default listen port** without hand-editing the file. The handoff
+    step now offers one, and emits `bind` only when it differs from the edge's `8787`. It sits on the
+    handoff step rather than beside the store's name on purpose: the port is a property of *that
+    machine*, never of the store, and it never reaches the registry.
+
+  The wizard now produces **two** files: `config.toml` (identity and cloud, no secret) and `env`
+  (`POS_EDGE_SYNC_KEY`, plus a commented `POS_EDGE_NATS_URL`) with the install command for
+  root-owned mode-0600. They stay separate because only one of them holds a credential, and a support
+  screenshot of a config file should never leak one.
+
+  `read_events` and `manage_webhooks` remain deliberately absent from both pickers: they exist in the
+  cloud's `Scope` enum but gate no route, so offering them would grant an authority that does nothing.
+
+### Added
+- **`docs/fork-checklist.md` — one page for everything a fork configures**
+  ([`docs/fork-checklist.md`](docs/fork-checklist.md)). This framework is meant to be forked, and the
+  settings a fork must supply were spread across three documents. The new page lists all **12** GitHub
+  Actions secrets derived from the workflows themselves (`grep -rno "secrets\.[A-Z_]*"`), marks the
+  five that are optional and the one that is conditional, and separates them from the values that are
+  **not** repository secrets: the per-store `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL`, the box's
+  `cloud.toml` values, and the Garage keys Garage itself mints.
+
+  It also corrects a real trap: **`RCLONE_REMOTE` was listed in the deploy runbook as a repository
+  secret, and no workflow reads it.** It is a box-side environment variable for `deploy/backup.sh`.
+  Setting it on GitHub does nothing and leaves the off-box backup tier disabled — a silent no-op in
+  the worst possible place. The runbook row is replaced with a note saying so.
+
 ### Changed
 - **Roadmap v3 corrected against the tree, and three postures settled**
   ([`docs/roadmap-v3.md`](docs/roadmap-v3.md)). An 18-agent audit read every roadmap slice against the

@@ -13,14 +13,24 @@ import { tenantId, tenantName } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
-// not be a MessageKey and would defeat the type check). Two are pre-selected: a store device reads its
-// configuration and places the orders its channels take.
+// not be a MessageKey and would defeat the type check).
+//
+// `read_config` and `relay_orders` are pre-selected together because a store box needs **both** or it
+// is half-connected in a way that is hard to see: with only `read_config` it pulls its configuration
+// happily while the order relay retries a `403` forever, so cloud-placed orders never reach the
+// kitchen and the only symptom is a log line. That pairing is why the relay scope is offered here at
+// all — it was missing from this list, which meant no operator could grant it from the console
+// (roadmap-v3 E6).
 const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_config", key: "scope.read_config" },
+  { wire: "relay_orders", key: "scope.relay_orders" },
   { wire: "place_orders", key: "scope.place_orders" },
   { wire: "read_rollups", key: "scope.read_rollups" },
   { wire: "manage_devices", key: "scope.manage_devices" },
 ];
+
+/// The bind port the edge defaults to when `config.toml` names none (`pos_edge`'s `DEFAULT_BIND`).
+const DEFAULT_BIND_PORT = "8787";
 
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
 
@@ -36,8 +46,17 @@ export function NewStore() {
   const [brandId, setBrandId] = createSignal("");
   const [created, setCreated] = createSignal<Store | null>(null);
 
-  const [scopes, setScopes] = createSignal<string[]>(["read_config", "place_orders"]);
+  const [scopes, setScopes] = createSignal<string[]>([
+    "read_config",
+    "relay_orders",
+    "place_orders",
+  ]);
   const [issued, setIssued] = createSignal<CreateApiKeyResponse | null>(null);
+
+  // A box fact, not a store fact: the listen port never reaches the registry, it only shapes the
+  // generated `config.toml`. Empty means "leave it out and take the edge's default", which is why the
+  // field lives on the handoff step beside the file rather than on step 1 beside the store's name.
+  const [bindPort, setBindPort] = createSignal("");
 
   const fail = (caught: unknown) =>
     setError(caught instanceof ApiError ? caught.message : String(caught));
@@ -102,11 +121,18 @@ export function NewStore() {
     }
   };
 
-  // The store server's bootstrap file (crates/pos-edge EdgeConfig): it names WHICH store this box is
-  // and nothing else — the schema is `deny_unknown_fields`, so a credential or a cloud URL here would
-  // be rejected at load. The box gets its credential by activation, not this file (see the runbook).
-  // Store/tenant names and the cloud origin ride along as comments, so the file documents itself
-  // without adding parsed keys. Assembled client-side because the store_id is only known here.
+  // The store server's bootstrap file (crates/pos-edge `EdgeConfig`): which store this box is, and
+  // which cloud it dials. It still carries no credential — that comes from the environment file below
+  // or from the OS keyring — but it MUST carry `cloud_url`, because `serve()` only composes the cloud
+  // surface `if let Some(cloud_url)`. A file without it produces a box that boots LAN-only: no
+  // config-pull, no heartbeat, no relay, and `/api/activation` answering 404 so the `/setup` screen
+  // cannot even be reached.
+  //
+  // This generator used to omit it, on the belief — stated in this very comment — that
+  // `deny_unknown_fields` would reject a cloud URL here. That was true when the wizard was written and
+  // stopped being true when E1 added the field; nobody revisited the comment, so the omission looked
+  // deliberate for four merged slices. Anything asserted about the edge's schema in a comment here is
+  // a claim about another crate, and it goes stale silently.
   const [copied, setCopied] = createSignal(false);
 
   const configToml = () => {
@@ -114,26 +140,47 @@ export function NewStore() {
     if (!store) {
       return "";
     }
+    const port = bindPort().trim();
     return [
       "# pos_edge bootstrap configuration",
       `# Store:  ${store.name}  (${store.store_id})`,
       `# Tenant: ${tenantName() || tenantId()}  (${tenantId()})`,
-      `# Cloud:  ${window.location.origin}`,
       "#",
-      "# This file tells the store server WHICH store it is. It carries no credential — the box",
-      "# gets its credential by activation (see the provisioning runbook), never from this file.",
+      "# This file tells the store server WHICH store it is and WHICH cloud to dial. It carries no",
+      "# credential — that lives in the environment file (or the OS keyring), never here.",
       "# Save it as config.toml beside the pos_edge binary, or point POS_EDGE_CONFIG at its path.",
       "",
       `store_id = "${store.store_id}"`,
+      `cloud_url = "${window.location.origin}"`,
+      ...(port && port !== DEFAULT_BIND_PORT
+        ? ["", `bind = "0.0.0.0:${port}"`]
+        : ["", `# Optional — override the listen address (default 0.0.0.0:${DEFAULT_BIND_PORT}):`, `# bind = "0.0.0.0:${DEFAULT_BIND_PORT}"`]),
       "",
       "# Optional — the LAN IP to advertise in the pairing QR; pin it with a DHCP reservation:",
       '# advertised_ip = "192.168.1.50"',
       "",
-      "# Optional — override the listen address (default 0.0.0.0:8787):",
-      '# bind = "0.0.0.0:8787"',
-      "",
       "# Optional — where the SQLite event store lives (default store.sqlite):",
       '# store_path = "store.sqlite"',
+      "",
+    ].join("\n");
+  };
+
+  // The second file the operator carries: the box's environment, holding the one real secret. Kept
+  // apart from config.toml on purpose — this one is mode-0600 and root-owned, that one is not.
+  const envFile = () => {
+    const key = issued();
+    return [
+      "# pos_edge environment — the store's secrets. Install it as root:",
+      "#   sudo install -o root -g root -m 0600 env /etc/pos-edge/env",
+      "# The service unit reads it via EnvironmentFile=-/etc/pos-edge/env.",
+      "",
+      "# The scoped store key (read_config + relay_orders). Shown once at issuance and not",
+      "# recoverable — revoke and re-issue in the console if this file is lost.",
+      key ? `POS_EDGE_SYNC_KEY=${key.token}` : "POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here",
+      "",
+      "# Where this store publishes its committed events. The URL carries the broker token, which is",
+      "# why it is here and not in config.toml. Leave unset to keep the outbox local for now.",
+      "# POS_EDGE_NATS_URL=nats://<token>@cloud.example.com:4222",
       "",
     ].join("\n");
   };
@@ -149,17 +196,20 @@ export function NewStore() {
   };
 
   // A real file download, not a data: link the operator has to rename — this dashboard is served by
-  // pos_cloud (same origin), so the browser saves `config.toml` directly.
-  const downloadConfig = () => {
-    const url = URL.createObjectURL(new Blob([configToml()], { type: "application/toml" }));
+  // pos_cloud (same origin), so the browser saves the file under the name given here.
+  const download = (filename: string, body: string, mime: string) => {
+    const url = URL.createObjectURL(new Blob([body], { type: mime }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "config.toml";
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
   };
+
+  const downloadConfig = () => download("config.toml", configToml(), "application/toml");
+  const downloadEnv = () => download("env", envFile(), "text/plain");
 
   return (
     <div>
@@ -303,10 +353,17 @@ export function NewStore() {
                 </tbody>
               </table>
 
-              {/* The store server's config.toml — the operator's one file to carry to the box. */}
+              {/* The two files the operator carries to the box: config.toml and the env file. */}
               <div class="flex flex-col gap-2">
                 <span class="text-sm font-medium text-ink">{t("wizard.configTitle")}</span>
                 <p class="text-sm text-ink-muted">{t("wizard.configHint")}</p>
+                <TextField
+                  label={t("wizard.bindPort")}
+                  value={bindPort()}
+                  onInput={setBindPort}
+                  placeholder={DEFAULT_BIND_PORT}
+                />
+                <p class="text-sm text-ink-muted">{t("wizard.bindPortHint")}</p>
                 <pre class="overflow-x-auto rounded-token border border-line bg-surface-raised p-3 font-mono text-xs text-ink">
                   {configToml()}
                 </pre>
@@ -321,6 +378,23 @@ export function NewStore() {
                 <Show when={copied()}>
                   <Banner tone="ok" message={t("wizard.configCopied")} />
                 </Show>
+              </div>
+
+              {/* The environment file — the store's one secret, installed root-owned and mode 0600. */}
+              <div class="flex flex-col gap-2">
+                <span class="text-sm font-medium text-ink">{t("wizard.envTitle")}</span>
+                <p class="text-sm text-ink-muted">{t("wizard.envHint")}</p>
+                <Show when={!issued()}>
+                  <Banner tone="danger" message={t("wizard.envNoKey")} />
+                </Show>
+                <pre class="overflow-x-auto rounded-token border border-line bg-surface-raised p-3 font-mono text-xs text-ink">
+                  {envFile()}
+                </pre>
+                <div class="flex gap-2">
+                  <Button variant="secondary" onClick={downloadEnv}>
+                    {t("wizard.downloadEnv")}
+                  </Button>
+                </div>
               </div>
 
               <Banner tone="ok" message={t("wizard.doneHint")} />

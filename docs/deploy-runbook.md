@@ -5,7 +5,9 @@
 How someone forks this repository and reaches a live admin UI, with **no command typed on the
 server** ([ADR-0044](adr/0044-fork-and-deploy.md)). The target is ~15 minutes: set a handful of
 secrets, run one workflow, enrol yourself. The details of each artifact are in
-[`deploy/README.md`](../deploy/README.md); this is the ordered checklist.
+[`deploy/README.md`](../deploy/README.md); this is the ordered checklist. For the full inventory of
+what a fork configures — all 12 repository secrets, and the per-store values that are deliberately
+*not* repository secrets — see [`fork-checklist.md`](fork-checklist.md).
 
 > **Fastest test path (no domain).** One Ubuntu VPS with Docker + a public IP is all you need. Set 6
 > GitHub Actions secrets — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS`, `ACME_EMAIL`, and
@@ -61,7 +63,12 @@ application secret (the box mints those itself, [ADR-0044](adr/0044-fork-and-dep
 | `ACME_EMAIL` | contact address for the certificate |
 | `CF_DNS_API_TOKEN` | the scoped Cloudflare token (leave empty for sslip.io) |
 | `VPS_PORT` | SSH port, if not 22 (optional; defaults to 22 when unset or empty) |
-| `RCLONE_REMOTE` | off-box backup target, e.g. `myremote:pos-backups` (optional at first) |
+
+> `RCLONE_REMOTE` used to be listed here as a repository secret. It is **not** one — no workflow reads
+> it. It is an environment variable on the box, read by [`deploy/backup.sh`](../deploy/backup.sh) when
+> it ships a dump off-box. Setting it as a GitHub secret does nothing and leaves the off-box backup
+> tier silently disabled, which is the worst place for a silent no-op. See
+> [`fork-checklist.md`](fork-checklist.md) for the full list of what is and is not a repository secret.
 
 Then configure a GitHub **Environment named `production`** with a **required reviewer**. Every deploy
 runs in it, so the reviewer is the second human the admin break-glass needs

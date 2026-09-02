@@ -21,14 +21,16 @@ matters which is which:
 
 | Artefact | What it is | Where it lives | Secret? |
 |---|---|---|---|
-| **`config.toml`** | Names *which store* this machine is (`store_id`) | On the store machine, on disk | No — a store id is not PII ([ADR-0004](../adr/0004-cloud-owned-configuration.md)) |
+| **`config.toml`** | Names *which store* this machine is (`store_id`) and *which cloud* it dials (`cloud_url`) | On the store machine, on disk | No — neither a store id nor a cloud URL is a secret ([ADR-0004](../adr/0004-cloud-owned-configuration.md)) |
+| **`env`** | The store's scoped sync key, and the event-bus URL when there is one | `/etc/pos-edge/env`, root-owned, mode 0600 | **Yes** — this is the file that holds a credential |
 | **Activation code** | A one-time `XXXX-XXXX-XXXX` a device trades for its credential | Handed to the device once, then spent | Treat as one — it *is* the credential until spent ([ADR-0050](../adr/0050-activation-code-exchange.md)) |
 | **API key** (optional) | A token for the public `/v1` API | Your integration's secret store | Yes — shown once, never recoverable ([ADR-0037](../adr/0037-api-keys.md)) |
 
-The credential a device actually runs on is **never** in `config.toml`. The file carries identity; the
-credential is minted by activation and kept in the machine's OS keyring
-([ADR-0051](../adr/0051-device-credential-provisioning.md)). That separation is deliberate: a leaked
-config file cannot sell, and a machine swap re-activates without re-editing any file.
+Each **device**'s credential is never in either file: it is minted by activation and kept in the
+machine's OS keyring ([ADR-0051](../adr/0051-device-credential-provisioning.md)). That separation is
+deliberate — a leaked `config.toml` cannot sell, and a machine swap re-activates without re-editing
+anything. The **store**'s sync key is different: it authenticates the box itself to `/sync`, so it
+lives in the keyring where possible and in the mode-0600 `env` file otherwise.
 
 ---
 
@@ -39,24 +41,38 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
-2. **API key** — issue the scoped key the store's integrations use to reach the public API, if any. It
-   is shown **once** — copy it now. Skip this if the store has no `/v1` integration yet; you can issue
-   one later from the API keys screen.
-3. **Handoff** — the wizard shows the store's `config.toml`, pre-filled with its `store_id` and, as
-   comments, the store and tenant names and this cloud's URL. **Download it** (or Copy). This is the
-   only file you carry to the machine.
+2. **API key** — issue the store's scoped key. `read_config` and `relay_orders` are pre-selected
+   together and you should keep both: with only `read_config` the box syncs its configuration and
+   looks healthy while the order relay answers `403` on every poll, so orders placed in the cloud
+   never reach the kitchen. The key is shown **once** — the next step embeds it in a file for you.
+3. **Handoff** — the wizard produces **two** files. Set the listen port here if this machine cannot
+   use the default `8787`, then download both:
+   - **`config.toml`** — `store_id`, `cloud_url`, and `bind` if you changed the port.
+   - **`env`** — the sync key, plus a commented `POS_EDGE_NATS_URL` for when the event bus is
+     reachable.
 
-> The generated file has exactly one active line — `store_id = "…"`. The commented `bind`,
-> `advertised_ip`, and `store_path` lines are optional overrides; leave them commented unless you have
-> a reason. The edge rejects any key it does not recognise, so do not add `tenant_id`, a cloud URL, or
-> the API key to this file — none of them belong there.
+> `config.toml` carries no secret, so it can sit beside the binary with ordinary permissions. `env`
+> carries the one secret and must be installed root-owned and mode 0600. Do not merge them, and do not
+> put the key in `config.toml` — the edge would load it, but the file is not protected like the other
+> one, and a support screenshot of a config file should never leak a credential.
+>
+> The commented `advertised_ip` and `store_path` lines are optional overrides; leave them commented
+> unless you have a reason. `tenant_id` is not a key the edge accepts — the store id is enough.
 
 ## Step 2 — Install the store server and drop the config
 
 Install `pos_edge` as an operating-system service so it starts on boot and restarts on crash — the
 step-by-step for systemd and Windows is in **[`deploy/edge/README.md`](../../deploy/edge/README.md)**.
 Put the downloaded `config.toml` where `POS_EDGE_CONFIG` points (the systemd unit uses
-`/var/lib/pos-edge/config.toml`; the Windows example uses `C:\pos\config.toml`), then start the service.
+`/var/lib/pos-edge/config.toml`; the Windows example uses `C:\pos\config.toml`), then install the `env`
+file with restricted permissions:
+
+```
+sudo install -o root -g root -m 0600 env /etc/pos-edge/env
+```
+
+The service unit reads it through `EnvironmentFile=-/etc/pos-edge/env` — the leading `-` means a
+missing file is not an error, so a LAN-only demo box needs no env file at all. Then start the service.
 
 The machine now knows which store it is, opens its SQLite event log, and serves the store UI on the LAN
 (`0.0.0.0:8787` by default).

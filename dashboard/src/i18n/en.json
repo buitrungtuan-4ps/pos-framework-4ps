@@ -154,7 +154,7 @@
   "wizard.storeLabel": "Store",
   "wizard.keyLabel": "API key id",
   "wizard.configTitle": "Store config file (config.toml)",
-  "wizard.configHint": "Save this as config.toml on the store server, beside the pos_edge binary (or point POS_EDGE_CONFIG at it). It names which store this box is; the box gets its credentials by activation, not from this file.",
+  "wizard.configHint": "Save this as config.toml on the store server, beside the pos_edge binary (or point POS_EDGE_CONFIG at it). It names which store this box is and which cloud to dial. It carries no secret — that is the env file below.",
   "wizard.downloadConfig": "Download config.toml",
   "wizard.configCopied": "Copied to clipboard.",
   "reports.title": "Reports",
@@ -1224,5 +1224,12 @@
   "stations.publish": "Publish the plan",
   "stations.publishHint": "Publishing compiles this store's kitchen stations and routing — together with its areas and tables — into the plan the store applies. Publish after changing stations or routing.",
   "stations.publishAction": "Publish to store",
-  "stations.published": "Published to the store."
+  "stations.published": "Published to the store.",
+  "wizard.bindPort": "Listen port",
+  "wizard.bindPortHint": "Leave blank to use the default 8787. Set it only when something else on the box already holds that port — it is a property of this machine, not of the store, so it never reaches the cloud.",
+  "wizard.envTitle": "Store environment file (env)",
+  "wizard.envHint": "The store's one secret. Install it as root, mode 0600, at /etc/pos-edge/env — the service unit reads it from there. Keep it out of config.toml and out of version control.",
+  "wizard.envNoKey": "No key was issued, so this file has no credential. Go back and issue one, or paste an existing key into the file before installing it.",
+  "wizard.downloadEnv": "Download env",
+  "scope.relay_orders": "Relay orders to the store"
 }
