@@ -16,7 +16,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::PermissionSet;
 use pos_edge::{
-    Edge, EdgeSession, InMemoryReceipts, Pairing, StaffAuth, StaffRoster, StoreIdentity,
+    Edge, EdgeSession, InMemoryReceipts, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity,
     SystemClock,
 };
 use pos_fakes::FakeStore;
@@ -73,11 +73,12 @@ async fn app() -> (Router, String) {
     let code = pairing.mint(now).expect("mint a pairing code");
     let token = pairing
         .redeem(&code, now)
+        .await
         .expect("redeem")
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();
-    let service = pos_edge::http::domain_router(edge, pairing);
+    let service = pos_edge::http::domain_router(edge, pairing, Arc::new(Sessions::new()));
     // Sign the paired device in, so the command routes below run under a real employee.
     let (status, _) = send(
         service.clone(),

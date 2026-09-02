@@ -97,6 +97,31 @@ weakening dressed as an improvement.
   upgrades into it with both tables empty, which is exactly today's post-restart state — so the
   upgrade itself needs no special step and cannot be worse than the status quo.
 
+**Delivery note (2026-09-02, S0d-2).** Implemented, with one decision made during the work and
+worth recording because it went the *other* way from the obvious reading of this record.
+
+- **The object-safe view of the port lives in `pos-edge`, not in `pos_ports::dynamic`.** That module
+  reserves its mirrors for "the four families that need runtime selection" and states that the other
+  ports have none because they are chosen once at startup; `DeviceRegistry` is the second kind, so
+  adding it there would have paid `Box::pin` for flexibility nothing uses and diluted a rule the
+  module exists to state. The reason a trait object is needed at all is that `pos-edge`'s `AppState`
+  is not generic, so the seam belongs where the constraint is — `pos_edge::durable_auth`. `Edge<S>`
+  already exposes its store and `serve` already holds an `Arc<Edge<S>>`, so this needed **no new
+  parameter to `serve` and no change in `main.rs`**.
+- **The in-memory table is keyed by the digest too**, not by the token. It has to be — a restart can
+  only restore what was stored — and the consequence is better than the requirement: the edge now
+  holds no device token anywhere, in memory or on disk. A token exists for as long as it takes
+  `redeem` to hand it to the device that will keep it.
+- **`last_seen_at` is flushed at a minute's granularity**, not on every request. The gate touches on
+  every authenticated call and the value is only ever compared against a thirty-minute window, so a
+  write per request would be a SQLite round-trip on the hot path for nothing. A restart can lose up
+  to a minute of freshness, which is immaterial against the window it feeds.
+- **Write ordering is deliberate and not uniform.** Pairing and sign-in record durably *before* they
+  are believed, so a failure refuses rather than issuing a credential the box may forget. Sign-*out*
+  is the opposite: memory clears first and unconditionally, because a half-failed sign-out must leave
+  the till locked on this box — an operator told a device is signed out when it is not is the worse
+  error. Both are commented at the call site.
+
 **What this does not do.**
 
 - **It does not make the device's identity provable.** A durable token is still a bearer secret: the

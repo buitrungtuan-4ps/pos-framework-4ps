@@ -124,9 +124,21 @@ pub(crate) async fn require_signed_in(
         )
             .into_response();
     };
-    let Some(employee_id) = sessions.employee_for(device_id) else {
+    let now = SystemClock.now();
+    let Some(employee_id) = sessions.employee_for(device_id, now) else {
+        // Nobody signed in, or the device has sat idle past the window (ADR-0091). The same `403`
+        // either way, so the UI shows the sign-in screen without having to distinguish them.
         return (StatusCode::FORBIDDEN, "sign in to act on this device").into_response();
     };
+    // The device is in use, so it is not idle. Memory always; the durable value is flushed only
+    // when it has fallen a minute behind, so this gate does not put a write on every request.
+    if sessions.touch(device_id, now)
+        && let Err(error) = sessions.flush_last_seen(device_id, now).await
+    {
+        // Not fatal: the in-memory instant has already moved, so the device keeps working and the
+        // only cost is a slightly stale row if the box restarts in the next minute.
+        tracing::warn!(error = %error, "could not flush a device's last-seen instant");
+    }
     request.extensions_mut().insert(Actor {
         employee_id,
         device_id,
@@ -244,7 +256,16 @@ where
         .authenticate(employee_id, phc, &request.pin, now)
     {
         SignIn::Ok => {
-            deps.sessions.sign_in(device_id, employee_id);
+            // Recorded durably before it is reported (ADR-0091): telling someone they are signed in
+            // and then silently forgetting would surface mid-sale.
+            if let Err(error) = deps.sessions.sign_in(device_id, employee_id, now).await {
+                tracing::error!(error = %error, %employee_id, "could not record a sign-in");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "could not record the sign-in",
+                )
+                    .into_response();
+            }
             tracing::info!(%employee_id, "staff signed in");
             (
                 StatusCode::OK,
@@ -290,7 +311,13 @@ pub(crate) async fn sign_out<S>(
 where
     S: EventStore + Send + Sync + 'static,
 {
-    deps.sessions.sign_out(device_id);
+    // Memory is cleared first and unconditionally (see `Sessions::sign_out`), so a registry that
+    // cannot be written still leaves the device signed *out* on this box. Reporting the failure
+    // matters — the durable row will still say signed-in after a restart — but refusing the
+    // sign-out would be worse: the operator would believe the till is locked when it is not.
+    if let Err(error) = deps.sessions.sign_out(device_id).await {
+        tracing::error!(error = %error, "signed out locally but could not clear the durable record");
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -303,7 +330,7 @@ pub(crate) async fn current<S>(
 where
     S: EventStore + Send + Sync + 'static,
 {
-    let state = match deps.sessions.employee_for(device_id) {
+    let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
             employee_id: Some(employee_id.to_string()),

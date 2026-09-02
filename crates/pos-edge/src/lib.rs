@@ -41,6 +41,7 @@ pub mod config;
 pub mod config_client;
 pub mod countries;
 pub mod discovery;
+pub mod durable_auth;
 pub mod error;
 pub mod event_publish;
 pub mod fanout;
@@ -64,7 +65,7 @@ pub use app::{
     AppError, BillView, Edge, EdgeSession, LineDraft, LineView, ShiftView, StaffAuth, StaffRoster,
     StoreIdentity, TableView,
 };
-pub use auth::{Lockout, SignIn};
+pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
 pub use clock::SystemClock;
 pub use config::EdgeConfig;
 pub use discovery::{Advertiser, NoopAdvertiser};

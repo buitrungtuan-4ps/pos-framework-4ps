@@ -99,9 +99,15 @@ first real store.
     eighteenth, a 13-case contract suite, `FakeDeviceRegistry`, and the `store-sqlite` adapter with
     additive migration `0005_device_registry.sql`. Both implementations pass the same 13 cases, so
     "swappable" is checked rather than claimed. No behaviour change in `pos-edge` yet.
-  - **S0d-2 — the edge wiring.** `Pairing` and `Sessions` become write-through over the port with
-    in-memory reads, both tables load at boot, the idle timeout lands as a pure policy, and the
-    revoke-device / revoke-all routes join the pairing surface.
+  - **S0d-2 — the edge wiring. Done.** `Pairing` and `Sessions` are write-through over the port with
+    in-memory reads, both tables load at boot (fatal if unreadable — starting empty would silently
+    unpair a store that *is* paired), `has_gone_idle` is a pure policy that fails closed on a stepped
+    clock, `sign_in_idle_timeout_minutes` is configurable at 30, and `/api/pair/revoke` +
+    `/api/pair/devices` join the pairing surface behind its own gate. The object-safe seam lives in
+    `pos-edge`, **not** `pos_ports::dynamic` — that module reserves mirrors for runtime selection, and
+    this is the chosen-once-at-startup kind — so `serve`'s signature and `main.rs` are unchanged. One
+    property fell out for free: keying the live map by digest as well means the edge now holds no
+    device token anywhere.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
   nothing writes the tag at build time, so every artifact reports the same version and the whole OTA
   progress model (ADR-0078) cannot tell one release from another.

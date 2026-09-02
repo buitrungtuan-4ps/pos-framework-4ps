@@ -12,6 +12,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use pos_proto::ids::StoreId;
 use serde::Deserialize;
@@ -56,6 +57,22 @@ pub struct EdgeConfig {
     /// a credential, so it comes from the environment (see [`NatsConfig`]).
     #[serde(default)]
     pub nats: Option<NatsConfig>,
+    /// How many minutes a signed-in device may sit idle before its sign-in stops counting
+    /// ([ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)). Defaults to 30.
+    ///
+    /// Sign-in survives a restart, which is what stops a power blip or an OTA install making every
+    /// member of staff re-enter a PIN mid-service. The cost of that is a till carried off while
+    /// signed in as a manager, and this window is what bounds it: past it, the device is treated as
+    /// signed out. Lower it towards the pre-S0d behaviour, or raise it for continuity and accept the
+    /// wider window; `0` is refused by [`Self::validate`], because a zero window signs a device out
+    /// between its own two requests.
+    #[serde(default = "default_sign_in_idle_timeout_minutes")]
+    pub sign_in_idle_timeout_minutes: u64,
+}
+
+/// Thirty minutes, as [`crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT`].
+const fn default_sign_in_idle_timeout_minutes() -> u64 {
+    30
 }
 
 /// The JetStream stream this store publishes into
@@ -84,7 +101,33 @@ impl EdgeConfig {
             cloud_url: None,
             store_path: default_store_path(),
             nats: None,
+            sign_in_idle_timeout_minutes: default_sign_in_idle_timeout_minutes(),
         }
+    }
+
+    /// How long a signed-in device may idle, as a [`Duration`].
+    #[must_use]
+    pub const fn sign_in_idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.sign_in_idle_timeout_minutes * 60)
+    }
+
+    /// Rejects a configuration that would misbehave rather than starting with it.
+    ///
+    /// # Errors
+    ///
+    /// [`EdgeError::Config`] when `sign_in_idle_timeout_minutes` is zero: a zero window signs a
+    /// device out between its own two requests, which looks like a broken till rather than like a
+    /// policy. A deployment that wants the pre-S0d behaviour uses the revoke-all break-glass after a
+    /// restart instead.
+    pub fn validate(&self) -> Result<(), EdgeError> {
+        if self.sign_in_idle_timeout_minutes == 0 {
+            return Err(EdgeError::Config(
+                "sign_in_idle_timeout_minutes must be at least 1: a zero window signs a device out \
+                 between its own two requests (ADR-0091)"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// The host to advertise in the pairing URL: the configured `advertised_ip`, or the bind IP when
