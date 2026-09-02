@@ -6648,7 +6648,10 @@ where
         Err(refusal) => return refusal,
     };
     let known: BTreeSet<TaxClassId> = match state.catalog.list_tax_classes(tenant_id).await {
-        Ok(classes) => classes.iter().map(|class| class.tax_class_id).collect(),
+        Ok(classes) => classes
+            .iter()
+            .map(|class| class.record.tax_class_id)
+            .collect(),
         Err(error) => return catalog_error_response(&error),
     };
     let mut entries = Vec::with_capacity(request.rates.len());
@@ -10345,7 +10348,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_items(tenant_id).await {
-        Ok(items) => (StatusCode::OK, Json::<Vec<CatalogItem>>(items)).into_response(),
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10399,8 +10402,10 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let items = match state.catalog.list_items(tenant_id).await {
-        Ok(items) => items,
+    // The version each row was read at is for a writer (ADR-0094); an export is a read, so the
+    // records go out as they always did.
+    let items: Vec<CatalogItem> = match state.catalog.list_items(tenant_id).await {
+        Ok(items) => items.into_iter().map(|item| item.record).collect(),
         Err(error) => return catalog_error_response(&error),
     };
     let Ok(body) = export::items_csv(&items) else {
@@ -10478,7 +10483,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_item(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10491,7 +10496,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -10557,8 +10562,12 @@ where
         image_ref,
         status,
     };
-    match state.catalog.update_item(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_item(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10571,9 +10580,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("item"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("item"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10604,7 +10614,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_tax_classes(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<TaxClass>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10647,7 +10657,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_tax_class(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10660,7 +10670,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -10705,8 +10715,12 @@ where
         name: request.name,
         status,
     };
-    match state.catalog.update_tax_class(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_tax_class(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10719,9 +10733,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("tax class"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("tax class"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10752,7 +10767,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_item_categories(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<ItemCategory>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10795,7 +10810,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_item_category(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10808,7 +10823,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -10856,8 +10871,12 @@ where
         name: request.name,
         status,
     };
-    match state.catalog.update_item_category(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_item_category(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10870,9 +10889,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("item category"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("item category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10903,7 +10923,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_item_subcategories(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<ItemSubcategory>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10953,7 +10973,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_item_subcategory(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -10966,7 +10986,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11017,8 +11037,16 @@ where
         name: request.name,
         status,
     };
-    match state.catalog.update_item_subcategory(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .catalog
+        .update_item_subcategory(&record, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11031,9 +11059,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("item sub-category"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("item sub-category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11064,7 +11093,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_display_categories(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<DisplayCategory>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11107,7 +11136,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_display_category(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11120,7 +11149,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11168,8 +11197,16 @@ where
         name: request.name,
         status,
     };
-    match state.catalog.update_display_category(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .catalog
+        .update_display_category(&record, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11182,9 +11219,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("display category"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("display category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11215,7 +11253,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_display_subcategories(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<DisplaySubcategory>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11265,7 +11303,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_display_subcategory(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11278,7 +11316,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11329,8 +11367,16 @@ where
         name: request.name,
         status,
     };
-    match state.catalog.update_display_subcategory(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .catalog
+        .update_display_subcategory(&record, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11343,9 +11389,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("display sub-category"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("display sub-category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11544,7 +11591,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_modifier_groups(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<ModifierGroup>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11597,7 +11644,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_modifier_group(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11610,7 +11657,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11668,8 +11715,16 @@ where
         attached_item_ids,
         status,
     };
-    match state.catalog.update_modifier_group(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .catalog
+        .update_modifier_group(&record, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11682,9 +11737,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("modifier group"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("modifier group"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11715,7 +11771,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_menus(tenant_id).await {
-        Ok(menus) => (StatusCode::OK, Json::<Vec<Menu>>(menus)).into_response(),
+        Ok(menus) => (StatusCode::OK, Json(menus)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11761,7 +11817,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_menu(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11774,7 +11830,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11821,8 +11877,12 @@ where
         parent_menu_id,
         status,
     };
-    match state.catalog.update_menu(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_menu(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11835,9 +11895,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("menu"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("menu"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11870,7 +11931,7 @@ where
             Err(refusal) => return refusal,
         };
     match state.catalog.list_menu_sections(tenant_id, menu_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<MenuSection>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11917,7 +11978,7 @@ where
         status: EntityStatus::Active,
     };
     match state.catalog.create_menu_section(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11930,7 +11991,7 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => catalog_error_response(&error),
     }
@@ -11982,8 +12043,12 @@ where
         sort: request.sort,
         status,
     };
-    match state.catalog.update_menu_section(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_menu_section(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -11996,9 +12061,10 @@ where
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("menu section"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("menu section"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -12276,12 +12342,14 @@ where
 
     // Load the tenant's authoring model. Placements are gathered across every menu; the compiler
     // filters to the requested menu's inheritance chain, so extra rows are harmless.
-    let items = match state.catalog.list_items(tenant_id).await {
-        Ok(items) => items,
+    // The compiler takes the authoring records themselves; the version each was read at is a
+    // writer's concern (ADR-0094) and would only be noise in a compiled book.
+    let items: Vec<CatalogItem> = match state.catalog.list_items(tenant_id).await {
+        Ok(items) => items.into_iter().map(|item| item.record).collect(),
         Err(error) => return catalog_error_response(&error),
     };
-    let menus = match state.catalog.list_menus(tenant_id).await {
-        Ok(menus) => menus,
+    let menus: Vec<Menu> = match state.catalog.list_menus(tenant_id).await {
+        Ok(menus) => menus.into_iter().map(|menu| menu.record).collect(),
         Err(error) => return catalog_error_response(&error),
     };
     let mut placements = Vec::new();
@@ -12307,14 +12375,16 @@ where
     // the tenant's layout buttons resolve to a per-channel `LayoutBook`, delivered on a separate
     // `layout` node so a button moving reprices nothing. The layout compiler is forgiving (a stale
     // button is skipped), so this never fails a publish that the price compile accepted.
-    let display_categories = match state.catalog.list_display_categories(tenant_id).await {
-        Ok(rows) => rows,
-        Err(error) => return catalog_error_response(&error),
-    };
-    let display_subcategories = match state.catalog.list_display_subcategories(tenant_id).await {
-        Ok(rows) => rows,
-        Err(error) => return catalog_error_response(&error),
-    };
+    let display_categories: Vec<DisplayCategory> =
+        match state.catalog.list_display_categories(tenant_id).await {
+            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+            Err(error) => return catalog_error_response(&error),
+        };
+    let display_subcategories: Vec<DisplaySubcategory> =
+        match state.catalog.list_display_subcategories(tenant_id).await {
+            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+            Err(error) => return catalog_error_response(&error),
+        };
     let layout_buttons = match state.catalog.list_layout_buttons(tenant_id).await {
         Ok(rows) => rows,
         Err(error) => return catalog_error_response(&error),

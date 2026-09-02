@@ -627,6 +627,7 @@
   "catalog.groupMax": "Max select",
   "catalog.groupRuleInvalid": "Min and max must be whole numbers with max ≥ min.",
   "catalog.status": "Status",
+  "catalog.stale": "Someone else changed this while you were editing. The list has been reloaded \u2014 please check and try again.",
   "catalog.statusActive": "Active",
   "catalog.statusArchived": "Archived",
   "catalog.actions": "Actions",

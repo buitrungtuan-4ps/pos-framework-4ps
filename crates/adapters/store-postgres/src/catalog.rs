@@ -18,7 +18,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
 /// An item as listed — the product master.
 #[derive(Clone, Debug)]
@@ -42,6 +42,10 @@ pub struct CatalogItemRow {
     pub image_ref: Option<String>,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// An item category or sub-category as listed. A sub-category carries its parent category id; a
@@ -58,6 +62,10 @@ pub struct CatalogTaxonomyRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A tax class as listed — a named bucket an item belongs to.
@@ -71,6 +79,10 @@ pub struct CatalogTaxClassRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A layout button as listed — one item's button in a per-channel layout.
@@ -115,6 +127,10 @@ pub struct CatalogModifierGroupRow {
     pub attached_item_ids_json: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A menu as listed — a named set that may inherit from a parent.
@@ -130,6 +146,10 @@ pub struct CatalogMenuRow {
     pub parent_menu_id: Option<String>,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A menu section as listed — an authoring grouping within a menu.
@@ -147,6 +167,10 @@ pub struct CatalogMenuSectionRow {
     pub sort: i32,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A placement as listed — an item in a menu, with its per-channel prices as a JSON document.
@@ -201,14 +225,15 @@ impl PostgresCatalog {
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
         image_ref: Option<&str>,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_items \
                  (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
                  item_subcategory_id, image_ref) \
-                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)",
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8) \
+                 RETURNING xmin::text",
                 &[
                     &menu_item_id,
                     &tenant_id,
@@ -222,7 +247,7 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's items, newest first.
@@ -235,7 +260,8 @@ impl PostgresCatalog {
         let rows = connection
             .query(
                 "SELECT menu_item_id, tenant_id, name, name_translations::text, tax_class_id, \
-                 item_category_id, item_subcategory_id, image_ref, status FROM catalog_items \
+                 item_category_id, item_subcategory_id, image_ref, status, xmin::text \
+                 FROM catalog_items \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -253,12 +279,13 @@ impl PostgresCatalog {
                 item_subcategory_id: row.get(6),
                 image_ref: row.get(7),
                 status: row.get(8),
+                version: row.get(9),
             })
             .collect())
     }
 
-    /// Renames an item, sets its tax class and status, within its tenant. Returns whether a row
-    /// changed.
+    /// Renames an item, sets its tax class and status, within its tenant. Applies only if the row is
+    /// still at `expected`.
     ///
     /// # Errors
     ///
@@ -280,14 +307,16 @@ impl PostgresCatalog {
         item_subcategory_id: Option<&str>,
         image_ref: Option<&str>,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_items SET name = $3, name_translations = $4::jsonb, \
                  tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, \
                  image_ref = $8, status = $9, updated_at = now() \
-                 WHERE tenant_id = $1 AND menu_item_id = $2",
+                 WHERE tenant_id = $1 AND menu_item_id = $2 \
+                 AND xmin::text = $10 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &menu_item_id,
@@ -298,11 +327,26 @@ impl PostgresCatalog {
                     &item_subcategory_id,
                     &image_ref,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_items WHERE tenant_id = $1 AND menu_item_id = $2",
+                &[&tenant_id, &menu_item_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- tax classes (tenant-scoped) ---
@@ -317,17 +361,18 @@ impl PostgresCatalog {
         tax_class_id: &str,
         tenant_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_tax_classes (tax_class_id, tenant_id, name) \
-                 VALUES ($1, $2, $3)",
+                 VALUES ($1, $2, $3) \
+                 RETURNING xmin::text",
                 &[&tax_class_id, &tenant_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's tax classes, newest first.
@@ -342,7 +387,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT tax_class_id, tenant_id, name, status FROM catalog_tax_classes \
+                "SELECT tax_class_id, tenant_id, name, status, xmin::text FROM catalog_tax_classes \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -355,11 +400,12 @@ impl PostgresCatalog {
                 tenant_id: row.get(1),
                 name: row.get(2),
                 status: row.get(3),
+                version: row.get(4),
             })
             .collect())
     }
 
-    /// Renames a tax class and sets its status, within its tenant. Returns whether a row changed.
+    /// Renames a tax class and sets its status, within its tenant. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -370,17 +416,33 @@ impl PostgresCatalog {
         tax_class_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_tax_classes SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND tax_class_id = $2",
-                &[&tenant_id, &tax_class_id, &name, &status],
+                 WHERE tenant_id = $1 AND tax_class_id = $2 \
+                 AND xmin::text = $5 RETURNING xmin::text",
+                &[&tenant_id, &tax_class_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_tax_classes WHERE tenant_id = $1 AND tax_class_id = $2",
+                &[&tenant_id, &tax_class_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- item taxonomy: categories and sub-categories (tenant-scoped) ---
@@ -395,17 +457,18 @@ impl PostgresCatalog {
         item_category_id: &str,
         tenant_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_item_categories (item_category_id, tenant_id, name) \
-                 VALUES ($1, $2, $3)",
+                 VALUES ($1, $2, $3) \
+                 RETURNING xmin::text",
                 &[&item_category_id, &tenant_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's item categories, newest first.
@@ -420,7 +483,8 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT item_category_id, tenant_id, name, status FROM catalog_item_categories \
+                "SELECT item_category_id, tenant_id, name, status, xmin::text \
+                 FROM catalog_item_categories \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -434,11 +498,12 @@ impl PostgresCatalog {
                 parent_id: None,
                 name: row.get(2),
                 status: row.get(3),
+                version: row.get(4),
             })
             .collect())
     }
 
-    /// Renames an item category and sets its status, within its tenant. Returns whether a row changed.
+    /// Renames an item category and sets its status, within its tenant. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -449,17 +514,33 @@ impl PostgresCatalog {
         item_category_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_item_categories SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND item_category_id = $2",
-                &[&tenant_id, &item_category_id, &name, &status],
+                 WHERE tenant_id = $1 AND item_category_id = $2 \
+                 AND xmin::text = $5 RETURNING xmin::text",
+                &[&tenant_id, &item_category_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_item_categories WHERE tenant_id = $1 AND item_category_id = $2",
+                &[&tenant_id, &item_category_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Inserts an item sub-category under a parent category.
@@ -473,17 +554,18 @@ impl PostgresCatalog {
         tenant_id: &str,
         item_category_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_item_subcategories \
-                 (item_subcategory_id, tenant_id, item_category_id, name) VALUES ($1, $2, $3, $4)",
+                 (item_subcategory_id, tenant_id, item_category_id, name) VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
                 &[&item_subcategory_id, &tenant_id, &item_category_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's item sub-categories, newest first.
@@ -498,7 +580,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT item_subcategory_id, tenant_id, item_category_id, name, status \
+                "SELECT item_subcategory_id, tenant_id, item_category_id, name, status, xmin::text \
                  FROM catalog_item_subcategories WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -512,11 +594,12 @@ impl PostgresCatalog {
                 parent_id: Some(row.get(2)),
                 name: row.get(3),
                 status: row.get(4),
+                version: row.get(5),
             })
             .collect())
     }
 
-    /// Renames an item sub-category, (re)parents it and sets its status. Returns whether a row changed.
+    /// Renames an item sub-category, (re)parents it and sets its status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -528,24 +611,41 @@ impl PostgresCatalog {
         item_category_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_item_subcategories SET item_category_id = $3, name = $4, \
                  status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND item_subcategory_id = $2",
+                 WHERE tenant_id = $1 AND item_subcategory_id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &item_subcategory_id,
                     &item_category_id,
                     &name,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_item_subcategories WHERE tenant_id = $1 AND item_subcategory_id = $2",
+                &[&tenant_id, &item_subcategory_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- display taxonomy: categories and sub-categories (tenant-scoped) ---
@@ -560,17 +660,18 @@ impl PostgresCatalog {
         display_category_id: &str,
         tenant_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_display_categories (display_category_id, tenant_id, name) \
-                 VALUES ($1, $2, $3)",
+                 VALUES ($1, $2, $3) \
+                 RETURNING xmin::text",
                 &[&display_category_id, &tenant_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's display categories, newest first.
@@ -585,7 +686,8 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT display_category_id, tenant_id, name, status FROM catalog_display_categories \
+                "SELECT display_category_id, tenant_id, name, status, xmin::text \
+                 FROM catalog_display_categories \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -599,11 +701,12 @@ impl PostgresCatalog {
                 parent_id: None,
                 name: row.get(2),
                 status: row.get(3),
+                version: row.get(4),
             })
             .collect())
     }
 
-    /// Renames a display category and sets its status. Returns whether a row changed.
+    /// Renames a display category and sets its status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -614,17 +717,33 @@ impl PostgresCatalog {
         display_category_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_display_categories SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND display_category_id = $2",
-                &[&tenant_id, &display_category_id, &name, &status],
+                 WHERE tenant_id = $1 AND display_category_id = $2 \
+                 AND xmin::text = $5 RETURNING xmin::text",
+                &[&tenant_id, &display_category_id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_display_categories WHERE tenant_id = $1 AND display_category_id = $2",
+                &[&tenant_id, &display_category_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Inserts a display sub-category under a parent display category.
@@ -638,13 +757,14 @@ impl PostgresCatalog {
         tenant_id: &str,
         display_category_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_display_subcategories \
                  (display_subcategory_id, tenant_id, display_category_id, name) \
-                 VALUES ($1, $2, $3, $4)",
+                 VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
                 &[
                     &display_subcategory_id,
                     &tenant_id,
@@ -654,7 +774,7 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's display sub-categories, newest first.
@@ -669,7 +789,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT display_subcategory_id, tenant_id, display_category_id, name, status \
+                "SELECT display_subcategory_id, tenant_id, display_category_id, name, status, xmin::text \
                  FROM catalog_display_subcategories WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -683,12 +803,13 @@ impl PostgresCatalog {
                 parent_id: Some(row.get(2)),
                 name: row.get(3),
                 status: row.get(4),
+                version: row.get(5),
             })
             .collect())
     }
 
-    /// Renames a display sub-category, (re)parents it and sets its status. Returns whether a row
-    /// changed.
+    /// Renames a display sub-category, (re)parents it and sets its status. Applies only if the row is
+    /// still at `expected`.
     ///
     /// # Errors
     ///
@@ -700,24 +821,41 @@ impl PostgresCatalog {
         display_category_id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_display_subcategories SET display_category_id = $3, name = $4, \
                  status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND display_subcategory_id = $2",
+                 WHERE tenant_id = $1 AND display_subcategory_id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &display_subcategory_id,
                     &display_category_id,
                     &name,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_display_subcategories WHERE tenant_id = $1 AND display_subcategory_id = $2",
+                &[&tenant_id, &display_subcategory_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- layout buttons (tenant-scoped, keyed by (tenant, sales_channel, menu_item_id)) ---
@@ -849,14 +987,15 @@ impl PostgresCatalog {
         max_select: i32,
         member_item_ids_json: &str,
         attached_item_ids_json: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_modifier_groups \
                  (modifier_group_id, tenant_id, name, min_select, max_select, member_item_ids, \
                   attached_item_ids) \
-                 VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7::text::jsonb)",
+                 VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7::text::jsonb) \
+                 RETURNING xmin::text",
                 &[
                     &modifier_group_id,
                     &tenant_id,
@@ -869,7 +1008,7 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's modifier groups, newest first.
@@ -885,7 +1024,7 @@ impl PostgresCatalog {
         let rows = connection
             .query(
                 "SELECT modifier_group_id, tenant_id, name, min_select, max_select, \
-                 member_item_ids::text, attached_item_ids::text, status \
+                 member_item_ids::text, attached_item_ids::text, status, xmin::text \
                  FROM catalog_modifier_groups WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -902,6 +1041,7 @@ impl PostgresCatalog {
                 member_item_ids_json: row.get(5),
                 attached_item_ids_json: row.get(6),
                 status: row.get(7),
+                version: row.get(8),
             })
             .collect())
     }
@@ -927,14 +1067,16 @@ impl PostgresCatalog {
         member_item_ids_json: &str,
         attached_item_ids_json: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_modifier_groups SET name = $3, min_select = $4, max_select = $5, \
                  member_item_ids = $6::text::jsonb, attached_item_ids = $7::text::jsonb, \
                  status = $8, updated_at = now() \
-                 WHERE tenant_id = $1 AND modifier_group_id = $2",
+                 WHERE tenant_id = $1 AND modifier_group_id = $2 \
+                 AND xmin::text = $9 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &modifier_group_id,
@@ -944,11 +1086,26 @@ impl PostgresCatalog {
                     &member_item_ids_json,
                     &attached_item_ids_json,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_modifier_groups WHERE tenant_id = $1 AND modifier_group_id = $2",
+                &[&tenant_id, &modifier_group_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- menus (tenant-scoped) ---
@@ -964,17 +1121,18 @@ impl PostgresCatalog {
         tenant_id: &str,
         name: &str,
         parent_menu_id: Option<&str>,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_menus (menu_id, tenant_id, name, parent_menu_id) \
-                 VALUES ($1, $2, $3, $4)",
+                 VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
                 &[&menu_id, &tenant_id, &name, &parent_menu_id],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's menus, newest first.
@@ -986,7 +1144,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT menu_id, tenant_id, name, parent_menu_id, status FROM catalog_menus \
+                "SELECT menu_id, tenant_id, name, parent_menu_id, status, xmin::text FROM catalog_menus \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -1000,12 +1158,13 @@ impl PostgresCatalog {
                 name: row.get(2),
                 parent_menu_id: row.get(3),
                 status: row.get(4),
+                version: row.get(5),
             })
             .collect())
     }
 
-    /// Renames a menu, (re)sets its parent and status, within its tenant. Returns whether a row
-    /// changed.
+    /// Renames a menu, (re)sets its parent and status, within its tenant. Applies only if the row is
+    /// still at `expected`.
     ///
     /// # Errors
     ///
@@ -1017,17 +1176,33 @@ impl PostgresCatalog {
         name: &str,
         parent_menu_id: Option<&str>,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_menus SET name = $3, parent_menu_id = $4, status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND menu_id = $2",
-                &[&tenant_id, &menu_id, &name, &parent_menu_id, &status],
+                 WHERE tenant_id = $1 AND menu_id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
+                &[&tenant_id, &menu_id, &name, &parent_menu_id, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_menus WHERE tenant_id = $1 AND menu_id = $2",
+                &[&tenant_id, &menu_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- menu sections (tenant-scoped, within a menu) ---
@@ -1044,17 +1219,18 @@ impl PostgresCatalog {
         menu_id: &str,
         name: &str,
         sort: i32,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO catalog_menu_sections \
-                 (menu_section_id, tenant_id, menu_id, name, sort) VALUES ($1, $2, $3, $4, $5)",
+                 (menu_section_id, tenant_id, menu_id, name, sort) VALUES ($1, $2, $3, $4, $5) \
+                 RETURNING xmin::text",
                 &[&menu_section_id, &tenant_id, &menu_id, &name, &sort],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a menu's sections within a tenant, by sort then id.
@@ -1070,7 +1246,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT menu_section_id, tenant_id, menu_id, name, sort, status \
+                "SELECT menu_section_id, tenant_id, menu_id, name, sort, status, xmin::text \
                  FROM catalog_menu_sections WHERE tenant_id = $1 AND menu_id = $2 \
                  ORDER BY sort ASC, menu_section_id ASC",
                 &[&tenant_id, &menu_id],
@@ -1086,12 +1262,13 @@ impl PostgresCatalog {
                 name: row.get(3),
                 sort: row.get(4),
                 status: row.get(5),
+                version: row.get(6),
             })
             .collect())
     }
 
-    /// Renames a menu section, sets its sort and status, within its tenant. Returns whether a row
-    /// changed.
+    /// Renames a menu section, sets its sort and status, within its tenant. Applies only if the row is
+    /// still at `expected`.
     ///
     /// # Errors
     ///
@@ -1103,17 +1280,40 @@ impl PostgresCatalog {
         name: &str,
         sort: i32,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE catalog_menu_sections SET name = $3, sort = $4, status = $5, \
-                 updated_at = now() WHERE tenant_id = $1 AND menu_section_id = $2",
-                &[&tenant_id, &menu_section_id, &name, &sort, &status],
+                 updated_at = now() WHERE tenant_id = $1 AND menu_section_id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
+                &[
+                    &tenant_id,
+                    &menu_section_id,
+                    &name,
+                    &sort,
+                    &status,
+                    &expected,
+                ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_menu_sections WHERE tenant_id = $1 AND menu_section_id = $2",
+                &[&tenant_id, &menu_section_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     // --- placements (tenant-scoped, keyed by (menu_id, menu_item_id)) ---

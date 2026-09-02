@@ -34,7 +34,7 @@ import {
   ReorderList,
 } from "../components/kit";
 import { toast } from "../components/Toast";
-import { CHANNEL_LABEL, errorMessage, StatusCell } from "./catalog/shared";
+import { CHANNEL_LABEL, errorMessage, isStale, StatusCell } from "./catalog/shared";
 
 // Cap the rendered grid extent so a stray large column/row never blows up the preview; buttons beyond
 // it still appear in the flowing list and are editable.
@@ -374,11 +374,15 @@ export function Layout() {
       await api.updateDisplayCategory(row.display_category_id, tenantId(), {
         name,
         status: fields.status ?? row.status,
-      });
+      }, row.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);
@@ -454,11 +458,15 @@ export function Layout() {
         displayCategoryId: row.display_category_id,
         name,
         status: fields.status ?? row.status,
-      });
+      }, row.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);

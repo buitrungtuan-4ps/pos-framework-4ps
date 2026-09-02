@@ -627,6 +627,7 @@
   "catalog.groupMax": "Chọn tối đa",
   "catalog.groupRuleInvalid": "Tối thiểu và tối đa phải là số nguyên với tối đa ≥ tối thiểu.",
   "catalog.status": "Trạng thái",
+  "catalog.stale": "Người khác đã thay đổi mục này trong lúc bạn đang sửa. Danh sách đã được tải lại \u2014 vui lòng kiểm tra và thử lại.",
   "catalog.statusActive": "Đang dùng",
   "catalog.statusArchived": "Đã lưu trữ",
   "catalog.actions": "Thao tác",

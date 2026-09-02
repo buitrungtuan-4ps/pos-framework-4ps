@@ -813,10 +813,12 @@ export const api = {
     taxClassId: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<TaxClass>(
+    requestJsonIfMatch<TaxClass>(
       "PATCH",
       `/admin/catalog/tax-classes/${encodeURIComponent(taxClassId)}`,
+      etag,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
   // Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies. `set`
@@ -1101,10 +1103,12 @@ export const api = {
     itemCategoryId: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<ItemCategory>(
+    requestJsonIfMatch<ItemCategory>(
       "PATCH",
       `/admin/catalog/item-categories/${encodeURIComponent(itemCategoryId)}`,
+      etag,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
   listItemSubcategories: (tenantId: string) =>
@@ -1122,10 +1126,12 @@ export const api = {
     itemSubcategoryId: string,
     tenantId: string,
     fields: { itemCategoryId: string; name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<ItemSubcategory>(
+    requestJsonIfMatch<ItemSubcategory>(
       "PATCH",
       `/admin/catalog/item-subcategories/${encodeURIComponent(itemSubcategoryId)}`,
+      etag,
       {
         tenant_id: tenantId,
         item_category_id: fields.itemCategoryId,
@@ -1167,8 +1173,9 @@ export const api = {
       imageRef?: string | null;
       status: EntityStatus;
     },
+    etag: ETag,
   ) =>
-    requestJson<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, {
+    requestJsonIfMatch<CatalogItem>("PATCH", `/admin/catalog/items/${encodeURIComponent(menuItemId)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       name_translations: fields.nameTranslations ?? {},
@@ -1190,8 +1197,9 @@ export const api = {
     menuId: string,
     tenantId: string,
     fields: { name: string; parentMenuId: string | null; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<Menu>("PATCH", `/admin/catalog/menus/${encodeURIComponent(menuId)}`, {
+    requestJsonIfMatch<Menu>("PATCH", `/admin/catalog/menus/${encodeURIComponent(menuId)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       parent_menu_id: fields.parentMenuId,
@@ -1238,10 +1246,12 @@ export const api = {
     menuId: string,
     menuSectionId: string,
     fields: { name: string; sort: number; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<MenuSection>(
+    requestJsonIfMatch<MenuSection>(
       "PATCH",
       `/admin/catalog/menus/${encodeURIComponent(menuId)}/sections/${encodeURIComponent(menuSectionId)}`,
+      etag,
       { tenant_id: tenantId, name: fields.name, sort: fields.sort, status: fields.status },
     ),
   publishMenu: (tenantId: string, storeId: string, menuId: string) =>
@@ -1283,10 +1293,12 @@ export const api = {
       attachedItemIds: string[];
       status: EntityStatus;
     },
+    etag: ETag,
   ) =>
-    requestJson<ModifierGroup>(
+    requestJsonIfMatch<ModifierGroup>(
       "PATCH",
       `/admin/catalog/modifier-groups/${encodeURIComponent(modifierGroupId)}`,
+      etag,
       {
         tenant_id: tenantId,
         name: fields.name,
@@ -1313,10 +1325,12 @@ export const api = {
     displayCategoryId: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<DisplayCategory>(
+    requestJsonIfMatch<DisplayCategory>(
       "PATCH",
       `/admin/catalog/display-categories/${encodeURIComponent(displayCategoryId)}`,
+      etag,
       { tenant_id: tenantId, name: fields.name, status: fields.status },
     ),
   listDisplaySubcategories: (tenantId: string) =>
@@ -1334,10 +1348,12 @@ export const api = {
     displaySubcategoryId: string,
     tenantId: string,
     fields: { displayCategoryId: string; name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestJson<DisplaySubcategory>(
+    requestJsonIfMatch<DisplaySubcategory>(
       "PATCH",
       `/admin/catalog/display-subcategories/${encodeURIComponent(displaySubcategoryId)}`,
+      etag,
       {
         tenant_id: tenantId,
         display_category_id: fields.displayCategoryId,
