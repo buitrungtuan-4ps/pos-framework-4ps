@@ -17,6 +17,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **An absent entity and a down dependency each answer in one shape** — 103 sites (#135). Q3b
+  slice 4b, and the last of the cloud's repeated refusal families.
+
+  `"no such X"` was written out sixty-one times in thirty-five spellings, and `"the X service is
+  unavailable"` forty-two times in sixteen. Unlike the ULID and closed-set refusals nothing here was
+  *wrong* — only repeated — so `not_found(entity)` and `service_unavailable(service)` are about the
+  next absence and the next outage arriving in the same shape rather than about fixing a defect.
+
+  Neither carries a `details` array, deliberately: `details` names a field the caller got wrong, and
+  a caller asking after a store that does not exist got its fields right. Naming one would send a
+  client to fix an input that was fine.
+
+  `service_unavailable` is `ErrorStatus::Unavailable`, not `InvalidArgument`, which is the
+  distinction deriving the HTTP code from `ErrorStatus::http_code` exists to keep: an outage is
+  **retryable** and the request was fine. A client that reads a `503` as its own fault stops
+  retrying something that would have succeeded.
+
+  Two refusals keep their own wording rather than joining the shape: `"the store has no published
+  configuration"` (six routes — the store and its config tree both exist; what is missing is a
+  published *version*), and `/admin/setup`'s `"setup is not enabled"`, whose vagueness is the point,
+  since `"no such X"` would imply a setup resource that might exist under another name.
+
 - **A refusal about a closed set now lists the set the parser actually accepts** — 22 sites, and the
   set has one home per field instead of one per sentence (#134). Q3b slice 4.
 

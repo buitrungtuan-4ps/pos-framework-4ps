@@ -10860,3 +10860,52 @@ async fn a_range_refusal_about_two_fields_names_only_the_one_out_of_range() {
         "open_hour was 9, which is in range, so it is not named: {body}"
     );
 }
+
+/// An absence answers in the envelope, and carries **no** `details` array.
+///
+/// 103 refusals about an absent entity or a down dependency moved onto `not_found` and
+/// `service_unavailable` (Q3b slice 4b). Neither takes a field, deliberately: `details` names a
+/// field the caller got wrong, and a caller asking after a store that does not exist got its fields
+/// right. Naming one would send it to fix an input that was fine. `http.rs`'s `absence_tests` pins
+/// the retryable/terminal split between the two; this pins the body.
+#[tokio::test]
+async fn an_absence_is_enveloped_and_names_no_field() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    let tenant_id = json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .to_owned();
+
+    // A well-formed store id that names no store.
+    let missing = StoreId::new(
+        "01JZZZZZZZZZZZZZZZZZZZZZZZ"
+            .parse()
+            .expect("a valid test ULID"),
+    );
+    let refused = router
+        .oneshot(patch_with_cookie(
+            &format!("/admin/stores/{}", missing.as_ulid()),
+            &serde_json::json!({ "tenant_id": tenant_id, "name": "Bến Thành", "status": "active" }),
+            &cookie,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "NOT_FOUND", "got {body}");
+    assert_eq!(body["error"]["message"], "no such store");
+    assert!(
+        body["error"]["details"].is_null(),
+        "an absent store is not a bad field: {body}"
+    );
+}
