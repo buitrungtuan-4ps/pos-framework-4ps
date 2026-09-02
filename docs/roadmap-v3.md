@@ -163,6 +163,14 @@ deliberately reboots the box (so the highest-precedence safety rule in `decide_r
 fact a restart loses), and `trusted_keys` has no source anywhere — it must be baked in at build time, never
 read from the cloud-published config tree, or a compromised cloud could introduce a signing key.
 
+**The tenth was the enforcement machinery itself, and it is now closed.** `IntakeLedger` (ADR-0064) was
+a port with no `PortName` variant, so it had no contract suite, no row in `docs/architecture.md` §5, and
+its failures were labelled `order_in`. It now has all three plus a six-case suite that `pos-fakes` and
+`store-sqlite` both pass — the first time the ledger's two implementations have been checked against each
+other. The blind spot that hid it stays on the record: `every_port_has_a_suite` iterates `PortName::ALL`,
+so it can only check what was registered, and what should have caught this is the ADR-first rule plus a
+reviewer — a process control, not a test.
+
 **The ninth — a takeaway order cannot be paid for. Found by writing Q1.** `EdgeOrderIn` accepts a relayed
 order, reprices it from the store's own menu, stores it transactionally and issues a queue number. Then it
 stops: `Edge::open_bill` is the only path to a bill, it takes a `TableId`, it gates on that table being

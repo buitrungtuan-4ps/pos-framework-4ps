@@ -135,7 +135,7 @@ impl TxContext for FakeTx {
             ))
         {
             return Err(PortError::already_exists(
-                PortName::OrderIn,
+                PortName::IntakeLedger,
                 "an order already exists for this reference",
             ));
         }

@@ -26,7 +26,14 @@ use pos_proto::wire_enum::WireEnum;
 /// [ADR-0021](../../../docs/adr/0021-corrected-port-list.md) as amended by
 /// [ADR-0053](../../../docs/adr/0053-cloud-sync-port.md) (`CloudSync`, the seventeenth) and
 /// [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md) (`DeviceRegistry`, the
-/// eighteenth); a nineteenth variant needs an ADR first.
+/// eighteenth) and [ADR-0064](../../../docs/adr/0064-edge-order-in.md) (`IntakeLedger`, the
+/// nineteenth); a twentieth variant needs an ADR first.
+///
+/// `IntakeLedger` is the odd one: ADR-0064 called it a port when it landed, but it was given no
+/// variant here — so [`crate::IntakeLedger`] had no suite and no row in `docs/architecture.md` §5,
+/// and *nothing noticed*, because the guard that enforces "every port has a suite" iterates
+/// [`Self::ALL`] and can only see what is registered here. Registering it is what puts it back
+/// under that guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum PortName {
@@ -66,6 +73,8 @@ pub enum PortName {
     CloudSync,
     /// [`crate::DeviceRegistry`].
     DeviceRegistry,
+    /// [`crate::IntakeLedger`].
+    IntakeLedger,
 }
 
 impl PortName {
@@ -92,6 +101,7 @@ impl PortName {
         Self::OrderIn,
         Self::CloudSync,
         Self::DeviceRegistry,
+        Self::IntakeLedger,
     ];
 
     /// The port's name in `snake_case`, for metric labels and log fields.
@@ -119,6 +129,7 @@ impl PortName {
             Self::OrderIn => "order_in",
             Self::CloudSync => "cloud_sync",
             Self::DeviceRegistry => "device_registry",
+            Self::IntakeLedger => "intake_ledger",
         }
     }
 }
@@ -333,11 +344,24 @@ mod tests {
     }
 
     #[test]
-    fn the_port_list_is_the_eighteen_adr_0021_and_its_amendments_name() {
-        // Sixteen from ADR-0021, plus `CloudSync` (ADR-0053) and `DeviceRegistry` (ADR-0091).
-        // The number is asserted rather than described so that adding a port without its ADR,
-        // its suite and its row in `docs/architecture.md` §5 fails here first.
-        assert_eq!(PortName::ALL.len(), 18);
+    fn the_port_list_is_the_nineteen_adr_0021_and_its_amendments_name() {
+        // Sixteen from ADR-0021, plus `CloudSync` (ADR-0053), `DeviceRegistry` (ADR-0091) and
+        // `IntakeLedger` (ADR-0064 — a port from the start, registered late). The number is
+        // asserted rather than described so that adding a port without its ADR, its suite and its
+        // row in `docs/architecture.md` §5 fails here first.
+        assert_eq!(PortName::ALL.len(), 19);
+    }
+
+    #[test]
+    fn every_port_has_a_distinct_label() {
+        // The labels partition metrics and log fields, so two ports sharing one would silently
+        // merge two adapters' latency charts. Cheap to check, and it also catches a copy-paste in
+        // `as_label` when a variant is added.
+        let mut labels: Vec<&str> = PortName::ALL.iter().map(|port| port.as_label()).collect();
+        labels.sort_unstable();
+        let count = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), count, "two ports share a label");
     }
 
     #[test]

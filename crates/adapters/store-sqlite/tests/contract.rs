@@ -25,7 +25,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pos_contract_tests::harness::{
-    ConfigStoreHarness, DeviceRegistryHarness, EventStoreHarness, HarnessError, Setup,
+    ConfigStoreHarness, DeviceRegistryHarness, EventStoreHarness, HarnessError,
+    IntakeLedgerHarness, Setup,
 };
 use pos_proto::{StoreId, Ulid};
 use store_sqlite::SqliteStore;
@@ -105,6 +106,20 @@ impl ConfigStoreHarness for StoreHarness {
     }
 }
 
+impl IntakeLedgerHarness for StoreHarness {
+    type Ledger = SqliteStore;
+
+    async fn fresh(&self) -> Setup<SqliteStore> {
+        // A fresh file, so no key is taken — the ledger's whole job is to notice a *repeat*, and a
+        // shared file between cases would make one case's key another's collision.
+        Self::open(self.next_path())
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(0x0ADA))
+    }
+}
+
 impl DeviceRegistryHarness for StoreHarness {
     type Registry = SqliteStore;
 
@@ -128,4 +143,9 @@ mod device_registry {
 mod config_store {
     use super::{StoreHarness, block_on};
     pos_contract_tests::config_store_suite!(StoreHarness::new(), block_on);
+}
+
+mod intake_ledger {
+    use super::{StoreHarness, block_on};
+    pos_contract_tests::intake_ledger_suite!(StoreHarness::new(), block_on);
 }

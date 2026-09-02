@@ -425,7 +425,7 @@ fn commit(
 /// plain insert exists to catch, reported as [`PortError::already_exists`] so the caller re-resolves
 /// with a look-up — or a genuine store fault.
 fn intake_conflict_or_db_error(error: rusqlite::Error) -> PortError {
-    let port = PortName::OrderIn;
+    let port = PortName::IntakeLedger;
     if let rusqlite::Error::SqliteFailure(failure, _) = &error
         && failure.code == rusqlite::ErrorCode::ConstraintViolation
     {
@@ -681,7 +681,7 @@ fn look_up_intake(
     sales_channel: &str,
     external_reference: &str,
 ) -> Result<Option<String>, PortError> {
-    let port = PortName::OrderIn;
+    let port = PortName::IntakeLedger;
     conn.query_row(
         "SELECT record FROM intake_ledger
          WHERE store_id = ?1 AND sales_channel = ?2 AND external_reference = ?3",

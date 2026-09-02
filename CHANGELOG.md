@@ -17,6 +17,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **`IntakeLedger` is a registered port at last, with a suite both its implementations pass**
+  ([ADR-0064](docs/adr/0064-edge-order-in.md) amendment, #118). It was built as a port and called one
+  by its own ADR, but it never got a `PortName` variant — and everything downstream of that registry
+  quietly skipped it: no shared contract suite, so the two implementations were **never checked
+  against each other**; no row in `docs/architecture.md` §5, so the authoritative port list was wrong
+  by one; and its failures reported under `PortName::OrderIn`, merging two seams into one metric
+  label.
+
+  It now has the variant (the nineteenth), the `intake_ledger` label, a row, and a six-case suite
+  that `pos-fakes` and `store-sqlite` both run. The case that earns its place is
+  `a_repeat_key_is_refused_at_commit`: the ledger's whole purpose is that a marketplace's retry
+  cannot open a second order and charge a guest twice, and that guarantee lives in a **commit**, not
+  a row — so the suite drives the transaction boundary itself and checks that the second write loses
+  with `AlreadyExists` while the first record stands. Its mirror,
+  `an_uncommitted_record_is_not_found`, covers the direction that matters after a crash: a
+  rolled-back intake must not resolve, or a retry would be told "already handled" for an order that
+  was never opened, and the food would never be made.
+
+  **Why it went unnoticed, stated plainly.** The `every_port_has_a_suite` guard iterates
+  `PortName::ALL`, so it can only check ports that were registered — it can never be the thing that
+  catches an unregistered one. The control that should have caught this is the rule that a new port
+  needs an ADR first and a reviewer who reads it. That is a process control, not a test, and it is
+  the one that failed. The blind spot is now written down in three places rather than fixed and
+  forgotten.
+
+  **Upgrade note** None; no wire, schema or migration change. One observable difference: errors from
+  the intake ledger now carry `intake_ledger` rather than `order_in` as their port label, so a
+  dashboard or alert filtering on `order_in` for ledger failures needs the new label. The
+  queue-number allocator keeps `order_in`, which is the seam it belongs to.
+
 - **The acceptance suite now drives the router the shipped binary serves** (roadmap v3 slice **Q1**,
   the v1.0 gate, #117). `pos_edge::compose` is `serve` minus the socket — the same state, the same
   router, the same background loops — and `crates/pos-edge/tests/acceptance.rs` walks a store's whole

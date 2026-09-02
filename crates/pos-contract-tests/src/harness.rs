@@ -42,8 +42,8 @@ use core::future::Future;
 
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
-    Fiscalization, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver,
-    ShippingDispatch, Signer, UpdateReport,
+    Fiscalization, IntakeLedger, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal,
+    PrinterDriver, ShippingDispatch, Signer, UpdateReport,
 };
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
@@ -211,6 +211,24 @@ pub trait DeviceRegistryHarness: Send + Sync {
 
     /// A registry with nothing paired and nobody signed in.
     fn fresh(&self) -> impl Future<Output = Setup<Self::Registry>> + Send;
+}
+
+/// Supplies a fresh [`IntakeLedger`] with no recorded intake.
+///
+/// The ledger shares its transaction with the event store
+/// ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)), so the harness hands back the whole store
+/// and the suite drives [`Transactional::begin`](pos_ports::Transactional::begin) itself — the
+/// atomicity the port exists for is only observable across a commit, which means the suite has to
+/// own the transaction boundary rather than be handed a buffered handle.
+pub trait IntakeLedgerHarness: Send + Sync {
+    /// The implementation under test.
+    type Ledger: IntakeLedger;
+
+    /// A ledger with nothing recorded in it.
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Ledger>> + Send;
+
+    /// A store identifier the cases may use.
+    fn store_id(&self) -> StoreId;
 }
 
 /// Supplies a fresh [`CloudSync`] seeded with one recognised activation and one published release.
