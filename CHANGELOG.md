@@ -17,6 +17,58 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The store now remembers its OTA self-test across the restart an install performs**
+  ([ADR-0048](docs/adr/0048-ota-rollout-model.md)'s rollback rule,
+  [ADR-0055](docs/adr/0055-edge-ota-updater.md), roadmap v3 slice R5).
+
+  `decide_rollout` puts one rule above every other — above even the kill switch: a device whose
+  *running* version failed its self-test must revert. The fact that rule reads,
+  `DeviceState.last_self_test`, was **process memory**, and an install deliberately restarts the
+  edge. So the fleet's highest-precedence safety rule depended on the one fact a reboot destroys —
+  the very reboot it exists to recover from. A box that installed a bad build, failed its self-test
+  and restarted came back with no memory of failing, weighed itself against the same rollout, and
+  was eligible to install the same bad build again. Migration `0006_ota_self_test` closes that loop.
+
+  - **`OtaStateAuthority`** (`crates/pos-edge/src/ota_state.rs`) is where the store keeps its last
+    self-test: one result per store, not a history, because the decision reads only the most recent
+    verdict and the fleet's trail is the cloud's through `CloudSync::report`. Implemented for
+    `store_sqlite::SqliteStore` over its single writer thread, with an `InMemoryOtaState` twin for
+    tests and the example.
+  - **`device_state(...)`** assembles the `DeviceState` a rollout decision is made against from the
+    three places its facts actually live: `current` from this binary's own version (never a stored
+    copy, which could disagree with it after a rollback — and the rollback rule compares the two),
+    `ring`/`canary_bucket` from the cloud-published `device_ota` placement, and `last_self_test`
+    from the authority. It returns `None` when the store has no placement, which is not an error:
+    an unplaced store is eligible for no rollout.
+  - **`ReleaseVersion` gains `Display`**, completing the pair with `ReleaseVersion::parse`, so a
+    caller that has to store a version writes one spelling rather than assembling its own at each
+    site. Two hand-rolled spellings that differ by a `v` are a version that parses back as `None`,
+    and the rollback rule reads a `None` as "nothing to revert from".
+
+  **Not a port, and deliberately so.** This follows the category `queue.rs` and `receipt.rs` already
+  occupy — durable *edge-local* bookkeeping as a trait defined in `pos-edge`, implemented for
+  `SqliteStore` over its public API, with an in-memory twin and its own additive migration. A port
+  ([ADR-0026](docs/adr/0026-port-shapes.md)) is a boundary the domain crosses and a vendor could sit
+  behind; nothing swaps in a different self-test store, and `store-postgres` has no reason to hold
+  one, because the cloud learns a store's self-test through `CloudSync::report`
+  ([ADR-0078](docs/adr/0078-sync-and-ota-closure.md)) rather than by sharing a table.
+  [ADR-0091](docs/adr/0091-durable-edge-auth-state.md) gains a note narrowing its "must live in
+  `pos-ports`" argument, which binds a trait the *adapter* implements and not one `pos-edge`
+  implements *for* `SqliteStore`.
+
+  **What this does not yet do, stated plainly:** nothing in production calls it. That is not new to
+  this change — it is the condition of the whole OTA path, and this entry is the first to say so.
+  `CloudSync::report` has no production caller (every `UpdateReport` in the tree is in `pos-fakes` or
+  an adapter test), so the cloud's report route, the fleet read model, and the OTA console's progress
+  pane are fed by nothing; and `UpdateInstaller` has no production implementation at all, so
+  `OtaUpdater` cannot be constructed in the field even with the trusted keys and `SignedArtifact` in
+  place. The install arm stays gated on that installer (the hardware gate ADR-0055 and ADR-0078
+  already flagged) and on `POST /internal/ota/artifact`
+  ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md), blocked on object-storage credentials). The
+  *reporting* arm needs neither, and is the next slice.
+
+  No `PROTOCOL_VERSION` bump and no new API: one additive SQLite migration on the edge, and no wire
+  format is involved.
 - **The OTA rollout decision now has its inputs: the edge reads both config nodes, and the console can
   place a store in the rollout** ([ADR-0052](docs/adr/0052-ota-rollout-config.md) Corrections 1–2,
   [ADR-0048](docs/adr/0048-ota-rollout-model.md), roadmap v3 slice R5).

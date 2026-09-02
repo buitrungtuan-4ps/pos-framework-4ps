@@ -129,9 +129,29 @@ pub(crate) enum Command {
         external_reference: String,
         reply: oneshot::Sender<Result<Option<String>, PortError>>,
     },
+    /// Record the store's latest OTA self-test, replacing any earlier one (migration 0006).
+    RecordSelfTest {
+        store_id: StoreId,
+        row: SelfTestRow,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// The store's last OTA self-test, or `None` if it has never recorded one.
+    LastSelfTest {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<Option<SelfTestRow>, PortError>>,
+    },
     /// Anything in the device registry (ADR-0091), grouped because it is a distinct concern from
     /// the event store and keeps this enum's dispatch readable.
     Registry(RegistryCommand),
+}
+
+/// The store's last self-test as it sits in `ota_self_test` (migration 0006): the release that was
+/// tested and whether it passed. The version travels as its wire string, so this row stays a plain
+/// data carrier and `pos-edge` owns the parse back into a `ReleaseVersion`.
+#[derive(Debug, Clone)]
+pub(crate) struct SelfTestRow {
+    pub(crate) version: String,
+    pub(crate) passed: bool,
 }
 
 /// A device-registry unit of work (ADR-0091).
@@ -256,6 +276,16 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     business_date,
                     order_id,
                 ));
+            }
+            Command::RecordSelfTest {
+                store_id,
+                row,
+                reply,
+            } => {
+                let _ = reply.send(record_self_test(&conn, store_id, &row));
+            }
+            Command::LastSelfTest { store_id, reply } => {
+                let _ = reply.send(last_self_test(&conn, store_id));
             }
             Command::LookUpIntake {
                 store_id,
@@ -612,6 +642,49 @@ fn allocate_receipt(
 /// delivering at once are handed distinct numbers. Idempotency is the `queue_allocations` row: an
 /// order that already has a number gets it back without advancing the counter, so a retry after a
 /// crash shouts the same number rather than burning a second one.
+/// Records the store's latest self-test, replacing any earlier one (migration 0006).
+///
+/// An upsert rather than an append: the rollback rule reads only the most recent verdict, and the
+/// fleet's history is the cloud's through `CloudSync::report` (ADR-0078). Reported under
+/// [`PortName::CloudSync`] because that is the port this state exists to serve — the OTA path — and a
+/// fault here must not surface under whichever port happens to sit near it in a metric label.
+fn record_self_test(
+    conn: &Connection,
+    store_id: StoreId,
+    row: &SelfTestRow,
+) -> Result<(), PortError> {
+    let port = PortName::CloudSync;
+    conn.execute(
+        "INSERT INTO ota_self_test (store_id, version, passed, recorded_time)
+         VALUES (?1, ?2, ?3, datetime('now'))
+         ON CONFLICT (store_id) DO UPDATE SET
+             version = excluded.version,
+             passed = excluded.passed,
+             recorded_time = excluded.recorded_time",
+        params![store_id.to_string(), row.version, i64::from(row.passed)],
+    )
+    .map_err(|error| db_error(port, error))?;
+    Ok(())
+}
+
+/// The store's last self-test, or `None` if it has never recorded one — a box that has never
+/// installed anything, which the rollback rule reads as "nothing to revert from".
+fn last_self_test(conn: &Connection, store_id: StoreId) -> Result<Option<SelfTestRow>, PortError> {
+    let port = PortName::CloudSync;
+    conn.query_row(
+        "SELECT version, passed FROM ota_self_test WHERE store_id = ?1",
+        params![store_id.to_string()],
+        |row| {
+            Ok(SelfTestRow {
+                version: row.get(0)?,
+                passed: row.get::<_, i64>(1)? != 0,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| db_error(port, error))
+}
+
 fn allocate_queue_number(
     conn: &mut Connection,
     store_id: StoreId,

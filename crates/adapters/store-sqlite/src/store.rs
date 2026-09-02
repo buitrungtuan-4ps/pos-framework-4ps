@@ -23,7 +23,7 @@ use pos_proto::ulid::Ulid;
 use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
-    self, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, RegistryCommand,
+    self, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, RegistryCommand, SelfTestRow,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -131,6 +131,52 @@ impl SqliteStore {
             }
         })
         .await
+    }
+
+    /// Records the store's latest OTA self-test, replacing any earlier one (migration 0006, the
+    /// rollback rule of [ADR-0048]).
+    ///
+    /// `version` is the release that was tested, stored rather than inferred, because the rollback
+    /// rule compares it against what the box is *now* running: a failure recorded against a version
+    /// the box has since left is history, not a reason to revert.
+    ///
+    /// [ADR-0048]: ../../../docs/adr/0048-ota-rollout-model.md
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn record_ota_self_test(
+        &self,
+        store_id: StoreId,
+        version: String,
+        passed: bool,
+    ) -> Result<(), PortError> {
+        self.ask(PortName::CloudSync, move |reply| Command::RecordSelfTest {
+            store_id,
+            row: SelfTestRow { version, passed },
+            reply,
+        })
+        .await
+    }
+
+    /// The store's last OTA self-test as `(version, passed)`, or `None` if it has never recorded one
+    /// — a box that has never installed anything, which the rollback rule reads as nothing to revert
+    /// from.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the read fails.
+    pub async fn last_ota_self_test(
+        &self,
+        store_id: StoreId,
+    ) -> Result<Option<(String, bool)>, PortError> {
+        let row = self
+            .ask(PortName::CloudSync, move |reply| Command::LastSelfTest {
+                store_id,
+                reply,
+            })
+            .await?;
+        Ok(row.map(|row| (row.version, row.passed)))
     }
 
     /// Sends a command to the writer thread and awaits its reply.

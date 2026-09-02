@@ -196,3 +196,28 @@ worth recording because it went the *other* way from the obvious reading of this
 - **A fork gains one setting**, `sign_in_idle_timeout`, defaulting to 30 minutes. A deployment that
   wants today's behaviour back sets it very low and uses revoke-all after a restart; a deployment that
   wants continuity above all raises it and accepts the stolen-till window that comes with it.
+
+**Correction, made while adding a second kind of durable edge-local state.** The dependency argument
+above is narrower than it reads, and the tree already contained the counter-example when this was
+written.
+
+"A trait `store-sqlite` implements **must** live in `pos-ports` … defining it in `pos-edge` is not
+available — the dependency runs the other way" is true of a trait the **adapter** implements, which
+is the case for `DeviceRegistry` and does not change. It does not bind a trait `pos-edge` *defines*
+and implements **for** `SqliteStore` using that store's public methods: there the dependency runs
+`pos-edge` → `store-sqlite`, which is the direction that already exists, so the impl is legal where
+the trait is local. `crates/pos-edge/src/queue.rs` has done exactly that since PR-1c, and
+`receipt.rs` before it.
+
+So the choice between a port and a local trait is not forced by the dependency graph, and the real
+question is what the trait *is*. A **port** is a boundary the domain crosses and a vendor could sit
+behind — it earns a `PortName`, a contract suite, a `pos-fakes` implementation, and a row in
+[ADR-0021](0021-corrected-port-list.md). `DeviceRegistry` qualifies: it holds a bearer credential's
+digest, it is a security boundary, and its contract binds every implementation. A **local authority
+trait** is durable edge-local bookkeeping nobody swaps: the receipt counter, the queue counter, and
+now `OtaStateAuthority` (`crates/pos-edge/src/ota_state.rs`), where the store's last OTA self-test
+lives so ADR-0048's rollback rule survives the restart an install performs.
+
+The cost of the local category is that no contract suite binds an implementation, which is why each
+one is proven against both its SQLite path and its in-memory twin. Promoting a local trait to a port
+later is mechanical, and stays the right move if a second implementation ever needs binding.

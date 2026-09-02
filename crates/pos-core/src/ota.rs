@@ -26,6 +26,8 @@
 //! cannot disagree about what a legal rollout looks like. Parsing lives here, beside the decision it
 //! feeds; deserialising the surrounding document is the caller's I/O.
 
+use core::fmt;
+
 use serde::Deserialize;
 
 /// A semantic release version of the `pos_edge` / `pos_cloud` binary. Ordered `major`, then `minor`,
@@ -201,6 +203,18 @@ impl Ring {
             "fleet" => Some(Self::Fleet),
             _ => None,
         }
+    }
+}
+
+impl fmt::Display for ReleaseVersion {
+    /// Writes `MAJOR.MINOR.PATCH` — exactly what [`ReleaseVersion::parse`] reads back.
+    ///
+    /// The pair exists so a caller that has to *store* a version (the edge persists the release its
+    /// self-test judged, ADR-0048's rollback rule) writes one spelling rather than assembling its own
+    /// with `format!` at each site. Two hand-rolled spellings that differ by a `v` are a version that
+    /// parses back as `None`, and the rollback rule reads a `None` as "nothing to revert from".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 
@@ -399,6 +413,20 @@ mod tests {
 
     fn v(major: u16, minor: u16, patch: u16) -> ReleaseVersion {
         ReleaseVersion::new(major, minor, patch)
+    }
+
+    #[test]
+    fn a_version_round_trips_through_its_display() {
+        // The pair that makes persisting a version safe: whatever `Display` writes, `parse` reads
+        // back as the same version. Checked at the extremes, because `u16` boundaries are where a
+        // hand-rolled formatter would truncate.
+        for version in [v(0, 0, 0), v(1, 2, 3), v(65_535, 65_535, 65_535)] {
+            assert_eq!(
+                ReleaseVersion::parse(&version.to_string()),
+                Some(version),
+                "{version} did not round-trip"
+            );
+        }
     }
 
     /// A healthy fleet device running 1.0.0, fully inside the canary ramp.
