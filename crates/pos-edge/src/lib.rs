@@ -80,7 +80,7 @@ pub use pairing::{Code, DeviceToken, Pairing};
 pub use queue::{InMemoryQueueNumbers, QueueNumberAuthority};
 pub use receipt::{InMemoryReceipts, ReceiptAuthority};
 pub use relay_client::{RelayClient, RelayTransport, RelayTransportError};
-pub use server::{serve, system_device_id};
+pub use server::{Composed, compose, serve, system_device_id};
 pub use sntp::{Drift, assess as assess_drift};
 pub use state::{AppState, BuildInfo};
 pub use version::{VERSION, released, tag};

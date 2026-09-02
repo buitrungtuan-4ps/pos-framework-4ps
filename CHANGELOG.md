@@ -17,6 +17,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The acceptance suite now drives the router the shipped binary serves** (roadmap v3 slice **Q1**,
+  the v1.0 gate, #117). `pos_edge::compose` is `serve` minus the socket — the same state, the same
+  router, the same background loops — and `crates/pos-edge/tests/acceptance.rs` walks a store's whole
+  day through it: pair a device over `/api/pair`, sign a person in with a PIN, seat a table, order,
+  fire to the kitchen, bump the ticket, read what the table owes, open the bill, settle it, cycle the
+  table to clean; open a cash shift, count it blind, close it; and accept a relayed takeaway order.
+
+  **Why this is not one more HTTP test.** Every other suite in the crate builds its router by hand
+  (`http::domain_router(...)`), so it proves the *routes* work and says nothing about whether `serve`
+  **mounts** them. That gap is the most expensive one in this tree's history: seven slices shipped
+  code that was written, unit-tested and unreachable from the running binary, and an eighth turned up
+  the same week. It is measured, not asserted — deleting the domain-router merge from `serve` fails
+  four of these seven cases, while the hand-built suite passes all of its own.
+
+  The negative cases are part of the point: an unpaired host on the LAN is refused every domain route
+  (`401`), and a paired device with nobody signed in may sign someone in and nothing else (`403`) —
+  the two-gate split of [ADR-0084](docs/adr/0084-device-authentication.md), checked where the binary
+  actually serves it rather than where it is implemented. The store runs on `pos-fakes` with no
+  `cloud_url`, which is the acceptance condition itself and not a shortcut: a shop with its cable
+  unplugged keeps trading ([ADR-0001](docs/adr/0001-offline-first-store-autonomy.md)).
+
+  **Upgrade note** None. `compose` is additive and `serve`'s signature and behaviour are unchanged;
+  it now calls `compose` and then binds. A fork embedding the edge can build the composed router
+  without binding a port.
+
 - **A released binary now reports which release it is** (roadmap v3 slice **R1b**, #116). The release
   workflow stamps the tag it already validates into the build as `POS_EDGE_RELEASE_VERSION`, and
   `pos_edge::version` reads it through `option_env!` with `CARGO_PKG_VERSION` as the fallback. Before

@@ -110,6 +110,111 @@ where
     S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
+    // Read what binding and the startup banner need before `config` moves into the composition.
+    let bind = config.bind;
+    let advertised_host = config.advertised_host();
+
+    // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
+    // drains them together. A task translates the OS signal into a watched flag; each consumer waits
+    // on its own clone. It is created here rather than in `compose` because installing an OS signal
+    // handler is a property of *running*, not of composing — a test composes without one.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ignored = shutdown_tx.send(true);
+    });
+
+    let composed = compose(config, edge, queue, &shutdown_rx).await?;
+
+    // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
+    // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
+    match composed.pairing.mint(SystemClock.now()) {
+        Ok(code) => {
+            if let Some(host) = advertised_host {
+                tracing::info!(
+                    pairing_url = %pairing_url(host, bind.port(), &code),
+                    "scan or type this to pair a device",
+                );
+            } else {
+                tracing::warn!(
+                    "a device pairs at http://<edge-ip>:{}/pair?code={} — set advertised_ip or read the LAN IP off this machine",
+                    bind.port(),
+                    code.as_str(),
+                );
+            }
+        }
+        Err(_) => {
+            tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
+        }
+    }
+
+    // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
+    // raw-IP pairing URL above still works (ADR-0030).
+    NoopAdvertiser.advertise("pos", bind.port());
+
+    let listener = TcpListener::bind(bind)
+        .await
+        .map_err(|source| EdgeError::Bind { addr: bind, source })?;
+    tracing::info!(
+        %bind,
+        protocol_version = pos_proto::PROTOCOL_VERSION,
+        "pos_edge listening",
+    );
+
+    axum::serve(listener, composed.app.into_make_service())
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await
+        .map_err(EdgeError::Serve)?;
+
+    tracing::info!("pos_edge stopped");
+    Ok(())
+}
+
+/// Everything [`serve`] assembles before it binds a socket: the router the shipped binary serves,
+/// and the two auth tables it loaded from the store.
+///
+/// # Why this is a separate function
+///
+/// So that *composition* is testable, not only the pieces. A test can build a router by hand —
+/// `http::domain_router(edge, pairing, sessions)` — and pass while `serve` mounts something
+/// different, or nothing at all. That is not hypothetical: roadmap v3 records **seven** slices whose
+/// code was written, unit-tested and unreachable from the running binary, and an eighth found since.
+/// The acceptance suite (roadmap v3 **Q1**, `tests/acceptance.rs`) drives the router *this* function
+/// returns, so a route or a gate `serve` fails to mount fails a test rather than a store.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Composed {
+    /// The router the shipped binary serves — infra routes, domain routes, and the cloud surface
+    /// when the store is provisioned for one.
+    pub app: axum::Router,
+    /// The device pairing table, already refilled from the store (ADR-0091).
+    pub pairing: Arc<Pairing>,
+    /// The signed-in bindings, already refilled from the store (ADR-0091).
+    pub sessions: Arc<Sessions>,
+}
+
+/// Builds the state, the router and the background loops — everything [`serve`] does except
+/// installing a signal handler, printing the pairing banner and binding the socket.
+///
+/// Callers pass their own `shutdown_rx` so the loops this spawns drain with whatever owns the
+/// lifetime: `serve` passes the one fed by the OS signal, and a test passes a channel it never
+/// fires.
+///
+/// # Errors
+///
+/// [`EdgeError::Config`] if the configuration would misbehave, [`EdgeError::Country`] if the
+/// compiled-in country modules disagree, or [`EdgeError::DeviceRegistry`] if the pairing or sign-in
+/// table could not be read.
+pub async fn compose<S, Q>(
+    config: EdgeConfig,
+    edge: Arc<Edge<S>>,
+    queue: Q,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) -> Result<Composed, EdgeError>
+where
+    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
+{
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
@@ -118,8 +223,6 @@ where
     countries.validate().map_err(EdgeError::Country)?;
     tracing::info!(countries = ?countries.country_codes(), "country modules loaded");
 
-    let bind = config.bind;
-    let advertised_host = config.advertised_host();
     // The store's cloud and identity, read before `config` moves into the app state: they decide
     // whether the config-pull and heartbeat loops run (ADR-0085).
     let cloud_url = config.cloud_url.clone();
@@ -154,32 +257,6 @@ where
     let state =
         AppState::with_fanout(config, edge.fanout().clone()).with_pairing(Arc::clone(&pairing));
 
-    // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
-    // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
-    match state.pairing.mint(state.clock.now()) {
-        Ok(code) => {
-            if let Some(host) = advertised_host {
-                tracing::info!(
-                    pairing_url = %pairing_url(host, bind.port(), &code),
-                    "scan or type this to pair a device",
-                );
-            } else {
-                tracing::warn!(
-                    "a device pairs at http://<edge-ip>:{}/pair?code={} — set advertised_ip or read the LAN IP off this machine",
-                    bind.port(),
-                    code.as_str(),
-                );
-            }
-        }
-        Err(_) => {
-            tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
-        }
-    }
-
-    // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
-    // raw-IP pairing URL above still works (ADR-0030).
-    NoopAdvertiser.advertise("pos", bind.port());
-
     // The domain routes share the same pairing state the infra router serves, so the device-token
     // check (ADR-0084) validates tokens against the very set `/api/pair` issues them into. The config
     // loop keeps its own handle on the edge, so a menu published from the cloud hot-swaps the live
@@ -188,17 +265,8 @@ where
     let mut app = crate::http::router(state).merge(crate::http::domain_router(
         edge,
         Arc::clone(&pairing),
-        sessions,
+        Arc::clone(&sessions),
     ));
-
-    // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM drains
-    // them together. A task translates the OS signal into a watched flag; each consumer waits on its
-    // own clone.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        let _ignored = shutdown_tx.send(true);
-    });
 
     // Compose the cloud surface when the store is provisioned for a cloud (ADR-0086). A `cloud_url`
     // means: mount the activation routes so a fresh box can be set up at `/setup`, and — once the box
@@ -213,29 +281,18 @@ where
             &config_edge,
             queue,
             nats.as_ref(),
-            &shutdown_rx,
+            shutdown_rx,
         )
         .await;
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
 
-    let listener = TcpListener::bind(bind)
-        .await
-        .map_err(|source| EdgeError::Bind { addr: bind, source })?;
-    tracing::info!(
-        %bind,
-        protocol_version = pos_proto::PROTOCOL_VERSION,
-        "pos_edge listening",
-    );
-
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
-        .await
-        .map_err(EdgeError::Serve)?;
-
-    tracing::info!("pos_edge stopped");
-    Ok(())
+    Ok(Composed {
+        app,
+        pairing,
+        sessions,
+    })
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the OS-keyring
