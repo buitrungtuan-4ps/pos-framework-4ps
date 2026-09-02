@@ -133,6 +133,29 @@ impl SqliteStore {
         .await
     }
 
+    /// The queue number an order already holds, or `None` if it was never given one (migration
+    /// 0003).
+    ///
+    /// A read, so a counter screen can show the number without minting one. Keyed by
+    /// `(store, order)` with no business date, which is what `queue_allocations` stores — so an
+    /// order still open past the day's cutoff is found rather than lost.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the read fails.
+    pub async fn daily_queue_number_for(
+        &self,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> Result<Option<u64>, PortError> {
+        self.ask(PortName::OrderIn, move |reply| Command::QueueNumberFor {
+            store_id,
+            order_id,
+            reply,
+        })
+        .await
+    }
+
     /// Records the store's latest OTA self-test, replacing any earlier one (migration 0006, the
     /// rollback rule of [ADR-0048]).
     ///

@@ -11,6 +11,7 @@ import type {
   BumpResponse,
   CheckResponse,
   CountShiftRequest,
+  CounterOrder,
   FireRequest,
   FloorResponse,
   LineRequest,
@@ -152,8 +153,21 @@ export const api = {
   bumpTicket: (bump: BumpRequest) =>
     request<BumpResponse>("POST", "/api/kds/bump", bump),
 
+  // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
+  // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
+  // to charge one.
+  openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
+
+  // What an order owes, for an order that sits on no table.
+  checkOrder: (orderId: string) =>
+    request<CheckResponse>("GET", `/api/orders/${orderId}/check`),
+
   openBill: (tableId: string) =>
     request<BillResponse>("POST", `/api/tables/${tableId}/bill`),
+
+  // Open a bill on an order rather than a table — the counter's path to payment (ADR-0093).
+  openBillForOrder: (orderId: string) =>
+    request<BillResponse>("POST", `/api/orders/${orderId}/bill`),
   settleBill: (billId: string, settle: SettleRequest) =>
     request<BillResponse>("POST", `/api/bills/${billId}/settle`, settle),
 

@@ -108,6 +108,27 @@ export interface CheckResponse {
   total_due: Money;
 }
 
+// One line of a counter order, as the counter list shows it: what it is and how many, so a cashier
+// recognises the order a customer is collecting.
+export interface CounterLine {
+  display_name: string;
+  quantity: Quantity;
+}
+
+// A counter order awaiting payment (ADR-0093). A relayed or QR-counter order sits on no table, so it
+// appears on no floor plan — this list is the only way a cashier can find it.
+export interface CounterOrder {
+  order_id: string;
+  // The daily number staff shouted. Absent for an order that was never given one; the edge reads
+  // the number rather than minting one, so a screen refresh never invents a number.
+  queue_number?: number;
+  items: CounterLine[];
+  total_due: Money;
+  // A bill already open on this order. The screen settles THIS bill rather than opening a second
+  // one, which the edge refuses with a 409.
+  bill_id?: string;
+}
+
 export interface BumpRequest {
   order_id: string;
   station_id: string;

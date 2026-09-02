@@ -202,3 +202,62 @@ fn the_counter_survives_reopening_the_database() {
         );
     });
 }
+
+#[test]
+fn the_number_can_be_read_back_without_minting_one() {
+    // The counter screen lists open takeaway orders and shows the number staff shouted
+    // ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)). It must be able to *ask*
+    // without allocating: asking through `allocate_daily_queue_number` would answer too, being
+    // idempotent by order, and would put a number on every order a screen refresh happened to
+    // mention — including floor orders, which must never have one.
+    //
+    // The read is keyed by `(store, order)` with no business date, which is what
+    // `queue_allocations` stores. That is not a shortcut: an order still unpaid after the day's
+    // cutoff would not be found under *today's* date, so a date-keyed read would lose the number of
+    // exactly the order most likely to still be sitting on the counter.
+    let dir = TempDir::new().expect("temp dir");
+    let path: PathBuf = dir.path().join("queue-read.sqlite");
+    block_on(async {
+        let store = open(&path);
+        let store_id = store_id();
+
+        assert_eq!(
+            store
+                .daily_queue_number_for(store_id, order(1))
+                .await
+                .expect("read an unnumbered order"),
+            None,
+            "an order that was never given a number has none, and asking does not create one"
+        );
+
+        let allocated = store
+            .allocate_daily_queue_number(store_id, day(24), order(1))
+            .await
+            .expect("allocate");
+        assert_eq!(
+            store
+                .daily_queue_number_for(store_id, order(1))
+                .await
+                .expect("read"),
+            Some(allocated),
+            "the read returns the number that was actually handed out"
+        );
+
+        // The previous read must not have advanced anything: the next order gets 2, not 3.
+        let second = store
+            .allocate_daily_queue_number(store_id, day(24), order(2))
+            .await
+            .expect("second");
+        assert_eq!(second, 2, "reading a number consumes none");
+
+        // Yesterday's unpaid order is still found today, which is why the read carries no date.
+        assert_eq!(
+            store
+                .daily_queue_number_for(store_id, order(1))
+                .await
+                .expect("read across the cutoff"),
+            Some(1),
+            "an order left open past the cutoff keeps the number the counter shouted"
+        );
+    });
+}

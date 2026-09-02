@@ -2,6 +2,7 @@
   "app.brand": "Pizza 4P's",
 
   "nav.floor": "Floor",
+  "nav.counter": "Counter",
   "nav.kitchen": "Kitchen",
   "nav.pass": "Pass",
   "nav.today": "Today",
@@ -62,6 +63,15 @@
   "shift.expected": "Expected",
   "shift.counted": "Counted",
   "shift.variance": "Variance",
+
+  "counter.title": "Counter orders",
+  "counter.empty": "No orders waiting to be paid for.",
+  "counter.empty_hint": "Takeaway and delivery orders appear here when they arrive.",
+  "counter.queue_number": "No. {number}",
+  "counter.no_queue_number": "No number",
+  "counter.resume": "Bill already open — resume",
+  "counter.back": "← Counter orders",
+  "counter.next": "Next order",
 
   "pair.title": "Pair this device",
   "pair.paired": "Paired",

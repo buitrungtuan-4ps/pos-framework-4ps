@@ -18,6 +18,7 @@ pub mod assets;
 pub mod auth;
 pub mod bills;
 pub mod check;
+mod counter;
 pub mod floor;
 pub mod health;
 pub mod kds;
@@ -117,15 +118,20 @@ pub fn router(state: AppState) -> Router {
 /// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
 /// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
 /// successes).
-pub fn domain_router<S>(
+pub fn domain_router<S, Q>(
     edge: Arc<Edge<S>>,
+    queue: Q,
     pairing: Arc<Pairing>,
     sessions: Arc<Sessions>,
 ) -> Router
 where
     S: EventStore + Send + Sync + 'static,
+    Q: crate::queue::QueueNumberAuthority + 'static,
 {
     let lockout = Arc::new(Lockout::new());
+    // Cloned before `edge` and `sessions` move into the routers below.
+    let counter_edge = Arc::clone(&edge);
+    let sessions_for_counter = Arc::clone(&sessions);
 
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
     // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
@@ -181,8 +187,17 @@ where
     // Every domain route requires a paired device (ADR-0084). The check runs once here, over the
     // pairing state, so it guards reads, writes and the session routes alike before any handler; the
     // middleware carries its own `Arc<Pairing>` state, independent of the routes' own state.
+    // The counter's order list, in its own sub-router because it needs the queue-number authority
+    // beside the edge and `QueueNumberAuthority` is not dyn-compatible (ADR-0093). Behind the same
+    // signed-in gate as the rest of the domain surface, and the paired gate below.
+    let counter = counter::router(counter_edge, queue).layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&sessions_for_counter),
+        auth::require_signed_in,
+    ));
+
     guarded
         .merge(session)
+        .merge(counter)
         .layer(axum::middleware::from_fn_with_state(
             pairing,
             auth::require_paired_device,

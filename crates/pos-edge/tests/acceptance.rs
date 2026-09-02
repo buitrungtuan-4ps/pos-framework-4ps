@@ -6,7 +6,7 @@
 //! # What makes this different from the other suites
 //!
 //! Every other HTTP test in this crate builds its router by hand —
-//! `http::domain_router(edge, pairing, sessions)` — and so proves that *the routes* work. None of
+//! `http::domain_router(edge, queue, pairing, sessions)` — and so proves that *the routes* work. None of
 //! them proves that [`serve`](pos_edge::serve) **mounts** them. That distinction is the single most
 //! expensive one in this tree's history: roadmap v3 records seven slices whose code was written,
 //! unit-tested and unreachable from the running binary, and an eighth was found while scoping R5.
@@ -119,6 +119,12 @@ fn taxes() -> TaxRateTable {
 struct Store {
     app: Router,
     edge: Arc<Edge<FakeStore>>,
+    /// The queue-number authority the composed router was given, so a test's `EdgeOrderIn` can be
+    /// built over the **same** one. That is what production does — `compose` shares a single
+    /// authority between intake and the counter's read route (ADR-0093) — and a test with two would
+    /// prove the opposite of what it looks like it proves: the list would show no number for an
+    /// order that plainly has one.
+    queue: Arc<InMemoryQueueNumbers>,
     token: String,
     _shutdown: tokio::sync::watch::Sender<bool>,
 }
@@ -161,14 +167,10 @@ async fn a_store() -> Store {
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let composed = pos_edge::compose(
-        config,
-        Arc::clone(&edge),
-        InMemoryQueueNumbers::new(),
-        &shutdown_rx,
-    )
-    .await
-    .expect("the edge composes");
+    let queue = Arc::new(InMemoryQueueNumbers::new());
+    let composed = pos_edge::compose(config, Arc::clone(&edge), Arc::clone(&queue), &shutdown_rx)
+        .await
+        .expect("the edge composes");
 
     // Pair a device the way a device does: mint a code on the box, then redeem it over the route the
     // operator UI posts to. Nothing here reaches inside `Pairing` to fabricate a token.
@@ -204,6 +206,7 @@ async fn a_store() -> Store {
     Store {
         app: composed.app,
         edge,
+        queue,
         token,
         _shutdown: shutdown_tx,
     }
@@ -451,7 +454,7 @@ async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
     let store = a_store().await;
     let intake = EdgeOrderIn::new(
         Arc::clone(&store.edge),
-        InMemoryQueueNumbers::new(),
+        Arc::clone(&store.queue),
         pos_edge::system_device_id(store_id()),
     );
 
@@ -540,12 +543,19 @@ async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
 ///
 /// No table is created, seated or named anywhere in this test. That is the assertion: a store that
 /// has never opened a table can still take money.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one operator flow, read top to bottom: find the order on the counter list, read the \
+              check, open its bill, settle in cash, see it leave the list, and be refused a second \
+              bill. Splitting it into helpers would hide the order of the steps, which is the \
+              property an acceptance test exists to pin."
+)]
 #[tokio::test]
 async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
     let store = a_store().await;
     let intake = EdgeOrderIn::new(
         Arc::clone(&store.edge),
-        InMemoryQueueNumbers::new(),
+        Arc::clone(&store.queue),
         pos_edge::system_device_id(store_id()),
     );
 
@@ -567,7 +577,48 @@ async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
         })
         .await
         .expect("the store accepts a relayed counter order");
-    let order_id = accepted.order_id.to_string();
+
+    // The cashier finds the order the only way they can: the counter's list. A relayed order is on
+    // no floor plan, so without this route they would have to be *told* the ULID — which is the
+    // one thing an operator can never be expected to type.
+    let (status, listed) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/orders/open",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the counter list route is mounted");
+    let orders = listed.as_array().expect("a list of orders");
+    assert_eq!(orders.len(), 1, "the relayed order is waiting: {listed}");
+    let waiting = &orders[0];
+    assert_eq!(
+        waiting["queue_number"], 1,
+        "showing the number the counter shouted, read from the same authority intake allocated \
+         from — not a fresh one this route minted"
+    );
+    assert_eq!(
+        waiting["total_due"]["amount_minor"], WITH_TAX,
+        "and what is owed, with tax"
+    );
+    assert_eq!(
+        waiting["items"][0]["display_name"], "Margherita",
+        "and what it is, so a cashier recognises it: {waiting}"
+    );
+    assert!(
+        waiting["bill_id"].is_null(),
+        "no bill open on it yet, so the screen opens one rather than resuming"
+    );
+    let order_id = waiting["order_id"]
+        .as_str()
+        .expect("the list names the order to bill")
+        .to_owned();
+    assert_eq!(
+        order_id,
+        accepted.order_id.to_string(),
+        "and it is the order intake accepted"
+    );
 
     // The cashier reads what is owed before taking money, from the order-keyed check — the
     // table-keyed one cannot answer for an order that sits on no table.
@@ -627,6 +678,23 @@ async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
     assert!(
         settled["table_state"].is_null(),
         "and cycles no table on the way out"
+    );
+
+    // Settled, it leaves the counter list — otherwise every paid order of the day would pile up in
+    // front of the next customer's.
+    let (status, after) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/orders/open",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        after.as_array().map(Vec::len),
+        Some(0),
+        "a paid order is off the counter list: {after}"
     );
 
     // A second bill on the same order is refused. On the floor the table state machine used to do

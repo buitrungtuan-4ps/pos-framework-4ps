@@ -12,6 +12,7 @@ import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Setup } from "./screens/Setup";
 import { Shift } from "./screens/Shift";
+import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
 import { fold, loadFloor, loadMenu, setLink } from "./state/store";
@@ -103,6 +104,7 @@ export function App() {
       <Route path="/table/:id/pay" component={Pay} />
       <Route path="/kds" component={Kds} />
       <Route path="/expo" component={Expo} />
+      <Route path="/counter" component={Takeaway} />
       <Route path="/today" component={Today} />
       <Route path="/shift" component={Shift} />
       <Route path="/pair" component={Pairing} />

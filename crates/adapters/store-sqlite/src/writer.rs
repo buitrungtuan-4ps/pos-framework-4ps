@@ -121,6 +121,14 @@ pub(crate) enum Command {
         order_id: OrderId,
         reply: oneshot::Sender<Result<u64, PortError>>,
     },
+    /// The queue number an order was already given, or `None`. A **read**: unlike
+    /// [`Command::AllocateQueueNumber`] it never mints one, so a screen can show the number the
+    /// counter shouted without a GET minting numbers for orders that have none.
+    QueueNumberFor {
+        store_id: StoreId,
+        order_id: OrderId,
+        reply: oneshot::Sender<Result<Option<u64>, PortError>>,
+    },
     /// The intake-ledger record a `(store, sales_channel, external_reference)` already produced, as
     /// stored JSON, or `None`.
     LookUpIntake {
@@ -207,6 +215,12 @@ pub(crate) enum RegistryCommand {
 ///
 /// A `send` that fails means the caller's future was dropped before its reply arrived — the caller
 /// no longer cares, so the reply is discarded.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a dispatch table: one arm per command, each forwarding to its own function. Its \
+              length is the number of commands, and splitting it would scatter the \
+              command-to-handler mapping this loop exists to make obvious in one place."
+)]
 pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
     while let Some(command) = rx.blocking_recv() {
         match command {
@@ -276,6 +290,13 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     business_date,
                     order_id,
                 ));
+            }
+            Command::QueueNumberFor {
+                store_id,
+                order_id,
+                reply,
+            } => {
+                let _ = reply.send(queue_number_for(&conn, store_id, order_id));
             }
             Command::RecordSelfTest {
                 store_id,
@@ -683,6 +704,30 @@ fn last_self_test(conn: &Connection, store_id: StoreId) -> Result<Option<SelfTes
     )
     .optional()
     .map_err(|error| db_error(port, error))
+}
+
+/// The queue number an order already holds, or `None` if it was never given one.
+///
+/// Read-only, and keyed by `(store, order)` alone — `queue_allocations` carries no business date
+/// (migration 0003 records "an order id already names its store"), so a counter order left unpaid
+/// past the cutoff is still found the next morning. Asking
+/// [`allocate_queue_number`] instead would answer too, since it is idempotent by order, but it
+/// would *mint* a number for an order that has none — a write on a read path.
+fn queue_number_for(
+    conn: &Connection,
+    store_id: StoreId,
+    order_id: OrderId,
+) -> Result<Option<u64>, PortError> {
+    let port = PortName::OrderIn;
+    let number: Option<i64> = conn
+        .query_row(
+            "SELECT queue_number FROM queue_allocations WHERE store_id = ?1 AND order_id = ?2",
+            params![store_id.to_string(), order_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    Ok(number.map(|value| u64::try_from(value).unwrap_or(0)))
 }
 
 fn allocate_queue_number(

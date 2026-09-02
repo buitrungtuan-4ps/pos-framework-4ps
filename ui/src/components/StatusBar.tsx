@@ -7,6 +7,7 @@ import { state } from "../state/store";
 
 const NAV: { href: string; key: MessageKey }[] = [
   { href: "/", key: "nav.floor" },
+  { href: "/counter", key: "nav.counter" },
   { href: "/kds", key: "nav.kitchen" },
   { href: "/expo", key: "nav.pass" },
   { href: "/today", key: "nav.today" },
