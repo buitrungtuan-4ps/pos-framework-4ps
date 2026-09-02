@@ -94,10 +94,24 @@ true:
   verified, and it cannot be verified from a repository. The implementation slice proves reachability
   on a real box before the runbook claims it works, and falls back to attaching `nats` to the
   `frontend` network if not — at the cost of giving the broker egress it does not need.
-- **Certificate rotation for NATS.** On the ACME paths the certificate Caddy renews lives in the
-  `caddy_data` volume and rotates about every 60 days; NATS needs to reload it or the bus dies quietly
-  at renewal. A brought certificate (debate D24, whose ADR follows this one) sidesteps the problem
-  entirely, which is one reason that ADR is worth having before a fleet depends on the bus.
+- **Certificate rotation for NATS** — and, because of it, **this ADR's implementation is sequenced
+  after the TLS-posture one**. The decision above binds TLS and the published port into one change but
+  does not say where NATS's server certificate comes from, and on the ACME paths there is only one
+  real certificate on the box: the one Caddy renews inside its own `caddy_data` volume. That
+  certificate is *valid* for the broker — same hostname, same machine, a different port — so the
+  question is only plumbing and renewal. Both answers are bad:
+  - Mounting `caddy_data` into the NATS container couples the broker to another service's private
+    storage layout (the path embeds the ACME directory URL), and
+  - Caddy renews roughly 30 days before expiry, so a NATS that does not reload keeps serving the old
+    certificate until it expires and then **every store fails TLS and the bus goes dark silently** —
+    publish failure is non-fatal by design, so nothing complains for 60–90 days. That is the exact
+    failure class this program keeps finding, engineered in deliberately.
+
+  So the certificate's location must be a **configured** path that some posture put there on purpose,
+  not a reach into a neighbour's volume. Debate D24's `TLS_MODE` work lands first and establishes that
+  path for all four postures — ACME, Cloudflare DNS-01, a brought certificate, and termination
+  upstream — and E7's implementation then points at it. This ADR's transport decision is unaffected by
+  that ordering; only its delivery date is.
 - **Restricting the port by source address.** Stores on residential or mobile connections have no
   stable address, so a general allow-list is not available; per-deployment firewalling is a runbook
   step, not something the compose file can decide.
