@@ -196,7 +196,16 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
   `serve` fails four of the seven cases while the hand-built `domain_flow.rs` suite still passes — which
   is precisely the blind spot that let seven slices ship unreachable. Writing it also found the ninth:
   **a relayed takeaway order cannot be paid for** (see below).
-- **Q2** — i18n-parity gate + dashboard code-split.
+- **Q2** — i18n-parity gate + dashboard code-split. **Done.** The parity gate
+  (`scripts/i18n-parity.mjs`, mirrored into both roots, wired into `pnpm build`) requires every locale
+  to match `en`'s key set exactly. Its scope is deliberately one property: a *bad* key is already a
+  type error (`t()` takes `keyof typeof en`), but a key missing from `vi.json` type-checks and *works*
+  via the English fallback — so it ships silently and an operator reads English mid-shift. Both apps
+  are in parity today (1233 and 90 keys), so it is a drift guard, verified by breaking it in both
+  directions. The code-split made every guarded screen a `lazy()` chunk: **initial JS 540.57 → 268.15
+  kB (−50.4%), gzipped 131.47 → 76.67 kB**, 37 route chunks, and vite's >500 kB warning gone. Also
+  closed a smaller thing found on the way: `i18n-lint.mjs` was duplicated into both roots without
+  being listed in the `mirrored-files` gate, so it was identical only by luck.
 - **Q3** — AIP-193 envelope on `/v1` **and** `/admin` (both return plain text today) + ETag/If-Match.
 - **Q4** — Store hub + URL context `/t/:tenant/s/:store`.
 - **Q5** — `/admin` becomes a real contract: pagination/`q`/sort on the unbounded lists; `/admin` into OpenAPI + the drift gate; fix the webhook header docs↔code mismatch; implement or drop `pos-api-version`; wire or delete the two dead scopes; rate-limit `/v1/orders` and `/sync`.

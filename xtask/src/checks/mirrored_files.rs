@@ -7,7 +7,8 @@
 //! with separate Vite builds, so they cannot share a module the way two Rust crates share one. A few
 //! files are therefore copied verbatim into both: the design tokens (ADR-0060 has the dashboard reuse
 //! the P6 token set, and the WCAG-AA contrast guarantee — `docs/wcag-contrast-audit.md` — depends on
-//! the palettes being the same in both) and the contrast gate that checks them. Copies drift silently:
+//! the palettes being the same in both), the contrast gate that checks them, and the two i18n gates
+//! ([ADR-0020](../../../docs/adr/0020-i18n-and-a11y.md)). Copies drift silently:
 //! a token darkened in one root but not the other would leave one surface failing AA with nothing to
 //! catch it. This gate is the substitute for a shared module — it fails the build the moment a
 //! mirrored pair diverges, so "deduplicated" is enforced rather than hoped for.
@@ -24,6 +25,17 @@ const MIRRORED: &[(&str, &str)] = &[
     (
         "ui/scripts/wcag-contrast.mjs",
         "dashboard/scripts/wcag-contrast.mjs",
+    ),
+    // The two i18n gates. `i18n-lint.mjs` was duplicated into both roots and *not* listed here,
+    // so it was byte-identical only by luck — precisely the silent drift this gate exists to
+    // catch. `i18n-parity.mjs` joined it in roadmap v3 Q2 and is listed from the start.
+    (
+        "ui/scripts/i18n-lint.mjs",
+        "dashboard/scripts/i18n-lint.mjs",
+    ),
+    (
+        "ui/scripts/i18n-parity.mjs",
+        "dashboard/scripts/i18n-parity.mjs",
     ),
 ];
 

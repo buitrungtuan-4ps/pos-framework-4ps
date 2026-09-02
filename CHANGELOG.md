@@ -17,6 +17,47 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A locale that falls behind `en` now fails the build instead of falling back silently** (roadmap
+  v3 slice **Q2**, #119). `scripts/i18n-parity.mjs`, mirrored into both front-end roots and wired
+  into `pnpm build`, requires every catalogue to carry exactly the key set `en.json` carries.
+
+  **The scope is one property, deliberately.** A *bad* key is already impossible: `t()` takes
+  `MessageKey = keyof typeof en`, so a typo is a type error and `tsc --noEmit` rejects it ahead of
+  this. What the type system cannot see is the other catalogues — a key added to `en.json` and
+  forgotten in `vi.json` type-checks perfectly and *works*, because the runtime falls back to
+  English. So it ships, and a Vietnamese operator reads an English string mid-shift with nothing
+  failing anywhere to say so. That fallback is the right runtime behaviour — a blank or a raw key on
+  a till would be worse — which is precisely why the check has to happen at build time: the safety
+  net is silent by design. The reverse direction is caught too, since a key `en` has dropped is
+  usually the leftover half of a rename.
+
+  Both apps are in parity today (1233 keys in the console, 90 in the operator UI, exact in both
+  directions), so this is a drift guard rather than a fix. It was verified by breaking it: deleting
+  one key and adding one stray key each fail with the offending key named.
+
+### Changed
+- **The console's login page no longer downloads the whole console** (roadmap v3 slice **Q2**, #119).
+  Every screen behind the auth guard is now a `lazy()` route chunk; the three public screens
+  (`Login`, `Setup`, `AcceptInvite`) stay in the initial bundle because they are all an
+  unauthenticated visitor can reach.
+
+  **Initial JS: 540.57 kB → 268.15 kB (−50.4%); gzipped 131.47 kB → 76.67 kB (−41.7%)**, split into
+  37 route chunks with the largest (the Catalog shell) at 45.58 kB. Before this, anyone opening the
+  login page paid for all thirty-one screens first — the Reports charts, the Layout editor, every
+  Catalog sub-screen — before they could type a password. Vite had been printing its "chunks are
+  larger than 500 kB" warning and recommending exactly this; the warning is now gone.
+
+  **Upgrade note** None for operators. A fork adding a console screen should follow the `lazy()`
+  pattern in `dashboard/src/App.tsx` rather than importing it eagerly, or the screen rejoins the
+  initial chunk and quietly gives back part of this.
+
+### Fixed
+- **`i18n-lint.mjs` was a duplicated file that nothing kept in step** (#119). It is copied verbatim
+  into `ui/scripts/` and `dashboard/scripts/`, but unlike `wcag-contrast.mjs` it was never listed in
+  the `mirrored-files` gate — so the two copies were byte-identical only by luck, which is the exact
+  silent drift that gate's own documentation describes. Both it and the new `i18n-parity.mjs` are now
+  listed.
+
 - **`IntakeLedger` is a registered port at last, with a suite both its implementations pass**
   ([ADR-0064](docs/adr/0064-edge-order-in.md) amendment, #118). It was built as a port and called one
   by its own ADR, but it never got a `PortName` variant — and everything downstream of that registry
