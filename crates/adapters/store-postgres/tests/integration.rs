@@ -3439,3 +3439,96 @@ mod inventory_authoring {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Conditional writes over the `xmin` system column (ADR-0094).
+// ---------------------------------------------------------------------------
+
+mod conditional_writes {
+    use super::{block_on, prepared};
+    use store_postgres::RowUpdate;
+
+    /// The compare-and-swap itself, against the real planner.
+    ///
+    /// Three things can only be shown here. That `xmin` **moves on every `UPDATE`** — the whole
+    /// scheme rests on it, and no fake can prove Postgres does it. That a stale version is refused
+    /// as a `VersionMismatch` rather than silently applying. And that a **garbled** tag is a
+    /// mismatch too, not a database error: the comparison is on `xmin::text`, because casting
+    /// caller-supplied text to `xid` raises `invalid input syntax for type xid` and would turn a
+    /// client's stale tag into a `500` instead of the `412` it has earned.
+    #[test]
+    fn a_stale_or_garbled_version_is_refused_and_a_current_one_moves_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let tenant = "0000000000TENANTXMINAAAAAA";
+
+            let first = registry
+                .insert_tenant(tenant, "Placeholder")
+                .await
+                .expect("insert the tenant");
+
+            // A garbled tag: not a transaction id at all. It must simply not match.
+            assert_eq!(
+                registry
+                    .set_tenant(tenant, "Nope", "active", "not-a-transaction-id")
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+
+            // The current version applies, and hands back a different one.
+            let second = match registry
+                .set_tenant(tenant, "Pizza 4P's", "active", &first)
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            assert_ne!(
+                second, first,
+                "xmin must move on every UPDATE, or the next write would be unguarded"
+            );
+
+            // Replaying the first version is the lost update, refused.
+            assert_eq!(
+                registry
+                    .set_tenant(tenant, "Stale Overwrite", "archived", &first)
+                    .await
+                    .expect("the update"),
+                RowUpdate::VersionMismatch
+            );
+
+            // And the refused write changed nothing.
+            let rows = registry.fetch_tenants().await.expect("list the tenants");
+            // By id, not by position: the shared truncation between cases does not clear `tenants`.
+            let row = rows
+                .iter()
+                .find(|row| row.tenant_id == tenant)
+                .expect("the tenant is there");
+            assert_eq!(row.name, "Pizza 4P's");
+            assert_eq!(row.status, "active");
+            assert_eq!(row.version, second);
+        });
+    }
+
+    /// An absent row is `NotFound`, not `VersionMismatch` — the probe on the failure path is what
+    /// separates a `404` from a `412`, and zero rows alone cannot.
+    #[test]
+    fn an_absent_row_is_not_found_rather_than_a_version_mismatch() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            assert_eq!(
+                registry
+                    .set_tenant("0000000000TENANTGONEAAAAAA", "Nope", "active", "1")
+                    .await
+                    .expect("the update"),
+                RowUpdate::NotFound
+            );
+        });
+    }
+}

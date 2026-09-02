@@ -16,6 +16,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The console's four registry writes stop losing edits: `ETag` on read, `If-Match` on write, `412`
+  on a stale one** (#138). Q3c slice 2, the mechanism [ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)
+  frames, proven end to end on the smallest complete family — tenants, brands, stores, devices.
+
+  **`pos-cloud` gains `version::{Version, Versioned, UpdateOutcome}`.** A `Version` is an opaque
+  string: not a counter, not a timestamp, not ordered, and the type offers no way to ask. A
+  `Versioned<T>` serialises as the record's own fields plus an additive `etag` — `#[serde(flatten)]`,
+  so nothing moves or is renamed — which is how a **list** carries a version per row where a header
+  cannot. `UpdateOutcome` replaces the seam's `bool` with three answers, because a conflict and an
+  absence need different things from the caller and a bool cannot tell them apart.
+
+  **Beneath it, `xmin`.** `UPDATE … WHERE <key> AND xmin::text = $n RETURNING xmin::text` — one
+  statement, so the compare and the swap cannot be separated, and no migration. Zero rows is
+  ambiguous, so a probe on the failure path separates `NotFound` from `VersionMismatch`. The
+  comparison is on **`xmin::text`, not `$n::xid`**: casting caller-supplied text to `xid` raises
+  `invalid input syntax for type xid` on anything non-numeric, which would turn a client's stale or
+  garbled tag into a `500` instead of the `412` it earned. A live-Postgres case covers exactly that,
+  alongside the two that no fake can prove — that `xmin` moves on every `UPDATE`, and that a replayed
+  version changes nothing.
+
+  **On the wire.** A read-one and a write answer `ETag: "<token>"`; every list row carries the same
+  byte-identical token as `etag`; a write requires `If-Match`. Two headers are refused on purpose and
+  differently: `W/"…"` is `INVALID_FORMAT`, because RFC 9110 §13.1.1 compares `If-Match` *strongly*
+  and a weak validator can never match — accepting one would accept a tag that can only ever fail;
+  and `*` is `WILDCARD_NOT_ACCEPTED`, because it is legal HTTP for precisely the last-write-wins
+  behaviour this removes. An absent header is an ordinary `400` naming `if-match` as `REQUIRED`,
+  checked **after** field validation so a caller with a bad ULID still hears about the ULID.
+
+  **A create now answers with the version it starts at**, in the body and an `ETag` on the `201`.
+  Without it an admin who has just made a record would have to re-list the collection before editing
+  it — a round trip to learn something the server already knew.
+
+  **Breaking, deliberately, on `/admin`:** the four registry `PATCH` routes now refuse a request with
+  no `If-Match`. Accepting an absent header as "no opinion" would have left the silent clobber in
+  place *as the default*. The console is updated in the same change: `ApiError.isStale` names the
+  `412`, and the Stores screen reloads and says so rather than offering a retry — a retry would
+  re-apply the overwrite through a different door. `/admin` has one consumer, this repository's
+  console.
+
 ### Added
 - **ADR-0094 — the console stops losing edits** (#137)
   ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)). No behaviour change in this entry:

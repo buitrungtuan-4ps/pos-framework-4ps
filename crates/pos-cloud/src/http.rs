@@ -69,7 +69,7 @@ use std::sync::Arc;
 use argon2::password_hash::SaltString;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::header::{
-    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE, USER_AGENT,
+    CONTENT_SECURITY_POLICY, ETAG, IF_MATCH, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE, USER_AGENT,
     X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -77,7 +77,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use pos_ports::PortError;
 use pos_ports::config_store::ConfigUpdate;
@@ -183,6 +183,7 @@ use crate::scheduling::{
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
+use crate::version::{UpdateOutcome, Version, Versioned};
 use crate::vouchers::{NewVoucher, VoucherStore, VoucherStoreError, generate_code};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -5514,7 +5515,7 @@ where
         return denied;
     }
     match state.registry.list_tenants().await {
-        Ok(tenants) => (StatusCode::OK, Json::<Vec<TenantRecord>>(tenants)).into_response(),
+        Ok(tenants) => (StatusCode::OK, Json(tenants)).into_response(),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5552,7 +5553,7 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_tenant(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5566,7 +5567,7 @@ where
                 after,
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
     }
@@ -5607,8 +5608,12 @@ where
         name: request.name,
         status,
     };
-    match state.registry.update_tenant(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.registry.update_tenant(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5622,9 +5627,10 @@ where
                 after,
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("tenant"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("tenant"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5655,7 +5661,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.registry.list_brands(tenant_id).await {
-        Ok(brands) => (StatusCode::OK, Json::<Vec<BrandRecord>>(brands)).into_response(),
+        Ok(brands) => (StatusCode::OK, Json(brands)).into_response(),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5698,7 +5704,7 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_brand(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5712,7 +5718,7 @@ where
                 after,
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
     }
@@ -5755,8 +5761,12 @@ where
         name: request.name,
         status,
     };
-    match state.registry.update_brand(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.registry.update_brand(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5770,9 +5780,10 @@ where
                 after,
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("brand"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("brand"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5803,7 +5814,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.registry.list_stores(tenant_id).await {
-        Ok(stores) => (StatusCode::OK, Json::<Vec<StoreRecord>>(stores)).into_response(),
+        Ok(stores) => (StatusCode::OK, Json(stores)).into_response(),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5862,7 +5873,7 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_store(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5876,7 +5887,7 @@ where
                 after,
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
     }
@@ -5923,8 +5934,12 @@ where
         name: request.name,
         status,
     };
-    match state.registry.update_store(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.registry.update_store(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -5938,9 +5953,10 @@ where
                 after,
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("store"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("store"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5973,7 +5989,7 @@ where
             Err(refusal) => return refusal,
         };
     match state.registry.list_devices(tenant_id, store_id).await {
-        Ok(devices) => (StatusCode::OK, Json::<Vec<DeviceRecord>>(devices)).into_response(),
+        Ok(devices) => (StatusCode::OK, Json(devices)).into_response(),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -6020,7 +6036,7 @@ where
         status: EntityStatus::Active,
     };
     match state.registry.create_device(&record).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -6034,7 +6050,7 @@ where
                 after,
             )
             .await;
-            (StatusCode::CREATED, Json(record)).into_response()
+            versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
     }
@@ -6086,8 +6102,12 @@ where
         kind: request.kind,
         status,
     };
-    match state.registry.update_device(&record).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.registry.update_device(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::to_value(&record).ok();
             audit_action(
                 &state.audit,
@@ -6101,9 +6121,10 @@ where
                 after,
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
-        Ok(false) => not_found("device"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("device"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -16350,6 +16371,143 @@ pub(crate) fn service_unavailable(service: &str) -> Response {
     )
 }
 
+/// What was wrong with an `If-Match` value that is present but unusable.
+///
+/// Separate from the refusal it becomes so the parse can be tested as a pure function: the exact
+/// strings a client branches on are worth asserting, and a test that only reads status codes would
+/// pass on any of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EntityTagRefusal {
+    /// `If-Match: *` — legal HTTP, and refused here. See [`if_match`].
+    Wildcard,
+    /// Not one strong entity-tag: a weak `W/"…"`, a comma-separated list, or unquoted.
+    Malformed,
+}
+
+/// Reads one strong entity-tag out of a raw header value.
+///
+/// **Strong only.** RFC 9110 §13.1.1 evaluates `If-Match` with the strong comparison function,
+/// under which a weak validator never matches — so accepting `W/"…"` would accept a token that can
+/// only ever fail, which is worse than refusing it, because the caller would read the resulting
+/// `412` as a real conflict and go looking for an edit nobody made.
+///
+/// **One tag, not a list.** A list is legal HTTP and means "any of these"; here the version is a
+/// single row's, so a list has no meaning a caller could intend. The inner-quote check is what
+/// rejects it: `"a", "b"` unwraps to `a", "b`, which still contains a quote.
+fn parse_entity_tag(raw: &str) -> Result<Version, EntityTagRefusal> {
+    let trimmed = raw.trim();
+    if trimmed == "*" {
+        return Err(EntityTagRefusal::Wildcard);
+    }
+    let inner = trimmed
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .ok_or(EntityTagRefusal::Malformed)?;
+    if inner.contains('"') {
+        return Err(EntityTagRefusal::Malformed);
+    }
+    Ok(Version::new(inner))
+}
+
+/// The version a mutating route is being asked to replace
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+///
+/// **Required, not optional.** Treating an absent header as "no opinion" would leave the silent
+/// clobber this exists to close, and leave it as the *default* — every caller that had not been
+/// updated would keep overwriting. Absent is therefore an ordinary missing-field refusal, in the
+/// shape Q3b gave every other one, rather than a status of its own.
+///
+/// `If-Match: *` is refused too. It is legal HTTP meaning "whatever is there now", which is
+/// precisely last-write-wins under a different name, and no caller in this tree wants it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn if_match(headers: &HeaderMap) -> Result<Version, Response> {
+    let Some(raw) = headers.get(IF_MATCH) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match is required: send the etag the record was read at",
+            &[("if-match", "REQUIRED")],
+        ));
+    };
+    let Ok(text) = raw.to_str() else {
+        return Err(entity_tag_refusal(EntityTagRefusal::Malformed));
+    };
+    parse_entity_tag(text).map_err(entity_tag_refusal)
+}
+
+/// The refusal for an `If-Match` this surface will not act on.
+fn entity_tag_refusal(refusal: EntityTagRefusal) -> Response {
+    match refusal {
+        EntityTagRefusal::Wildcard => api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must name a version, not *",
+            &[("if-match", "WILDCARD_NOT_ACCEPTED")],
+        ),
+        EntityTagRefusal::Malformed => api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must be one strong entity-tag, in double quotes",
+            &[("if-match", "INVALID_FORMAT")],
+        ),
+    }
+}
+
+/// The refusal for a write against a version the record no longer holds: `412`, and no details.
+///
+/// No `details` array, for the same reason absence and outage carry none: the caller's fields were
+/// all fine. What went stale is the caller's *copy*, not any one input, so naming a field would
+/// send it to fix something that was right.
+fn version_mismatch() -> Response {
+    api_error(
+        ErrorStatus::VersionMismatch,
+        "the record changed since you read it: re-read it and try again",
+    )
+}
+
+/// A freshly created record and the version it starts at, as `201`.
+///
+/// A create answers with a version for the same reason a read does: without one the caller has to
+/// list the collection again before it can edit what it just made, which is a round trip to learn
+/// something the server already knew. RFC 9110 provides for exactly this on `201`.
+fn versioned_created<T>(record: T, version: &Version) -> Response
+where
+    T: Serialize,
+{
+    let body = Json(Versioned::new(record, version.clone()));
+    match HeaderValue::from_str(&format!("\"{version}\"")) {
+        Ok(tag) => (StatusCode::CREATED, [(ETAG, tag)], body).into_response(),
+        Err(_ignored) => (StatusCode::CREATED, body).into_response(),
+    }
+}
+
+/// A record and the version it is now at, as `200`.
+///
+/// Carries the version **twice**, deliberately: as the `ETag` header RFC 9110 defines for a single
+/// resource, and as the `etag` field a list row has to use because one header cannot describe many
+/// rows. Byte-identical either way, so a client has one code path for "remember this version" and
+/// no opportunity to reformat a token it must not parse.
+fn versioned_ok<T>(record: T, version: &Version) -> Response
+where
+    T: Serialize,
+{
+    let Ok(tag) = HeaderValue::from_str(&format!("\"{version}\"")) else {
+        // Unreachable through the adapters in this tree, which mint digits. A token that cannot be
+        // a header value is the adapter's fault, not the caller's, and the record is still correct.
+        return (
+            StatusCode::OK,
+            Json(Versioned::new(record, version.clone())),
+        )
+            .into_response();
+    };
+    (
+        StatusCode::OK,
+        [(ETAG, tag)],
+        Json(Versioned::new(record, version.clone())),
+    )
+        .into_response()
+}
+
 /// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.
 ///
 /// The fallback is unreachable — every code [`ErrorStatus::http_code`] returns is a valid status,
@@ -16610,6 +16768,81 @@ mod preview_diff_tests {
                 .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
             "the preview surfaces the real conflict: {violations:?}",
         );
+    }
+}
+
+#[cfg(test)]
+mod conditional_write_tests {
+    //! What `If-Match` accepts, and — more usefully — what it refuses.
+    //!
+    //! Every case here is a header a real client could plausibly send. Two of them look correct and
+    //! are not, which is why they are pinned rather than reasoned about: a weak validator, which
+    //! `If-Match` can never satisfy, and a wildcard, which is legal HTTP for exactly the
+    //! last-write-wins behaviour ADR-0094 removes. The parse is a pure function so the refusal each
+    //! produces can be asserted by name rather than by status code alone.
+
+    use super::{EntityTagRefusal, parse_entity_tag};
+
+    #[test]
+    fn a_strong_entity_tag_unwraps_to_the_token_the_adapter_minted() {
+        // Byte-identical to what the read handed out, quotes stripped and nothing else touched —
+        // the token is opaque, so any normalisation here would corrupt a fork's scheme.
+        for (header, token) in [
+            (r#""1847302""#, "1847302"),
+            (r#""sha256:9f86d0818""#, "sha256:9f86d0818"),
+            (r#"  "42"  "#, "42"),
+            (r#""""#, ""),
+        ] {
+            assert_eq!(
+                parse_entity_tag(header).map(|version| version.as_str().to_owned()),
+                Ok(token.to_owned()),
+                "parsing {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_weak_validator_is_refused_because_if_match_could_never_match_it() {
+        // RFC 9110 §13.1.1: `If-Match` uses the *strong* comparison function, under which a weak
+        // validator never matches. Accepting `W/"…"` would accept a tag that can only ever fail,
+        // and the caller would read the resulting 412 as a real conflict and go hunting for an edit
+        // that nobody made.
+        assert_eq!(
+            parse_entity_tag(r#"W/"1847302""#),
+            Err(EntityTagRefusal::Malformed)
+        );
+    }
+
+    #[test]
+    fn a_wildcard_is_refused_because_it_is_last_write_wins_by_another_name() {
+        // `If-Match: *` is legal HTTP meaning "whatever is there now" — precisely the behaviour
+        // ADR-0094 exists to remove. It gets its own refusal rather than the malformed one, because
+        // the caller's header is well-formed and the answer it needs is different.
+        assert_eq!(parse_entity_tag("*"), Err(EntityTagRefusal::Wildcard));
+        assert_eq!(parse_entity_tag("  *  "), Err(EntityTagRefusal::Wildcard));
+    }
+
+    #[test]
+    fn a_list_of_tags_is_refused_because_one_row_has_one_version() {
+        // A list is legal HTTP and means "any of these". A row has one version, so a list names no
+        // intent this surface could honour. The inner-quote check is what catches it.
+        assert_eq!(
+            parse_entity_tag(r#""a", "b""#),
+            Err(EntityTagRefusal::Malformed)
+        );
+    }
+
+    #[test]
+    fn an_unquoted_token_is_refused_rather_than_guessed_at() {
+        // Sending the token bare is the likeliest client mistake. Guessing that the caller meant
+        // `"1847302"` would work until the day a scheme mints a token that is itself quoted.
+        for header in ["1847302", r#""unterminated"#, r#"unopened""#] {
+            assert_eq!(
+                parse_entity_tag(header),
+                Err(EntityTagRefusal::Malformed),
+                "parsing {header}"
+            );
+        }
     }
 }
 

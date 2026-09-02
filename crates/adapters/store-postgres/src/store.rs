@@ -834,6 +834,37 @@ impl EventStore for PostgresStore {
     }
 }
 
+/// What a conditional `UPDATE` did
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+///
+/// Every conditional write in this crate has the same shape:
+///
+/// ```sql
+/// UPDATE t SET … WHERE <key> AND xmin::text = $n RETURNING xmin::text
+/// ```
+///
+/// One statement, so the compare and the swap cannot be separated. `xmin` is the transaction that
+/// last wrote the row, which Postgres changes on every `UPDATE` — no column to add, no trigger to
+/// maintain, and nothing a future `UPDATE` can forget to set.
+///
+/// **The comparison is on `xmin::text`, not `$n::xid`.** Casting caller-supplied text to `xid`
+/// raises `invalid input syntax for type xid` on anything non-numeric, which would turn a client
+/// sending a stale or garbled tag into a `500` instead of the `412` it has earned. Comparing as
+/// text cannot fail: a tag that is not a transaction id simply does not match. The row is already
+/// located by its primary key, so the un-indexable comparison costs nothing.
+///
+/// Zero rows is ambiguous on its own — wrong version, or no such row — so the caller probes once,
+/// on the failure path only, to tell the caller's `412` from its `404`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RowUpdate {
+    /// Applied. Carries the row's new version.
+    Updated(String),
+    /// The row is there, at a different version.
+    VersionMismatch,
+    /// No such row.
+    NotFound,
+}
+
 /// Maps a database error to the port's unavailable status.
 pub(crate) fn unavailable(error: tokio_postgres::Error) -> PortError {
     PortError::unavailable(PortName::EventStore, "the cloud database failed").with_source(error)

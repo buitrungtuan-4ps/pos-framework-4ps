@@ -160,11 +160,22 @@ export interface TranslationImportReport {
 /** Whether a registry entity is in use or retired (ADR-0065). Entities are archived, never deleted. */
 export type EntityStatus = "active" | "archived";
 
+/**
+ * The version a record was read at (ADR-0094). Send it back in `If-Match` to write; a write against
+ * a version the record no longer holds is refused with `412` instead of overwriting whoever edited
+ * in between.
+ *
+ * Opaque: never parse it, never compare two for ordering, never build one. The server mints it and
+ * the only correct thing to do with it is hand it back unchanged.
+ */
+export type ETag = string;
+
 /** A tenant from `GET /admin/tenants` (ADR-0065) — the root of the org tree. */
 export interface Tenant {
   readonly tenant_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A brand from `GET /admin/brands` — grouped under a tenant. */
@@ -173,6 +184,7 @@ export interface Brand {
   readonly tenant_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A store from `GET /admin/stores` — grouped under a tenant and, optionally, a brand. */
@@ -182,6 +194,7 @@ export interface Store {
   readonly brand_id: string | null;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A device from `GET /admin/stores/{id}/devices` — the canonical device identity. */
@@ -192,6 +205,7 @@ export interface Device {
   readonly name: string;
   readonly kind: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /**

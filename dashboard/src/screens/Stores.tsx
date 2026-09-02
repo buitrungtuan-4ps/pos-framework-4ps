@@ -37,7 +37,17 @@ export function Stores() {
   const [pendingArchive, setPendingArchive] = createSignal<Store | null>(null);
 
   // Errors surface on the page (Banner) and as a transient toast (F1).
-  const fail = (caught: unknown) => {
+  // A `412` means somebody else saved this store while the form was open (ADR-0094). The screen
+  // reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists
+  // to prevent, and the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("stores.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -54,7 +64,7 @@ export function Stores() {
       setStores(loadedStores);
       setBrands(loadedBrands);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -78,7 +88,7 @@ export function Stores() {
       toast.ok(t("stores.created"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -98,7 +108,7 @@ export function Stores() {
       toast.ok(t("stores.brandCreated"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -113,17 +123,18 @@ export function Stores() {
     setError("");
     setBusy(true);
     try {
-      await api.updateStore(store.store_id, tenantId(), {
-        name,
-        status: store.status,
-        brandId: store.brand_id,
-      });
+      await api.updateStore(
+        store.store_id,
+        tenantId(),
+        { name, status: store.status, brandId: store.brand_id },
+        store.etag,
+      );
       setEditing("");
       setDraftName("");
       toast.ok(t("stores.renamed"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -137,16 +148,17 @@ export function Stores() {
     setError("");
     setBusy(true);
     try {
-      await api.updateStore(store.store_id, tenantId(), {
-        name: store.name,
-        status: "archived",
-        brandId: store.brand_id,
-      });
+      await api.updateStore(
+        store.store_id,
+        tenantId(),
+        { name: store.name, status: "archived", brandId: store.brand_id },
+        store.etag,
+      );
       setPendingArchive(null);
       toast.ok(t("stores.archived"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -156,15 +168,16 @@ export function Stores() {
     setError("");
     setBusy(true);
     try {
-      await api.updateStore(store.store_id, tenantId(), {
-        name: store.name,
-        status: "active",
-        brandId: store.brand_id,
-      });
+      await api.updateStore(
+        store.store_id,
+        tenantId(),
+        { name: store.name, status: "active", brandId: store.brand_id },
+        store.etag,
+      );
       toast.ok(t("stores.restored"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -176,15 +189,16 @@ export function Stores() {
     setError("");
     setBusy(true);
     try {
-      await api.updateStore(store.store_id, tenantId(), {
-        name: store.name,
-        status: store.status,
-        brandId: brandId || null,
-      });
+      await api.updateStore(
+        store.store_id,
+        tenantId(),
+        { name: store.name, status: store.status, brandId: brandId || null },
+        store.etag,
+      );
       toast.ok(t("stores.brandChanged"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }

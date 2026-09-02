@@ -283,6 +283,7 @@
   "stores.archiveMessage": "Lưu trữ cửa hàng này? Nó sẽ không còn trong danh sách đang hoạt động nhưng không bị xóa và có thể khôi phục sau.",
   "stores.archived": "Đã lưu trữ cửa hàng.",
   "stores.restored": "Đã khôi phục cửa hàng.",
+  "stores.stale": "Người khác đã thay đổi cửa hàng này trong lúc bạn đang sửa. Danh sách đã được tải lại \u2014 vui lòng kiểm tra và thử lại.",
   "stores.renamed": "Đã đổi tên cửa hàng.",
   "stores.created": "Đã tạo cửa hàng.",
   "stores.brandCreated": "Đã tạo thương hiệu.",

@@ -283,6 +283,7 @@
   "stores.archiveMessage": "Archive this store? It stops appearing in active lists but is not deleted, and can be restored later.",
   "stores.archived": "Store archived.",
   "stores.restored": "Store restored.",
+  "stores.stale": "Someone else changed this store while you were editing. The list has been reloaded \u2014 please check and try again.",
   "stores.renamed": "Store renamed.",
   "stores.created": "Store created.",
   "stores.brandCreated": "Brand created.",

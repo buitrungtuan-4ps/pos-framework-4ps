@@ -42,6 +42,7 @@ import type {
   DisplaySubcategory,
   Employee,
   EntityStatus,
+  ETag,
   Enrolment,
   FleetStore,
   Ingredient,
@@ -135,6 +136,15 @@ export class ApiError extends Error {
   get isRejected(): boolean {
     return this.status === 400 || this.status === 409 || this.status === 422;
   }
+
+  /**
+   * Somebody else saved this record between the load and the save (ADR-0094). The screen's copy is
+   * stale, so the only correct recovery is to reload and let the operator see what changed —
+   * never a retry, which would re-apply the overwrite through a different door.
+   */
+  get isStale(): boolean {
+    return this.status === 412;
+  }
 }
 
 async function failure(response: Response): Promise<ApiError> {
@@ -200,6 +210,30 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
   const response = await fetch(path, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  return (await response.json()) as T;
+}
+
+// A conditional write (ADR-0094): `if-match` carries the version the record was read at, as a strong
+// entity-tag. The server requires it, so this is the only way to reach a mutating `/admin` route.
+// `etag` is the opaque token as it arrived, and the quotes are added here so no caller has to know
+// the header's grammar.
+async function requestJsonIfMatch<T>(
+  method: string,
+  path: string,
+  etag: ETag,
+  body?: unknown,
+): Promise<T> {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      "if-match": `"${etag}"`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
@@ -740,12 +774,16 @@ export const api = {
       name,
       ...(brandId === undefined ? {} : { brand_id: brandId }),
     }),
+  // `etag` is the version the caller read the store at (ADR-0094). A save against a version the
+  // store no longer holds is refused with `412` (`ApiError.isStale`) rather than overwriting
+  // whoever edited in between.
   updateStore: (
     storeId: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus; brandId: string | null },
+    etag: ETag,
   ) =>
-    requestJson<Store>("PATCH", `/admin/stores/${encodeURIComponent(storeId)}`, {
+    requestJsonIfMatch<Store>("PATCH", `/admin/stores/${encodeURIComponent(storeId)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       status: fields.status,

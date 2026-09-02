@@ -73,7 +73,7 @@ pub use reconcile::{PostgresReconcile, ReconcileRunRow};
 pub use registry::{BrandRow, DeviceRow, PostgresRegistry, StoreRow, TenantRow};
 pub use rollups::PostgresRollups;
 pub use scheduling::{NewScheduledPublishRow, PostgresScheduledPublishes, ScheduledPublishRow};
-pub use store::{PgTx, PostgresStore};
+pub use store::{PgTx, PostgresStore, RowUpdate};
 pub use subjects::{PostgresSubjects, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use tax_rates::{PostgresTaxRates, TaxRateRow};
