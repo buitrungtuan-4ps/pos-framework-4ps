@@ -47,6 +47,48 @@ pub trait QueueNumberAuthority: Send + Sync {
         business_date: BusinessDate,
         order_id: OrderId,
     ) -> impl Future<Output = Result<u64, PortError>> + Send;
+
+    /// The number an order was **already** given, or `None` if it never had one.
+    ///
+    /// A read, for the counter screen that lists open takeaway orders: it shows the number staff
+    /// shouted, not a new one. [`Self::allocate_queue_number`] would answer too, being idempotent
+    /// by order — and would mint a number for an order that has none, which is a write on a read
+    /// path and would put a number on a floor order that should never have had one.
+    ///
+    /// No business date, deliberately. The allocation is recorded per `(store, order)`, so an order
+    /// still unpaid after the day's cutoff is found the next morning rather than looked for under a
+    /// date it was never allocated on.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the authority cannot be reached or the read fails.
+    fn queue_number_for(
+        &self,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> impl Future<Output = Result<Option<u64>, PortError>> + Send;
+}
+
+/// One authority, shared. The trait returns `impl Future`, so it is not dyn-compatible and
+/// `Arc<dyn QueueNumberAuthority>` cannot exist; this is what lets the intake path and the
+/// counter's read route hold the *same* authority instead of two that would disagree.
+impl<T: QueueNumberAuthority + ?Sized> QueueNumberAuthority for std::sync::Arc<T> {
+    fn allocate_queue_number(
+        &self,
+        store_id: StoreId,
+        business_date: BusinessDate,
+        order_id: OrderId,
+    ) -> impl Future<Output = Result<u64, PortError>> + Send {
+        (**self).allocate_queue_number(store_id, business_date, order_id)
+    }
+
+    fn queue_number_for(
+        &self,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> impl Future<Output = Result<Option<u64>, PortError>> + Send {
+        (**self).queue_number_for(store_id, order_id)
+    }
 }
 
 impl QueueNumberAuthority for SqliteStore {
@@ -60,6 +102,16 @@ impl QueueNumberAuthority for SqliteStore {
     ) -> Result<u64, PortError> {
         self.allocate_daily_queue_number(store_id, business_date, order_id)
             .await
+    }
+
+    /// Forwards to the store's read of `queue_allocations`, which is keyed by order and carries no
+    /// date — so the lookup needs none.
+    async fn queue_number_for(
+        &self,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> Result<Option<u64>, PortError> {
+        self.daily_queue_number_for(store_id, order_id).await
     }
 }
 
@@ -112,6 +164,20 @@ impl QueueNumberAuthority for InMemoryQueueNumbers {
         *counter = counter.saturating_add(1);
         state.allocated.insert(order_id, number);
         Ok(number)
+    }
+
+    async fn queue_number_for(
+        &self,
+        _store_id: StoreId,
+        order_id: OrderId,
+    ) -> Result<Option<u64>, PortError> {
+        // `allocated` is keyed by order alone, matching the durable table: an order id already
+        // names its store, so there is nothing to scope by.
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(state.allocated.get(&order_id).copied())
     }
 }
 

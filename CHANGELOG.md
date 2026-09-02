@@ -16,6 +16,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **A counter screen, so a cashier can find a takeaway order and charge it** (#130). The second half
+  of [ADR-0093](docs/adr/0093-bill-keyed-on-order.md): #129 made a tableless order chargeable
+  through the API, and this is what an operator can actually touch.
+
+  A relayed marketplace order, a public-API order or a QR counter order sits on **no table**
+  (ADR-0064), so it appears on no floor plan and there is nothing to tap. The routes #129 added were
+  reachable only by someone who already knew the order's ULID — which is not something an operator
+  can be handed. **`GET /api/orders/open`** is the counter's equivalent of `GET /api/floor`: every
+  counter order still owing money, each with the daily queue number staff shouted, what is on it,
+  what it owes, and the bill already open on it if there is one.
+
+  The new **Counter** screen (`ui/`, nav between Floor and Kitchen) lists them and charges one on the
+  same cash/card pad the table pay screen uses, so a cashier's hands learn one pad. An order's ULID
+  is never shown.
+
+  Three details that are decisions rather than defaults:
+
+  - **The queue number is read, never allocated.** `QueueNumberAuthority` gains
+    `queue_number_for(store, order)`. Re-asking `allocate_queue_number` would have answered too
+    (it is idempotent by order) and would have *minted* a number for any order a screen refresh
+    happened to mention — including floor orders, which must never have one.
+  - **That read carries no business date**, because `queue_allocations` is keyed by
+    `(store, order)`. A date-keyed read would lose the number of exactly the order most likely to
+    still be sitting on the counter: one left unpaid past the day's cutoff.
+  - **One authority, shared.** `compose` now wraps it in an `Arc` and hands the same value to the
+    intake path and to the counter route. Two authorities over one store would be two counters, and
+    the list would show no number for an order that plainly has one. `Arc<Q>` implements the trait
+    by delegation, which is what makes sharing possible at all — the trait returns `impl Future`, so
+    it is not dyn-compatible.
+
+  An order whose bill is already open **stays on the list** and is marked as resumable, because the
+  cashier still has to take the money; the screen settles that bill rather than asking for a second
+  one, which the edge refuses. A settled order leaves the list. Both are covered end to end in the
+  Q1 acceptance suite, over the routes a device calls.
+
 ### Fixed
 - **A takeaway order can be paid for.** Implements
   [ADR-0093](docs/adr/0093-bill-keyed-on-order.md) (#129).

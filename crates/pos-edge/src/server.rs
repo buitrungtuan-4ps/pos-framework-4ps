@@ -262,8 +262,15 @@ where
     // loop keeps its own handle on the edge, so a menu published from the cloud hot-swaps the live
     // session the same routes serve.
     let config_edge = Arc::clone(&edge);
+    // ONE queue-number authority, shared: the counter's order list must show the numbers the intake
+    // path actually allocated, and two authorities over the same store would be two counters
+    // (ADR-0093). `Arc<Q>` implements `QueueNumberAuthority` by delegation, which is what lets the
+    // same value be held in two places — the trait returns `impl Future`, so it cannot be erased
+    // behind `dyn`.
+    let queue = Arc::new(queue);
     let mut app = crate::http::router(state).merge(crate::http::domain_router(
         edge,
+        Arc::clone(&queue),
         Arc::clone(&pairing),
         Arc::clone(&sessions),
     ));

@@ -2,6 +2,7 @@
   "app.brand": "Pizza 4P's",
 
   "nav.floor": "Sơ đồ bàn",
+  "nav.counter": "Quầy",
   "nav.kitchen": "Bếp",
   "nav.pass": "Khu ra món",
   "nav.today": "Hôm nay",
@@ -62,6 +63,15 @@
   "shift.expected": "Dự kiến",
   "shift.counted": "Đã đếm",
   "shift.variance": "Chênh lệch",
+
+  "counter.title": "Đơn tại quầy",
+  "counter.empty": "Không có đơn nào đang chờ thanh toán.",
+  "counter.empty_hint": "Đơn mang đi và đơn giao hàng sẽ hiện ở đây khi được nhận.",
+  "counter.queue_number": "Số {number}",
+  "counter.no_queue_number": "Không có số",
+  "counter.resume": "Hóa đơn đã mở — tiếp tục",
+  "counter.back": "← Đơn tại quầy",
+  "counter.next": "Đơn tiếp theo",
 
   "pair.title": "Ghép nối thiết bị",
   "pair.paired": "Đã ghép nối",

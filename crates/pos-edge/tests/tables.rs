@@ -14,8 +14,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::PermissionSet;
 use pos_edge::{
-    Edge, EdgeSession, InMemoryReceipts, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity,
-    SystemClock,
+    Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
+    StaffRoster, StoreIdentity, SystemClock,
 };
 use pos_fakes::FakeStore;
 use pos_proto::ClockSource;
@@ -72,7 +72,12 @@ async fn paired() -> (Router, String) {
         .as_str()
         .to_owned();
     (
-        pos_edge::http::domain_router(edge, pairing, Arc::new(Sessions::new())),
+        pos_edge::http::domain_router(
+            edge,
+            InMemoryQueueNumbers::new(),
+            pairing,
+            Arc::new(Sessions::new()),
+        ),
         token,
     )
 }
