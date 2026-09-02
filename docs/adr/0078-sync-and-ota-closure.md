@@ -1,6 +1,6 @@
 # ADR-0078 — Sync & OTA closure: the cloud learns what each store is running, and gets first-class levers instead of hand-edited JSON
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-28
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-02
 **Relates to** [ADR-0053](0053-cloud-sync-port.md) (the `CloudSync` port this extends with `report()`) · [ADR-0048](0048-ota-rollout-model.md) (the rollout model whose progress the cloud now observes) · [ADR-0052](0052-ota-rollout-config.md) (the `fleet_update`/`device_ota` config nodes the OTA levers publish) · [ADR-0055](0055-edge-ota-updater.md) (the edge updater that reports its outcome; its binary composition stays the flagged hardware gate) · [ADR-0040](0040-reconciliation.md) (the reconcile endpoint whose runs this records) · [ADR-0068](0068-fleet-liveness.md) (the fleet read model the report feeds) · `docs/cloud-admin-ux-plan.md` (Track O3)
 
 **Context.** The fleet subsystems are built but the loop is open — the cloud publishes and the edge acts, and the cloud never learns the result.
@@ -87,3 +87,41 @@ manifest-sender into the shipped `pos_edge` binary (the ADR-0055 hardware gate),
 `/internal/ota/artifact` **server**, and the remote last-30-minutes log tail over NATS (a net-new
 request-reply over the outbound-only `MessageLink`, rejected once in ADR-0054 — a follow-up track, not
 this one).
+
+**Amendment 1 (2026-09-02) — a report says "no self-test yet" instead of guessing.**
+`UpdateReport.self_test_passed` becomes `Option<bool>`, and the `/internal/ota/report` field becomes
+optional (`#[serde(default)]`, so an omitted field reads as `None`).
+
+Slice 1 above shaped `report()` around the case it was written for — a store that has *just installed
+and self-tested* — and a `bool` says everything that case needs. Wiring the reporting loop exposed the
+case it cannot express. The loop's primary value is telling the cloud **which binary each store is
+running**, which is useful on every store from its first boot, long before any store has taken an
+update. For those stores there is no verdict, and a `bool` forces the edge to invent one:
+
+- `true` claims a self-test that never ran, and the console shows a green **Passed** badge earned by
+  nothing.
+- `false` claims a failure that never happened, and every healthy store in a fresh fleet shows red —
+  which trains an operator to ignore the column that exists to warn them.
+
+The alternative — report *only* once a self-test exists — keeps the wire honest and loses the point:
+the installed-version column would stay empty for every store until it OTAs once, so the fleet view
+would be blank in exactly the state an operator most wants it (before the first rollout, checking what
+is out there).
+
+The read model was already right and unreachable, which is what makes this an amendment rather than a
+new decision. `pos_cloud::fleet::FleetStore.self_test_ok` is `Option<bool>`, the `store-postgres`
+column is nullable, and the console already renders `null` as **Not reported**. But that `None` was
+only ever reachable for a store that had never reported *at all* — the wire could not carry "reported,
+and no self-test". So the three-state model existed end to end except in the one place that produces
+the value, and the display had a state nothing could put it in.
+
+**Additive, and no `PROTOCOL_VERSION` bump.** `/internal` is unversioned; the field becomes optional
+rather than changing type on the wire, so an edge built before this amendment posts the same body and
+its `true`/`false` is read unchanged. `record_report` takes `Option<bool>` and writes SQL `NULL` for
+`None`, which the column already accepts. The console needs no change: it renders the `null` it was
+already written to expect.
+
+**What this does not settle.** The reporting loop itself is still the next slice, and the install arm
+stays where *Deliberately deferred* left it — `UpdateInstaller` has no production implementation (the
+ADR-0055 hardware gate) and `POST /internal/ota/artifact` does not exist. This amendment only makes it
+possible for the loop to be truthful when it lands.
