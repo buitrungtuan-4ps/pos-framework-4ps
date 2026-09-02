@@ -17,6 +17,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The ADR index is complete again, and records ADR-0091** (`docs/adr/README.md`). The table stopped
+  at 0066 and was **25 records behind** — every decision from the multi-admin console (0067) through
+  the TLS postures (0090) existed as a file and was reachable only by guessing its filename. For a
+  repository whose whole premise is being forked and read by someone who did not write it, the index
+  is the entry point, so this is a defect rather than untidiness. All 90 records are now listed with
+  their titles and statuses.
+- **ADR-0091 — durable edge auth state, ahead of roadmap v3 slice S0d**
+  ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md)). No behaviour change in this entry: the
+  record has to land first, because persisting the edge's pairing and sign-in tables needs an
+  **eighteenth port**. Every adapter in this tree depends on exactly `pos-proto` and `pos-ports` and
+  nothing else, so a trait `store-sqlite` implements cannot be defined in `pos-edge` — the dependency
+  runs the other way — which makes S0d a port-list change and therefore an ADR-first one.
+
+  The record settles the three things persistence *changes*, none of which are plumbing:
+
+  - **The device token is stored as a SHA-256 digest, never in the clear.** A token is a bearer
+    credential, and `pos.db` is far easier to walk off with than a running process's heap — which is
+    exactly what changes when this becomes durable. A plain digest suffices and a password KDF would
+    be wrong: the token is 128 bits from the OS CSPRNG, so there is no dictionary to run and no salt
+    to add, and lookup stays one indexed equality read on the gate every request crosses.
+  - **Revocation becomes explicit, because it stops being accidental.** Today a restart revokes every
+    token and every sign-in. Making them durable removes that, so the port gains a revoke path —
+    per-device, plus a revoke-all that reproduces the old restart behaviour on purpose. It works
+    offline, because a store noticing a missing tablet cannot be told to wait for the cloud.
+  - **Both tables survive a restart, guarded by a 30-minute `sign_in_idle_timeout`.** Durable pairing
+    with volatile sign-in was the safer option in isolation and is rejected: it halves the outage
+    instead of ending it, since staff would still all re-enter PINs at once on a mid-service reboot.
+    The timeout carries the risk that decision creates — a till carried off while signed in as a
+    manager — and idleness is the only signal available for it without the cloud.
+
+  One thing worth knowing for anyone reading the timeout code later: **no SNTP poll runs today.**
+  `pos-edge`'s `sntp` module has no production caller, which [ADR-0073](docs/adr/0073-alerting.md)
+  already recorded for the drift signal, so the clock behind this timeout is the host OS clock and a
+  daemon or a person can step it either way. The timeout is therefore a difference between two stored
+  instants that **expires the binding on a negative or implausible result** rather than extending it:
+  a clock that jumps must never be a way to hold a session open.
 - **E7 — the store event bus is reachable: `nats` publishes `4222` with TLS**
   ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md), roadmap v3 slice **E7**). The outbox
   publish E3 wired into `serve()` finally has somewhere to go. Until now `nats` sat on an

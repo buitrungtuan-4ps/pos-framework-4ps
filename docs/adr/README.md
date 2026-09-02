@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-02
 
 Each record states the context, the decision, and the consequences we accept. Records are immutable once merged: to change a decision, add a new record that supersedes the old one.
 
@@ -71,5 +71,31 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0064](0064-edge-order-in.md) | Edge `OrderIn`: the store reprices from its menu, opens a tableless order in its local log, and dedupes on the caller's reference | Accepted |
 | [0065](0065-cloud-org-registry.md) | The cloud org registry: named Tenant/Brand/Store/Device, RLS by tenant, backfilled from config_trees; identity and naming distinct from configuration | Accepted |
 | [0066](0066-cloud-catalog.md) | The cloud catalog: a normalized 12-entity authoring model (items, menus with inheritance, channel price lists, tax classes, display taxonomy, layouts) compiled per store×channel to a flat `MenuBook`/`DisplayPlan` and pushed via the config tree | Accepted |
+
+| [0067](0067-multi-admin-console-rbac.md) | Multi-admin console identities with role-based access | Accepted |
+| [0068](0068-fleet-liveness.md) | Fleet liveness: last-seen + config-version-held from the store pull | Accepted |
+| [0069](0069-audit-trail.md) | Console audit trail: an append-only record of who changed what | Accepted |
+| [0070](0070-people-and-access.md) | People & access: employees, store assignments, role templates, and the permissions a store enforces | Accepted |
+| [0071](0071-config-without-json.md) | Config without JSON: a form-driven capability editor, and an edge that applies the structured nodes | Accepted |
+| [0072](0072-floor-and-kitchen.md) | Floor & kitchen: areas/tables and stations as published master data the edge reads | Accepted |
+| [0073](0073-alerting.md) | Alerting: server-side detection, storage, and delivery of operational conditions | Accepted |
+| [0074](0074-localization-and-tax.md) | Localization & tax: authoring tax rates the edge already knows how to apply, and surfacing countries, locale packs, and store timezone as master data | Accepted |
+| [0075](0075-media-and-file-rail.md) | Media & file rail: images in Postgres `bytea`, and a CSV import/export rail with dry-run validation | Accepted |
+| [0076](0076-subject-request-tooling.md) | Subject-request tooling: per-subject PDPD/GDPR lookup, export, and erasure | Accepted |
+| [0077](0077-campaigns-and-scheduling.md) | Campaigns & scheduling: authoring promotions over the finished engine, and publishing them (and any config) on a future date | Accepted |
+| [0078](0078-sync-and-ota-closure.md) | Sync & OTA closure: the cloud learns what each store is running, and gets first-class levers instead of hand-edited JSON | Accepted |
+| [0079](0079-inventory-and-suppliers.md) | Inventory & suppliers: author recipes and stock thresholds in the cloud, so the finished §8 engine finally has inputs | Accepted |
+| [0080](0080-channels-and-payments.md) | Channels & payments: author per-store channel enablement, accepted tender, QR guardrails, and vendor policy as config nodes | Accepted |
+| [0081](0081-reports-and-analytics.md) | Reports & analytics: windowed rollups, revenue & product-mix, and X/Z close semantics, on a registry-driven projector | Accepted |
+| [0082](0082-catalog-and-layout-rebuild.md) | Catalog & Layout rebuild: split the monolith into kit sub-screens, make Layout a visual grid | Accepted |
+| [0083](0083-integration-doctrine.md) | Integration doctrine: the core stays small, everything else plugs in through three points | Accepted |
+| [0084](0084-device-authentication.md) | Device authentication: the edge enforces the pairing token on every domain route | Accepted |
+| [0085](0085-edge-cloud-sync-transport.md) | The edge dials its cloud: config-pull and heartbeat over the tree's rustls stack, keyed by the store's scoped credential | Accepted |
+| [0086](0086-edge-keyvault-and-activation.md) | The edge's OS-keyring KeyVault, and composing activation into the shipped binary | Accepted |
+| [0087](0087-edge-relay-and-event-publish.md) | Wiring the store's two outbound rails: the order relay, and edge event publish | Accepted |
+| [0088](0088-ota-artifact-hosting.md) | The cloud hosts the update artifact, and stays a dumb host | Accepted |
+| [0089](0089-edge-event-bus-transport.md) | The edge reaches the event bus directly, over TLS on its own port | Accepted |
+| [0090](0090-tls-postures.md) | TLS termination is a fork-level posture, chosen explicitly | Accepted |
+| [0091](0091-durable-edge-auth-state.md) | Edge auth state is durable: a `DeviceRegistry` port, hashed tokens, and an idle timeout | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
