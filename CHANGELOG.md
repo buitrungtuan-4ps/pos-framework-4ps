@@ -16,6 +16,53 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **Roadmap v3 corrected against the tree, and three postures settled**
+  ([`docs/roadmap-v3.md`](docs/roadmap-v3.md)). An 18-agent audit read every roadmap slice against the
+  code rather than the changelog, then tried to *refute* each "done" claim by hunting for the production
+  call site. The wiring held up — `serve()` → `compose_cloud_surface` → `spawn_cloud_loops` is a live
+  path, verified hop by hop — but the **chain** those slices form has never run end to end. Six findings,
+  now a named slice group **A·P1x — Close the chain**:
+  - **`/ws` is unauthenticated** (**S0c**). Mounted on the ungated infra router, outside both
+    `require_paired_device` and `require_signed_in`, so any host on the store LAN can read the whole
+    committed-event fan-out. Previously deferred to B6.1; reclassified as a live hole. B6.1 keeps the
+    read-only scope and event filter.
+  - **Pairing and sign-in are process-memory only** (**S0d**) — an edge restart re-pairs every device.
+  - **Released binaries have no version** (**R1b**) — `version = "0.0.0"` and nothing stamps the tag, so
+    the OTA progress model cannot distinguish releases.
+  - **A wizard-provisioned store boots LAN-only** (**E6**) — the `config.toml` generator emits no
+    `cloud_url`, so activation 404s on a store built exactly as the runbook says; and `relay_orders` is
+    absent from the key-issuance UI, so no operator can grant the relay its scope.
+  - **The event bus is unreachable** (**E7**) — NATS is on an `internal: true` network with no published
+    port, so `POS_EDGE_NATS_URL` has nowhere to point. Silent: the store trades on, the outbox stays
+    durable, and the cloud simply receives nothing.
+  - **`OtaUpdater` has zero production callers** (**R5**) — the only construction in the tree is a test.
+    Four merged slices built update decision, signature verification, self-test and rollback; none of it
+    runs.
+
+  **Q1 (the end-to-end acceptance suite) moves up** to run immediately after these, and the Cadence
+  section gains a **"name the call site"** rule: every PR must state the line that makes its code
+  reachable, because a slice whose only caller is its own test looks identical to a finished one. That has
+  now happened seven times.
+
+  Three debates settled from the transport and TLS discussion:
+  - **D23** — the edge reaches NATS **directly over TCP**, not through the reverse proxy. Both are
+    performance-indistinguishable here (~20 KB/s per store; the publisher batches every 5 s), so the
+    decision turns on what a proxy cannot give: TLS terminating *at* NATS is the only way to authenticate
+    a store by client certificate, NATS's cluster gossip survives, the proxy is not a shared chokepoint,
+    and there is no upgrade round-trip per reconnect. It needs no proxy plugin — the container publishes
+    its own port. Four explicit revisit triggers are recorded; reversing costs a URL, not code.
+  - **D24** — TLS termination is a **fork-level posture**: ACME HTTP-01, ACME DNS-01, bring-your-own
+    certificate files, or termination upstream at the fork's own balancer. An explicit `TLS_MODE` selects
+    a snippet instead of overwriting the committed `Caddyfile`. The upstream mode has a hidden edge: the
+    app must then trust `X-Forwarded-For`, or the login rate limit collapses every user onto one IP.
+  - **D25** — for mTLS, the server certificate and the client CA are **different trust decisions**. The
+    client CA must be private; pointing it at a public CA turns mTLS into a no-op. Store certificates
+    carry the `store_id` as their subject, which is what finally gives a box a real fleet identity. CA
+    custody follows D1's reasoning.
+
+  Milestone estimate rises from ≈70 to **≈80 PR**, 18 merged.
+
 ### Added
 - **The OTA release registry — the cloud can finally say a release exists** (roadmap v3, slice R2;
   [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). `pos_cloud::ota` records, for each release tag
