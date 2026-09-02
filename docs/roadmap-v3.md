@@ -41,7 +41,7 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 
 | Milestone | Contents | Meaning |
 |---|---|---|
-| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 (≈31 PR, 21 merged) | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
+| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 (≈31 PR, 22 merged) | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
 | **v1.1 — FnB & Management** | B·W2 + B·W3 + B·W7 + B·W8 + A·P4 + A·PF (≈29 PR) | Full order check → bill check → final bill; void/discount/split/refund with routes, events, ceilings; modifiers/notes/courses/fire-rounds; receipt engine per store/order; which item prints at which kitchen printer; config force/lock/fan-out with per-device drift; multi-floor drag-drop floor plan; alerting, network printing, backup; and the performance gates. |
 | **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (≈19 PR + ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
 | **v1.3 — Production International** | B·W10 + JP/IN go-live (≈3 PR code + ops, gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
@@ -50,14 +50,14 @@ Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ 
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
 materially. **≈82 PR total** plus the gated W10 — up from the original ≈70 by A·P1x's seven closing slices
 (E7a split out of E7 once ADR-0089 found it needed a certificate path) and the two posture ADRs
-(D23/D24). **24 merged** as of 2026-09-02 (#71–#74, #90–#110): all of A·P1's code, B9.1, R2's ADR and
-its release registry, E5, E6, E7a, E7, the two posture ADRs, the `X-Forwarded-For` rate-limit fix,
-and the NATS credential fix.
+(D23/D24). **25 merged** as of 2026-09-02 (#71–#74, #90–#112): all of A·P1's code, B9.1, R2's ADR and
+its release registry, E5, E6, E7a, E7, S0c, the two posture ADRs, the `X-Forwarded-For` rate-limit
+fix, and the NATS credential fix.
 
 ## Program A — Ship the Edge
 
 ### A·P1 — Unlock: ship & run
-- **S0** — Edge auth (security, first). Validate the paired `DeviceToken` on every domain route and `/ws`; a real actor from pairing + PIN sign-in replaces the hardcoded employee-1 `dev_actor`. Nothing below is meaningful while identity is forged. **Landed as S0a/S0b for the domain routes; `/ws` and durability remain — see S0c/S0d.**
+- **S0** — Edge auth (security, first). Validate the paired `DeviceToken` on every domain route and `/ws`; a real actor from pairing + PIN sign-in replaces the hardcoded employee-1 `dev_actor`. Nothing below is meaningful while identity is forged. **Landed as S0a/S0b for the domain routes and S0c for `/ws`; durability remains — see S0d.**
 - **C1** — Turn on the two stub CI jobs (contract, soak) + Dependabot. **Done.**
 - **R1** — Release workflow: build + minisign-sign (keys in GitHub secrets, never on the VPS) + publish. **Done, but the artifact carries no version — see R1b.**
 - **E1** — `cloud_url` into `EdgeConfig` + wire the config-pull and heartbeat loops into `serve()`. **Loops done; the provisioning half is not — see E6.**
@@ -76,6 +76,12 @@ first real store.
   `require_paired_device` and `require_signed_in`, so any host on the store LAN reads the whole
   committed-event fan-out — orders, bills, settlements. ADR-0084 deferred this to B6.1; the audit rules it
   a live hole, not a deferral. (The read-only *scope* and event-type filter stay with B6.1.)
+  **Done** ([ADR-0084 amendment](adr/0084-device-authentication.md)): a one-route sub-router carries
+  `require_paired_device_ws`, which accepts the token from `Authorization` **or** from
+  `Sec-WebSocket-Protocol` — the browser `WebSocket` API cannot set a header, and a query parameter was
+  rejected because the edge logs the request path. The server selects only the protocol *name*, so the
+  credential never comes back in the handshake. `/healthz`, `/api/pair` and the asset fallback stay open by
+  necessity.
 - **S0d** — Durable pairing and sign-in state. Both live in process memory today, so an edge restart
   re-pairs and re-signs-in every device — mid-service, on a box that is expected to be power-cycled.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
@@ -184,7 +190,7 @@ tested and unreachable. Q1 runs immediately after A·P1x, before any new A·P2 o
 - **B5.3** — Capability enforcement pass: all 10/10 flags gate real behaviour + new flags (service_charge, pre_bill) + new rules; fix the counter/retail presets so a store can actually sell.
 
 ### B·W6 — Integration hub
-- **B6.1** — `/ws` read-only scope + event-type filter, so a third-party KDS plugs in <50 ms on the LAN. **The authentication half moved earlier to S0c** — an unauthenticated socket is a live hole, not an integration feature, so it is not waiting for this wave.
+- **B6.1** — `/ws` read-only scope + event-type filter, so a third-party KDS plugs in <50 ms on the LAN. **The authentication half moved earlier to S0c and is done** — an unauthenticated socket is a live hole, not an integration feature, so it did not wait for this wave. What remains here is the *scope*: a consumer whose token buys read-only access to a chosen subset of event types, rather than the whole fan-out every paired device now gets.
 - **B6.2** — Cloud webhooks: event-type filter.
 - **B6.3** — `vendor_id` + external↔internal item map + generic delivery address on intake.
 - **B6.4** — Wire `DeliveryVendor` + live `vendors` node + staff-confirm release; device gains an address field (pre-configure a printer IP).

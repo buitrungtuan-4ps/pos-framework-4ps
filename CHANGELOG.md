@@ -88,6 +88,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   correction recording that its "no code change in `link-nats`" consequence was wrong, and why.
 
 ### Security
+- **`/ws` now requires the paired device token: any host on the store LAN could read the whole
+  committed-event stream** ([ADR-0084 amendment](docs/adr/0084-device-authentication.md), roadmap v3
+  slice **S0c**, #112). S0a gated every domain route on the pairing token and S0b added employee
+  sign-in on top, but `/ws` sat on the ungated infrastructure router the whole time. It streams every
+  event the store commits — orders, bills, settlements, shift closes — so a laptop plugged into the
+  store switch read the trading day without sending a command or presenting a credential. ADR-0084
+  filed this under a later integration slice (W6·B6.1) as "the read-side eavesdrop"; that was the
+  wrong urgency, and the tree audit reclassified it.
+
+  `/ws` is now a one-route sub-router behind `require_paired_device_ws`, which refuses an absent,
+  malformed, or unknown token with the same `401` every other gate gives — and a refused connection
+  never subscribes to the fan-out, so it cannot receive even one frame. The rest of the
+  infrastructure router stays open by necessity: `/healthz` answers an unauthenticated probe,
+  `/api/pair` is how a device *gets* a token, and the asset fallback serves the app that does the
+  pairing.
+
+  **The token reaches the gate through `Sec-WebSocket-Protocol`**, because the browser `WebSocket`
+  API cannot set request headers and so `Authorization` is unavailable to the store UI on an upgrade.
+  The client offers `[pos-edge.v1, <token>]`; the server selects **only the name**, so the credential
+  never travels back in the handshake response. A query parameter was the obvious alternative and was
+  rejected: the edge logs the request path on every request, so `/ws?token=…` would write a device
+  credential into a log. `Authorization` still works and is tried first, for a non-browser consumer
+  that can set it.
+
+  Why it survived two auth slices: the fan-out tests connected **without** a token and passed, so the
+  path was proven to work and never proven to be closed. They now pair first, and three new cases
+  pin the refusals — an unpaired host, a well-formed token that was never issued, and the bearer
+  path.
+
+  **Upgrade note:** an operator UI older than this edge cannot open `/ws` — it sends neither a
+  subprotocol nor a header — and will show as disconnected. The UI and the edge ship together in one
+  OTA artifact, so this only affects a hand-mixed pair. The in-memory token set is unchanged, so an
+  edge restart still drops every socket until each device re-pairs; making that durable is **S0d**.
 - **The `/admin/login` rate limit was bypassable, and is now keyed on an address the client cannot
   choose.** `client_ip` read the **leftmost** hop of `X-Forwarded-For` and that value fed the sliding
   window as its only key (`ip:…`), so an online password guesser could send a fresh fake

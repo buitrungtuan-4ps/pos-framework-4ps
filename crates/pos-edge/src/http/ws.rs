@@ -17,9 +17,26 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::fanout::ServerMessage;
 use crate::state::AppState;
 
+/// The subprotocol name this endpoint speaks.
+///
+/// A browser client offers `[SUBPROTOCOL, <device token>]`, because the `WebSocket` API cannot set an
+/// `Authorization` header and the token has to reach the gate somehow
+/// ([`crate::http::auth::require_paired_device_ws`]). The server selects **this name** and never the
+/// token, so the credential does not travel back in the handshake response.
+pub(crate) const SUBPROTOCOL: &str = "pos-edge.v1";
+
 /// Upgrades `GET /ws` to a WebSocket and pumps the fan-out into it.
+///
+/// Reached only through the paired-device gate: an unpaired host on the store LAN is refused `401`
+/// before this runs. Until S0c that gate was absent and this endpoint served the whole
+/// committed-event stream — orders, bills, settlements — to anyone who could route to the box.
 pub(crate) async fn handler(upgrade: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    upgrade.on_upgrade(move |socket| pump(socket, state))
+    // Echo the protocol *name* when the client offered it. A client that offered none negotiates
+    // none, which RFC 6455 permits and which is what a non-browser consumer authenticating with the
+    // `Authorization` header does.
+    upgrade
+        .protocols([SUBPROTOCOL])
+        .on_upgrade(move |socket| pump(socket, state))
 }
 
 /// Forwards fan-out frames to one device until either side closes.

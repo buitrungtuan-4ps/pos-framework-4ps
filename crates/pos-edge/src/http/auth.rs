@@ -9,7 +9,8 @@
 //! 1. [`require_paired_device`] — every request must present the bearer token a device was issued when
 //!    it paired ([`crate::pairing`]). This is what closes "any host on the store LAN commands the
 //!    edge": an unpaired tablet — or a laptop plugged into the store switch — is refused `401` before
-//!    it reaches a handler.
+//!    it reaches a handler. [`require_paired_device_ws`] is the same gate for `/ws`, which needs a
+//!    second way to present the token because a browser cannot set a header on a WebSocket.
 //! 2. [`require_signed_in`] — every *command* (and the store reads beside them) additionally requires a
 //!    real employee signed in on that device. The command then runs under that person's
 //!    [`Actor`], not a placeholder — so every sale, void and shift is attributable to who did it
@@ -53,10 +54,46 @@ use crate::pairing::{DeviceToken, Pairing};
 /// of the three it hit.
 pub(crate) async fn require_paired_device(
     State(pairing): State<Arc<Pairing>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    gate(&pairing, bearer(&request), request, next).await
+}
+
+/// The same gate for `GET /ws`, which accepts the token from **either** the `Authorization` header or
+/// the WebSocket subprotocol list.
+///
+/// # Why `/ws` needs a second channel
+///
+/// The store UI is a browser, and the browser `WebSocket` API cannot set request headers — there is
+/// no way to send `Authorization` on an upgrade. So the token also travels in
+/// `Sec-WebSocket-Protocol`, which the API *can* set (`new WebSocket(url, protocols)`).
+///
+/// The alternative was a query parameter, and it was rejected: the edge logs the request path on
+/// every request ([`crate::telemetry`]), so `/ws?token=…` would write a device credential into the
+/// log — against this module's own "no secret in a log" rule, and one careless log line away from
+/// being permanent. A header is not logged.
+///
+/// `Authorization` is still accepted and tried first, because a non-browser consumer (the
+/// third-party KDS the roadmap defers) can set it and should not have to learn this workaround.
+pub(crate) async fn require_paired_device_ws(
+    State(pairing): State<Arc<Pairing>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let presented = bearer(&request).or_else(|| subprotocol_token(&request));
+    gate(&pairing, presented, request, next).await
+}
+
+/// Resolves `presented` against the issued tokens, or refuses. Shared by both gates so there is one
+/// place that decides what a valid device token buys and what an invalid one is told.
+async fn gate(
+    pairing: &Pairing,
+    presented: Option<DeviceToken>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let Some(device_id) = bearer(&request).and_then(|token| pairing.device_for(&token)) else {
+    let Some(device_id) = presented.and_then(|token| pairing.device_for(&token)) else {
         return (
             StatusCode::UNAUTHORIZED,
             "pair this device to reach the edge",
@@ -105,6 +142,22 @@ fn bearer(request: &Request) -> Option<DeviceToken> {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(|token| DeviceToken::parse(token.trim()))
+}
+
+/// The device token offered as a WebSocket subprotocol, if one of the offered values is a token.
+///
+/// A client offers a list — `Sec-WebSocket-Protocol: pos-edge.v1, <token>` — and the server echoes
+/// only the *name* ([`crate::http::ws::SUBPROTOCOL`]), never the token, so the credential does not
+/// come back in the handshake response. Picking the entry out by shape is unambiguous:
+/// [`DeviceToken::parse`] accepts exactly 32 lowercase hex characters, which no protocol name is.
+fn subprotocol_token(request: &Request) -> Option<DeviceToken> {
+    request
+        .headers()
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .find_map(|offered| DeviceToken::parse(offered.trim()))
 }
 
 /// What the session routes ([`sign_in`], [`sign_out`], [`current`]) share: the [`Edge`] whose synced
