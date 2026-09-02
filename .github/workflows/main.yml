@@ -58,7 +58,7 @@ jobs:
       # the RLS cases drop to the `app_tenant` role to prove the policy still bites.
       DATABASE_URL: "host=localhost port=5432 user=pos password=pos dbname=poscloud"
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
       - name: store-postgres against a real PostgreSQL
         # Single-threaded: every case shares the one database and truncates between
@@ -122,7 +122,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
       # Every adapter's `tests/contract.rs` runs the shared suite for its port
       # (`pos-contract-tests`), so `--test contract` runs them all and skips the
