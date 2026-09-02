@@ -8635,10 +8635,22 @@ struct HaltRolloutRequest {
 }
 
 /// A `GET /admin/config/ota?tenant_id=&store_id=` query: which store's published rollout to read.
+/// Also serves `GET /admin/config/ota/placement` — the same `(tenant, store)` question about the
+/// other OTA node.
 #[derive(Debug, Clone, Deserialize)]
 struct OtaRolloutQuery {
     tenant_id: String,
     store_id: String,
+}
+
+/// A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —
+/// its ring, and the stable canary bucket that fixes its place in the fleet ramp.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishPlacementRequest {
+    tenant_id: String,
+    store_id: String,
+    ring: String,
+    canary_bucket: u8,
 }
 
 /// Builds the OTA rollout sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), O3).
@@ -8649,6 +8661,13 @@ struct OtaRolloutQuery {
 /// node through the same config tree and the same `CapabilityValidator` (its `ota_violations`) the
 /// generic publish used, so a malformed rollout is a `422` with the exact violations. Writes are behind
 /// [`ConsolePermission::PublishOta`] and audited; the read is behind [`ConsolePermission::Read`].
+///
+/// `PUT`/`GET /admin/config/ota/placement` are the other half of the rollout decision. A rollout says
+/// *which* devices are eligible; a placement says *where this store sits* — its ring and its stable
+/// canary bucket. A store with no placement is placed nowhere, and `decide_rollout` finds it eligible
+/// for nothing: safe, but it never updates. Both halves have to be authored for a fleet to move
+/// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md),
+/// [ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)).
 pub fn ota_config_router<Cfg, A, C>(
     config_trees: Cfg,
     admin: A,
@@ -8668,6 +8687,10 @@ where
         .route(
             "/admin/config/ota/halt",
             post(admin_halt_rollout::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/ota/placement",
+            get(admin_get_placement::<Cfg, A, C>).put(admin_publish_placement::<Cfg, A, C>),
         )
         .with_state(OtaConfigState {
             config_trees,
@@ -8729,9 +8752,13 @@ where
         &context,
         tenant_id,
         store_id,
-        node,
-        "config.ota.publish",
-        audit_detail,
+        OtaNodeWrite {
+            level: ConfigLevel::Store,
+            key: "fleet_update",
+            node,
+            action: "config.ota.publish",
+            detail: audit_detail,
+        },
     )
     .await
 }
@@ -8777,7 +8804,8 @@ where
     };
     let Some(mut node) = state_before
         .as_ref()
-        .and_then(|s| s.layers[2].get("fleet_update"))
+        .map(|s| s.layer(ConfigLevel::Store))
+        .and_then(|layer| layer.get("fleet_update"))
         .cloned()
     else {
         return (
@@ -8794,23 +8822,40 @@ where
         &context,
         tenant_id,
         store_id,
-        node,
-        "config.ota.halt",
-        serde_json::json!({ "halted": request.halted }),
+        OtaNodeWrite {
+            level: ConfigLevel::Store,
+            key: "fleet_update",
+            node,
+            action: "config.ota.halt",
+            detail: serde_json::json!({ "halted": request.halted }),
+        },
     )
     .await
 }
 
-/// The shared load→set-`fleet_update`→publish→save→audit tail behind both the publish and the halt
-/// levers. `node` is the `fleet_update` value to set; `action`/`detail` are the audit record.
+/// One OTA node write: where it lands and how the trail names it. Grouped because the five travel
+/// together and mean nothing apart — a `key` on the wrong `level` is exactly the mistake
+/// [`ConfigTreeState::layer`] exists to prevent, so they are chosen at one place.
+struct OtaNodeWrite<'a> {
+    /// The config layer the node belongs on: Store for a rollout, Device for a placement.
+    level: ConfigLevel,
+    /// The node's key in that layer — `fleet_update` or `device_ota`.
+    key: &'a str,
+    /// The value to set.
+    node: serde_json::Value,
+    /// The audit action id.
+    action: &'a str,
+    /// The audit detail, which carries no personal data — a rollout is fleet configuration.
+    detail: serde_json::Value,
+}
+
+/// The shared load→set-node→publish→save→audit tail behind every OTA lever.
 async fn publish_ota_node<Cfg, A, C>(
     state: &OtaConfigState<Cfg, A, C>,
     context: &AdminContext,
     tenant_id: TenantId,
     store_id: StoreId,
-    node: serde_json::Value,
-    action: &str,
-    detail: serde_json::Value,
+    write: OtaNodeWrite<'_>,
 ) -> Response
 where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -8821,15 +8866,15 @@ where
         Ok(state) => state,
         Err(error) => return config_store_error_response(&error),
     };
-    let mut store_layer = state_before.as_ref().map_or_else(
+    let mut layer = state_before.as_ref().map_or_else(
         || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
+        |existing| existing.layer(write.level).clone(),
     );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
+    if !layer.is_object() {
+        layer = serde_json::Value::Object(serde_json::Map::new());
     }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("fleet_update".to_owned(), node);
+    if let serde_json::Value::Object(map) = &mut layer {
+        map.insert(write.key.to_owned(), write.node);
     }
     let mut tree = match state_before {
         Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
@@ -8843,7 +8888,7 @@ where
         )
             .into_response();
     };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+    match tree.publish(write.level, layer, version_id) {
         Ok(id) => {
             if let Err(error) = state
                 .config_trees
@@ -8857,11 +8902,11 @@ where
                 &state.clock,
                 context,
                 Some(tenant_id),
-                action,
+                write.action,
                 "store",
                 &store_id.to_string(),
                 None,
-                Some(detail),
+                Some(write.detail),
             )
             .await;
             (
@@ -8916,10 +8961,120 @@ where
         Ok(state_before) => {
             let rollout = state_before
                 .as_ref()
-                .and_then(|s| s.layers[2].get("fleet_update"))
+                .map(|s| s.layer(ConfigLevel::Store))
+                .and_then(|layer| layer.get("fleet_update"))
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(rollout)).into_response()
+        }
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
+/// Composes a `device_ota` node onto a store's **Device** layer and publishes it — the placement half
+/// of the rollout decision ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)). Same
+/// load→merge→publish→version shape as the rollout lever, on a different layer and key, so the store's
+/// other Device-level settings survive. The config tree's `CapabilityValidator` checks the node before
+/// it commits, so a ring that names no ring or a bucket past 99 is a `422` carrying the reasons.
+///
+/// The placement is per **store**, not per terminal, despite the key's name and the Device layer it
+/// sits on: a config tree is keyed by `StoreId` and its Device layer is one document the store's
+/// terminals share, so they all take the same ring and bucket. That is the granularity the delivery
+/// mechanism has, and it is also the granularity a shop wants — a counter running two releases at once
+/// is worse than a counter a week behind. ADR-0052 Correction 1 records this against that ADR's
+/// original "per-device" wording.
+async fn admin_publish_placement<Cfg, A, C>(
+    State(state): State<OtaConfigState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPlacementRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishOta,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (Ok(tenant_id), Ok(store_id)) = (
+        request.tenant_id.parse::<Ulid>().map(TenantId::new),
+        request.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    let node = serde_json::json!({
+        "ring": request.ring,
+        "canary_bucket": request.canary_bucket,
+    });
+    publish_ota_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        OtaNodeWrite {
+            level: ConfigLevel::Device,
+            key: "device_ota",
+            node: node.clone(),
+            action: "config.ota.placement",
+            detail: node,
+        },
+    )
+    .await
+}
+
+/// Reads a store's published placement — the authored `device_ota` node — or `null` if the store has
+/// never been placed. Behind [`ConsolePermission::Read`].
+async fn admin_get_placement<Cfg, A, C>(
+    State(state): State<OtaConfigState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<OtaRolloutQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (Ok(tenant_id), Ok(store_id)) = (
+        query.tenant_id.parse::<Ulid>().map(TenantId::new),
+        query.store_id.parse::<Ulid>().map(StoreId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "tenant_id or store_id is not a ULID",
+        )
+            .into_response();
+    };
+    match state.config_trees.load(tenant_id, store_id).await {
+        Ok(state_before) => {
+            let placement = state_before
+                .as_ref()
+                .map(|s| s.layer(ConfigLevel::Device))
+                .and_then(|layer| layer.get("device_ota"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            (StatusCode::OK, Json(placement)).into_response()
         }
         Err(error) => config_store_error_response(&error),
     }

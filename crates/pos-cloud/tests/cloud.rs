@@ -6736,6 +6736,205 @@ async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
     assert_eq!(tax.as_array().expect("array").len(), 1);
 }
 
+/// The router with the OTA levers merged in ([ADR-0052](../../docs/adr/0052-ota-rollout-config.md),
+/// ADR-0078) — the rollout publish/halt/read and the placement publish/read.
+fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    let app = app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+    );
+    http::router(app).merge(http::ota_config_router(
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+#[tokio::test]
+async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/ota",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "target_version": "1.4.0",
+                "min_ring": "fleet",
+                "rollout_percent": 40,
+                "signing_key_id": "a1a1a1a1a1a1a1a1",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the rollout publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let placed = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/ota/placement",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "ring": "fleet",
+                "canary_bucket": 10,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the placement publish");
+    assert_eq!(placed.status(), StatusCode::OK);
+
+    // The two nodes sit on different layers, and publishing the second does not disturb the first —
+    // the rollout is a Store-level fact, the placement a Device-level one.
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(state.layers[2]["fleet_update"]["target_version"], "1.4.0");
+    assert_eq!(state.layers[2]["fleet_update"]["rollout_percent"], 40);
+    assert_eq!(state.layers[3]["device_ota"]["ring"], "fleet");
+    assert_eq!(state.layers[3]["device_ota"]["canary_bucket"], 10);
+
+    // And both reach the *effective* document, which is what a store actually pulls — a node authored
+    // onto a layer nothing merges would be invisible to the edge that has to read it.
+    let effective = &state.history.last().expect("a published version").effective;
+    assert_eq!(effective["fleet_update"]["min_ring"], "fleet");
+    assert_eq!(effective["device_ota"]["canary_bucket"], 10);
+
+    // The read-backs answer from the layer each node was authored onto.
+    let rollout = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/ota?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the rollout read");
+    assert_eq!(rollout.status(), StatusCode::OK);
+    assert_eq!(json_body(rollout).await["target_version"], "1.4.0");
+
+    let placement = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/ota/placement?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the placement read");
+    assert_eq!(placement.status(), StatusCode::OK);
+    assert_eq!(json_body(placement).await["canary_bucket"], 10);
+}
+
+#[tokio::test]
+async fn an_unplaced_store_reads_null_and_an_illegal_placement_is_refused_with_reasons() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // A store nobody has placed reads `null`, not a fabricated ring. The edge treats that as "no
+    // placement" and installs nothing, which is the safe end of the trade (ADR-0048).
+    let unplaced = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/ota/placement?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the placement read");
+    assert_eq!(unplaced.status(), StatusCode::OK);
+    assert!(json_body(unplaced).await.is_null());
+
+    // A ring that names no ring and a bucket past 99 are refused by the shared `pos-core` rules the
+    // edge also runs, with every violation at once rather than one per attempt.
+    let refused = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/ota/placement",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "ring": "everyone",
+                "canary_bucket": 200,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the placement publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let violations = json_body(refused).await;
+    let listed = violations["violations"]
+        .as_array()
+        .expect("the violations are a list");
+    assert!(
+        listed.iter().any(|v| v
+            .as_str()
+            .is_some_and(|text| text.contains("device_ota.ring"))),
+        "the bad ring is named: {listed:?}"
+    );
+    assert!(
+        listed.iter().any(|v| v
+            .as_str()
+            .is_some_and(|text| text.contains("device_ota.canary_bucket"))),
+        "the bad bucket is named: {listed:?}"
+    );
+
+    // The refusal changed nothing: the store is still unplaced, so a rejected publish cannot leave a
+    // half-applied placement behind.
+    assert!(
+        config_trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .is_none(),
+        "a refused publish persists no tree"
+    );
+}
+
+#[tokio::test]
+async fn the_placement_routes_require_a_session() {
+    let router = ota_app(provisioned_admin(), FakeConfigTrees::default());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let write = router
+        .clone()
+        .oneshot(put_json(
+            "/admin/config/ota/placement",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "ring": "fleet",
+                "canary_bucket": 10,
+            }),
+        ))
+        .await
+        .expect("route the placement publish");
+    assert_eq!(write.status(), StatusCode::UNAUTHORIZED);
+
+    let read = router
+        .oneshot(get(
+            &format!("/admin/config/ota/placement?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            None,
+        ))
+        .await
+        .expect("route the placement read");
+    assert_eq!(read.status(), StatusCode::UNAUTHORIZED);
+}
+
 fn country_app(admin: FakeAdmin) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),

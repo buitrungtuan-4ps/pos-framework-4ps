@@ -9,7 +9,7 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { FleetStore, OtaRollout } from "../api/types";
+import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
@@ -47,6 +47,8 @@ export function Ota() {
   const [stores, setStores] = createSignal<FleetStore[] | null>(null);
   const [rollout, setRollout] = createSignal<OtaRollout | null>(null);
   const [rolloutLoaded, setRolloutLoaded] = createSignal(false);
+  const [placement, setPlacement] = createSignal<OtaPlacement | null>(null);
+  const [placementLoaded, setPlacementLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
@@ -57,8 +59,14 @@ export function Ota() {
   const [signingKey, setSigningKey] = createSignal("");
   const [revokedKeys, setRevokedKeys] = createSignal("");
 
+  // Placement fields — where this store sits in the rollout. A rollout says which devices are
+  // eligible; without a placement the store is eligible for nothing and never updates (ADR-0052).
+  const [placementRing, setPlacementRing] = createSignal<RingWire>("fleet");
+  const [canaryBucket, setCanaryBucket] = createSignal("0");
+
   const [confirmPublish, setConfirmPublish] = createSignal(false);
   const [confirmHalt, setConfirmHalt] = createSignal(false);
+  const [confirmPlace, setConfirmPlace] = createSignal(false);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -101,9 +109,33 @@ export function Ota() {
     }
   };
 
+  const loadPlacement = async () => {
+    if (!storeId()) {
+      setPlacement(null);
+      setPlacementLoaded(false);
+      return;
+    }
+    try {
+      const loaded = await api.getOtaPlacement(tenantId(), storeId());
+      setPlacement(loaded);
+      setPlacementLoaded(true);
+      // Prime the form from the published placement, so an edit starts from what is live. An unplaced
+      // store keeps the form's own default rather than showing a ring it is not in.
+      if (loaded) {
+        setPlacementRing(
+          RINGS.includes(loaded.ring as RingWire) ? (loaded.ring as RingWire) : "fleet",
+        );
+        setCanaryBucket(String(loaded.canary_bucket));
+      }
+    } catch (caught) {
+      fail(caught);
+    }
+  };
+
   const load = () => {
     void loadFleet();
     void loadRollout();
+    void loadPlacement();
   };
 
   // Load on open and whenever the tenant/store changes (never with an empty context, F0).
@@ -142,6 +174,26 @@ export function Ota() {
       });
       toast.ok(t("ota.published"));
       await loadRollout();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const place = async () => {
+    setConfirmPlace(false);
+    setBusy(true);
+    try {
+      const bucket = Number.parseInt(canaryBucket(), 10);
+      await api.publishOtaPlacement({
+        tenant_id: tenantId(),
+        store_id: storeId(),
+        ring: placementRing(),
+        canary_bucket: Number.isFinite(bucket) ? bucket : 0,
+      });
+      toast.ok(t("ota.placed"));
+      await loadPlacement();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -272,6 +324,77 @@ export function Ota() {
             </Show>
           </Card>
 
+          <Card title={t("ota.placementTitle")}>
+            <Show
+              when={storeId()}
+              fallback={
+                <EmptyState title={t("ota.pickStore")} description={t("ota.pickStoreHint")} />
+              }
+            >
+              <div class="flex flex-col gap-4">
+                <p class="text-sm text-ink-muted">{t("ota.placementHint")}</p>
+                <Show when={placementLoaded()}>
+                  <Show
+                    when={placement()}
+                    fallback={
+                      <EmptyState
+                        title={t("ota.unplaced")}
+                        description={t("ota.unplacedHint")}
+                      />
+                    }
+                  >
+                    {(live) => (
+                      <div class="rounded-token border border-line p-4">
+                        <span class="mb-2 block text-sm font-medium text-ink">
+                          {t("ota.placementCurrent")}
+                        </span>
+                        {currentRow(
+                          t("ota.placementRing"),
+                          t(RING_LABEL[live().ring as RingWire] ?? "ota.ring.fleet"),
+                        )}
+                        {currentRow(t("ota.canaryBucket"), String(live().canary_bucket))}
+                      </div>
+                    )}
+                  </Show>
+                </Show>
+                <label class="block">
+                  <span class="mb-1 block text-sm font-medium text-ink">
+                    {t("ota.placementRing")}
+                  </span>
+                  <select
+                    class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                    aria-label={t("ota.placementRing")}
+                    value={placementRing()}
+                    onChange={(event) =>
+                      setPlacementRing(event.currentTarget.value as RingWire)
+                    }
+                  >
+                    <For each={RINGS}>
+                      {(ring) => <option value={ring}>{t(RING_LABEL[ring])}</option>}
+                    </For>
+                  </select>
+                </label>
+                <TextField
+                  label={t("ota.canaryBucket")}
+                  type="number"
+                  value={canaryBucket()}
+                  onInput={setCanaryBucket}
+                  placeholder="0"
+                />
+                <p class="text-sm text-ink-muted">{t("ota.canaryBucketHint")}</p>
+                <div>
+                  <Button
+                    variant="primary"
+                    disabled={busy() || canaryBucket().trim().length === 0}
+                    onClick={() => setConfirmPlace(true)}
+                  >
+                    {t("ota.place")}
+                  </Button>
+                </div>
+              </div>
+            </Show>
+          </Card>
+
           <Card title={t("ota.manage")}>
             <Show
               when={storeId()}
@@ -399,6 +522,21 @@ export function Ota() {
           busy={busy()}
           onConfirm={() => void publish()}
           onCancel={() => setConfirmPublish(false)}
+        />
+        <ConfirmDialog
+          open={confirmPlace()}
+          title={t("ota.confirmPlace")}
+          message={t("ota.confirmPlaceBody", {
+            store: storeName(),
+            ring: t(RING_LABEL[placementRing()]),
+            bucket: canaryBucket(),
+          })}
+          confirmLabel={t("ota.place")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          busy={busy()}
+          onConfirm={() => void place()}
+          onCancel={() => setConfirmPlace(false)}
         />
         <ConfirmDialog
           open={confirmHalt()}

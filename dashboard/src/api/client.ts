@@ -59,7 +59,9 @@ import type {
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
+  OtaPlacement,
   OtaRollout,
+  PublishPlacementRequest,
   PublishRolloutRequest,
   ReconcileRun,
   Recipe,
@@ -1370,6 +1372,18 @@ export const api = {
       store_id: storeId,
       halted,
     }),
+
+  // The placement half (ADR-0052): a rollout says which devices are eligible, a placement says where
+  // this store sits — its ring and its stable canary bucket. A store that has never been placed reads
+  // `null` and installs nothing, so both halves have to be authored for a fleet to move. Same
+  // permissions as the rollout: read behind console.data.read, publish behind console.ota.publish.
+  getOtaPlacement: (tenantId: string, storeId: string) =>
+    requestJson<OtaPlacement | null>(
+      "GET",
+      `/admin/config/ota/placement?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishOtaPlacement: (request: PublishPlacementRequest) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/ota/placement", request),
 
   // --- reconciliation run history (ADR-0078, Track O3) ---
   // The trail of reconciliation diffs (ADR-0040): counts and a timestamp per run, newest first,

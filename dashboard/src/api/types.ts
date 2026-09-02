@@ -708,6 +708,28 @@ export interface PublishRolloutRequest {
 }
 
 /**
+ * A store's OTA placement — the `device_ota` config node — from `GET /admin/config/ota/placement`
+ * (ADR-0052), or `null` when the store has never been placed. The rollout says which devices are
+ * eligible; the placement says where this store sits. A store with no placement installs nothing.
+ *
+ * The placement is per store, not per terminal: a config tree is keyed by store and its Device layer
+ * is one document its terminals share, so they all take the same ring and bucket (ADR-0052
+ * Correction 1).
+ */
+export interface OtaPlacement {
+  readonly ring: string;
+  readonly canary_bucket: number;
+}
+
+/** A `PUT /admin/config/ota/placement` body: place a store in the rollout. */
+export interface PublishPlacementRequest {
+  readonly tenant_id: string;
+  readonly store_id: string;
+  readonly ring: string;
+  readonly canary_bucket: number;
+}
+
+/**
  * One reconciliation run from `GET /admin/reconcile` (ADR-0078, Track O3): counts and a timestamp per
  * diff (ADR-0040), never event contents. `missing_found` of zero means the store was fully in sync.
  */
