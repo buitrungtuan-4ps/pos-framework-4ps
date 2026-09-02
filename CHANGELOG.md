@@ -17,7 +17,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
-- **ADR-0094 — the console stops losing edits**
+- **ADR-0094 — the console stops losing edits** (#137)
   ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)). No behaviour change in this entry:
   the record lands first because it adds a status to the `pos-proto` error envelope and changes the
   shape of every mutating `/admin` seam, and roadmap v3 **Q3c** books it that way.
