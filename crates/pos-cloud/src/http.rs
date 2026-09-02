@@ -643,18 +643,22 @@ where
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
         request.store_id.parse::<Ulid>().map(StoreId::new),
     ) else {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+            &[("tenant_id", "NOT_A_ULID"), ("store_id", "NOT_A_ULID")],
+        );
     };
     let mut candidates = Vec::with_capacity(request.event_ids.len());
     for raw in &request.event_ids {
         match raw.parse::<EventId>() {
             Ok(id) => candidates.push(id),
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "an event id is not a ULID").into_response();
+                return api_error_with_details(
+                    ErrorStatus::InvalidArgument,
+                    "an event id is not a ULID",
+                    &[("event_ids", "NOT_A_ULID")],
+                );
             }
         }
     }
@@ -859,15 +863,19 @@ where
         request.tenant_id.parse::<Ulid>().map(TenantId::new),
         request.store_id.parse::<Ulid>().map(StoreId::new),
     ) else {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+            &[("tenant_id", "NOT_A_ULID"), ("store_id", "NOT_A_ULID")],
+        );
     };
     let installed = request.installed.trim();
     if installed.is_empty() {
-        return (StatusCode::BAD_REQUEST, "an installed version is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "an installed version is required",
+            &[("installed", "REQUIRED")],
+        );
     }
     match state
         .reports
@@ -1001,13 +1009,35 @@ where
         return forbidden.into_response();
     }
     let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the store id is not a ULID",
+            &[("store_id", "NOT_A_ULID")],
+        );
     };
     let Some(kind) = DeviceKind::from_wire(&request.kind) else {
-        return (StatusCode::BAD_REQUEST, "kind must be one of printer, kds").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "kind must be one of printer, kds",
+            &[("kind", "UNKNOWN_VALUE")],
+        );
     };
+    // Reported per field rather than as one "name and address are required", because a caller that
+    // sent a name and forgot an address should be told which of the two to fix. The condition is
+    // unchanged; only the answer got more specific.
     if request.name.trim().is_empty() || request.address.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name and address are required").into_response();
+        let mut missing: Vec<(&str, &str)> = Vec::with_capacity(2);
+        if request.name.trim().is_empty() {
+            missing.push(("name", "REQUIRED"));
+        }
+        if request.address.trim().is_empty() {
+            missing.push(("address", "REQUIRED"));
+        }
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name and address are required",
+            &missing,
+        );
     }
     let Some(id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceProposalId::new)
@@ -1061,7 +1091,11 @@ where
         return forbidden.into_response();
     }
     let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the store id is not a ULID",
+            &[("store_id", "NOT_A_ULID")],
+        );
     };
     match state
         .devices
@@ -12970,7 +13004,11 @@ where
 {
     let Ok(code) = ActivationCode::parse(&request.code) else {
         // A malformed code never named a real one, so this is a plain client error, not an oracle.
-        return (StatusCode::BAD_REQUEST, "the activation code is malformed").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the activation code is malformed",
+            &[("code", "MALFORMED")],
+        );
     };
     let code_hash = hash_code(&code);
     let issued = match state.activations.lookup(code_hash).await {
@@ -13532,14 +13570,22 @@ where
         return forbidden.into_response();
     }
     let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the store id is not a ULID",
+            &[("store_id", "NOT_A_ULID")],
+        );
     };
     let held = match query.held_version {
         None => None,
         Some(ref raw) => match raw.parse::<Ulid>().map(ConfigVersionId::new) {
             Ok(version) => Some(version),
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "held_version is not a ULID").into_response();
+                return api_error_with_details(
+                    ErrorStatus::InvalidArgument,
+                    "held_version is not a ULID",
+                    &[("held_version", "NOT_A_ULID")],
+                );
             }
         },
     };
@@ -13601,7 +13647,11 @@ where
         return forbidden.into_response();
     }
     let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return (StatusCode::BAD_REQUEST, "the store id is not a ULID").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the store id is not a ULID",
+            &[("store_id", "NOT_A_ULID")],
+        );
     };
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app

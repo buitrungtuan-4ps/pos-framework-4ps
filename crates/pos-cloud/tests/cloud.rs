@@ -2094,6 +2094,85 @@ async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, Str
     (router, token, store_ulid, version)
 }
 
+/// A refusal on the **store-facing** surface is enveloped too, and names the field that was wrong
+/// rather than the other one on the same route.
+///
+/// `GET /sync/stores/{id}/config` can refuse for two different fields — the path's store id or the
+/// query's `held_version` — and a store that sent a good id and a bad version needs to be told
+/// which. Before this slice both answered the same shape of bare string.
+#[tokio::test]
+async fn a_store_facing_refusal_names_the_field_that_was_actually_wrong() {
+    let keys = FakeKeys::default();
+    let (router, token, store_ulid, _version) = published_config(&keys).await;
+
+    let response = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config?held_version=not-a-ulid"),
+            Some(&token),
+        ))
+        .await
+        .expect("route the sync");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["details"][0]["field"], "held_version");
+    assert_eq!(body["error"]["details"][0]["reason"], "NOT_A_ULID");
+    assert!(
+        body["error"]["details"][1].is_null(),
+        "only the field that was wrong is named — the store id in the path was fine: {body}"
+    );
+}
+
+/// A refusal about two fields names **only the ones actually missing.**
+///
+/// `propose_device` refuses when either `name` or `address` is blank, and its message says "name
+/// and address are required" for both cases. A store that sent a name and forgot the address was
+/// being told to check both. The condition is unchanged; the answer got specific.
+#[tokio::test]
+async fn a_refusal_about_two_fields_names_only_the_ones_missing() {
+    let keys = FakeKeys::default();
+    let router = device_app(provisioned_admin(), keys.clone(), FakeDevices::default());
+    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let devices_uri = format!("/sync/stores/{store_ulid}/devices");
+
+    // A name, and a blank address.
+    let response = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &devices_uri,
+            &serde_json::json!({ "kind": "printer", "name": "Kitchen 1", "address": "   " }),
+            &token,
+        ))
+        .await
+        .expect("route the proposal");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "address",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["reason"], "REQUIRED");
+    assert!(
+        body["error"]["details"][1].is_null(),
+        "the name was fine, so it is not named: {body}"
+    );
+
+    // Both blank: both named, in the order the fields are declared.
+    let response = router
+        .oneshot(post_json_bearer(
+            &devices_uri,
+            &serde_json::json!({ "kind": "printer", "name": "", "address": "" }),
+            &token,
+        ))
+        .await
+        .expect("route the proposal");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["details"][0]["field"], "name", "got {body}");
+    assert_eq!(body["error"]["details"][1]["field"], "address");
+}
+
 #[tokio::test]
 async fn config_sync_serves_an_update_then_reports_up_to_date() {
     let keys = FakeKeys::default();

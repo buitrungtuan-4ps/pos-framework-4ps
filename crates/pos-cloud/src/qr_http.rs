@@ -37,11 +37,13 @@ use serde::Deserialize;
 
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderIn};
 use pos_proto::determinism::ClockSource;
+use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{StoreId, TableId, TenantId};
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, Timestamp};
 
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
+use crate::http::api_error;
 use crate::orders::{OrderLineRequest, intake_error, order_response, to_inbound_line};
 use crate::qr::{QrDecision, QrFacts, QrRejection, TableTokenSecret, verify_table_token};
 
@@ -357,23 +359,36 @@ fn is_open_at(hour: u8, open: u8, close: u8) -> bool {
     }
 }
 
-/// Maps a [`QrRejection`] to the guest-facing status and reason.
+/// Maps a [`QrRejection`] to the guest-facing envelope and reason.
+///
+/// One `match` for all four rejections, so the guest page has one shape to render whatever went
+/// wrong. The messages stay guest-facing prose — a diner reads these, not an integrator — and the
+/// `status` beside them is what the page branches on, which is the split the envelope exists to
+/// make: the wording can be softened or translated without breaking the page.
+///
+/// No `details`: none of the four is about a field the guest filled in. An untrusted table code
+/// carries no field-level reason on purpose — it is the one arm where naming what was wrong with
+/// the code would help someone guessing at codes.
 fn rejection_response(reason: QrRejection) -> Response {
     let (status, message) = match reason {
-        QrRejection::UntrustedTable => (StatusCode::FORBIDDEN, "the table code is not recognised"),
+        QrRejection::UntrustedTable => (
+            ErrorStatus::PermissionDenied,
+            "the table code is not recognised",
+        ),
         QrRejection::StoreOffline => (
-            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorStatus::Unavailable,
             "the store is offline; please ask a member of staff",
         ),
-        QrRejection::OutsideBusinessHours => {
-            (StatusCode::CONFLICT, "the store is closed right now")
-        }
+        QrRejection::OutsideBusinessHours => (
+            ErrorStatus::FailedPrecondition,
+            "the store is closed right now",
+        ),
         QrRejection::RateLimited => (
-            StatusCode::TOO_MANY_REQUESTS,
+            ErrorStatus::ResourceExhausted,
             "too many orders from this table; please wait a moment",
         ),
     };
-    (status, message).into_response()
+    api_error(status, message)
 }
 
 #[cfg(test)]

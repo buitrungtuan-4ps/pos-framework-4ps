@@ -50,6 +50,7 @@ use pos_proto::{SalesChannel, Ulid};
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
+use crate::http::{api_error, api_error_with_details};
 use crate::orders::StoreDirectory;
 
 /// The default the relay parks for when a store publishes no `store.order_relay.wait_ms`.
@@ -645,7 +646,11 @@ where
         return forbidden.into_response();
     }
     let Ok(store_id) = store_id.parse::<StoreId>() else {
-        return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response();
+        return api_error_with_details(
+            pos_proto::error::ErrorStatus::InvalidArgument,
+            "store_id is not a ULID",
+            &[("store_id", "NOT_A_ULID")],
+        );
     };
 
     // Answer immediately if anything is pending; otherwise hold the request open, re-checking, until
@@ -699,11 +704,11 @@ where
         store_id.parse::<StoreId>(),
         queued_id.parse::<Ulid>().map(OrderQueueId::new),
     ) else {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            pos_proto::error::ErrorStatus::InvalidArgument,
             "store_id or queued_id is not a ULID",
-        )
-            .into_response();
+            &[("store_id", "NOT_A_ULID"), ("queued_id", "NOT_A_ULID")],
+        );
     };
 
     match state
@@ -726,20 +731,14 @@ pub(crate) struct LookUpQuery {
     pub(crate) external_reference: String,
 }
 
-/// Maps a queue [`PortError`] to an HTTP status for the store-facing routes.
+/// Maps a queue [`PortError`] to a response for the store-facing routes.
+///
+/// This was the **second** hand-written copy of the `ErrorStatus` -> HTTP code map that
+/// `ErrorStatus::http_code` owns; `orders.rs` held the first, deleted in the previous slice.
+/// Finding it twice is what makes it a pattern rather than an oversight — the shape was being
+/// copied from one route module to the next — so both are gone and the map has one home again.
 fn relay_error(error: &PortError) -> Response {
-    use pos_proto::error::ErrorStatus;
-    let status = match error.status() {
-        ErrorStatus::InvalidArgument => StatusCode::BAD_REQUEST,
-        ErrorStatus::NotFound => StatusCode::NOT_FOUND,
-        ErrorStatus::PermissionDenied => StatusCode::FORBIDDEN,
-        ErrorStatus::Unauthenticated => StatusCode::UNAUTHORIZED,
-        ErrorStatus::FailedPrecondition | ErrorStatus::AlreadyExists => StatusCode::CONFLICT,
-        ErrorStatus::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
-        ErrorStatus::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-        ErrorStatus::Internal | ErrorStatus::Unspecified => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, error.to_string()).into_response()
+    api_error(error.status(), error.to_string())
 }
 
 /// Converts a wire look-up query to the typed parts, or the reason it is a `400`.
