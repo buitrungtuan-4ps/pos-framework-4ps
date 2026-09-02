@@ -690,11 +690,7 @@ where
         }
         Err(error) => {
             tracing::error!(%error, "a reconciliation diff failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the reconciliation service is unavailable",
-            )
-                .into_response()
+            service_unavailable("reconciliation")
         }
     }
 }
@@ -793,11 +789,7 @@ where
         }
         Err(error) => {
             tracing::error!(%error, "reading the reconciliation history failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the reconciliation service is unavailable",
-            )
-                .into_response()
+            service_unavailable("reconciliation")
         }
     }
 }
@@ -886,11 +878,7 @@ where
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "recording an OTA report failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the fleet service is unavailable",
-            )
-                .into_response()
+            service_unavailable("fleet")
         }
     }
 }
@@ -1035,11 +1023,7 @@ where
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceProposalId::new)
     else {
         tracing::error!("could not read OS entropy to mint a device-proposal id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the device service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("device");
     };
     let proposal = PersistedDeviceProposal {
         id,
@@ -1586,7 +1570,7 @@ where
     };
     match state.people.get(tenant_id, employee_id).await {
         Ok(Some(employee)) => (StatusCode::OK, Json(employee)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Ok(None) => not_found("employee"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1702,7 +1686,7 @@ where
     // Read the current row for the audit `before` (id/code/status, never the name) and to answer 404.
     let existing = match state.people.get(tenant_id, employee_id).await {
         Ok(Some(employee)) => employee,
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Ok(None) => return not_found("employee"),
         Err(error) => return people_error_response(&error),
     };
     let update = EmployeeUpdate {
@@ -1737,7 +1721,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Ok(false) => not_found("employee"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1802,7 +1786,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such employee").into_response(),
+        Ok(false) => not_found("employee"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1867,7 +1851,7 @@ where
         };
     match state.people.get(tenant_id, role_id).await {
         Ok(Some(role)) => (StatusCode::OK, Json(role)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such role").into_response(),
+        Ok(None) => not_found("role"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -2030,7 +2014,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such role").into_response(),
+        Ok(false) => not_found("role"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -2218,7 +2202,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such assignment").into_response(),
+        Ok(false) => not_found("assignment"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -2484,11 +2468,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -2618,11 +2598,7 @@ where
     };
     let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
         tracing::error!("could not serialise a tax rate table");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the tax-rate service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("tax-rate");
     };
 
     // Set the `tax` key on the store's Store layer (index 2) and re-publish it, preserving the other
@@ -2648,11 +2624,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -2848,11 +2820,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -2989,11 +2957,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -3754,7 +3718,7 @@ where
     };
     match AreaStore::get(&state.floor, tenant_id, area_id).await {
         Ok(Some(area)) => (StatusCode::OK, Json(area)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such area").into_response(),
+        Ok(None) => not_found("area"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -3890,7 +3854,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such area").into_response(),
+        Ok(false) => not_found("area"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -3956,7 +3920,7 @@ where
     };
     match TableStore::get(&state.floor, tenant_id, table_id).await {
         Ok(Some(table)) => (StatusCode::OK, Json(table)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such table").into_response(),
+        Ok(None) => not_found("table"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4114,7 +4078,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such table").into_response(),
+        Ok(false) => not_found("table"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4180,7 +4144,7 @@ where
     };
     match StationStore::get(&state.floor, tenant_id, station_id).await {
         Ok(Some(station)) => (StatusCode::OK, Json(station)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such station").into_response(),
+        Ok(None) => not_found("station"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4334,7 +4298,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such station").into_response(),
+        Ok(false) => not_found("station"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4506,7 +4470,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such routing rule").into_response(),
+        Ok(false) => not_found("routing rule"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4642,11 +4606,7 @@ where
         serde_json::to_value(&station_plan),
     ) else {
         tracing::error!("could not serialise a compiled floor or station plan");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the floor service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("floor");
     };
 
     // Set the `floor` and `stations` keys on the store's Store layer (index 2) and re-publish it,
@@ -4673,11 +4633,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -5005,7 +4961,7 @@ where
         Ok(Some(row)) => {
             (StatusCode::OK, Json(FleetStoreView::from_row(row, now_ms))).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Ok(None) => not_found("store"),
         Err(error) => fleet_error_response(&error),
     }
 }
@@ -5609,7 +5565,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such tenant").into_response(),
+        Ok(false) => not_found("tenant"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5757,7 +5713,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such brand").into_response(),
+        Ok(false) => not_found("brand"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -5925,7 +5881,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Ok(false) => not_found("store"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -6088,7 +6044,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such device").into_response(),
+        Ok(false) => not_found("device"),
         Err(error) => registry_error_response(&error),
     }
 }
@@ -6880,7 +6836,7 @@ where
     };
     match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(campaign)) => (StatusCode::OK, Json(campaign)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Ok(None) => not_found("campaign"),
         Err(error) => campaign_error_response(&error),
     }
 }
@@ -6972,7 +6928,7 @@ where
     };
     let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(existing)) => existing,
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Ok(None) => return not_found("campaign"),
         Err(error) => return campaign_error_response(&error),
     };
     let campaign = match build_campaign(&request, campaign_id) {
@@ -7031,7 +6987,7 @@ where
     };
     let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(existing)) => existing,
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Ok(None) => return not_found("campaign"),
         Err(error) => return campaign_error_response(&error),
     };
     match state
@@ -7354,7 +7310,7 @@ where
     match state.inventory.list_ingredients(tenant_id).await {
         Ok(ingredients) => match ingredients.into_iter().find(|i| i.id == ingredient_id) {
             Some(ingredient) => (StatusCode::OK, Json(ingredient)).into_response(),
-            None => (StatusCode::NOT_FOUND, "no such ingredient").into_response(),
+            None => not_found("ingredient"),
         },
         Err(error) => inventory_error_response(&error),
     }
@@ -7456,7 +7412,7 @@ where
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return (StatusCode::NOT_FOUND, "no such ingredient").into_response();
+        return not_found("ingredient");
     };
     let ingredient = match build_ingredient(&request, ingredient_id) {
         Ok(ingredient) => ingredient,
@@ -7523,7 +7479,7 @@ where
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return (StatusCode::NOT_FOUND, "no such ingredient").into_response();
+        return not_found("ingredient");
     };
     match state
         .inventory
@@ -7610,7 +7566,7 @@ where
     match state.inventory.list_recipes(tenant_id).await {
         Ok(recipes) => match recipes.into_iter().find(|r| r.item == item) {
             Some(recipe) => (StatusCode::OK, Json(recipe)).into_response(),
-            None => (StatusCode::NOT_FOUND, "no such recipe").into_response(),
+            None => not_found("recipe"),
         },
         Err(error) => inventory_error_response(&error),
     }
@@ -7712,7 +7668,7 @@ where
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return (StatusCode::NOT_FOUND, "no such recipe").into_response();
+        return not_found("recipe");
     };
     match state.inventory.delete_recipe(tenant_id, item).await {
         Ok(()) => {
@@ -7797,7 +7753,7 @@ where
     match state.inventory.list_suppliers(tenant_id).await {
         Ok(suppliers) => match suppliers.into_iter().find(|s| s.id == supplier_id) {
             Some(supplier) => (StatusCode::OK, Json(supplier)).into_response(),
-            None => (StatusCode::NOT_FOUND, "no such supplier").into_response(),
+            None => not_found("supplier"),
         },
         Err(error) => inventory_error_response(&error),
     }
@@ -7893,7 +7849,7 @@ where
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return (StatusCode::NOT_FOUND, "no such supplier").into_response();
+        return not_found("supplier");
     };
     let supplier = match build_supplier(&request, supplier_id) {
         Ok(supplier) => supplier,
@@ -7954,7 +7910,7 @@ where
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return (StatusCode::NOT_FOUND, "no such supplier").into_response();
+        return not_found("supplier");
     };
     match state
         .inventory
@@ -8154,11 +8110,7 @@ where
         serde_json::to_value(inventory_to_node(ingredients, recipes, suppliers))
     else {
         tracing::error!("could not serialise an inventory node");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the inventory service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("inventory");
     };
 
     // Set the `inventory` key on the store's Store layer (index 2) and re-publish it, preserving the
@@ -8175,11 +8127,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -8315,11 +8263,7 @@ where
     };
     let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
         tracing::error!("could not serialise a campaigns node");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the campaign service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("campaign");
     };
 
     // Set the `campaigns` key on the store's Store layer (index 2) and re-publish it, preserving the
@@ -8345,11 +8289,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -8493,11 +8433,7 @@ where
     };
     let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
         tracing::error!("could not serialise a campaigns node");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the campaign service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("campaign");
     };
     let state_before = match state.config_trees.load(tenant_id, store_id).await {
         Ok(state) => state,
@@ -8790,11 +8726,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(write.level, layer, version_id) {
         Ok(id) => {
@@ -9094,7 +9026,7 @@ where
             )
                 .into_response();
         }
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such campaign").into_response(),
+        Ok(None) => return not_found("campaign"),
         Err(error) => return campaign_error_response(&error),
     }
     // Mint the batch — a fresh id and code each, failing closed if OS entropy is unavailable.
@@ -9326,11 +9258,7 @@ where
     };
     let Ok(node_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
         tracing::error!("could not serialise a campaigns node to schedule");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the campaign service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("campaign");
     };
     let Some(id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()) else {
         return campaign_entropy_unavailable();
@@ -9466,7 +9394,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such pending scheduled publish").into_response(),
+        Ok(false) => not_found("pending scheduled publish"),
         Err(error) => scheduled_error_response(&error),
     }
 }
@@ -9725,7 +9653,7 @@ where
             bytes,
         )
             .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such media asset").into_response(),
+        Ok(None) => not_found("media asset"),
         Err(error) => media_error_response(&error),
     }
 }
@@ -9821,7 +9749,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such media asset").into_response(),
+        Ok(false) => not_found("media asset"),
         Err(error) => media_error_response(&error),
     }
 }
@@ -9984,7 +9912,7 @@ where
             )
                 .into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "no such subject for this tenant").into_response(),
+        Ok(None) => not_found("subject for this tenant"),
         Err(error) => subject_error_response(&error),
     }
 }
@@ -10044,7 +9972,7 @@ where
             )
                 .into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "no such subject for this tenant").into_response(),
+        Ok(None) => not_found("subject for this tenant"),
         Err(error) => subject_error_response(&error),
     }
 }
@@ -10081,7 +10009,7 @@ where
     let record = match state.subjects.fetch(tenant, subject).await {
         Ok(Some(record)) => record,
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, "no such subject for this tenant").into_response();
+            return not_found("subject for this tenant");
         }
         Err(error) => return subject_error_response(&error),
     };
@@ -10567,7 +10495,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such item").into_response(),
+        Ok(false) => not_found("item"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10715,7 +10643,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such tax class").into_response(),
+        Ok(false) => not_found("tax class"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -10866,7 +10794,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such item category").into_response(),
+        Ok(false) => not_found("item category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11027,7 +10955,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such item sub-category").into_response(),
+        Ok(false) => not_found("item sub-category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11178,7 +11106,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such display category").into_response(),
+        Ok(false) => not_found("display category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11339,7 +11267,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such display sub-category").into_response(),
+        Ok(false) => not_found("display sub-category"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11507,7 +11435,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such layout button").into_response(),
+        Ok(false) => not_found("layout button"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11678,7 +11606,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such modifier group").into_response(),
+        Ok(false) => not_found("modifier group"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11831,7 +11759,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such menu").into_response(),
+        Ok(false) => not_found("menu"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -11992,7 +11920,7 @@ where
             .await;
             (StatusCode::OK, Json(record)).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such menu section").into_response(),
+        Ok(false) => not_found("menu section"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -12156,7 +12084,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such placement").into_response(),
+        Ok(false) => not_found("placement"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -12294,11 +12222,7 @@ where
     };
     let Ok(book_value) = serde_json::to_value(&book) else {
         tracing::error!("could not serialise a compiled menu book");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the catalog service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("catalog");
     };
 
     // Compile the presentation layout alongside the price book (ADR-0066): the display taxonomy plus
@@ -12320,11 +12244,7 @@ where
     let layout = compile_layout_book(&display_categories, &display_subcategories, &layout_buttons);
     let Ok(layout_value) = serde_json::to_value(&layout) else {
         tracing::error!("could not serialise a compiled layout book");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the catalog service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("catalog");
     };
 
     // Load the store's tree (or start one), set the `menu` and `layout` keys on its Store layer, and
@@ -12351,11 +12271,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -12532,11 +12448,7 @@ where
     let staff_count = document.staff.len();
     let Ok(document_value) = serde_json::to_value(&document) else {
         tracing::error!("could not serialise a compiled permissions document");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the people service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("people");
     };
 
     // Set the `permissions` key on the store's Store layer (index 2 in Tenant→Brand→Store→Device) and
@@ -12561,11 +12473,7 @@ where
     };
     let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
@@ -12745,11 +12653,7 @@ where
     };
     let Some(code) = mint_activation_code() else {
         tracing::error!("could not read OS entropy to mint an activation code");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the activation service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("activation");
     };
     match state
         .activations
@@ -12846,11 +12750,7 @@ where
             let now_ms = state.clock.now().as_milliseconds_since_epoch();
             let (Some(id), Some(secret)) = (mint_ulid(now_ms), random_hex_32()) else {
                 tracing::error!("could not read OS entropy to mint a device credential");
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "the activation service is unavailable",
-                )
-                    .into_response();
+                return service_unavailable("activation");
             };
             let (credential, token) = mint_device_credential(id, &secret);
             match state
@@ -13418,11 +13318,7 @@ where
             };
             (StatusCode::OK, Json(response)).into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            "the store has no published configuration",
-        )
-            .into_response(),
+        Ok(None) => no_published_configuration(),
         Err(error) => config_store_error_response(&error),
     }
 }
@@ -13510,11 +13406,7 @@ where
         // The OS entropy source is unavailable: never mint a token that is not fully random, so fail
         // closed with a retryable status rather than issue a guessable session.
         tracing::error!("could not read OS entropy to mint a session token");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the sign-in service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("sign-in");
     };
     // Capture the client IP and user-agent so the admin can recognise this session in their own
     // session list ([ADR-0067] slice 4). Behind the P8 reverse proxy the real client IP arrives in
@@ -13660,8 +13552,10 @@ where
     W: Clone + Send + Sync + 'static,
 {
     let Some(expected) = app.admin_setup_token.as_deref() else {
-        // No token configured: setup is off. Reveal nothing more than "no such route".
-        return (StatusCode::NOT_FOUND, "setup is not enabled").into_response();
+        // No token configured: setup is off. Reveal nothing more than "no such route" — so this one
+        // keeps its own wording rather than joining `not_found`, whose "no such {entity}" would
+        // imply a setup resource that might exist under another name, and it carries no `details`.
+        return api_error(ErrorStatus::NotFound, "setup is not enabled");
     };
     if !constant_time_eq(&request.setup_token, expected) {
         return (StatusCode::UNAUTHORIZED, "setup failed").into_response();
@@ -13675,11 +13569,7 @@ where
     }
     let Some((secret, phc)) = mint_credential(&request.password) else {
         tracing::error!("could not mint a super-admin credential (entropy or hashing failed)");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the setup service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("setup");
     };
     match app
         .admin
@@ -13710,11 +13600,7 @@ where
             (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response()
         }
         Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the setup service is unavailable",
-        )
-            .into_response(),
+        Err(_) => service_unavailable("setup"),
     }
 }
 
@@ -13970,11 +13856,7 @@ where
         }
         Err(error) => {
             tracing::error!(%error, "an audit read failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the audit service is unavailable",
-            )
-                .into_response()
+            service_unavailable("audit")
         }
     }
 }
@@ -14105,11 +13987,7 @@ where
     let now_ms = app.clock.now().as_milliseconds_since_epoch();
     let (Some(id), Some(secret)) = (mint_api_key_id(now_ms), random_hex_32()) else {
         tracing::error!("could not read OS entropy to mint an API key");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the provisioning service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("provisioning");
     };
     let expires_at = match request.expires_at_ms {
         Some(ms) => match pos_proto::time::Timestamp::from_milliseconds_since_epoch(ms) {
@@ -14123,11 +14001,7 @@ where
     let (stored, token) = issue(id, tenant_id, scopes, &secret, expires_at);
     if let Err(error) = app.keys.insert(&stored).await {
         tracing::error!(%error, "persisting a new API key failed");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the provisioning service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("provisioning");
     }
     // Records the grant, never the secret: the scopes and expiry are the auditable fact; the token
     // is shown once to the caller and never written to the trail.
@@ -14185,11 +14059,7 @@ where
         Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
         Err(error) => {
             tracing::error!(%error, "listing API keys failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the provisioning service is unavailable",
-            )
-                .into_response()
+            service_unavailable("provisioning")
         }
     }
 }
@@ -14248,11 +14118,7 @@ where
         }
         Err(error) => {
             tracing::error!(%error, "revoking an API key failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the provisioning service is unavailable",
-            )
-                .into_response()
+            service_unavailable("provisioning")
         }
     }
 }
@@ -14357,7 +14223,7 @@ where
         .await
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "no such session").into_response(),
+        Ok(false) => not_found("session"),
         Err(_) => admin_service_unavailable(),
     }
 }
@@ -15102,7 +14968,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Ok(false) => not_found("admin"),
         Err(error) => {
             tracing::error!(%error, "setting an admin role failed");
             admin_service_unavailable()
@@ -15172,7 +15038,7 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such admin").into_response(),
+        Ok(false) => not_found("admin"),
         Err(error) => {
             tracing::error!(%error, "setting an admin status failed");
             admin_service_unavailable()
@@ -15256,11 +15122,7 @@ where
     };
     let Some(version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch()) else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     match tree.publish(level, document, version_id) {
         Ok(id) => {
@@ -15342,18 +15204,10 @@ where
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
                 Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
-                None => (
-                    StatusCode::NOT_FOUND,
-                    "the store has no published configuration",
-                )
-                    .into_response(),
+                None => no_published_configuration(),
             }
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            "the store has no published configuration",
-        )
-            .into_response(),
+        Ok(None) => no_published_configuration(),
         Err(error) => config_store_error_response(&error),
     }
 }
@@ -15420,11 +15274,7 @@ where
             views.reverse(); // history is oldest-first; the console reads newest-first.
             (StatusCode::OK, Json(views)).into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            "the store has no published configuration",
-        )
-            .into_response(),
+        Ok(None) => no_published_configuration(),
         Err(error) => config_store_error_response(&error),
     }
 }
@@ -15468,14 +15318,10 @@ where
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
                 Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
-                None => (StatusCode::NOT_FOUND, "no such config version").into_response(),
+                None => not_found("config version"),
             }
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            "the store has no published configuration",
-        )
-            .into_response(),
+        Ok(None) => no_published_configuration(),
         Err(error) => config_store_error_response(&error),
     }
 }
@@ -15528,24 +15374,16 @@ where
         Ok(state) => state,
         Err(error) => return config_store_error_response(&error),
     }) else {
-        return (
-            StatusCode::NOT_FOUND,
-            "the store has no published configuration",
-        )
-            .into_response();
+        return no_published_configuration();
     };
     let mut tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
     let Some(new_version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch())
     else {
         tracing::error!("could not read OS entropy to mint a config version id");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the configuration service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("configuration");
     };
     let Some(new_id) = tree.restore(version_id, new_version_id) else {
-        return (StatusCode::NOT_FOUND, "no such config version").into_response();
+        return not_found("config version");
     };
     if let Err(error) = app
         .config_trees
@@ -15979,22 +15817,14 @@ where
         }
         Err(join_error) => {
             tracing::error!(%join_error, "the SSRF vetting task failed to join");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the webhook service is unavailable",
-            )
-                .into_response();
+            return service_unavailable("webhook");
         }
     };
 
     let now_ms = app.clock.now().as_milliseconds_since_epoch();
     let (Some(id), Some(secret)) = (mint_webhook_id(now_ms), random_hex_32()) else {
         tracing::error!("could not read OS entropy to mint a webhook endpoint");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the webhook service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("webhook");
     };
     let endpoint = PersistedWebhook {
         id,
@@ -16007,11 +15837,7 @@ where
     };
     if let Err(error) = app.webhooks.insert(&endpoint).await {
         tracing::error!(%error, "persisting a new webhook endpoint failed");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the webhook service is unavailable",
-        )
-            .into_response();
+        return service_unavailable("webhook");
     }
     (
         StatusCode::CREATED,
@@ -16052,11 +15878,7 @@ where
         Ok(summaries) => (StatusCode::OK, Json::<Vec<WebhookSummary>>(summaries)).into_response(),
         Err(error) => {
             tracing::error!(%error, "listing webhook endpoints failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the webhook service is unavailable",
-            )
-                .into_response()
+            service_unavailable("webhook")
         }
     }
 }
@@ -16097,11 +15919,7 @@ where
         Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "deleting a webhook endpoint failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the webhook service is unavailable",
-            )
-                .into_response()
+            service_unavailable("webhook")
         }
     }
 }
@@ -16156,31 +15974,19 @@ where
                 .iter()
                 .any(|summary| summary.id == endpoint_id.to_string())
             {
-                return (
-                    StatusCode::NOT_FOUND,
-                    "no such webhook endpoint for this tenant",
-                )
-                    .into_response();
+                return not_found("webhook endpoint for this tenant");
             }
         }
         Err(error) => {
             tracing::error!(%error, "listing webhook endpoints failed");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the webhook service is unavailable",
-            )
-                .into_response();
+            return service_unavailable("webhook");
         }
     }
     match app.webhooks.set_disabled(endpoint_id, false).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "re-enabling a webhook endpoint failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the webhook service is unavailable",
-            )
-                .into_response()
+            service_unavailable("webhook")
         }
     }
 }
@@ -16425,6 +16231,44 @@ fn entity_status_refusal() -> Response {
     enum_refusal(
         "status",
         EntityStatus::ALL.iter().map(|status| status.as_str()),
+    )
+}
+
+/// The refusal for a named thing that is not there: `NOT_FOUND`, `"no such {entity}"`, no details.
+///
+/// Sixty-one sites wrote this sentence out, thirty-five spellings of it, and the value of one home
+/// here is smaller than for the ULID and closed-set refusals: nothing was *wrong*, only repeated.
+/// What it does buy is that the next absent entity cannot arrive with a different phrasing or a
+/// different status.
+///
+/// No `details` array, deliberately. `details` names a field the caller got wrong, and a caller
+/// asking after an employee who does not exist got its fields right — the employee is absent.
+/// Naming one here would send a client to fix an input that was fine.
+fn not_found(entity: &str) -> Response {
+    api_error(ErrorStatus::NotFound, format!("no such {entity}"))
+}
+
+/// The refusal for a store's configuration that has not been published yet.
+///
+/// Its own name because six routes answer it and it is not the `"no such X"` shape: the store
+/// exists, and so does its config tree; what is missing is a *published version* of it.
+fn no_published_configuration() -> Response {
+    api_error(
+        ErrorStatus::NotFound,
+        "the store has no published configuration",
+    )
+}
+
+/// The refusal for a dependency that is down: `SERVICE_UNAVAILABLE`, and no details.
+///
+/// `ErrorStatus::Unavailable`, not `InvalidArgument`, which is the distinction deriving the code
+/// from [`ErrorStatus::http_code`] exists to keep: this refusal is **retryable** and the caller's
+/// request was fine. A client that reads it as its own fault stops retrying something that would
+/// have succeeded.
+fn service_unavailable(service: &str) -> Response {
+    api_error(
+        ErrorStatus::Unavailable,
+        format!("the {service} service is unavailable"),
     )
 }
 
@@ -16687,6 +16531,45 @@ mod preview_diff_tests {
                 .iter()
                 .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
             "the preview surfaces the real conflict: {violations:?}",
+        );
+    }
+}
+
+#[cfg(test)]
+mod absence_tests {
+    //! The two refusals that are *not* the caller's fault, and the one property that separates them.
+    //!
+    //! Unlike the ULID and closed-set refusals, nothing here was wrong before — sixty-one absences
+    //! and forty-two outages were simply written out one at a time. So this earns two tests, not six:
+    //! the status codes, because `NotFound` and `Unavailable` differ in whether a client should
+    //! **retry**, and that is the distinction deriving the code from [`ErrorStatus::http_code`]
+    //! exists to keep. A `503` answered as a `400` would stop a client retrying something that would
+    //! have succeeded on its own.
+    //!
+    //! That neither carries a `details` array is asserted over HTTP in `tests/cloud.rs`, where the
+    //! body can be read.
+
+    use super::{no_published_configuration, not_found, service_unavailable};
+    use axum::http::StatusCode;
+
+    /// An absent entity is the caller's answer, not its fault, and it is terminal.
+    #[test]
+    fn an_absence_is_a_terminal_404() {
+        assert_eq!(not_found("employee").status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            no_published_configuration().status(),
+            StatusCode::NOT_FOUND,
+            "the store exists; what is missing is a published version"
+        );
+    }
+
+    /// An outage is **retryable**, which is the whole reason it is a different `ErrorStatus`.
+    #[test]
+    fn an_outage_is_a_retryable_503() {
+        assert_eq!(
+            service_unavailable("configuration").status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not 400: the request was fine and retrying it may work"
         );
     }
 }
