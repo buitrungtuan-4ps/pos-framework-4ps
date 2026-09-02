@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pos_ports::blob_store::{BlobKey, BlobStore};
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, SignedArtifact, UpdateReport};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
@@ -477,12 +477,25 @@ impl DeviceRegistry for FakeDeviceRegistry {
 // CloudSync
 // -----------------------------------------------------------------------------------------------
 
-/// An in-memory `CloudSync`: one recognised activation code and one published release.
+/// An in-memory `CloudSync`: one recognised activation code and one published release, served with
+/// a detached signature.
 ///
-/// A transport has no state to reset, so this is a unit struct whose fixtures are associated
-/// constants and functions — the harness echoes them to the suite so it knows the right answers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FakeCloudSync;
+/// Its only state is the signature it serves. [`Self::new`] serves one that genuinely verifies
+/// against [`FakeSigner::key(1)`](FakeSigner::key), because an artifact and its signature now arrive
+/// together ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)) and the faithful default is
+/// a cloud whose artifact passes. [`Self::serving_signature`] is how a test builds a cloud that
+/// serves the wrong one — which is the interesting case, and one a caller can no longer construct by
+/// simply omitting the signature.
+#[derive(Debug, Clone)]
+pub struct FakeCloudSync {
+    signature: Signature,
+}
+
+impl Default for FakeCloudSync {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl FakeCloudSync {
     /// The one activation code this channel accepts; anything else is refused.
@@ -490,10 +503,23 @@ impl FakeCloudSync {
     /// The one release this channel publishes; anything else is not found.
     pub const KNOWN_RELEASE: &'static str = "v1.2.3";
 
-    /// A channel with the fixed fixtures.
+    /// A channel with the fixed fixtures, serving a signature that verifies.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            signature: Self::artifact_signature(),
+        }
+    }
+
+    /// A channel that serves `signature` for [`Self::KNOWN_RELEASE`], whatever it is.
+    ///
+    /// For the two cases worth testing on the edge side: a signature by an untrusted key, and one
+    /// over different bytes than the artifact. Both must be refused before anything reaches the
+    /// disk, and neither is reachable by accident — a cloud serving *no* signature is not a state
+    /// this type can be in.
+    #[must_use]
+    pub fn serving_signature(signature: Signature) -> Self {
+        Self { signature }
     }
 
     /// The device [`Self::VALID_CODE`] grants.
@@ -512,6 +538,18 @@ impl FakeCloudSync {
     #[must_use]
     pub fn artifact_bytes() -> Vec<u8> {
         b"fake-update-artifact".to_vec()
+    }
+
+    /// The detached signature [`Self::KNOWN_RELEASE`] returns beside [`Self::artifact_bytes`].
+    ///
+    /// Not minisign — [`FakeSigner`]'s own scheme — but genuinely *valid under it*, over these exact
+    /// bytes and by the key the edge's tests trust. That matters: the faithful default for a cloud
+    /// is one whose artifact verifies, so a test asserting the install path does not have to arrange
+    /// the signature itself, and a test asserting refusal has to say out loud that its cloud is
+    /// serving the wrong one.
+    #[must_use]
+    pub fn artifact_signature() -> Signature {
+        FakeSigner::sign(&Self::artifact_bytes(), &FakeSigner::key(1))
     }
 
     /// A well-formed update report the channel accepts — a store on [`Self::KNOWN_RELEASE`] whose
@@ -543,9 +581,12 @@ impl CloudSync for FakeCloudSync {
         }
     }
 
-    async fn fetch_update(&self, release: &ReleaseTag) -> Result<Vec<u8>, PortError> {
+    async fn fetch_update(&self, release: &ReleaseTag) -> Result<SignedArtifact, PortError> {
         if release.as_str() == Self::KNOWN_RELEASE {
-            Ok(Self::artifact_bytes())
+            Ok(SignedArtifact {
+                bytes: Self::artifact_bytes(),
+                signature: self.signature.clone(),
+            })
         } else {
             Err(PortError::not_found(
                 PortName::CloudSync,

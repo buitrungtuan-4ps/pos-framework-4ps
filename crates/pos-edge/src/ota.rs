@@ -127,16 +127,26 @@ pub trait UpdateInstaller: Send + Sync {
     fn rollback(&self) -> Result<(), InstallError>;
 }
 
-/// One update to weigh: the published rollout, the release tag to fetch, its detached signature, and
-/// the revocation list — everything [`OtaUpdater::run`] needs beyond the device's own state.
+/// One update to weigh: the published rollout, the release tag to fetch, and the revocation list —
+/// everything [`OtaUpdater::run`] needs beyond the device's own state.
+///
+/// # Why the signature is not in here
+///
+/// It used to be, as `signature: &'a Signature`, and **nothing in production could fill it in**:
+/// `CloudSync::fetch_update` returned the artifact bytes alone, so the only `UpdatePlan` ever
+/// constructed was in this crate's own tests. The fix is not to find a producer for the field but to
+/// delete it — the signature belongs to the artifact, arrives with it as a
+/// [`SignedArtifact`](pos_ports::SignedArtifact), and a plan built *before* the fetch has no
+/// business claiming to know it ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)).
+///
+/// Keeping both would have been worse than either: two signatures with no rule for which one wins,
+/// and a caller free to pass the plan's while the bytes came with another.
 #[derive(Debug)]
 pub struct UpdatePlan<'a> {
     /// The rollout the cloud published ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)).
     pub published: &'a PublishedUpdate,
     /// The release tag [`CloudSync::fetch_update`] fetches the artifact by.
     pub release: &'a ReleaseTag,
-    /// The artifact's detached signature, to verify before trusting the bytes.
-    pub signature: &'a Signature,
     /// The revoked signing-key ids ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)).
     pub revoked_keys: &'a [SigningKeyId],
 }
@@ -207,13 +217,18 @@ impl<C: CloudSync, S: Signer, I: UpdateInstaller> OtaUpdater<C, S, I> {
     }
 
     /// Fetch → verify → stage → apply → self-test → commit-or-rollback. Verification gates the disk.
+    ///
+    /// The signature verified here is the one that came back **with** the bytes, so there is no
+    /// arrangement of this function in which unverified bytes reach `apply`: obtaining the artifact
+    /// and obtaining the thing that judges it are the same call.
     async fn install(&self, plan: &UpdatePlan<'_>) -> Result<UpdateOutcome, UpdateError> {
-        let artifact = self
+        let fetched = self
             .cloud
             .fetch_update(plan.release)
             .await
             .map_err(UpdateError::Fetch)?;
-        self.verify(&artifact, plan.signature, plan.revoked_keys)?;
+        let artifact = fetched.bytes;
+        self.verify(&artifact, &fetched.signature, plan.revoked_keys)?;
 
         self.installer
             .stage_backup()

@@ -50,7 +50,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     detached minisign signature is a few hundred bytes and the artifact is tens of megabytes, so
     wrapping both in JSON would cost roughly +33 % on every download by every store in every ring to
     move a payload that fits in a header. The `HttpTransport` seam's `HttpResponse` gains an additive
-    `headers` field.
+    `headers` field. (The record said base64; implementing it found there is no base64 crate in this
+    workspace, so honouring the word would have meant a new dependency — itself an ADR-first change.
+    Hex needs nothing new, costs a few hundred extra bytes on a signature, and leaves the
+    header-versus-body argument untouched. Recorded as ADR-0092 Correction 1.)
   - **Trusted keys are compiled in through `option_env!`** — the same mechanism R1b used for the
     release version, so no build script and no new dependency — **and no runtime path may supply
     them.** Stated as a prohibition rather than a preference: a key taken from the cloud-published
@@ -84,6 +87,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   one key and adding one stray key each fail with the offending key named.
 
 ### Changed
+- **The edge can no longer obtain an update artifact without the signature that judges it**
+  (roadmap v3 slice **R5**, [ADR-0092](docs/adr/0092-artifact-trust-chain.md)).
+  `CloudSync::fetch_update` returns a `SignedArtifact { bytes, signature }` instead of `Vec<u8>`, and
+  `UpdatePlan` **loses** its `signature` field.
+
+  Dropping the field is the actual fix. It was `signature: &'a Signature`, and nothing in production
+  could fill it in: the port returned artifact bytes alone, so the only `UpdatePlan` ever built was
+  in `pos-edge`'s own tests. The answer was not to find it a producer but to delete it — a signature
+  belongs to the artifact, arrives with it, and a plan assembled *before* the fetch has no business
+  claiming to know it. Keeping both would have been worse than either: two signatures with no rule
+  for which wins.
+
+  What the pairing buys is that **skipping verification stops being expressible**. Two independent
+  calls let a caller hold tens of megabytes of executable bytes with no signature and no objection
+  from the type system; every such site then rests on somebody remembering the rule. Now the only
+  way to get the bytes is to also be handed the thing that judges them, so `OtaUpdater::install` has
+  no arrangement in which unverified bytes reach `apply`.
+
+  On the wire the artifact stays the raw body and the signature rides `X-Pos-Artifact-Signature` as
+  lowercase hex, following the existing `X-Pos-Webhook-Signature` naming. `HttpResponse` gains an
+  additive `headers` field to carry it. A `2xx` carrying no signature header is a **retryable
+  failure**, not a successful fetch — bytes with nothing to judge them are unusable, a proxy
+  stripping a header is the likely cause, and it must never read as permission to install.
+
+  The `CloudSync` contract suite gains the obligation, so it binds every future adapter rather than
+  just this one: a fetched artifact arrives with a non-empty signature, and it is the one published
+  beside those bytes. Verified by mutation — a fake serving an empty signature fails exactly that
+  case. `FakeCloudSync` now serves a signature that genuinely verifies under `FakeSigner`, and gained
+  `serving_signature` so a test that wants a hostile cloud has to say so; the edge's untrusted-key
+  and swapped-blob tests were rewritten to use it, which is a better model of the threat anyway — the
+  attacker is the host serving the artifact, not the code assembling the plan.
+
+  **Upgrade note** `PROTOCOL_VERSION` unchanged: `/internal` is unversioned and the header is
+  additive. Nothing is wired yet — `POST /internal/ota/artifact` still does not exist, so no
+  deployment behaviour changes. A fork with its own `CloudSync` adapter must return the pair and
+  serve the header; the contract suite will tell it so.
+
 - **Cloud failures answer one machine-readable error shape, starting with every shared error
   responder** (roadmap v3 slice **Q3a**). A refusal now carries the AIP-193 envelope
   `pos-proto` has always defined — `{"error":{"code":503,"status":"UNAVAILABLE","message":"…"}}` —

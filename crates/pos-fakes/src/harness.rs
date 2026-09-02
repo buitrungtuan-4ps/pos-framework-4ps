@@ -235,6 +235,10 @@ impl CloudSyncHarness for CloudHarness {
         FakeCloudSync::artifact_bytes()
     }
 
+    fn update_signature(&self) -> Signature {
+        FakeCloudSync::artifact_signature()
+    }
+
     fn sample_report(&self) -> UpdateReport {
         FakeCloudSync::sample_report()
     }

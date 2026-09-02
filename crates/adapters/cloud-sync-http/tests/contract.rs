@@ -25,7 +25,7 @@ use core::future::Future;
 
 use cloud_sync_http::{HttpCloudSync, HttpResponse, HttpTransport, TransportError};
 use pos_contract_tests::harness::{CloudSyncHarness, Setup};
-use pos_ports::UpdateReport;
+use pos_ports::{Signature, UpdateReport};
 use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
@@ -40,6 +40,48 @@ const ARTIFACT: &[u8] = b"fake-signed-update-artifact";
 /// The device the accepted code grants.
 fn granted_device() -> DeviceId {
     DeviceId::new(Ulid::from_u128(0x0DE7))
+}
+
+/// The detached signature the stub serves beside [`ARTIFACT`]. Opaque bytes: this suite proves the
+/// *wire* carries a signature and the adapter decodes it, not that Ed25519 works.
+const ARTIFACT_SIGNATURE: &[u8] = b"stub-detached-signature";
+
+/// Lowercase hex, matching what the cloud will put in the header.
+///
+/// Pushed a nibble at a time rather than through `format!`, which the workspace lints reject for
+/// appending to a `String` — and which would allocate once per byte for no reason.
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hex.push(nibble(byte >> 4));
+        hex.push(nibble(*byte));
+    }
+    hex
+}
+
+/// One lowercase hex character for the low four bits of `value`.
+///
+/// A match rather than a lookup table, because the backbone crates forbid `indexing_slicing` and
+/// this crate inherits the same lint — the same shape `pos_ports::device_registry` uses.
+const fn nibble(value: u8) -> char {
+    match value & 0x0f {
+        0 => '0',
+        1 => '1',
+        2 => '2',
+        3 => '3',
+        4 => '4',
+        5 => '5',
+        6 => '6',
+        7 => '7',
+        8 => '8',
+        9 => '9',
+        10 => 'a',
+        11 => 'b',
+        12 => 'c',
+        13 => 'd',
+        14 => 'e',
+        _ => 'f',
+    }
 }
 
 /// A stub cloud: it speaks the exact wire the real cloud does (ADR-0050, ADR-0054), so the adapter's
@@ -65,11 +107,13 @@ impl HttpTransport for StubCloud {
                     HttpResponse {
                         status: 201,
                         body: serde_json::to_vec(&payload).expect("the stub encodes its own JSON"),
+                        ..HttpResponse::default()
                     }
                 } else {
                     HttpResponse {
                         status: 403,
                         body: b"activation refused".to_vec(),
+                        ..HttpResponse::default()
                     }
                 }
             }
@@ -79,14 +123,23 @@ impl HttpTransport for StubCloud {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
                 if release == KNOWN_RELEASE {
+                    // The wire shape ADR-0092 fixes: the artifact is the raw body and its detached
+                    // signature rides a header as lowercase hex. The header name is spelled in
+                    // mixed case here on purpose — the wire delivers it lowercased, and the
+                    // adapter's lookup has to be case-insensitive like HTTP itself.
                     HttpResponse {
                         status: 200,
                         body: ARTIFACT.to_vec(),
+                        headers: vec![(
+                            "X-Pos-Artifact-Signature".to_owned(),
+                            encode_hex(ARTIFACT_SIGNATURE),
+                        )],
                     }
                 } else {
                     HttpResponse {
                         status: 404,
                         body: b"no such release".to_vec(),
+                        ..HttpResponse::default()
                     }
                 }
             }
@@ -99,11 +152,13 @@ impl HttpTransport for StubCloud {
                 HttpResponse {
                     status: if has_fields { 204 } else { 400 },
                     body: Vec::new(),
+                    ..HttpResponse::default()
                 }
             }
             other => HttpResponse {
                 status: 404,
                 body: format!("the stub cloud has no route {other}").into_bytes(),
+                ..HttpResponse::default()
             },
         };
         Ok(response)
@@ -134,6 +189,10 @@ impl CloudSyncHarness for HttpHarness {
 
     fn update_bytes(&self) -> Vec<u8> {
         ARTIFACT.to_vec()
+    }
+
+    fn update_signature(&self) -> Signature {
+        Signature::new(ARTIFACT_SIGNATURE.to_vec())
     }
 
     fn sample_report(&self) -> UpdateReport {
