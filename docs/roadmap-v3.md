@@ -206,7 +206,35 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
   kB (−50.4%), gzipped 131.47 → 76.67 kB**, 37 route chunks, and vite's >500 kB warning gone. Also
   closed a smaller thing found on the way: `i18n-lint.mjs` was duplicated into both roots without
   being listed in the `mirrored-files` gate, so it was identical only by luck.
-- **Q3** — AIP-193 envelope on `/v1` **and** `/admin` (both return plain text today) + ETag/If-Match.
+- **Q3** — AIP-193 envelope on `/v1` **and** `/admin` (both returned plain text) + ETag/If-Match.
+  Scoping it found the job is four times the size it was booked at: **392 string-bodied error
+  sites**, not the 185 first counted — the first census used a single-line pattern and missed every
+  multi-line `(StatusCode::X,\n "…")` form — and **31 of those are shared per-domain helpers
+  carrying 258 call sites between them**, so the real figure is ~620 error response paths. That
+  changed the slicing: convert the *shared responders* first, where thirty one-line edits move 258
+  paths, then the inline validation refusals (which are also the ones that will carry field-level
+  `details`), then ETag.
+  - **Q3a — the envelope and every shared responder. Done.** `api_error` is the single constructor
+    and takes no status code: it derives one from the body's own `ErrorStatus` through
+    `ErrorStatus::http_code`, so a status line and a body cannot disagree. All 30 helpers plus
+    `error_response` now go through it. `error_response` also *had* a latent trap — a catch-all arm
+    sent `NOT_FOUND`, `ALREADY_EXISTS`, `PERMISSION_DENIED` and `UNAUTHENTICATED` to `500`, blaming
+    the server for the caller's own bad request and inviting a retry that could never succeed. It
+    was latent, not live: the function has one caller (`/internal/ingest`) and none of those four is
+    reachable from it. Deleting the match closes it for the next caller, and a test walks every
+    canonical status through `error_response` and fails if the match returns — verified by
+    reinstating it. Two integration cases pin what a body change could have broken silently: a
+    refused activation still answers **byte-for-byte identically** whether the code was spent or
+    never issued (ADR-0050's no-oracle rule, which a richer body is exactly the thing that could
+    undo), and a throttled login keeps its `Retry-After` (the half a JSON body cannot carry).
+    Mid-conversion the surface is deliberately mixed, and safe by construction: nothing consumes the
+    shape — `cloud-sync-http` maps on HTTP status alone and never parses a body — and the console's
+    `failure()` now reads the envelope, `{"violations":[…]}` and raw text alike.
+  - **Q3b** — the ~360 inline validation refusals, by surface: non-`/admin` (`/v1`, `/sync`,
+    `/internal`, `/activate`) first, then `/admin`. These carry `details` — the field name and a
+    stable reason — which is what lets a console form highlight the offending input instead of
+    showing a sentence.
+  - **Q3c** — ETag on read, `If-Match` required on PATCH, `412` on mismatch.
 - **Q4** — Store hub + URL context `/t/:tenant/s/:store`.
 - **Q5** — `/admin` becomes a real contract: pagination/`q`/sort on the unbounded lists; `/admin` into OpenAPI + the drift gate; fix the webhook header docs↔code mismatch; implement or drop `pos-api-version`; wire or delete the two dead scopes; rate-limit `/v1/orders` and `/sync`.
 - **Q6** — Integrator docs: webhook quickstart (correct HMAC header), auth guide, API tour.

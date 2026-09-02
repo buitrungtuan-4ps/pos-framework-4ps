@@ -1063,6 +1063,16 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("parse the body as JSON")
 }
 
+/// The response body as raw bytes — for comparing two responses that must be indistinguishable.
+async fn body_bytes(response: axum::response::Response) -> axum::body::Bytes {
+    response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes()
+}
+
 /// The response body as a UTF-8 string — for the CSV export routes (ADR-0075).
 async fn text_body(response: axum::response::Response) -> String {
     let bytes = response
@@ -3393,6 +3403,106 @@ async fn the_activation_exchange_is_single_use_and_gives_no_oracle() {
         .await
         .expect("route the malformed code");
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- The AIP-193 error envelope (roadmap v3 Q3a, ADR-0026 §27) ----------------------------------
+
+/// A refusal answers the envelope — and two different refusals still answer *identically*.
+///
+/// The second assertion is the one worth having. `activation_refused` collapses a spent, revoked,
+/// unknown and raced code into one response on purpose ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)),
+/// so a prober learns nothing from trying. Giving that refusal a *richer* body is exactly the change
+/// that could have reintroduced the oracle it was built to close, so this compares the two bodies
+/// byte for byte rather than trusting that they are still the same.
+#[tokio::test]
+async fn a_refused_activation_answers_the_envelope_and_still_gives_no_oracle() {
+    let spent = ActivationCode::from_entropy([31; pos_core::activation::PAYLOAD_LEN]);
+    let device = DeviceId::new(Ulid::from_u128(0x00C0_FFEE));
+    let activations = FakeActivations::with_issued(hash_code(&spent), tenant(), store_id(), device);
+    let router = http::activation_router(activations, FakeAdmin::default(), clock());
+    let refuse = |code: String| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(post_json("/activate", &serde_json::json!({ "code": code })))
+                .await
+                .expect("route the exchange")
+        }
+    };
+
+    // Spend the code, then present it again: the refusal path.
+    let minted = refuse(spent.as_str().to_owned()).await;
+    assert_eq!(
+        minted.status(),
+        StatusCode::CREATED,
+        "the code is spent here"
+    );
+    let replayed = refuse(spent.as_str().to_owned()).await;
+    assert_eq!(replayed.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        replayed
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json"),
+        "the refusal is the envelope, not plain text"
+    );
+    let replayed_bytes = body_bytes(replayed).await;
+    let body: serde_json::Value =
+        serde_json::from_slice(&replayed_bytes).expect("the refusal parses as the envelope");
+    assert_eq!(body["error"]["code"], 403);
+    assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
+    assert_eq!(body["error"]["message"], "activation refused");
+    assert!(
+        body["error"].get("details").is_none(),
+        "a deliberately generic refusal names no field: {body}"
+    );
+
+    // A well-formed code that was never issued must be indistinguishable from the spent one.
+    let unknown = ActivationCode::from_entropy([200; pos_core::activation::PAYLOAD_LEN]);
+    let missed = refuse(unknown.as_str().to_owned()).await;
+    assert_eq!(missed.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_bytes(missed).await,
+        replayed_bytes,
+        "an unknown code and a spent one must answer byte-for-byte alike, or the body is an oracle"
+    );
+}
+
+/// A throttled login answers the envelope *and* keeps its `Retry-After`.
+///
+/// The header is the half the body cannot carry: `RESOURCE_EXHAUSTED` says a limit was reached,
+/// only `Retry-After` says when to come back. Rebuilding the response around the JSON body is
+/// precisely where a header gets dropped, so it is asserted here rather than assumed.
+#[tokio::test]
+async fn a_rate_limited_login_answers_the_envelope_and_keeps_its_retry_after() {
+    let router = login_rate_limited_router(1, 60);
+    let bogus = serde_json::json!({ "password": "wrong-passphrase", "totp_code": "000000" });
+    let attempt = || {
+        let router = router.clone();
+        let bogus = bogus.clone();
+        async move {
+            router
+                .oneshot(post_json("/admin/login", &bogus))
+                .await
+                .expect("route login")
+        }
+    };
+    assert_eq!(
+        attempt().await.status(),
+        StatusCode::UNAUTHORIZED,
+        "the first attempt is inside the limit"
+    );
+
+    let throttled = attempt().await;
+    assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        throttled.headers().get("retry-after").is_some(),
+        "the envelope must not have cost the client its Retry-After"
+    );
+    let body = json_body(throttled).await;
+    assert_eq!(body["error"]["code"], 429);
+    assert_eq!(body["error"]["status"], "RESOURCE_EXHAUSTED");
 }
 
 // --- Public order intake (POST /v1/orders) — P11a, ADR-0056 -------------------------------------
