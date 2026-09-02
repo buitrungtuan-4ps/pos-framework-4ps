@@ -115,7 +115,7 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
             .open_bill(device_a(), table)
             .await
             .expect("opens the bill");
-        assert_eq!(bill.table_state, TableState::AwaitingPayment);
+        assert_eq!(bill.table_state, Some(TableState::AwaitingPayment));
 
         // Three 150k lines at the 10% standard rate: 450k + 45k tax = 495k. Pay it split cash + card.
         let settled = edge
@@ -146,7 +146,7 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
             "the first receipt is number one"
         );
         assert!(settled.print_receipt, "a receipt prints after settlement");
-        assert_eq!(settled.table_state, TableState::NeedsCleaning);
+        assert_eq!(settled.table_state, Some(TableState::NeedsCleaning));
 
         // Clean down: the table cycles back to free, ready for the next guests.
         let cleaned = edge.clean_table(device_a(), table).await.expect("cleans");

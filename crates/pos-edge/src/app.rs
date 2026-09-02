@@ -465,6 +465,14 @@ pub enum AppError {
     /// matched and none is the default) and the caller named no station either (ADR-0072).
     #[error("the line routes to no station")]
     UnroutableLine,
+    /// A command named an order the edge does not know — no floor order on a table, and no lines
+    /// either, so there is nothing to bill.
+    #[error("no such order")]
+    UnknownOrder,
+    /// A bill was opened on an order that already has one open (ADR-0093). Two bills on one order
+    /// would take two receipt numbers and charge the guest twice for one meal.
+    #[error("a bill is already open on that order")]
+    BillAlreadyOpen,
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
@@ -551,8 +559,9 @@ pub struct BillView {
     pub receipt_number: Option<u64>,
     /// What the guest owed, present once settled.
     pub total_due: Option<Money>,
-    /// The state the bill's table moved to as a result (P5 derives the floor cycle from the bill).
-    pub table_state: TableState,
+    /// The state the bill's table moved to as a result (P5 derives the floor cycle from the bill),
+    /// or `None` for a counter order, which has no table to move (ADR-0093).
+    pub table_state: Option<TableState>,
     /// Whether the settle asked for a receipt to be printed, for the caller to run after commit.
     pub print_receipt: bool,
 }
@@ -595,11 +604,18 @@ struct LineRecord {
 }
 
 /// What the projection remembers about one bill: the order it bills, the table that order sits on
-/// (so settling can cycle the table), and its state (so a second settle is refused).
+/// **if** it sits on one (so settling can cycle the table), and its state (so a second settle is
+/// refused).
+///
+/// `table_id` is an `Option` because a bill belongs to an order, not to a table
+/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). A takeaway or delivery order is
+/// tableless by design ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)); while this was a bare
+/// `TableId` such an order could be accepted, priced, queued and fired — and never charged for,
+/// because there was no table to open its bill against.
 #[derive(Debug, Clone, Copy)]
 struct BillRecord {
     order_id: OrderId,
-    table_id: TableId,
+    table_id: Option<TableId>,
     state: BillState,
 }
 
@@ -635,6 +651,9 @@ struct Projection {
     table_orders: HashMap<TableId, OrderId>,
     lines: HashMap<OrderLineId, LineRecord>,
     bills: HashMap<BillId, BillRecord>,
+    /// The bill open on each order, so a second bill on one order is refused (ADR-0093). See
+    /// [`Projection::bill_for_order`] for why this has to be explicit.
+    order_bills: HashMap<OrderId, BillId>,
     shifts: HashMap<ShiftId, ShiftRecord>,
     /// The one shift currently trading or counted, if any — the drawer cash lands on it, and every
     /// event minted while it is set carries its id. Cleared when the shift closes.
@@ -714,8 +733,22 @@ impl Projection {
         lines.into_iter().map(|(_, record)| record).collect()
     }
 
+    /// Records a bill and indexes it by the order it bills.
     fn open_bill_record(&mut self, bill_id: BillId, record: BillRecord) {
+        self.order_bills.insert(record.order_id, bill_id);
         self.bills.insert(bill_id, record);
+    }
+
+    /// The bill already open on an order, if any.
+    ///
+    /// This index is what keeps one order to one bill now that a bill is keyed on an order rather
+    /// than a table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
+    /// accident: a table can only be `Occupied` once, so `decide_table(RequestBill)` refused the
+    /// second request on its way through, and nothing had to say so. An order key has no state
+    /// machine behind it, and dropping the rule silently would be expensive — two open bills on one
+    /// order means two receipt numbers and a guest charged twice for one meal.
+    fn bill_for_order(&self, order_id: OrderId) -> Option<BillId> {
+        self.order_bills.get(&order_id).copied()
     }
 
     fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
@@ -1327,17 +1360,31 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::Domain`] if a line's tax class has no configured rate — a configuration error the
     /// caller surfaces rather than papers over with zero tax.
     pub fn check_totals(&self, table_id: TableId) -> Result<BillTotals, AppError> {
-        let session = self.session();
         // Bound to a local first: a `match` on the call would hold the projection guard across the
         // arm, and the arm takes it again — which is a deadlock, not a borrow error.
         let open_order = self.lock_projection().order_for_table(table_id);
-        let class_bases = match open_order {
-            Some(order_id) => {
-                let lines = self.lock_projection().lines_for_order(order_id);
-                Self::class_bases(&lines)?
-            }
-            None => Vec::new(),
-        };
+        match open_order {
+            Some(order_id) => self.order_totals(order_id),
+            // A free table owes nothing, which is a real answer for a screen to show.
+            None => Ok(Self::nothing_owed(self.session().currency)),
+        }
+    }
+
+    /// What an **order** owes right now — the primitive [`Self::check_totals`] delegates to.
+    ///
+    /// Keyed on the order because that is what a bill bills
+    /// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)); a counter order has no table to
+    /// ask about, so the table-keyed read cannot answer for it. Same `billing::assemble`, same
+    /// projection, same session as the settle path.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if a line's tax class has no configured rate — a configuration error the
+    /// caller surfaces rather than papers over with zero tax.
+    pub fn order_totals(&self, order_id: OrderId) -> Result<BillTotals, AppError> {
+        let session = self.session();
+        let lines = self.lock_projection().lines_for_order(order_id);
+        let class_bases = Self::class_bases(&lines)?;
         if class_bases.is_empty() {
             // Nothing ordered — a seated table before its first line, or one whose every line was
             // voided. `assemble` refuses an empty bill (there is nothing to allocate across), and
@@ -1373,24 +1420,91 @@ impl<S: EventStore> Edge<S> {
     /// here. The table's fine-grained state is derived from the bill lifecycle rather than from its
     /// own events, because the frozen catalogue has no table-transition event for it.
     ///
+    /// This is the floor's entry point and it delegates to [`Self::open_bill_for_order`], which is
+    /// the primitive (ADR-0093). The delegation keeps the `Occupied` gate ADR-0072 owns inside the
+    /// domain rather than moving it into whichever caller happens to know about tables.
+    ///
     /// # Errors
     ///
     /// [`AppError::Domain`] if the table is not occupied (requesting the bill is illegal otherwise),
-    /// [`AppError::NoOpenOrder`] if the table has no order, or [`AppError`] if the store cannot be
-    /// written.
+    /// [`AppError::NoOpenOrder`] if the table has no order, [`AppError::BillAlreadyOpen`] if its
+    /// order already has a bill, or [`AppError`] if the store cannot be written.
     pub async fn open_bill(&self, actor: Actor, table_id: TableId) -> Result<BillView, AppError> {
+        let open_order = self.lock_projection().order_for_table(table_id);
+        if let Some(order_id) = open_order {
+            return self.open_bill_for_order(actor, order_id).await;
+        }
+        // Which refusal "no order here" is belongs to the table machine, not to this function:
+        // asking a *free* table for its bill is an illegal floor move and reads as one, and only a
+        // table that is occupied yet somehow orderless is `NoOpenOrder`. So `decide_table` runs
+        // here for its refusal rather than its result — it errors on a free table and succeeds on
+        // an occupied one — which keeps the answer the floor has always given.
         let ctx = self.decision_ctx(actor)?;
-        let current_table = self.table_state(table_id);
-        // Requesting the bill is a legal floor move only from Occupied; decide_table also gates the
-        // tables capability.
-        let table_decision = decide_table(current_table, TableCommand::RequestBill, &ctx)?;
+        let _requestable =
+            decide_table(self.table_state(table_id), TableCommand::RequestBill, &ctx)?;
+        Err(AppError::NoOpenOrder)
+    }
 
-        let order_id = self
-            .lock_projection()
-            .order_for_table(table_id)
-            .ok_or(AppError::NoOpenOrder)?;
+    /// Opens a bill on an **order** (`billing.bill.opened`), moving its table to awaiting payment if
+    /// it has one. The primitive [`Self::open_bill`] delegates to.
+    ///
+    /// Keyed on the order because that is what a bill bills
+    /// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). `BillingBillOpened` has always
+    /// carried `{bill_id, order_id}` and no billing event mentions a table at all, so the durable
+    /// truth already said this; what was table-shaped was the edge's in-memory reach for the order,
+    /// and it made takeaway revenue uncollectable — a tableless order (ADR-0064) had no table to
+    /// pass, to be occupied, or to resolve from.
+    ///
+    /// A floor order still makes the floor move: its table is stepped `Occupied → AwaitingPayment`
+    /// by `decide_table`, which is also where [`Capability::Tables`](pos_core::capability::Capability)
+    /// is required. A counter order makes no floor move, so it needs neither — the capability gates
+    /// *table service*, not the act of charging a guest, and a takeaway-only store must be able to
+    /// take money without turning table service on.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownOrder`] if the edge knows no such order; [`AppError::BillAlreadyOpen`] if
+    /// one is already open on it; [`AppError::Domain`] if the order sits on a table that is not
+    /// occupied; or [`AppError`] if the store cannot be written.
+    pub async fn open_bill_for_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+    ) -> Result<BillView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+
+        let (existing_bill, table_id, has_lines) = {
+            let projection = self.lock_projection();
+            (
+                projection.bill_for_order(order_id),
+                projection.table_for_order(order_id),
+                !projection.lines_for_order(order_id).is_empty(),
+            )
+        };
+        if existing_bill.is_some() {
+            return Err(AppError::BillAlreadyOpen);
+        }
+        // An order the edge does not know cannot be billed. A floor order is proved by the table
+        // index; a counter order has no index, so its lines are the proof — and an inbound order
+        // always opens with at least one, because `submit` refuses an empty one (ADR-0064). Checked
+        // this way rather than on lines alone so a seated table whose every line was voided still
+        // opens a bill and is refused later by `assemble`, which is what the floor already did.
+        if table_id.is_none() && !has_lines {
+            return Err(AppError::UnknownOrder);
+        }
+
+        // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
+        // the tables capability. There is no floor move to prove for a counter order.
+        let table_decision = match table_id {
+            Some(table_id) => Some(decide_table(
+                self.table_state(table_id),
+                TableCommand::RequestBill,
+                &ctx,
+            )?),
+            None => None,
+        };
+
         let bill_id = BillId::new(self.next_ulid());
-
         let payload = BillingBillOpened { bill_id, order_id };
         self.commit_and_publish(&ctx, &payload).await?;
 
@@ -1404,14 +1518,16 @@ impl<S: EventStore> Edge<S> {
                     state: BillState::Open,
                 },
             );
-            projection.set_table(table_id, table_decision.next_state);
+            if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
+                projection.set_table(table_id, decision.next_state);
+            }
         }
         Ok(BillView {
             bill_id,
             state: BillState::Open,
             receipt_number: None,
             total_due: None,
-            table_state: table_decision.next_state,
+            table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
         })
     }
@@ -1452,9 +1568,17 @@ impl<S: EventStore> Edge<S> {
         let session = self.session();
         let totals = billing::assemble(&Self::bill_input(&session, &class_bases))?;
 
-        // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal.
-        let current_table = self.table_state(bill.table_id);
-        let table_decision = decide_table(current_table, TableCommand::Settle, &ctx)?;
+        // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
+        // order has no table, so there is no floor move to prove and no tables capability to
+        // require (ADR-0093) — settling is ordinary cashier work either way.
+        let table_decision = match bill.table_id {
+            Some(table_id) => Some(decide_table(
+                self.table_state(table_id),
+                TableCommand::Settle,
+                &ctx,
+            )?),
+            None => None,
+        };
 
         // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
         // open shift's blind-close roll-up. Summed before the payments move into the command.
@@ -1537,7 +1661,9 @@ impl<S: EventStore> Edge<S> {
         {
             let mut projection = self.lock_projection();
             projection.set_bill_state(bill_id, bill_decision.next_state);
-            projection.set_table(bill.table_id, table_decision.next_state);
+            if let (Some(table_id), Some(decision)) = (bill.table_id, table_decision.as_ref()) {
+                projection.set_table(table_id, decision.next_state);
+            }
             projection.collect_cash(cash_taken)?;
         }
         Ok(BillView {
@@ -1545,7 +1671,7 @@ impl<S: EventStore> Edge<S> {
             state: bill_decision.next_state,
             receipt_number: Some(receipt_number),
             total_due: Some(totals.total_due),
-            table_state: table_decision.next_state,
+            table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
         })
     }
@@ -1768,15 +1894,21 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::BillingBillOpened => {
                 let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
-                if let Some(table_id) = projection.table_for_order(event.order_id) {
-                    projection.open_bill_record(
-                        event.bill_id,
-                        BillRecord {
-                            order_id: event.order_id,
-                            table_id,
-                            state: BillState::Open,
-                        },
-                    );
+                // The bill is recorded whether or not a table is found. A bill event names its
+                // order, never a table (ADR-0093), and a counter order has none — while this arm
+                // was inside `if let Some(table_id)`, a takeaway bill was dropped on every rebuild,
+                // so a restart between opening and settling one lost it entirely and the guest
+                // could not be charged.
+                let table_id = projection.table_for_order(event.order_id);
+                projection.open_bill_record(
+                    event.bill_id,
+                    BillRecord {
+                        order_id: event.order_id,
+                        table_id,
+                        state: BillState::Open,
+                    },
+                );
+                if let Some(table_id) = table_id {
                     projection.set_table(table_id, TableState::AwaitingPayment);
                 }
             }
@@ -1791,8 +1923,11 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_bill_state(event.bill_id, BillState::Settled);
-                if let Some(record) = projection.bill(event.bill_id) {
-                    projection.set_table(record.table_id, TableState::NeedsCleaning);
+                if let Some(table_id) = projection
+                    .bill(event.bill_id)
+                    .and_then(|record| record.table_id)
+                {
+                    projection.set_table(table_id, TableState::NeedsCleaning);
                 }
             }
             EventType::CashShiftOpened => {
@@ -2038,12 +2173,14 @@ mod tests {
     use pos_core::decision::Actor;
     use pos_fakes::FakeStore;
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
-    use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StationId, StoreId, TableId};
+    use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, OrderId, StationId, StoreId, TableId};
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
-    use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
+    use pos_proto::{
+        BillState, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState, TableState,
+    };
 
     fn identity() -> StoreIdentity {
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)))
@@ -2253,6 +2390,37 @@ mod tests {
         });
     }
 
+    /// One already-priced line, in the shape the intake path hands to
+    /// [`Edge::open_inbound_order`] — priced by the store, not by the caller.
+    fn a_priced_line() -> pos_core::menu::PricedLine {
+        pos_core::menu::PricedLine {
+            menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+            display_name: DisplayName::new("Margherita"),
+            quantity: Quantity::ONE,
+            unit_price: vnd(150_000),
+            line_total: vnd(150_000),
+            tax_class_id: EdgeSession::standard_tax_class(),
+            tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+            repriced: false,
+        }
+    }
+
+    /// Opens a tableless counter order the way a relayed takeaway order arrives: no table, no
+    /// signed-in employee, the box's own device id (ADR-0064).
+    async fn a_counter_order(edge: &Edge<FakeStore>) -> OrderId {
+        let (order_id, _business_date) = edge
+            .open_inbound_order(
+                actor().device_id,
+                Open::from_known(SalesChannel::Takeaway),
+                None,
+                &[(a_priced_line(), false)],
+                None,
+            )
+            .await
+            .expect("a counter order opens with no table");
+        order_id
+    }
+
     fn cash(minor: i64) -> Payment {
         Payment {
             method: PaymentMethod::Cash,
@@ -2272,7 +2440,7 @@ mod tests {
             // Opening the bill requests it: the table moves to awaiting payment.
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
             assert_eq!(opened.state, BillState::Open);
-            assert_eq!(opened.table_state, TableState::AwaitingPayment);
+            assert_eq!(opened.table_state, Some(TableState::AwaitingPayment));
             assert_eq!(edge.table_state(table), TableState::AwaitingPayment);
 
             // One 150k line at the 10% standard rate is 165k owed.
@@ -2292,7 +2460,7 @@ mod tests {
                 "settling asks for a receipt to print"
             );
             // The table cycles to needs-cleaning, then a clean releases it.
-            assert_eq!(settled.table_state, TableState::NeedsCleaning);
+            assert_eq!(settled.table_state, Some(TableState::NeedsCleaning));
             let cleaned = edge.clean_table(actor(), table).await.expect("cleans");
             assert_eq!(cleaned.state, TableState::Free);
         });
@@ -2377,6 +2545,94 @@ mod tests {
             // A free table cannot be asked for its bill.
             let refused = edge.open_bill(actor(), table).await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
+        });
+    }
+
+    /// The defect [ADR-0093](../../docs/adr/0093-bill-keyed-on-order.md) closes.
+    ///
+    /// This flow could not be written at all before the bill was keyed on the order: `open_bill`
+    /// took a `TableId`, gated on that table being `Occupied` and resolved the order through
+    /// `order_for_table`, and a takeaway order is tableless by design (ADR-0064). So a store could
+    /// accept, price, queue and fire a counter order — and had no way to take money for it.
+    #[test]
+    fn a_counter_order_opens_a_bill_and_settles_with_no_table_anywhere() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let order_id = a_counter_order(&edge).await;
+
+            // The cashier reads the figure first, and it is the same one the settle demands — the
+            // order-keyed read exists because the table-keyed one cannot answer for this order.
+            let owed = edge.order_totals(order_id).expect("the order assembles");
+            assert_eq!(owed.total_due, vnd(165_000), "150,000 plus 10% tax");
+
+            let opened = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("a tableless order opens a bill");
+            assert_eq!(opened.state, BillState::Open);
+            assert_eq!(
+                opened.table_state, None,
+                "there is no table, so there is no table state to report"
+            );
+
+            let settled = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .await
+                .expect("and the counter sale settles");
+            assert_eq!(settled.state, BillState::Settled);
+            assert_eq!(
+                settled.receipt_number,
+                Some(1),
+                "a counter sale draws on the same gapless per-store receipt counter (ADR-0025)"
+            );
+            assert_eq!(settled.total_due, Some(vnd(165_000)));
+            assert_eq!(settled.table_state, None, "and cycles no table");
+        });
+    }
+
+    /// The rule that used to hold as a side effect of the table state machine (ADR-0093).
+    ///
+    /// A table can only be `Occupied` once, so `decide_table(RequestBill)` refused a second request
+    /// on its way through and nothing had to say so. Keying on the order removes that accident, and
+    /// dropping the rule silently would mean two receipt numbers and a guest charged twice for one
+    /// meal — so both entry points are checked here, not just the new one.
+    #[test]
+    fn a_second_bill_on_one_order_is_refused_from_the_counter_and_from_the_floor() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+
+            let order_id = a_counter_order(&edge).await;
+            edge.open_bill_for_order(actor(), order_id)
+                .await
+                .expect("the first bill opens");
+            let refused = edge.open_bill_for_order(actor(), order_id).await;
+            assert!(
+                matches!(refused, Err(super::AppError::BillAlreadyOpen)),
+                "the order index is all that stands between one bill and two on the counter"
+            );
+
+            let table = TableId::new(Ulid::from_u128(305));
+            edge.seat_table(actor(), table).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.open_bill(actor(), table).await.expect("opens a bill");
+            let refused = edge.open_bill(actor(), table).await;
+            assert!(
+                matches!(refused, Err(super::AppError::BillAlreadyOpen)),
+                "the floor is refused too, and now says why rather than reporting an illegal table                  transition"
+            );
+        });
+    }
+
+    /// An order id the edge has never seen buys nothing. The floor path proves an order exists by
+    /// finding it on a table; a counter order has no table, so its lines are the proof.
+    #[test]
+    fn an_order_the_edge_does_not_know_cannot_be_billed() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let refused = edge
+                .open_bill_for_order(actor(), OrderId::new(Ulid::from_u128(0x00C0_FFEE)))
+                .await;
+            assert!(matches!(refused, Err(super::AppError::UnknownOrder)));
         });
     }
 

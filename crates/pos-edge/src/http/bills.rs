@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Bill routes: open a bill on a table, settle it (P5).
+//! Bill routes: open a bill on a table, open one on an order, settle it (P5, ADR-0093).
 //!
 //! Settling proves the payments sum **exactly** to what the bill assembles to (ADR-0028) and
 //! allocates the gapless per-store receipt number (ADR-0025). The response carries the receipt
@@ -19,7 +19,7 @@ use pos_core::billing::Payment;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, TableId};
+use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
@@ -70,8 +70,10 @@ pub(crate) struct BillResponse {
     receipt_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_due: Option<Money>,
-    /// The state the bill's table moved to.
-    table_state: String,
+    /// The state the bill's table moved to, absent for a counter order that has no table
+    /// (ADR-0093). The UI already treated this as optional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table_state: Option<String>,
     print_receipt: bool,
 }
 
@@ -82,7 +84,7 @@ impl From<BillView> for BillResponse {
             state: view.state.as_wire().to_owned(),
             receipt_number: view.receipt_number,
             total_due: view.total_due,
-            table_state: view.table_state.as_wire().to_owned(),
+            table_state: view.table_state.map(|state| state.as_wire().to_owned()),
             print_receipt: view.print_receipt,
         }
     }
@@ -101,6 +103,27 @@ where
         return bad_request("a table id is a ULID");
     };
     respond(edge.open_bill(actor, table_id).await)
+}
+
+/// `POST /api/orders/{id}/bill` — open a bill on an order, table or no table.
+///
+/// The counter's route, and the one that makes takeaway revenue collectable: a relayed or QR-counter
+/// order is tableless by design (ADR-0064), so `/api/tables/{id}/bill` can never reach it
+/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). A floor order billed through here
+/// still makes its table's `Occupied → AwaitingPayment` move, because the domain decides that from
+/// the order, not from which route was called.
+pub(crate) async fn open_for_order<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
+        return bad_request("an order id is a ULID");
+    };
+    respond(edge.open_bill_for_order(actor, order_id).await)
 }
 
 /// `POST /api/bills/{id}/settle` — settle a bill with the applied payments.

@@ -16,6 +16,52 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **A takeaway order can be paid for.** Implements
+  [ADR-0093](docs/adr/0093-bill-keyed-on-order.md) (#129).
+
+  A relayed or counter order was accepted, priced from the store's own menu, stored, queued and
+  fired — and then could not be charged for. `Edge::open_bill` was the only path to a bill anywhere
+  in the tree and it took a `TableId`, so a tableless order (ADR-0064) had no table to pass, to be
+  occupied, or to resolve from. Not degraded: impossible.
+
+  `open_bill_for_order(actor, order_id)` is now the primitive and `open_bill(actor, table_id)`
+  delegates to it, so the floor keeps the `Occupied` gate ADR-0072 owns rather than moving it into a
+  caller. `BillRecord.table_id` is an `Option`, and settling cycles a table only when there is one.
+  Two routes make it reachable from a till: **`POST /api/orders/{id}/bill`** and
+  **`GET /api/orders/{id}/check`**, the counter's equivalents of the table-keyed pair.
+
+  A floor order billed through the order-keyed route still makes its table's
+  `Occupied → AwaitingPayment` move, because the domain decides that from the order rather than from
+  which route was called. A counter order needs no `tables_enabled` capability to be charged — the
+  capability gates table service, not taking money, so a takeaway-only store no longer has to turn
+  table service on to use its till.
+
+  Two defects were found and fixed while implementing, both invisible until a bill could be
+  tableless:
+
+  - **A counter bill did not survive a restart.** The projection's `billing.bill.opened` fold arm
+    recorded a bill only when it could find a table for the order, so a rebuild dropped a takeaway
+    bill entirely — a box restarted between opening one and settling it came back not knowing the
+    bill existed. Covered by `a_counter_bill_survives_the_restart_that_used_to_drop_it`.
+  - **One-bill-per-order was being enforced by accident.** A table can only be `Occupied` once, so
+    the table state machine refused a second bill on its way through and nothing had to say so.
+    Keying on the order removes that accident, so the projection now carries an explicit order→bill
+    index; without it, two open bills on one order would mean two receipt numbers and a guest
+    charged twice for one meal.
+
+  The Q1 acceptance suite now settles a relayed takeaway order end to end over the routes a device
+  calls, where before it asserted the gap and recorded why.
+
+### Changed
+- **Requesting a second bill on a table that already has one now says so.** It was reported as an
+  illegal table transition (`AwaitingPayment` cannot be asked for a bill); it is now
+  `a bill is already open on that order`. Still `409 Conflict`, so no client changes — the message
+  is just the true one (#129).
+- **`table_state` is omitted from a bill response for an order with no table** rather than always
+  present (#129). The edge UI's typed client already declared the field optional and guarded on its
+  absence, so nothing in `ui/` changed; a fork reading it as required should treat it as optional.
+
 ### Added
 - **ADR-0093 — a bill belongs to an order, not to a table**
   ([ADR-0093](docs/adr/0093-bill-keyed-on-order.md)). No behaviour change in this entry: the record

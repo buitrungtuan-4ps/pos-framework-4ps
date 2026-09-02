@@ -429,20 +429,23 @@ async fn a_table_is_sold_end_to_end_on_the_composed_edge() {
 /// ([ADR-0058](../../../docs/adr/0058-cloud-store-relay.md)) — so intake runs through the port, as it
 /// does in the field.
 ///
-/// # What this test does *not* do, and why
+/// This test covers **intake**: accepted, priced, queued, idempotent. Taking the money is the next
+/// test down, [`a_relayed_takeaway_order_is_charged_at_the_counter`], and the split is deliberate —
+/// intake and payment failed independently while the bill was table-keyed.
 ///
-/// It does not settle the order, because **the edge has no way to**. `Edge::open_bill` is the only
-/// path to a bill, and it takes a `TableId`: it gates on the table being `Occupied` and resolves the
-/// order with `order_for_table`. A takeaway order is tableless by design (roadmap-v3 PR-1b), so
-/// `order_for_table` can never find it, no HTTP route opens a bill without a table, and the edge UI
-/// has no takeaway screen at all. A relayed takeaway order can therefore be accepted, priced, stored
-/// and queued — and never paid for.
+/// # What this test used to record, and how it was closed
 ///
-/// That is a live gap, found by writing this suite, and it is filed as its own slice rather than
-/// papered over here: closing it means a bill that is keyed on an order instead of a table, which is
-/// a domain change and not a test fixture. Q1's job is to be the gate, and a gate that asserts a
-/// flow works when it does not would be worse than no gate. So this asserts the reachable truth, and
-/// the paragraph above is the record.
+/// It used to end here and say so, because **the edge had no way to settle a takeaway order**.
+/// `Edge::open_bill` was the only path to a bill and it took a `TableId`: it gated on that table
+/// being `Occupied` and resolved the order through `order_for_table`. A takeaway order is tableless
+/// by design (roadmap-v3 PR-1b), so `order_for_table` could never find it, no route opened a bill
+/// without a table, and every takeaway order a store accepted was priced, queued, fired — and could
+/// not be charged for.
+///
+/// Writing this suite is what found that, and it was filed as its own slice rather than papered over
+/// here, because closing it meant keying the bill on the order — a domain change, not a test
+/// fixture. That decision is [ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md) and it has
+/// landed, so the flow it blocked is now asserted rather than described.
 #[tokio::test]
 async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
     let store = a_store().await;
@@ -523,6 +526,123 @@ async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
     assert_ne!(
         elsewhere.order_id, accepted.order_id,
         "one reference on two channels is two orders"
+    );
+}
+
+/// Takeaway, end to end: a relayed order is **paid for at the counter**, through the routes a device
+/// calls ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+///
+/// This is the flow the suite could not assert before the bill was keyed on the order, and it is
+/// driven over HTTP rather than through `Edge` directly on purpose: the domain change would be worth
+/// nothing to a store if the counter had no route to reach it, which is the failure mode this
+/// roadmap keeps catching. So the order arrives through the port, as it does in the field, and every
+/// step after that is a request a till makes.
+///
+/// No table is created, seated or named anywhere in this test. That is the assertion: a store that
+/// has never opened a table can still take money.
+#[tokio::test]
+async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
+    let store = a_store().await;
+    let intake = EdgeOrderIn::new(
+        Arc::clone(&store.edge),
+        InMemoryQueueNumbers::new(),
+        pos_edge::system_device_id(store_id()),
+    );
+
+    let accepted = intake
+        .submit(&InboundOrder {
+            external_reference: ExternalReference::parse("COUNTER-1").expect("a reference"),
+            sales_channel: Open::from_known(SalesChannel::Takeaway),
+            store_id: store_id(),
+            table_id: None,
+            subject_id: None,
+            lines: vec![InboundOrderLine {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(ITEM)),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: Vec::new(),
+                quoted_unit_price: None,
+                note: None,
+            }],
+            placed_at: pos_edge::SystemClock.now(),
+        })
+        .await
+        .expect("the store accepts a relayed counter order");
+    let order_id = accepted.order_id.to_string();
+
+    // The cashier reads what is owed before taking money, from the order-keyed check — the
+    // table-keyed one cannot answer for an order that sits on no table.
+    let (status, check) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        &format!("/api/orders/{order_id}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the counter check route is mounted");
+    assert_eq!(
+        check["total_due"]["amount_minor"], WITH_TAX,
+        "the till shows the store's own figure with tax, not the ex-tax intake total"
+    );
+
+    // Open the bill on the order. Nothing here mentions a table.
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a tableless order takes a bill");
+    assert_eq!(bill["state"], "BILL_STATE_OPEN");
+    assert!(
+        bill["table_state"].is_null(),
+        "no table state is reported, because there is no table: {bill}"
+    );
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    // And settle it in cash, exactly. The receipt number comes off the same gapless per-store
+    // counter a dine-in sale draws on (ADR-0025) — a counter sale is not a second ledger.
+    let (status, settled) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the counter sale settles: {settled}"
+    );
+    assert_eq!(settled["state"], "BILL_STATE_SETTLED");
+    assert_eq!(settled["receipt_number"], 1);
+    assert_eq!(settled["total_due"]["amount_minor"], WITH_TAX);
+    assert!(
+        settled["table_state"].is_null(),
+        "and cycles no table on the way out"
+    );
+
+    // A second bill on the same order is refused. On the floor the table state machine used to do
+    // this by accident; on the counter there is no table, so the order index is the only thing
+    // between one receipt and two for one meal.
+    let (status, refused) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "one order, one bill: {refused}"
     );
 }
 

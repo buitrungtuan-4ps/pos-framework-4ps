@@ -22,7 +22,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::TableId;
+use pos_proto::ids::{OrderId, TableId};
 use pos_proto::money::Money;
 
 use crate::app::Edge;
@@ -62,6 +62,37 @@ where
             .into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
         // a configuration error, and the till showing it beats the till inventing a number.
+        Err(error) => error_response(&error),
+    }
+}
+
+/// `GET /api/orders/{id}/check` — the running check for one order, table or no table.
+///
+/// The counter's read. A takeaway order sits on no table
+/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above
+/// cannot answer for it, and the cashier needs the figure before taking money as much on a counter
+/// order as on a floor one. Same [`Edge::order_totals`](crate::app::Edge::order_totals) the settle
+/// path assembles from.
+pub(crate) async fn read_for_order<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Path(order_id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_id) = parse_ulid(&order_id).map(OrderId::new) else {
+        return bad_request("an order id is a ULID");
+    };
+    match edge.order_totals(order_id) {
+        Ok(totals) => (
+            StatusCode::OK,
+            Json(CheckResponse {
+                subtotal: totals.subtotal,
+                tax_total: totals.tax_total,
+                total_due: totals.total_due,
+            }),
+        )
+            .into_response(),
         Err(error) => error_response(&error),
     }
 }
