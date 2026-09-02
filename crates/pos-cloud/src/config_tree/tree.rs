@@ -43,6 +43,18 @@ impl ConfigLevel {
     /// The levels in override order, least specific first.
     pub const ORDER: [Self; 4] = [Self::Tenant, Self::Brand, Self::Store, Self::Device];
 
+    /// The token this level carries in a path and on the wire. The HTTP parser and the refusal that
+    /// lists what `level` accepts are both derived from this and [`Self::ORDER`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tenant => "tenant",
+            Self::Brand => "brand",
+            Self::Store => "store",
+            Self::Device => "device",
+        }
+    }
+
     /// This level's index into the layer array.
     const fn index(self) -> usize {
         match self {

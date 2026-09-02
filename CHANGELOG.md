@@ -17,6 +17,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **A refusal about a closed set now lists the set the parser actually accepts** — 22 sites, and the
+  set has one home per field instead of one per sentence (#134). Q3b slice 4.
+
+  `"status must be active or archived"` was written out at **eighteen** routes. The sentence and the
+  parser were two separate statements of the same set, which is the shape that goes wrong quietly: a
+  third status would have needed eighteen edits and got none of them, leaving eighteen routes naming
+  a set that no longer existed. The same held for `role` (2 routes), the admin `status`, and `level`.
+
+  Each set now lives on its own enum — `EntityStatus::ALL` and `AdminStatus::ALL` are new,
+  `AdminRole::ALL` and `ConfigLevel::ORDER` already existed — and **both** the wire parser and the
+  refusal's prose are derived from it. A new variant updates all of them. `details` carries
+  `(field, "INVALID_ENUM_VALUE")`, which is what a console needs to mark the offending `<select>`.
+
+  The prose is unchanged for three of the four fields, including all eighteen `status` routes, so
+  only the `details` array is new. `level` reads `"level must be tenant, brand, store, or device"`
+  where it read `"level must be one of tenant, brand, store, device"` — the one wording that moved
+  onto the shared shape.
+
+- **A refusal about a value out of range names the field, and only the field that was wrong.** The
+  five range checks — the staff PIN's length, `cutoff_hour`, a store's opening hours, a voucher
+  batch's `count`, a scheduled publish's `effective_at_ms` — now carry an `OUT_OF_RANGE` detail.
+  `"open_hour and close_hour must be in 0..=23"` named **both** hours whichever one was out of
+  range, the same over-naming the ULID refusals had in slice 3; it names the one that was.
+
 - **Every ULID a caller sends is now parsed in one place, and a refusal names the field that was
   actually wrong** — 177 refusal sites, half of everything the cloud can refuse (#133). Q3b slice 3.
 
