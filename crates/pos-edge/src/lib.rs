@@ -58,6 +58,7 @@ pub mod server;
 pub mod sntp;
 pub mod state;
 pub mod telemetry;
+pub mod trusted_keys;
 pub mod version;
 
 pub use activation::{activation_router, boot_standing};
@@ -83,4 +84,5 @@ pub use relay_client::{RelayClient, RelayTransport, RelayTransportError};
 pub use server::{Composed, compose, serve, system_device_id};
 pub use sntp::{Drift, assess as assess_drift};
 pub use state::{AppState, BuildInfo};
+pub use trusted_keys::{TRUSTED_KEYS_VAR, TrustedKeyError, trusted_keys};
 pub use version::{VERSION, released, tag};

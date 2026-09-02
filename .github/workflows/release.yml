@@ -72,6 +72,21 @@ jobs:
             exit 1
           fi
 
+      - name: Fail early if the trust anchor is absent
+        # The other half of the supply chain (ADR-0092). A binary built without the trusted public
+        # keys cannot verify *any* update, so it is unshippable for the same reason an unsigned
+        # artifact is — and finding out at the first rollout means a fleet that silently never
+        # updates. `vars`, not `secrets`: a public key is not secret, and a variable is visible in
+        # the run log where an operator can see which anchor a release was built against.
+        env:
+          POS_EDGE_TRUSTED_KEYS: ${{ vars.POS_EDGE_TRUSTED_KEYS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${POS_EDGE_TRUSTED_KEYS}" ]; then
+            echo "::error::the POS_EDGE_TRUSTED_KEYS variable is not set — the built edge would trust no update signing key and could never install an update. Set it to the second line of minisign.pub: see docs/fork-checklist.md."
+            exit 1
+          fi
+
       - uses: ./.github/actions/rust-setup
 
       - name: Cross toolchain for arm64
@@ -104,10 +119,16 @@ jobs:
           # `crates/pos-edge/src/version.rs`'s `version_parses` test fails the build if this
           # expression ever stops producing X.Y.Z.
           POS_EDGE_RELEASE_VERSION: ${{ env.TAG }}
+          # Bake the trust anchor in (ADR-0092). Read at compile time by
+          # `crates/pos-edge/src/trusted_keys.rs`, which is the *only* path to a trusted key: nothing
+          # may take one from the cloud-published config tree, because a key an attacker who controls
+          # the cloud can choose makes the signature check verify their artifact against their key.
+          POS_EDGE_TRUSTED_KEYS: ${{ vars.POS_EDGE_TRUSTED_KEYS }}
         run: |
           set -euo pipefail
           export POS_EDGE_RELEASE_VERSION="${POS_EDGE_RELEASE_VERSION#v}"
           echo "stamping version ${POS_EDGE_RELEASE_VERSION} from tag ${TAG}"
+          echo "baking $(printf '%s' "${POS_EDGE_TRUSTED_KEYS}" | tr ',' '\n' | grep -c .) trusted signing key(s)"
           cargo build --release --locked -p pos-edge --target x86_64-unknown-linux-gnu
           cargo build --release --locked -p pos-edge --target aarch64-unknown-linux-gnu
 

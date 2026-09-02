@@ -150,3 +150,29 @@ is corrected here rather than quietly worked around.
    spelling on the wire rather than two that happen to work. Header *names* stay case-insensitive,
    as HTTP defines them — a proxy or a fork's stub may send any casing, and reading the name
    case-sensitively would turn every store's fetch into a failure at once.
+
+2. **Where minisign's base64 is decoded was left implicit, and Correction 1 settled it by accident.**
+   Every type in this tree holds **raw** bytes — `Signature(Vec<u8>)`, `PublicKey::new(KeyId,
+   Vec<u8>)` — and `updater-minisign` reads a signature at fixed byte offsets (`[0..2]` algorithm,
+   `[2..10]` key id, `[10..74]` the Ed25519 signature), never decoding text. But minisign's *on-disk*
+   formats are two-line text files whose second line is base64: `.minisig` for a signature, `.pub`
+   for a key. R1 publishes the `.minisig` files as-is. So a base64 decode has to happen somewhere
+   between the release workflow and the edge, and it existed nowhere.
+
+   Choosing a hex signature header above already answered half of it, without saying so: the cloud
+   serves the signature's *raw* bytes, so the decode happens **once, at upload, under operator
+   supervision** rather than on every store on every download. That is the right place — it keeps the
+   fleet path dumb and puts the one fragile parse where a human is watching — but it was an implicit
+   consequence of an encoding choice, which is exactly what this record exists to prevent. It is now
+   explicit: **the `/admin` upload path decodes minisign's base64 and stores raw signature bytes; the
+   edge never sees base64 for a signature.**
+
+   The **key** goes the other way, and deliberately. `POS_EDGE_TRUSTED_KEYS` takes minisign's own
+   base64 `.pub` line verbatim, decoded at build time by `crates/pos-edge/src/trusted_keys.rs`. Hex
+   would have matched the header and needed no decoder, and was rejected: it forces the operator to
+   convert the file by hand on a step done once per fork, where a mistake yields a binary that cannot
+   install an update and says so only at the first rollout. On a one-shot unrecoverable step,
+   ergonomics is a security property. The two encodings differ because the two paths differ — one is
+   machine-to-machine on every download, the other is a human pasting a file line once — and the
+   decoder is hand-rolled in `pos-edge` rather than added as a dependency, on the same reasoning as
+   Correction 1.
