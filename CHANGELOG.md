@@ -17,7 +17,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
-- **The catalog's nine authoring entities join the conditional-write mechanism.** Q3c slice 3:
+- **The catalog's nine authoring entities join the conditional-write mechanism** (#139). Q3c slice 3:
   items, tax classes, item categories and sub-categories, display categories and sub-categories,
   modifier groups, menus and menu sections — nine `create`/`list`/`update` triples, eleven `PATCH`
   routes, through the same `Version`/`Versioned`/`UpdateOutcome` seam and the same
