@@ -16,6 +16,50 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **ADR-0089 — the edge reaches the event bus directly, over TLS on its own port**
+  ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md), roadmap v3 slice **E7**, debate D23). The
+  decision record ahead of the implementation.
+
+  E3 built the outbox publish and wired it into `serve()`; every part of it is live code on a live
+  path, and it has never reached a broker. `nats` sits on an `internal: true` network with no published
+  port and no proxy route, so `POS_EDGE_NATS_URL` has **no valid value** — and the failure is silent by
+  design (`spawn_event_publish` treats an unreachable broker as non-fatal so the store keeps trading),
+  which is why it survived. A fleet in that state looks healthy from the till and empty from the cloud.
+
+  Two transports were weighed and they are **performance-indistinguishable** here: the publisher
+  batches every 5 s, so ~135 events ≈ 40–100 KB, ~20 KB/s per store. WebSocket's frame header and its
+  mandatory client-side masking XOR are a rounding error at that rate. Throughput does not decide it.
+  Four things a reverse proxy cannot give do:
+  - **Client certificates** — TLS must terminate *at* NATS to authenticate a store by certificate.
+    Behind a proxy the client's identity dies at the proxy, and NATS does not read headers. This is
+    the one that decided it, because per-store identity on the bus is an already-flagged gap.
+  - **Cluster topology** — NATS gossips its cluster and clients failover on their own; through a proxy
+    those advertised addresses are unreachable internal ones.
+  - **Blast radius** — Caddy runs `cpus: 0.25` / `mem_limit: 96m` and already carries every store's
+    config long-poll; the bus would double its persistent connections and make one process the single
+    failure for both console and events.
+  - **Reconnect cost** — a WebSocket upgrade round-trip per reconnect, which matters for the live mode
+    roadmap v3 still defers.
+
+  Two constraints the ADR makes binding. **The port never opens without TLS**: publishing `4222` makes
+  the broker internet-facing with no proxy and no firewall in front by default, so its TLS and token
+  become the only protection — server TLS and the published port land in the same change, never one
+  before the other. And **the client CA must be private** when mTLS follows: a public CA there means
+  anyone who can obtain a certificate from it can speak to the bus, which is mTLS configured into a
+  no-op. Token authentication ships first; per-store certificates are their own slice, and the CA
+  starts on the box as an explicitly-recorded pilot posture that a fleet moves offline before scale.
+
+  Four **revisit triggers** are written down rather than left implicit, because reversing this costs a
+  URL and not code (`async_nats::connect` takes either scheme, and `websockets` is already in
+  async-nats' default features): mTLS abandoned, a store network that permits only `443`, Caddy
+  *measured* as the constraint, or the bus starting to carry large payloads.
+
+  Flagged rather than assumed: whether Docker's `internal: true` permits a published port. It should —
+  the flag removes a network's route *out*, and published ports are host→container DNAT — but that is
+  not verifiable from a repository, so the implementation slice must prove reachability on a real box
+  before the runbook claims it, with attaching `nats` to `frontend` as the fallback.
+
 ### Fixed
 - **A store provisioned by the wizard can now actually reach its cloud** (roadmap v3, slice **E6**).
   Three defects, one chain:
