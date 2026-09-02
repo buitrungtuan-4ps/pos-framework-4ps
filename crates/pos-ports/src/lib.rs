@@ -1,12 +1,14 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The seventeen boundaries between the framework and the outside world.
+//! The eighteen boundaries between the framework and the outside world.
 //!
 //! Every external system — database, broker, printer, terminal, marketplace, tax
 //! authority — is one implementation of one trait defined here. The list is fixed
-//! by `docs/adr/0021-corrected-port-list.md`; adding a seventeenth needs an ADR
-//! merged first.
+//! by `docs/adr/0021-corrected-port-list.md` and its amendments —
+//! `docs/adr/0053-cloud-sync-port.md` added the seventeenth and
+//! `docs/adr/0091-durable-edge-auth-state.md` the eighteenth; a nineteenth needs an
+//! ADR merged first.
 //!
 //! # Shape
 //!
@@ -14,9 +16,9 @@
 //! `unimplemented!()` means the port is wrong, not the adapter
 //! (`docs/design-principles.md`, interface segregation).
 //!
-//! Two of the seventeen are synchronous and are re-exported from `pos-proto`
+//! Two of the eighteen are synchronous and are re-exported from `pos-proto`
 //! rather than defined here, so that there is exactly one definition of each:
-//! `ClockSource` and `IdGenerator`. The other fifteen are asynchronous,
+//! `ClockSource` and `IdGenerator`. The other sixteen are asynchronous,
 //! declared with native `async fn` in trait — no procedural macro, no boxing on
 //! the happy path. Where a family needs runtime selection between several
 //! compiled-in adapters, this crate also carries a hand-written object-safe
@@ -41,6 +43,7 @@ pub mod blob_store;
 pub mod cloud_sync;
 pub mod config_store;
 pub mod delivery;
+pub mod device_registry;
 pub mod dynamic;
 pub mod erp;
 pub mod error;
@@ -61,6 +64,7 @@ pub use blob_store::{BlobKey, BlobKeyError, BlobStore};
 pub use cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
 pub use config_store::{ConfigDelta, ConfigDocument, ConfigSnapshot, ConfigStore, ConfigUpdate};
 pub use delivery::{BusyMode, DeliveryVendor, PendingDecision, PrepTime, VendorOrderRef};
+pub use device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 pub use dynamic::{
     BoxFuture, DynDeliveryVendor, DynErpSink, DynFiscalization, DynPaymentTerminal,
     DynPrinterDriver,

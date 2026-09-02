@@ -21,8 +21,8 @@
 use pos_fakes::executor::run_ready;
 use pos_fakes::harness::{
     BlobHarness, ClockHarness, CloudHarness, DeliveryHarness, ErpHarness, FiscalHarness, IdHarness,
-    IntakeHarness, LinkHarness, MetricsHarness, PrinterHarness, ShippingHarness, SignerFixture,
-    StoreHarness, TerminalHarness, VaultHarness,
+    IntakeHarness, LinkHarness, MetricsHarness, PrinterHarness, RegistryHarness, ShippingHarness,
+    SignerFixture, StoreHarness, TerminalHarness, VaultHarness,
 };
 
 /// One module per port, so a failing test names its port in the path.
@@ -111,7 +111,12 @@ mod order_in {
     pos_contract_tests::order_in_suite!(IntakeHarness, run_ready);
 }
 
-/// Seventeen suites are invoked above, matching `PortName::ALL`.
+mod device_registry {
+    use super::{RegistryHarness, run_ready};
+    pos_contract_tests::device_registry_suite!(RegistryHarness, run_ready);
+}
+
+/// Eighteen suites are invoked above, matching `PortName::ALL`.
 ///
 /// `pos_contract_tests` asserts that every port *has* a suite; this asserts that this crate *runs*
 /// every one. Without it a suite could be added and quietly never invoked here, which would look
@@ -136,6 +141,7 @@ fn every_suite_is_invoked_here() {
         "erp_sink",
         "order_in",
         "cloud_sync",
+        "device_registry",
     ];
     assert_eq!(invoked.len(), pos_contract_tests::SUITES.len());
     for (port, _) in pos_contract_tests::SUITES {

@@ -11,16 +11,20 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
+use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{BillId, ConfigVersionId, EventId, OrderId, StoreId};
-use pos_proto::time::BusinessDate;
+use pos_proto::ids::{BillId, ConfigVersionId, DeviceId, EventId, OrderId, StoreId};
+use pos_proto::time::{BusinessDate, Timestamp};
+use pos_proto::ulid::Ulid;
 
 use crate::migrations;
 use crate::tx::SqliteTx;
-use crate::writer::{self, Command, IntakeWrite};
+use crate::writer::{
+    self, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, RegistryCommand,
+};
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
 /// stalled writer cannot grow the queue without bound.
@@ -130,6 +134,20 @@ impl SqliteStore {
     }
 
     /// Sends a command to the writer thread and awaits its reply.
+    /// [`Self::ask`] for a registry command, so nine call sites need not each wrap the variant and
+    /// name the port. Always [`PortName::DeviceRegistry`]: a registry fault must not be reported
+    /// under whichever port happens to sit near it in a metric label.
+    async fn registry<T, F>(&self, make: F) -> Result<T, PortError>
+    where
+        T: Send,
+        F: FnOnce(oneshot::Sender<Result<T, PortError>>) -> RegistryCommand,
+    {
+        self.ask(PortName::DeviceRegistry, |reply| {
+            Command::Registry(make(reply))
+        })
+        .await
+    }
+
     async fn ask<T, F>(&self, port: PortName, make: F) -> Result<T, PortError>
     where
         T: Send,
@@ -315,6 +333,171 @@ impl ConfigStore for SqliteStore {
         };
         tx.config = Some(update.clone());
         Ok(reached)
+    }
+}
+
+/// Renders an id the way [`Ulid`]'s `FromStr` reads it back, so a row round-trips.
+fn id_text<T: core::fmt::Display>(id: T) -> String {
+    id.to_string()
+}
+
+/// Reads an id back out of a row, reporting a corrupt one rather than substituting a default.
+///
+/// A silently-defaulted id would resolve a token to the zero device, which is worse than an error:
+/// it would authenticate. So a row that does not parse is an internal fault with the detail on the
+/// (redacted) source, never a value.
+fn parse_id<T: From<Ulid>>(text: &str, what: &str) -> Result<T, PortError> {
+    text.parse::<Ulid>().map(T::from).map_err(|error| {
+        PortError::internal(
+            PortName::DeviceRegistry,
+            format!("a stored {what} is not a ULID"),
+        )
+        .with_source(error)
+    })
+}
+
+/// Reads a stored instant, likewise refusing rather than defaulting.
+fn parse_instant(ms: i64, what: &str) -> Result<Timestamp, PortError> {
+    Timestamp::from_milliseconds_since_epoch(ms).map_err(|error| {
+        PortError::internal(
+            PortName::DeviceRegistry,
+            format!("a stored {what} is out of range"),
+        )
+        .with_source(error)
+    })
+}
+
+/// Reads a stored digest, refusing a row that is not 64 lowercase hex characters.
+///
+/// A hand-edited or truncated digest must be visibly wrong. Substituting anything would produce a
+/// value that matches no token, which looks like a device that mysteriously stopped working.
+fn parse_digest(text: &str) -> Result<TokenDigest, PortError> {
+    TokenDigest::parse_hex(text).ok_or_else(|| {
+        PortError::internal(
+            PortName::DeviceRegistry,
+            "a stored token digest is not 64 hex characters",
+        )
+    })
+}
+
+fn to_paired(row: &PairedDeviceRow) -> Result<PairedDevice, PortError> {
+    Ok(PairedDevice {
+        device_id: parse_id(&row.device_id, "device id")?,
+        token_digest: parse_digest(&row.token_digest)?,
+        paired_at: parse_instant(row.paired_at_ms, "pairing instant")?,
+    })
+}
+
+fn to_session(row: &DeviceSessionRow) -> Result<DeviceSession, PortError> {
+    Ok(DeviceSession {
+        device_id: parse_id(&row.device_id, "device id")?,
+        employee_id: parse_id(&row.employee_id, "employee id")?,
+        signed_in_at: parse_instant(row.signed_in_at_ms, "sign-in instant")?,
+        last_seen_at: parse_instant(row.last_seen_at_ms, "last-seen instant")?,
+    })
+}
+
+impl DeviceRegistry for SqliteStore {
+    async fn record_pairing(&self, device: PairedDevice) -> Result<(), PortError> {
+        // The digest arrives already computed: this adapter never sees a device token, so it
+        // cannot leak one (ADR-0091).
+        let row = PairedDeviceRow {
+            device_id: id_text(device.device_id),
+            token_digest: device.token_digest.to_hex(),
+            paired_at_ms: device.paired_at.as_milliseconds_since_epoch(),
+        };
+        self.registry(move |reply| RegistryCommand::RecordPairing { device: row, reply })
+            .await
+    }
+
+    async fn device_for_token(&self, digest: TokenDigest) -> Result<Option<DeviceId>, PortError> {
+        let token_digest = digest.to_hex();
+        let found = self
+            .registry(move |reply| RegistryCommand::DeviceForDigest {
+                token_digest,
+                reply,
+            })
+            .await?;
+        match found {
+            Some(text) => Ok(Some(parse_id(&text, "device id")?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn paired_devices(&self) -> Result<Vec<PairedDevice>, PortError> {
+        let rows = self
+            .registry(|reply| RegistryCommand::PairedDevices { reply })
+            .await?;
+        rows.iter().map(to_paired).collect()
+    }
+
+    async fn revoke_device(&self, device_id: DeviceId) -> Result<(), PortError> {
+        let id = id_text(device_id);
+        self.registry(move |reply| RegistryCommand::RevokeDevices {
+            device_id: Some(id),
+            reply,
+        })
+        .await
+    }
+
+    async fn revoke_all_devices(&self) -> Result<(), PortError> {
+        self.registry(|reply| RegistryCommand::RevokeDevices {
+            device_id: None,
+            reply,
+        })
+        .await
+    }
+
+    async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {
+        let row = DeviceSessionRow {
+            device_id: id_text(session.device_id),
+            employee_id: id_text(session.employee_id),
+            signed_in_at_ms: session.signed_in_at.as_milliseconds_since_epoch(),
+            last_seen_at_ms: session.last_seen_at.as_milliseconds_since_epoch(),
+        };
+        self.registry(move |reply| RegistryCommand::RecordSignIn {
+            session: row,
+            reply,
+        })
+        .await
+    }
+
+    async fn sign_in_for(&self, device_id: DeviceId) -> Result<Option<DeviceSession>, PortError> {
+        let id = id_text(device_id);
+        let row = self
+            .registry(move |reply| RegistryCommand::SignInFor {
+                device_id: id,
+                reply,
+            })
+            .await?;
+        row.as_ref().map(to_session).transpose()
+    }
+
+    async fn sign_ins(&self) -> Result<Vec<DeviceSession>, PortError> {
+        let rows = self
+            .registry(|reply| RegistryCommand::SignIns { reply })
+            .await?;
+        rows.iter().map(to_session).collect()
+    }
+
+    async fn touch_session(&self, device_id: DeviceId, now: Timestamp) -> Result<(), PortError> {
+        let id = id_text(device_id);
+        let now_ms = now.as_milliseconds_since_epoch();
+        self.registry(move |reply| RegistryCommand::TouchSession {
+            device_id: id,
+            now_ms,
+            reply,
+        })
+        .await
+    }
+
+    async fn clear_sign_in(&self, device_id: DeviceId) -> Result<(), PortError> {
+        let id = id_text(device_id);
+        self.registry(move |reply| RegistryCommand::ClearSignIn {
+            device_id: id,
+            reply,
+        })
+        .await
     }
 }
 
