@@ -58,6 +58,7 @@ pub mod server;
 pub mod sntp;
 pub mod state;
 pub mod telemetry;
+pub mod version;
 
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
@@ -82,3 +83,4 @@ pub use relay_client::{RelayClient, RelayTransport, RelayTransportError};
 pub use server::{serve, system_device_id};
 pub use sntp::{Drift, assess as assess_drift};
 pub use state::{AppState, BuildInfo};
+pub use version::{VERSION, released, tag};

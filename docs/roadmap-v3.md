@@ -59,7 +59,7 @@ fix, and the NATS credential fix.
 ### A·P1 — Unlock: ship & run
 - **S0** — Edge auth (security, first). Validate the paired `DeviceToken` on every domain route and `/ws`; a real actor from pairing + PIN sign-in replaces the hardcoded employee-1 `dev_actor`. Nothing below is meaningful while identity is forged. **Landed as S0a/S0b for the domain routes and S0c for `/ws`; durability remains — see S0d.**
 - **C1** — Turn on the two stub CI jobs (contract, soak) + Dependabot. **Done.**
-- **R1** — Release workflow: build + minisign-sign (keys in GitHub secrets, never on the VPS) + publish. **Done, but the artifact carries no version — see R1b.**
+- **R1** — Release workflow: build + minisign-sign (keys in GitHub secrets, never on the VPS) + publish. **Done**; the artifact now carries its version too (R1b).
 - **E1** — `cloud_url` into `EdgeConfig` + wire the config-pull and heartbeat loops into `serve()`. **Loops done; the provisioning half is not — see E6.**
 - **E2** — OS-keyring `KeyVault` adapter + the `/setup` activation screen in the edge UI. **Done; reachable only once E6 lands.**
 - **E3** — Wire the relay client + NATS event publish. **Wired; neither can reach production — see E6 and E7.**
@@ -110,7 +110,15 @@ first real store.
     device token anywhere.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
   nothing writes the tag at build time, so every artifact reports the same version and the whole OTA
-  progress model (ADR-0078) cannot tell one release from another.
+  progress model (ADR-0078) cannot tell one release from another. **Done**: the release workflow exports
+  `POS_EDGE_RELEASE_VERSION` from the tag it already validates, and `pos_edge::version` reads it through
+  `option_env!` with `CARGO_PKG_VERSION` as the fallback — so a hand-built binary still says `0.0.0`,
+  which is true, and no build script or new dependency is involved. The tag's `v` is stripped because
+  `ReleaseVersion::parse` rejects it and the cloud publishes `target_version` bare; a test running
+  against the *compiled-in* value fails the build, rather than the fleet, if a fork changes that
+  expression. It also pinned the property the rollout gate rests on: `decide_rollout` compares
+  `ReleaseVersion`, not text, and there is now a case at each two-digit boundary (9→10, 1.9→1.10,
+  1.1.9→1.1.10) — the exact places a string-typed version would silently strand every store.
 - **E6** — Close the provisioning chain. The wizard's `config.toml` generator emits no `cloud_url` at all,
   so `compose_cloud_surface` never runs and `/api/activation` 404s on a store built exactly as the runbook
   says. Fix: emit `cloud_url`, offer a bind port, and generate the mode-0600 env file

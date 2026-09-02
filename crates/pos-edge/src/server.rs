@@ -18,7 +18,6 @@ use pos_ports::intake_ledger::IntakeLedger;
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, StoreId};
-use pos_proto::text::ReleaseTag;
 
 use crate::activation::{activation_router, boot_standing};
 use crate::app::Edge;
@@ -432,11 +431,10 @@ async fn spawn_event_publish<S>(
         }
     };
 
-    let publisher = EventPublisher::new(
-        Arc::clone(edge),
-        link,
-        ReleaseTag::new(env!("CARGO_PKG_VERSION")),
-    );
+    // The release the store is running, stamped at build time (R1b). Was `CARGO_PKG_VERSION`,
+    // which is `0.0.0` in every artifact — so every store told the cloud the same thing and the
+    // OTA progress model could not tell one release from another.
+    let publisher = EventPublisher::new(Arc::clone(edge), link, crate::version::tag());
     tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())));
     tracing::info!(
         stream = %nats.stream,
