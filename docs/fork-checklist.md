@@ -45,8 +45,27 @@ Generate the key **offline, on your own machine** — never on a runner or the V
 minisign -G -W -p minisign.pub -s minisign.key
 ```
 
-`minisign.pub` is not a secret: record it in the fleet's OTA trust configuration so the edge accepts
-signatures from this key, and keep the private half in a password manager or on a hardware key.
+`minisign.pub` is not a secret. Keep the private half in a password manager or on a hardware key,
+and give the **public** half to the build as a repository **variable** (not a secret — a variable is
+visible in the run log, where an operator can see which anchor a release was built against):
+
+| Variable | Required | What |
+|---|---|---|
+| `POS_EDGE_TRUSTED_KEYS` | yes | the **second line** of `minisign.pub`, verbatim. Comma-separate two of them to keep a retirement path open. `release.yml` **fails before it builds** without it |
+
+```
+POS_EDGE_TRUSTED_KEYS="$(sed -n 2p minisign.pub)"
+```
+
+**It is a build input, and only a build input** ([ADR-0092](adr/0092-artifact-trust-chain.md)). An
+earlier version of this page said to "record it in the fleet's OTA trust configuration", which reads
+like the cloud-published config tree — and a key taken from there is a key an attacker who controls
+the cloud can choose, which makes the signature check verify *their* artifact against *their* key. A
+trust anchor cannot live inside the channel it protects, so `crates/pos-edge/src/trusted_keys.rs`
+reads it through `option_env!` and `pos-edge` exposes no way to supply one at runtime.
+
+Keep **two** keys baked in where you can ([ADR-0047](adr/0047-minisign-verification.md)): retiring a
+compromised key otherwise needs a release that the compromised key itself must sign.
 
 ### Mirror — `.github/workflows/mirror.yml`
 

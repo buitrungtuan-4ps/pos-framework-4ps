@@ -87,6 +87,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   one key and adding one stray key each fail with the offending key named.
 
 ### Changed
+- **The edge's trusted signing keys now have a source, and only a build-time one**
+  (roadmap v3 slice **R5**, [ADR-0092](docs/adr/0092-artifact-trust-chain.md) part 2).
+  `pos_edge::trusted_keys()` reads `POS_EDGE_TRUSTED_KEYS` through `option_env!` — the mechanism R1b
+  used for the release version, so no build script and no new dependency — and `release.yml` now
+  fails before it builds if the variable is unset, beside the existing check for the signing key.
+
+  **Nothing could build that vector before.** `OtaUpdater::new` took `trusted_keys: Vec<PublicKey>`
+  and the only source in the tree was a test fixture. ADR-0047 said the keys were "baked into this
+  binary"; the baking was never written.
+
+  **The shape enforces where a key may come from, not a comment.** `trusted_keys()` takes no
+  arguments and the parser is private, so there is no public function in `pos-edge` that turns a
+  runtime string into a `PublicKey`. That matters because the easiest place for R5 to have found a
+  key list is the cloud-published config tree — already parsed, already in `EdgeSession` — and a key
+  taken from there is a key an attacker controlling the cloud can choose, making the signature check
+  verify *their* artifact against *their* key. A trust anchor cannot live inside the channel it
+  protects. `docs/fork-checklist.md` previously said to "record it in the fleet's OTA trust
+  configuration", which reads like exactly that; it now names the build variable and says why.
+
+  **The format is minisign's own**: each entry is the second line of a `minisign.pub` file verbatim
+  (base64 of `Ed` ‖ key id ‖ key), comma-separated for two keys so a compromised one can be retired
+  — ADR-0047's reason for keeping two. So a fork pastes what the tool produced,
+  `POS_EDGE_TRUSTED_KEYS="$(sed -n 2p minisign.pub)"`, with no hand conversion on a once-per-fork
+  step where a mistake yields a binary that cannot update and says so only at the first rollout.
+
+  A binary with no keys returns `TrustedKeyError::NotBakedIn` rather than an empty vector, so the
+  wiring cannot mistake "no anchor" for "nothing to check"; an updater with no trust anchor must
+  refuse to install.
+
+  **Upgrade note** A fork must set the `POS_EDGE_TRUSTED_KEYS` **repository variable** (not a
+  secret — a public key is not secret, and a variable is visible in the run log where an operator can
+  see which anchor a release was built against). `release.yml` refuses to build without it. Nothing
+  else changes: `OtaUpdater` still has no production caller until R5.
+
 - **The edge can no longer obtain an update artifact without the signature that judges it**
   (roadmap v3 slice **R5**, [ADR-0092](docs/adr/0092-artifact-trust-chain.md)).
   `CloudSync::fetch_update` returns a `SignedArtifact { bytes, signature }` instead of `Vec<u8>`, and
