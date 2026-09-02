@@ -2,46 +2,124 @@
 // session is live (`GET /admin/session`); until that resolves the app shows a neutral loading line,
 // then either the authenticated area (inside the nav Shell) or the public login/setup screens. The
 // guard is reactive: logging in or out flips `authed` and the routes follow.
+//
+// # Every guarded screen is a separate chunk (roadmap v3 Q2)
+//
+// The three public screens are imported eagerly, because they are all an unauthenticated visitor
+// can reach. Everything behind the auth guard is `lazy()`, so it is fetched when its route is first
+// matched and not before.
+//
+// Before this, one 540 kB bundle held every screen, and the login page paid for all of them: the
+// Reports charts, the Layout editor, all the Catalog sub-screens — downloaded before anyone could
+// type a password. Vite had been printing its "chunks are larger than 500 kB" warning and
+// recommending exactly this.
+//
+// The `.then` unwrapping is because the screens use named exports and `lazy` wants a default. It is
+// ceremony, but renaming every screen's export to satisfy the loader would be a larger and less
+// reversible change than one line of it each.
 
-import { createEffect, createSignal, onMount, type ParentProps, Show } from "solid-js";
+import { createEffect, createSignal, lazy, onMount, type ParentProps, Show } from "solid-js";
 import { Navigate, Route, Router } from "@solidjs/router";
 
 import { api } from "./api/client";
 import { Shell } from "./components/Shell";
 import { locale, t } from "./i18n";
 import { authed, setAuthed } from "./state/session";
+
+// Public: reachable without a session, so they ship in the initial chunk.
 import { AcceptInvite } from "./screens/AcceptInvite";
-import { Activation } from "./screens/Activation";
-import { Admins } from "./screens/Admins";
-import { Alerts } from "./screens/Alerts";
-import { Audit } from "./screens/Audit";
-import { ApiKeys } from "./screens/ApiKeys";
-import { Campaigns } from "./screens/Campaigns";
-import { CatalogShell } from "./screens/catalog/CatalogShell";
-import { Channels } from "./screens/Channels";
-import { Config } from "./screens/Config";
-import { Layout } from "./screens/Layout";
-import { Devices } from "./screens/Devices";
-import { Fleet } from "./screens/Fleet";
-import { Inventory } from "./screens/Inventory";
-import { Ota } from "./screens/Ota";
-import { Reconcile } from "./screens/Reconcile";
-import { Floor } from "./screens/Floor";
 import { Login } from "./screens/Login";
-import { Media } from "./screens/Media";
-import { MySecurity } from "./screens/MySecurity";
-import { MySessions } from "./screens/MySessions";
-import { NewStore } from "./screens/NewStore";
-import { People } from "./screens/People";
-import { Reports } from "./screens/Reports";
 import { Setup } from "./screens/Setup";
-import { Stations } from "./screens/Stations";
-import { StoreSettings } from "./screens/StoreSettings";
-import { Stores } from "./screens/Stores";
-import { Subjects } from "./screens/Subjects";
-import { TaxRates } from "./screens/TaxRates";
-import { Translations } from "./screens/Translations";
-import { Webhooks } from "./screens/Webhooks";
+
+// Guarded: one chunk each, fetched when the route is first matched.
+const Activation = lazy(() =>
+  import("./screens/Activation").then((module) => ({ default: module.Activation })),
+);
+const Admins = lazy(() =>
+  import("./screens/Admins").then((module) => ({ default: module.Admins })),
+);
+const Alerts = lazy(() =>
+  import("./screens/Alerts").then((module) => ({ default: module.Alerts })),
+);
+const Audit = lazy(() =>
+  import("./screens/Audit").then((module) => ({ default: module.Audit })),
+);
+const ApiKeys = lazy(() =>
+  import("./screens/ApiKeys").then((module) => ({ default: module.ApiKeys })),
+);
+const Campaigns = lazy(() =>
+  import("./screens/Campaigns").then((module) => ({ default: module.Campaigns })),
+);
+const CatalogShell = lazy(() =>
+  import("./screens/catalog/CatalogShell").then((module) => ({ default: module.CatalogShell })),
+);
+const Channels = lazy(() =>
+  import("./screens/Channels").then((module) => ({ default: module.Channels })),
+);
+const Config = lazy(() =>
+  import("./screens/Config").then((module) => ({ default: module.Config })),
+);
+const Layout = lazy(() =>
+  import("./screens/Layout").then((module) => ({ default: module.Layout })),
+);
+const Devices = lazy(() =>
+  import("./screens/Devices").then((module) => ({ default: module.Devices })),
+);
+const Fleet = lazy(() =>
+  import("./screens/Fleet").then((module) => ({ default: module.Fleet })),
+);
+const Inventory = lazy(() =>
+  import("./screens/Inventory").then((module) => ({ default: module.Inventory })),
+);
+const Ota = lazy(() =>
+  import("./screens/Ota").then((module) => ({ default: module.Ota })),
+);
+const Reconcile = lazy(() =>
+  import("./screens/Reconcile").then((module) => ({ default: module.Reconcile })),
+);
+const Floor = lazy(() =>
+  import("./screens/Floor").then((module) => ({ default: module.Floor })),
+);
+const Media = lazy(() =>
+  import("./screens/Media").then((module) => ({ default: module.Media })),
+);
+const MySecurity = lazy(() =>
+  import("./screens/MySecurity").then((module) => ({ default: module.MySecurity })),
+);
+const MySessions = lazy(() =>
+  import("./screens/MySessions").then((module) => ({ default: module.MySessions })),
+);
+const NewStore = lazy(() =>
+  import("./screens/NewStore").then((module) => ({ default: module.NewStore })),
+);
+const People = lazy(() =>
+  import("./screens/People").then((module) => ({ default: module.People })),
+);
+const Reports = lazy(() =>
+  import("./screens/Reports").then((module) => ({ default: module.Reports })),
+);
+const Stations = lazy(() =>
+  import("./screens/Stations").then((module) => ({ default: module.Stations })),
+);
+const StoreSettings = lazy(() =>
+  import("./screens/StoreSettings").then((module) => ({ default: module.StoreSettings })),
+);
+const Stores = lazy(() =>
+  import("./screens/Stores").then((module) => ({ default: module.Stores })),
+);
+const Subjects = lazy(() =>
+  import("./screens/Subjects").then((module) => ({ default: module.Subjects })),
+);
+const TaxRates = lazy(() =>
+  import("./screens/TaxRates").then((module) => ({ default: module.TaxRates })),
+);
+const Translations = lazy(() =>
+  import("./screens/Translations").then((module) => ({ default: module.Translations })),
+);
+const Webhooks = lazy(() =>
+  import("./screens/Webhooks").then((module) => ({ default: module.Webhooks })),
+);
+
 
 // The authenticated area: render the nav Shell around the matched child route, or bounce to login.
 function Guarded(props: ParentProps) {

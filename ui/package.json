@@ -6,11 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && pnpm i18n:lint && pnpm contrast && vite build",
+    "build": "tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && vite build",
     "typecheck": "tsc --noEmit",
     "i18n:lint": "node scripts/i18n-lint.mjs",
     "contrast": "node scripts/wcag-contrast.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "i18n:parity": "node scripts/i18n-parity.mjs"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",
