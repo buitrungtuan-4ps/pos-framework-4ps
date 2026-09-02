@@ -241,6 +241,7 @@ export interface TaxClass {
   readonly tenant_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /**
@@ -469,6 +470,7 @@ export interface ItemCategory {
   readonly tenant_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** An item sub-category, nested under a category (ADR-0066 entity 3). */
@@ -478,6 +480,7 @@ export interface ItemSubcategory {
   readonly item_category_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A display category — the presentation taxonomy a screen groups by (ADR-0066 entity 11). */
@@ -486,6 +489,7 @@ export interface DisplayCategory {
   readonly tenant_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A display sub-category, nested under a display category (ADR-0066 entity 11). */
@@ -495,6 +499,7 @@ export interface DisplaySubcategory {
   readonly display_category_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A button's grid slot on a POS terminal (`pos-proto` `GridPosition`). */
@@ -525,6 +530,7 @@ export interface ModifierGroup {
   readonly member_item_ids: string[];
   readonly attached_item_ids: string[];
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
@@ -540,6 +546,7 @@ export interface CatalogItem {
   /** The item's photo — a media id (ADR-0075), or null. */
   readonly image_ref: string | null;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A media asset as listed (ADR-0075) — its id and size, never the bytes. */
@@ -580,6 +587,7 @@ export interface Menu {
   readonly name: string;
   readonly parent_menu_id: string | null;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A menu section — an authoring grouping within a menu (ADR-0066 entity 7). Authoring-only. */
@@ -590,6 +598,7 @@ export interface MenuSection {
   readonly name: string;
   readonly sort: number;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */

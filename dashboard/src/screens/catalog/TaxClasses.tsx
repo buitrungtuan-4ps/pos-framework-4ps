@@ -13,7 +13,7 @@ import { tenantId } from "../../state/session";
 import { Banner, Button, Card, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
 import { toast } from "../../components/Toast";
-import { errorMessage, StatusCell } from "./shared";
+import { errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogTaxClasses() {
   const [rows, setRows] = createSignal<TaxClass[] | null>(null);
@@ -79,11 +79,15 @@ export function CatalogTaxClasses() {
       await api.updateTaxClass(row.tax_class_id, tenantId(), {
         name,
         status: fields.status ?? row.status,
-      });
+      }, row.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);

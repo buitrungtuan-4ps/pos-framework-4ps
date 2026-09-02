@@ -15,7 +15,7 @@ import { tenantId } from "../../state/session";
 import { Banner, Button, Card, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState, FormField } from "../../components/kit";
 import { toast } from "../../components/Toast";
-import { errorMessage, StatusCell } from "./shared";
+import { errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogTaxonomy() {
   const [categories, setCategories] = createSignal<ItemCategory[] | null>(null);
@@ -101,11 +101,15 @@ export function CatalogTaxonomy() {
       await api.updateItemCategory(row.item_category_id, tenantId(), {
         name,
         status: fields.status ?? row.status,
-      });
+      }, row.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);
@@ -183,11 +187,15 @@ export function CatalogTaxonomy() {
         itemCategoryId: row.item_category_id,
         name,
         status: fields.status ?? row.status,
-      });
+      }, row.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);

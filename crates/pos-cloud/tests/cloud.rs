@@ -6371,102 +6371,152 @@ async fn an_owner_can_be_demoted_when_another_owner_remains() {
 
 #[derive(Default, Clone)]
 struct FakeCatalog {
-    items: Arc<Mutex<Vec<CatalogItem>>>,
-    tax_classes: Arc<Mutex<Vec<TaxClass>>>,
-    categories: Arc<Mutex<Vec<ItemCategory>>>,
-    subcategories: Arc<Mutex<Vec<ItemSubcategory>>>,
-    display_categories: Arc<Mutex<Vec<DisplayCategory>>>,
-    display_subcategories: Arc<Mutex<Vec<DisplaySubcategory>>>,
+    items: Arc<Mutex<Vec<Versioned<CatalogItem>>>>,
+    tax_classes: Arc<Mutex<Vec<Versioned<TaxClass>>>>,
+    categories: Arc<Mutex<Vec<Versioned<ItemCategory>>>>,
+    subcategories: Arc<Mutex<Vec<Versioned<ItemSubcategory>>>>,
+    display_categories: Arc<Mutex<Vec<Versioned<DisplayCategory>>>>,
+    display_subcategories: Arc<Mutex<Vec<Versioned<DisplaySubcategory>>>>,
     layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
-    modifier_groups: Arc<Mutex<Vec<ModifierGroup>>>,
-    menus: Arc<Mutex<Vec<Menu>>>,
-    menu_sections: Arc<Mutex<Vec<MenuSection>>>,
+    modifier_groups: Arc<Mutex<Vec<Versioned<ModifierGroup>>>>,
+    menus: Arc<Mutex<Vec<Versioned<Menu>>>>,
+    menu_sections: Arc<Mutex<Vec<Versioned<MenuSection>>>>,
     placements: Arc<Mutex<Vec<MenuPlacement>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeCatalog {
+    /// The fake's stand-in for `xmin` (ADR-0094): a token that changes on every successful write,
+    /// which is the only property the seam contract needs.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 impl CatalogStore for FakeCatalog {
-    async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
-        self.items.lock().expect("lock").push(item.clone());
-        Ok(())
+    async fn create_item(&self, item: &CatalogItem) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
+        self.items
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(item.clone(), version.clone()));
+        Ok(version)
     }
 
-    async fn list_items(&self, tenant_id: TenantId) -> Result<Vec<CatalogItem>, CatalogStoreError> {
+    async fn list_items(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<CatalogItem>>, CatalogStoreError> {
         Ok(self
             .items
             .lock()
             .expect("lock")
             .iter()
-            .filter(|item| item.tenant_id == tenant_id)
+            .filter(|item| item.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
 
-    async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+    async fn update_item(
+        &self,
+        item: &CatalogItem,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.items.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.menu_item_id == item.menu_item_id && row.tenant_id == item.tenant_id {
-                row.name.clone_from(&item.name);
-                row.name_translations.clone_from(&item.name_translations);
-                row.tax_class_id = item.tax_class_id;
-                row.item_category_id = item.item_category_id;
-                row.item_subcategory_id = item.item_subcategory_id;
-                row.image_ref = item.image_ref;
-                row.status = item.status;
-                return Ok(true);
+            if row.record.menu_item_id == item.menu_item_id
+                && row.record.tenant_id == item.tenant_id
+            {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&item.name);
+                row.record
+                    .name_translations
+                    .clone_from(&item.name_translations);
+                row.record.tax_class_id = item.tax_class_id;
+                row.record.item_category_id = item.item_category_id;
+                row.record.item_subcategory_id = item.item_subcategory_id;
+                row.record.image_ref = item.image_ref;
+                row.record.status = item.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.tax_classes
             .lock()
             .expect("lock")
-            .push(tax_class.clone());
-        Ok(())
+            .push(Versioned::new(tax_class.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_tax_classes(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<TaxClass>>, CatalogStoreError> {
         Ok(self
             .tax_classes
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
 
-    async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+    async fn update_tax_class(
+        &self,
+        tax_class: &TaxClass,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.tax_classes.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.tax_class_id == tax_class.tax_class_id && row.tenant_id == tax_class.tenant_id {
-                row.name.clone_from(&tax_class.name);
-                row.status = tax_class.status;
-                return Ok(true);
+            if row.record.tax_class_id == tax_class.tax_class_id
+                && row.record.tenant_id == tax_class.tenant_id
+            {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&tax_class.name);
+                row.record.status = tax_class.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_item_category(&self, category: &ItemCategory) -> Result<(), CatalogStoreError> {
-        self.categories.lock().expect("lock").push(category.clone());
-        Ok(())
+    async fn create_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
+        self.categories
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(category.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_item_categories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ItemCategory>>, CatalogStoreError> {
         Ok(self
             .categories
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -6474,41 +6524,48 @@ impl CatalogStore for FakeCatalog {
     async fn update_item_category(
         &self,
         category: &ItemCategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.categories.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.item_category_id == category.item_category_id
-                && row.tenant_id == category.tenant_id
+            if row.record.item_category_id == category.item_category_id
+                && row.record.tenant_id == category.tenant_id
             {
-                row.name.clone_from(&category.name);
-                row.status = category.status;
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&category.name);
+                row.record.status = category.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
     async fn create_item_subcategory(
         &self,
         subcategory: &ItemSubcategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.subcategories
             .lock()
             .expect("lock")
-            .push(subcategory.clone());
-        Ok(())
+            .push(Versioned::new(subcategory.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_item_subcategories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ItemSubcategory>>, CatalogStoreError> {
         Ok(self
             .subcategories
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -6516,42 +6573,49 @@ impl CatalogStore for FakeCatalog {
     async fn update_item_subcategory(
         &self,
         subcategory: &ItemSubcategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.subcategories.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.item_subcategory_id == subcategory.item_subcategory_id
-                && row.tenant_id == subcategory.tenant_id
+            if row.record.item_subcategory_id == subcategory.item_subcategory_id
+                && row.record.tenant_id == subcategory.tenant_id
             {
-                row.name.clone_from(&subcategory.name);
-                row.item_category_id = subcategory.item_category_id;
-                row.status = subcategory.status;
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&subcategory.name);
+                row.record.item_category_id = subcategory.item_category_id;
+                row.record.status = subcategory.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
     async fn create_display_category(
         &self,
         category: &DisplayCategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.display_categories
             .lock()
             .expect("lock")
-            .push(category.clone());
-        Ok(())
+            .push(Versioned::new(category.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_display_categories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<DisplayCategory>>, CatalogStoreError> {
         Ok(self
             .display_categories
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -6559,41 +6623,48 @@ impl CatalogStore for FakeCatalog {
     async fn update_display_category(
         &self,
         category: &DisplayCategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.display_categories.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.display_category_id == category.display_category_id
-                && row.tenant_id == category.tenant_id
+            if row.record.display_category_id == category.display_category_id
+                && row.record.tenant_id == category.tenant_id
             {
-                row.name.clone_from(&category.name);
-                row.status = category.status;
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&category.name);
+                row.record.status = category.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
     async fn create_display_subcategory(
         &self,
         subcategory: &DisplaySubcategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.display_subcategories
             .lock()
             .expect("lock")
-            .push(subcategory.clone());
-        Ok(())
+            .push(Versioned::new(subcategory.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_display_subcategories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<DisplaySubcategory>>, CatalogStoreError> {
         Ok(self
             .display_subcategories
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -6601,19 +6672,25 @@ impl CatalogStore for FakeCatalog {
     async fn update_display_subcategory(
         &self,
         subcategory: &DisplaySubcategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.display_subcategories.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.display_subcategory_id == subcategory.display_subcategory_id
-                && row.tenant_id == subcategory.tenant_id
+            if row.record.display_subcategory_id == subcategory.display_subcategory_id
+                && row.record.tenant_id == subcategory.tenant_id
             {
-                row.name.clone_from(&subcategory.name);
-                row.display_category_id = subcategory.display_category_id;
-                row.status = subcategory.status;
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&subcategory.name);
+                row.record.display_category_id = subcategory.display_category_id;
+                row.record.status = subcategory.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
     async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
@@ -6660,24 +6737,28 @@ impl CatalogStore for FakeCatalog {
         Ok(rows.len() != before)
     }
 
-    async fn create_modifier_group(&self, group: &ModifierGroup) -> Result<(), CatalogStoreError> {
+    async fn create_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.modifier_groups
             .lock()
             .expect("lock")
-            .push(group.clone());
-        Ok(())
+            .push(Versioned::new(group.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_modifier_groups(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ModifierGroup>>, CatalogStoreError> {
         Ok(self
             .modifier_groups
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -6685,82 +6766,119 @@ impl CatalogStore for FakeCatalog {
     async fn update_modifier_group(
         &self,
         group: &ModifierGroup,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.modifier_groups.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.modifier_group_id == group.modifier_group_id && row.tenant_id == group.tenant_id
+            if row.record.modifier_group_id == group.modifier_group_id
+                && row.record.tenant_id == group.tenant_id
             {
-                *row = group.clone();
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record = group.clone();
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
-        self.menus.lock().expect("lock").push(menu.clone());
-        Ok(())
+    async fn create_menu(&self, menu: &Menu) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
+        self.menus
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(menu.clone(), version.clone()));
+        Ok(version)
     }
 
-    async fn list_menus(&self, tenant_id: TenantId) -> Result<Vec<Menu>, CatalogStoreError> {
+    async fn list_menus(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<Menu>>, CatalogStoreError> {
         Ok(self
             .menus
             .lock()
             .expect("lock")
             .iter()
-            .filter(|menu| menu.tenant_id == tenant_id)
+            .filter(|menu| menu.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
 
-    async fn update_menu(&self, menu: &Menu) -> Result<bool, CatalogStoreError> {
+    async fn update_menu(
+        &self,
+        menu: &Menu,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.menus.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.menu_id == menu.menu_id && row.tenant_id == menu.tenant_id {
-                row.name.clone_from(&menu.name);
-                row.parent_menu_id = menu.parent_menu_id;
-                row.status = menu.status;
-                return Ok(true);
+            if row.record.menu_id == menu.menu_id && row.record.tenant_id == menu.tenant_id {
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&menu.name);
+                row.record.parent_menu_id = menu.parent_menu_id;
+                row.record.status = menu.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
-    async fn create_menu_section(&self, section: &MenuSection) -> Result<(), CatalogStoreError> {
+    async fn create_menu_section(
+        &self,
+        section: &MenuSection,
+    ) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
         self.menu_sections
             .lock()
             .expect("lock")
-            .push(section.clone());
-        Ok(())
+            .push(Versioned::new(section.clone(), version.clone()));
+        Ok(version)
     }
 
     async fn list_menu_sections(
         &self,
         tenant_id: TenantId,
         menu_id: MenuId,
-    ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<MenuSection>>, CatalogStoreError> {
         Ok(self
             .menu_sections
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .filter(|row| row.record.tenant_id == tenant_id && row.record.menu_id == menu_id)
             .cloned()
             .collect())
     }
 
-    async fn update_menu_section(&self, section: &MenuSection) -> Result<bool, CatalogStoreError> {
+    async fn update_menu_section(
+        &self,
+        section: &MenuSection,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.menu_sections.lock().expect("lock");
         for row in rows.iter_mut() {
-            if row.menu_section_id == section.menu_section_id && row.tenant_id == section.tenant_id
+            if row.record.menu_section_id == section.menu_section_id
+                && row.record.tenant_id == section.tenant_id
             {
-                row.name.clone_from(&section.name);
-                row.sort = section.sort;
-                row.status = section.status;
-                return Ok(true);
+                if &row.etag != expected {
+                    return Ok(UpdateOutcome::VersionMismatch);
+                }
+                row.record.name.clone_from(&section.name);
+                row.record.sort = section.sort;
+                row.record.status = section.status;
+                row.etag = version.clone();
+                return Ok(UpdateOutcome::Updated(version));
             }
         }
-        Ok(false)
+        Ok(UpdateOutcome::NotFound)
     }
 
     async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
@@ -6888,18 +7006,26 @@ fn tax_rate_app(admin: FakeAdmin, catalog: FakeCatalog, tax_rates: FakeTaxRates)
 /// Seeds a tax class straight into the fake, so a rate can name a known class without the catalog
 /// create route.
 fn seed_tax_class(catalog: &FakeCatalog, tenant: &str, tax_class_id: &str, name: &str) {
-    catalog.tax_classes.lock().expect("lock").push(TaxClass {
-        tax_class_id: tax_class_id
-            .parse::<Ulid>()
-            .map(TaxClassId::new)
-            .expect("a class ULID"),
-        tenant_id: tenant
-            .parse::<Ulid>()
-            .map(TenantId::new)
-            .expect("a tenant ULID"),
-        name: name.to_owned(),
-        status: EntityStatus::Active,
-    });
+    catalog
+        .tax_classes
+        .lock()
+        .expect("lock")
+        .push(Versioned::new(
+            TaxClass {
+                tax_class_id: tax_class_id
+                    .parse::<Ulid>()
+                    .map(TaxClassId::new)
+                    .expect("a class ULID"),
+                tenant_id: tenant
+                    .parse::<Ulid>()
+                    .map(TenantId::new)
+                    .expect("a tenant ULID"),
+                name: name.to_owned(),
+                status: EntityStatus::Active,
+            },
+            // Seeded straight in, so it starts at a version nothing has read yet.
+            catalog.mint(),
+        ));
 }
 
 /// An in-memory `MediaStore` for the route tests (ADR-0075), tenant-scoped like the real adapter.
@@ -7846,6 +7972,9 @@ async fn catalog_creates_lists_and_renames_a_tax_class() {
         .as_str()
         .expect("a tax class id")
         .to_owned();
+    // The create hands back the version the record starts at (ADR-0094), so the edit below needs no
+    // second round trip to learn it.
+    let etag = created["etag"].as_str().expect("an etag").to_owned();
 
     let listed = router
         .clone()
@@ -7861,10 +7990,11 @@ async fn catalog_creates_lists_and_renames_a_tax_class() {
     // Rename + archive in one PATCH.
     let renamed = router
         .clone()
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/catalog/tax-classes/{tax_class_id}"),
             &serde_json::json!({ "tenant_id": tenant, "name": "Alcohol", "status": "archived" }),
             &cookie,
+            &etag,
         ))
         .await
         .expect("route rename tax class");
@@ -7873,16 +8003,93 @@ async fn catalog_creates_lists_and_renames_a_tax_class() {
     assert_eq!(renamed["name"], "Alcohol");
     assert_eq!(renamed["status"], "archived");
 
-    // A PATCH to an unknown id is a 404, not a silent success.
+    // A PATCH to an unknown id is a 404, not a silent success — and not a 412 either: a
+    // well-formed version for a row that does not exist is an absence, not a conflict (ADR-0094).
     let missing = router
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/catalog/tax-classes/{}", ulid_text(999)),
             &serde_json::json!({ "tenant_id": tenant, "name": "Nope", "status": "active" }),
             &cookie,
+            &etag,
         ))
         .await
         .expect("route rename unknown tax class");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+/// The catalog's nine record-shaped entities are on the same conditional-write mechanism as the
+/// registry (ADR-0094), and this is the case that matters: a second editor holding a stale copy is
+/// refused, and the first editor's change is still there.
+///
+/// One entity stands for the nine because the seam, adapter and handler shape is identical across
+/// them — what a per-entity copy of this test would prove is that the same code was pasted nine
+/// times, not that nine behaviours are right.
+#[tokio::test]
+async fn a_stale_catalog_write_is_refused_and_the_first_edit_survives() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/tax-classes",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard 10%" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tax class");
+    let created = json_body(created).await;
+    let tax_class_id = created["tax_class_id"].as_str().expect("an id").to_owned();
+    // Both editors load the record at the same version.
+    let both_read = created["etag"].as_str().expect("an etag").to_owned();
+
+    let first = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Alcohol", "status": "active" }),
+            &cookie,
+            &both_read,
+        ))
+        .await
+        .expect("route the first save");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant, "name": "Stale Overwrite", "status": "archived",
+            }),
+            &cookie,
+            &both_read,
+        ))
+        .await
+        .expect("route the second save");
+    assert_eq!(second.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        json_body(second).await["error"]["status"],
+        "VERSION_MISMATCH"
+    );
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-classes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the listing");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows[0]["name"], "Alcohol",
+        "the refused write must not have applied: {rows}"
+    );
+    assert_eq!(
+        rows[0]["status"], "active",
+        "nor any other field it carried: {rows}"
+    );
 }
 
 #[tokio::test]
@@ -8093,6 +8300,7 @@ async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
     assert_eq!(created["min_select"], 1);
     assert_eq!(created["member_item_ids"][0], modifier);
     assert_eq!(created["attached_item_ids"][0], pizza);
+    let etag = created["etag"].as_str().expect("an etag").to_owned();
     let group_id = created["modifier_group_id"]
         .as_str()
         .expect("a group id")
@@ -8111,7 +8319,7 @@ async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
     // Update the rule + archive in one PATCH.
     let updated = router
         .clone()
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/catalog/modifier-groups/{group_id}"),
             &serde_json::json!({
                 "tenant_id": tenant,
@@ -8123,6 +8331,7 @@ async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
                 "status": "archived",
             }),
             &cookie,
+            &etag,
         ))
         .await
         .expect("route update modifier group");
@@ -8244,6 +8453,7 @@ async fn catalog_menu_sections_group_placements_within_a_menu() {
     assert_eq!(created.status(), StatusCode::CREATED);
     let section = json_body(created).await;
     let section_id = section["menu_section_id"].as_str().expect("id").to_owned();
+    let etag = section["etag"].as_str().expect("an etag").to_owned();
     assert_eq!(section["name"], "Starters");
 
     // List sections — the new one is there.
@@ -8262,12 +8472,13 @@ async fn catalog_menu_sections_group_placements_within_a_menu() {
     // Rename and re-sort it.
     let renamed = router
         .clone()
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("{sections_base}/{section_id}"),
             &serde_json::json!({
                 "tenant_id": tenant, "name": "Appetizers", "sort": 2, "status": "active",
             }),
             &cookie,
+            &etag,
         ))
         .await
         .expect("route rename section");

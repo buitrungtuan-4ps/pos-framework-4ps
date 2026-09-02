@@ -17,7 +17,7 @@ import { Banner, Button, Card, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState, FormField, TechnicalDetails } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
-import { cleanTranslations, errorMessage, StatusCell } from "./shared";
+import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogItems() {
   const [items, setItems] = createSignal<CatalogItem[] | null>(null);
@@ -142,11 +142,15 @@ export function CatalogItems() {
         itemSubcategoryId: item.item_subcategory_id,
         imageRef: fields.imageRef !== undefined ? fields.imageRef : item.image_ref,
         status: fields.status ?? item.status,
-      });
+      }, item.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);

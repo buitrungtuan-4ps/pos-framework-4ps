@@ -34,7 +34,7 @@ import {
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
-import { CHANNEL_LABEL, emptyPriceSheet, errorMessage, StatusCell } from "./shared";
+import { CHANNEL_LABEL, emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogMenus() {
   const [menus, setMenus] = createSignal<Menu[] | null>(null);
@@ -186,11 +186,15 @@ export function CatalogMenus() {
         name,
         parentMenuId: fields.parentMenuId === undefined ? menu.parent_menu_id : fields.parentMenuId,
         status: fields.status ?? menu.status,
-      });
+      }, menu.etag);
       await load();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await load();
+      }
       return false;
     } finally {
       setBusy(false);
@@ -273,11 +277,15 @@ export function CatalogMenus() {
         name,
         sort: fields.sort ?? section.sort,
         status: fields.status ?? section.status,
-      });
+      }, section.etag);
       await loadMenuDetail(selectedMenu());
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // A stale copy is recovered by reloading, so the reader sees what actually changed.
+      if (isStale(caught)) {
+        await loadMenuDetail(selectedMenu());
+      }
       return false;
     } finally {
       setBusy(false);

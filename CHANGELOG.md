@@ -17,6 +17,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **The catalog's nine authoring entities join the conditional-write mechanism.** Q3c slice 3:
+  items, tax classes, item categories and sub-categories, display categories and sub-categories,
+  modifier groups, menus and menu sections — nine `create`/`list`/`update` triples, eleven `PATCH`
+  routes, through the same `Version`/`Versioned`/`UpdateOutcome` seam and the same
+  `xmin::text` compare-and-swap slice 2 built. Nothing new was invented; the point of the slice is
+  that the mechanism carried across without special cases.
+
+  **`CatalogStore` splits into two shapes, and only one of them is this mechanism's problem.** The
+  nine record-shaped entities have the registry's shape and get the registry's treatment. The two
+  keyed upserts — `set_placement`/`remove_placement` and `set_layout_button`/`remove_layout_button` —
+  do **not**: a caller there asserts a fact at a key rather than replacing a record it read, and on a
+  first write there is no prior version to name, so `If-Match` does not fit without also introducing
+  `If-None-Match`. They are deferred to the slice that takes the config tree's whole-document save,
+  where the question is the same one — how a *set* replaced wholesale avoids losing a concurrent edit
+  to a different member — and the seam's doc comment says so rather than leaving the omission to be
+  discovered.
+
+  **Reads that are not writes strip the version.** The menu compiler, the layout compiler and the
+  CSV export take the authoring records themselves: a version is a writer's concern, and carrying one
+  into a compiled book or an export column would be noise. Each of those three load sites says so at
+  the point it discards it.
+
+  **The console follows in the same change**, since the routes now refuse a write without `If-Match`:
+  the nine catalog `update*` client methods take the version the row was read at, and the Catalog and
+  Layout screens reload on a `412` rather than offering a retry, via a shared `isStale` and one new
+  `catalog.stale` string in `en`/`vi`.
+
+### Changed
 - **The console's four registry writes stop losing edits: `ETag` on read, `If-Match` on write, `412`
   on a stale one** (#138). Q3c slice 2, the mechanism [ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)
   frames, proven end to end on the smallest complete family — tenants, brands, stores, devices.

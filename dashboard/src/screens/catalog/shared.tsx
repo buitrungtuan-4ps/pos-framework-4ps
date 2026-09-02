@@ -44,9 +44,27 @@ export const cleanTranslations = (raw: Record<string, string>): Record<string, s
   return cleaned;
 };
 
-/** The message to surface for a caught API failure — the server's message, or a stringified fallback. */
-export const errorMessage = (caught: unknown): string =>
-  caught instanceof ApiError ? caught.message : String(caught);
+/**
+ * The message to surface for a caught API failure — the server's message, or a stringified fallback.
+ *
+ * A `412` is the one failure whose server message is not the most useful thing to show: it says the
+ * record changed, but not what the reader should do about it (ADR-0094). The prose here says both,
+ * and [`isStale`] is what tells the caller to reload so the reader can see what changed.
+ */
+export const errorMessage = (caught: unknown): string => {
+  if (isStale(caught)) {
+    return t("catalog.stale");
+  }
+  return caught instanceof ApiError ? caught.message : String(caught);
+};
+
+/**
+ * Whether a caught failure is "somebody else saved this first" (ADR-0094).
+ *
+ * The recovery is always a reload, never a retry: retrying would re-apply the overwrite the refusal
+ * exists to prevent.
+ */
+export const isStale = (caught: unknown): boolean => caught instanceof ApiError && caught.isStale;
 
 /** The already-translated active/archived label. */
 export const statusLabel = (status: EntityStatus): string =>

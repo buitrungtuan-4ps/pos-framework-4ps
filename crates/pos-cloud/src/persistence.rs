@@ -2900,7 +2900,7 @@ fn parse_catalog_subcategory_id(text: &str) -> Result<ItemSubcategoryId, Catalog
         })
 }
 
-fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreError> {
+fn catalog_item_record(row: CatalogItemRow) -> Result<Versioned<CatalogItem>, CatalogStoreError> {
     let item_category_id = match row.item_category_id {
         Some(text) => Some(parse_catalog_category_id(&text)?),
         None => None,
@@ -2921,54 +2921,74 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<CatalogItem, CatalogStoreE
         .as_deref()
         .and_then(|text| text.parse::<Ulid>().ok())
         .map(MediaId::new);
-    Ok(CatalogItem {
-        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        name_translations,
-        tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
-        item_category_id,
-        item_subcategory_id,
-        image_ref,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        CatalogItem {
+            menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            name_translations,
+            tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
+            item_category_id,
+            item_subcategory_id,
+            image_ref,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn catalog_category_record(row: CatalogTaxonomyRow) -> Result<ItemCategory, CatalogStoreError> {
-    Ok(ItemCategory {
-        item_category_id: parse_catalog_category_id(&row.id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+fn catalog_category_record(
+    row: CatalogTaxonomyRow,
+) -> Result<Versioned<ItemCategory>, CatalogStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        ItemCategory {
+            item_category_id: parse_catalog_category_id(&row.id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn catalog_subcategory_record(
     row: CatalogTaxonomyRow,
-) -> Result<ItemSubcategory, CatalogStoreError> {
+) -> Result<Versioned<ItemSubcategory>, CatalogStoreError> {
     let parent = row.parent_id.ok_or_else(|| {
         CatalogStoreError::new("an item sub-category row is missing its parent category")
     })?;
-    Ok(ItemSubcategory {
-        item_subcategory_id: parse_catalog_subcategory_id(&row.id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        item_category_id: parse_catalog_category_id(&parent)?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        ItemSubcategory {
+            item_subcategory_id: parse_catalog_subcategory_id(&row.id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            item_category_id: parse_catalog_category_id(&parent)?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn catalog_tax_class_record(row: CatalogTaxClassRow) -> Result<TaxClass, CatalogStoreError> {
-    Ok(TaxClass {
-        tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+fn catalog_tax_class_record(
+    row: CatalogTaxClassRow,
+) -> Result<Versioned<TaxClass>, CatalogStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        TaxClass {
+            tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn parse_catalog_display_category(text: &str) -> Result<DisplayCategoryId, CatalogStoreError> {
@@ -2995,30 +3015,38 @@ fn parse_catalog_display_subcategory(
 
 fn catalog_display_category_record(
     row: CatalogTaxonomyRow,
-) -> Result<DisplayCategory, CatalogStoreError> {
-    Ok(DisplayCategory {
-        display_category_id: parse_catalog_display_category(&row.id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+) -> Result<Versioned<DisplayCategory>, CatalogStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        DisplayCategory {
+            display_category_id: parse_catalog_display_category(&row.id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn catalog_display_subcategory_record(
     row: CatalogTaxonomyRow,
-) -> Result<DisplaySubcategory, CatalogStoreError> {
+) -> Result<Versioned<DisplaySubcategory>, CatalogStoreError> {
     let parent = row.parent_id.ok_or_else(|| {
         CatalogStoreError::new("a display sub-category row is missing its parent category")
     })?;
-    Ok(DisplaySubcategory {
-        display_subcategory_id: parse_catalog_display_subcategory(&row.id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        display_category_id: parse_catalog_display_category(&parent)?,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        DisplaySubcategory {
+            display_subcategory_id: parse_catalog_display_subcategory(&row.id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            display_category_id: parse_catalog_display_category(&parent)?,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn catalog_layout_button_record(
@@ -3075,62 +3103,74 @@ fn parse_catalog_item_id_list(json: &str) -> Result<Vec<MenuItemId>, CatalogStor
 
 fn catalog_modifier_group_record(
     row: CatalogModifierGroupRow,
-) -> Result<ModifierGroup, CatalogStoreError> {
+) -> Result<Versioned<ModifierGroup>, CatalogStoreError> {
     let min_select = u16::try_from(row.min_select).map_err(|_ignored| {
         CatalogStoreError::new("a modifier group's min_select is out of range")
     })?;
     let max_select = u16::try_from(row.max_select).map_err(|_ignored| {
         CatalogStoreError::new("a modifier group's max_select is out of range")
     })?;
-    Ok(ModifierGroup {
-        modifier_group_id: row
-            .modifier_group_id
-            .parse::<Ulid>()
-            .map(ModifierGroupId::new)
-            .map_err(|_ignored| {
-                CatalogStoreError::new(format!(
-                    "a modifier group id is not a ULID: {}",
-                    row.modifier_group_id
-                ))
-            })?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        min_select,
-        max_select,
-        member_item_ids: parse_catalog_item_id_list(&row.member_item_ids_json)?,
-        attached_item_ids: parse_catalog_item_id_list(&row.attached_item_ids_json)?,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        ModifierGroup {
+            modifier_group_id: row
+                .modifier_group_id
+                .parse::<Ulid>()
+                .map(ModifierGroupId::new)
+                .map_err(|_ignored| {
+                    CatalogStoreError::new(format!(
+                        "a modifier group id is not a ULID: {}",
+                        row.modifier_group_id
+                    ))
+                })?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            min_select,
+            max_select,
+            member_item_ids: parse_catalog_item_id_list(&row.member_item_ids_json)?,
+            attached_item_ids: parse_catalog_item_id_list(&row.attached_item_ids_json)?,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
-fn catalog_menu_record(row: CatalogMenuRow) -> Result<Menu, CatalogStoreError> {
+fn catalog_menu_record(row: CatalogMenuRow) -> Result<Versioned<Menu>, CatalogStoreError> {
     let parent_menu_id = match row.parent_menu_id {
         Some(text) => Some(parse_catalog_menu_id(&text)?),
         None => None,
     };
-    Ok(Menu {
-        menu_id: parse_catalog_menu_id(&row.menu_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        name: row.name,
-        parent_menu_id,
-        status: EntityStatus::from_db(&row.status),
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        Menu {
+            menu_id: parse_catalog_menu_id(&row.menu_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            parent_menu_id,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn catalog_menu_section_record(
     row: CatalogMenuSectionRow,
-) -> Result<MenuSection, CatalogStoreError> {
-    Ok(MenuSection {
-        menu_section_id: parse_catalog_menu_section_id(&row.menu_section_id)?,
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        menu_id: parse_catalog_menu_id(&row.menu_id)?,
-        name: row.name,
-        sort: row.sort,
-        status: EntityStatus::from_db(&row.status),
-    })
+) -> Result<Versioned<MenuSection>, CatalogStoreError> {
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        MenuSection {
+            menu_section_id: parse_catalog_menu_section_id(&row.menu_section_id)?,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            menu_id: parse_catalog_menu_id(&row.menu_id)?,
+            name: row.name,
+            sort: row.sort,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
 }
 
 fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, CatalogStoreError> {
@@ -3154,8 +3194,18 @@ fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, 
     })
 }
 
+/// Carries the catalog adapter's conditional-write result across the seam (ADR-0094), exactly as
+/// [`registry_outcome`] does for the registry.
+fn catalog_outcome(update: RowUpdate) -> UpdateOutcome {
+    match update {
+        RowUpdate::Updated(version) => UpdateOutcome::Updated(Version::new(version)),
+        RowUpdate::VersionMismatch => UpdateOutcome::VersionMismatch,
+        RowUpdate::NotFound => UpdateOutcome::NotFound,
+    }
+}
+
 impl CatalogStore for PostgresCatalog {
-    async fn create_item(&self, item: &CatalogItem) -> Result<(), CatalogStoreError> {
+    async fn create_item(&self, item: &CatalogItem) -> Result<Version, CatalogStoreError> {
         let category = item.item_category_id.map(|id| id.to_string());
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
@@ -3172,10 +3222,14 @@ impl CatalogStore for PostgresCatalog {
             image_ref.as_deref(),
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn list_items(&self, tenant_id: TenantId) -> Result<Vec<CatalogItem>, CatalogStoreError> {
+    async fn list_items(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<CatalogItem>>, CatalogStoreError> {
         let rows = self
             .fetch_items(&tenant_id.to_string())
             .await
@@ -3183,7 +3237,11 @@ impl CatalogStore for PostgresCatalog {
         rows.into_iter().map(catalog_item_record).collect()
     }
 
-    async fn update_item(&self, item: &CatalogItem) -> Result<bool, CatalogStoreError> {
+    async fn update_item(
+        &self,
+        item: &CatalogItem,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         let category = item.item_category_id.map(|id| id.to_string());
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
@@ -3199,25 +3257,28 @@ impl CatalogStore for PostgresCatalog {
             subcategory.as_deref(),
             image_ref.as_deref(),
             item.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<(), CatalogStoreError> {
+    async fn create_tax_class(&self, tax_class: &TaxClass) -> Result<Version, CatalogStoreError> {
         self.insert_tax_class(
             &tax_class.tax_class_id.to_string(),
             &tax_class.tenant_id.to_string(),
             &tax_class.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_tax_classes(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<TaxClass>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<TaxClass>>, CatalogStoreError> {
         let rows = self
             .fetch_tax_classes(&tenant_id.to_string())
             .await
@@ -3225,31 +3286,41 @@ impl CatalogStore for PostgresCatalog {
         rows.into_iter().map(catalog_tax_class_record).collect()
     }
 
-    async fn update_tax_class(&self, tax_class: &TaxClass) -> Result<bool, CatalogStoreError> {
+    async fn update_tax_class(
+        &self,
+        tax_class: &TaxClass,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_tax_class(
             &tax_class.tenant_id.to_string(),
             &tax_class.tax_class_id.to_string(),
             &tax_class.name,
             tax_class.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn create_item_category(&self, category: &ItemCategory) -> Result<(), CatalogStoreError> {
+    async fn create_item_category(
+        &self,
+        category: &ItemCategory,
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_item_category(
             &category.item_category_id.to_string(),
             &category.tenant_id.to_string(),
             &category.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_item_categories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ItemCategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ItemCategory>>, CatalogStoreError> {
         let rows = self
             .fetch_item_categories(&tenant_id.to_string())
             .await
@@ -3260,21 +3331,24 @@ impl CatalogStore for PostgresCatalog {
     async fn update_item_category(
         &self,
         category: &ItemCategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_item_category(
             &category.tenant_id.to_string(),
             &category.item_category_id.to_string(),
             &category.name,
             category.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn create_item_subcategory(
         &self,
         subcategory: &ItemSubcategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_item_subcategory(
             &subcategory.item_subcategory_id.to_string(),
             &subcategory.tenant_id.to_string(),
@@ -3282,13 +3356,14 @@ impl CatalogStore for PostgresCatalog {
             &subcategory.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_item_subcategories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ItemSubcategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ItemSubcategory>>, CatalogStoreError> {
         let rows = self
             .fetch_item_subcategories(&tenant_id.to_string())
             .await
@@ -3299,35 +3374,39 @@ impl CatalogStore for PostgresCatalog {
     async fn update_item_subcategory(
         &self,
         subcategory: &ItemSubcategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_item_subcategory(
             &subcategory.tenant_id.to_string(),
             &subcategory.item_subcategory_id.to_string(),
             &subcategory.item_category_id.to_string(),
             &subcategory.name,
             subcategory.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn create_display_category(
         &self,
         category: &DisplayCategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_display_category(
             &category.display_category_id.to_string(),
             &category.tenant_id.to_string(),
             &category.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_display_categories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<DisplayCategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<DisplayCategory>>, CatalogStoreError> {
         let rows = self
             .fetch_display_categories(&tenant_id.to_string())
             .await
@@ -3340,21 +3419,24 @@ impl CatalogStore for PostgresCatalog {
     async fn update_display_category(
         &self,
         category: &DisplayCategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_display_category(
             &category.tenant_id.to_string(),
             &category.display_category_id.to_string(),
             &category.name,
             category.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn create_display_subcategory(
         &self,
         subcategory: &DisplaySubcategory,
-    ) -> Result<(), CatalogStoreError> {
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_display_subcategory(
             &subcategory.display_subcategory_id.to_string(),
             &subcategory.tenant_id.to_string(),
@@ -3362,13 +3444,14 @@ impl CatalogStore for PostgresCatalog {
             &subcategory.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_display_subcategories(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<DisplaySubcategory>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<DisplaySubcategory>>, CatalogStoreError> {
         let rows = self
             .fetch_display_subcategories(&tenant_id.to_string())
             .await
@@ -3381,15 +3464,18 @@ impl CatalogStore for PostgresCatalog {
     async fn update_display_subcategory(
         &self,
         subcategory: &DisplaySubcategory,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_display_subcategory(
             &subcategory.tenant_id.to_string(),
             &subcategory.display_subcategory_id.to_string(),
             &subcategory.display_category_id.to_string(),
             &subcategory.name,
             subcategory.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3436,7 +3522,10 @@ impl CatalogStore for PostgresCatalog {
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn create_modifier_group(&self, group: &ModifierGroup) -> Result<(), CatalogStoreError> {
+    async fn create_modifier_group(
+        &self,
+        group: &ModifierGroup,
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_modifier_group(
             &group.modifier_group_id.to_string(),
             &group.tenant_id.to_string(),
@@ -3447,13 +3536,14 @@ impl CatalogStore for PostgresCatalog {
             &item_id_list_json(&group.attached_item_ids)?,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_modifier_groups(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ModifierGroup>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<ModifierGroup>>, CatalogStoreError> {
         let rows = self
             .fetch_modifier_groups(&tenant_id.to_string())
             .await
@@ -3466,7 +3556,8 @@ impl CatalogStore for PostgresCatalog {
     async fn update_modifier_group(
         &self,
         group: &ModifierGroup,
-    ) -> Result<bool, CatalogStoreError> {
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_modifier_group(
             &group.tenant_id.to_string(),
             &group.modifier_group_id.to_string(),
@@ -3476,12 +3567,14 @@ impl CatalogStore for PostgresCatalog {
             &item_id_list_json(&group.member_item_ids)?,
             &item_id_list_json(&group.attached_item_ids)?,
             group.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn create_menu(&self, menu: &Menu) -> Result<(), CatalogStoreError> {
+    async fn create_menu(&self, menu: &Menu) -> Result<Version, CatalogStoreError> {
         let parent = menu.parent_menu_id.map(|id| id.to_string());
         self.insert_menu(
             &menu.menu_id.to_string(),
@@ -3490,10 +3583,14 @@ impl CatalogStore for PostgresCatalog {
             parent.as_deref(),
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn list_menus(&self, tenant_id: TenantId) -> Result<Vec<Menu>, CatalogStoreError> {
+    async fn list_menus(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<Menu>>, CatalogStoreError> {
         let rows = self
             .fetch_menus(&tenant_id.to_string())
             .await
@@ -3501,7 +3598,11 @@ impl CatalogStore for PostgresCatalog {
         rows.into_iter().map(catalog_menu_record).collect()
     }
 
-    async fn update_menu(&self, menu: &Menu) -> Result<bool, CatalogStoreError> {
+    async fn update_menu(
+        &self,
+        menu: &Menu,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         let parent = menu.parent_menu_id.map(|id| id.to_string());
         self.set_menu(
             &menu.tenant_id.to_string(),
@@ -3509,12 +3610,17 @@ impl CatalogStore for PostgresCatalog {
             &menu.name,
             parent.as_deref(),
             menu.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn create_menu_section(&self, section: &MenuSection) -> Result<(), CatalogStoreError> {
+    async fn create_menu_section(
+        &self,
+        section: &MenuSection,
+    ) -> Result<Version, CatalogStoreError> {
         self.insert_menu_section(
             &section.menu_section_id.to_string(),
             &section.tenant_id.to_string(),
@@ -3523,6 +3629,7 @@ impl CatalogStore for PostgresCatalog {
             section.sort,
         )
         .await
+        .map(Version::new)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3530,7 +3637,7 @@ impl CatalogStore for PostgresCatalog {
         &self,
         tenant_id: TenantId,
         menu_id: MenuId,
-    ) -> Result<Vec<MenuSection>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<MenuSection>>, CatalogStoreError> {
         let rows = self
             .fetch_menu_sections(&tenant_id.to_string(), &menu_id.to_string())
             .await
@@ -3538,15 +3645,21 @@ impl CatalogStore for PostgresCatalog {
         rows.into_iter().map(catalog_menu_section_record).collect()
     }
 
-    async fn update_menu_section(&self, section: &MenuSection) -> Result<bool, CatalogStoreError> {
+    async fn update_menu_section(
+        &self,
+        section: &MenuSection,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
         self.set_menu_section(
             &section.tenant_id.to_string(),
             &section.menu_section_id.to_string(),
             &section.name,
             section.sort,
             section.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(catalog_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
