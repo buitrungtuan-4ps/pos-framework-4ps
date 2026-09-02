@@ -23,8 +23,10 @@ use pos_proto::wire_enum::WireEnum;
 /// An enum rather than a string so metrics, the error mailbox, and the per-adapter
 /// latency charts required by `docs/roadmap.md` P11 can partition by port without
 /// matching text. The list is fixed by
-/// [ADR-0021](../../../docs/adr/0021-corrected-port-list.md); an eighteenth variant
-/// needs an ADR first.
+/// [ADR-0021](../../../docs/adr/0021-corrected-port-list.md) as amended by
+/// [ADR-0053](../../../docs/adr/0053-cloud-sync-port.md) (`CloudSync`, the seventeenth) and
+/// [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md) (`DeviceRegistry`, the
+/// eighteenth); a nineteenth variant needs an ADR first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum PortName {
@@ -62,6 +64,8 @@ pub enum PortName {
     OrderIn,
     /// [`crate::CloudSync`].
     CloudSync,
+    /// [`crate::DeviceRegistry`].
+    DeviceRegistry,
 }
 
 impl PortName {
@@ -87,6 +91,7 @@ impl PortName {
         Self::ErpSink,
         Self::OrderIn,
         Self::CloudSync,
+        Self::DeviceRegistry,
     ];
 
     /// The port's name in `snake_case`, for metric labels and log fields.
@@ -113,6 +118,7 @@ impl PortName {
             Self::ErpSink => "erp_sink",
             Self::OrderIn => "order_in",
             Self::CloudSync => "cloud_sync",
+            Self::DeviceRegistry => "device_registry",
         }
     }
 }
@@ -327,8 +333,11 @@ mod tests {
     }
 
     #[test]
-    fn the_port_list_is_the_seventeen_from_adr_0021() {
-        assert_eq!(PortName::ALL.len(), 17);
+    fn the_port_list_is_the_eighteen_adr_0021_and_its_amendments_name() {
+        // Sixteen from ADR-0021, plus `CloudSync` (ADR-0053) and `DeviceRegistry` (ADR-0091).
+        // The number is asserted rather than described so that adding a port without its ADR,
+        // its suite and its row in `docs/architecture.md` §5 fails here first.
+        assert_eq!(PortName::ALL.len(), 18);
     }
 
     #[test]

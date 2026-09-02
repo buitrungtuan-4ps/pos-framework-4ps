@@ -17,6 +17,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **`DeviceRegistry` — the eighteenth port, so pairing and sign-in can survive a restart**
+  ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md), roadmap v3 slice **S0d-1**). The port half
+  of S0d: the trait, its contract suite, the fake, and the real `store-sqlite` adapter with an
+  additive migration. **No behaviour change in `pos-edge` yet** — the edge still keeps both tables
+  in process memory until S0d-2 wires this in. Split the way `CloudSync` was
+  ([ADR-0053](docs/adr/0053-cloud-sync-port.md): port+suite+fake, then adapter, then edge wiring),
+  because the port and the wiring fail in different ways and reviewing them together hides both.
+
+  **The port never receives a device token.** It takes a `TokenDigest` — a SHA-256, computed by the
+  caller — so an implementation cannot leak a credential it was never handed, and a stolen `pos.db`
+  yields digests, which cannot be presented to the gate. `TokenDigest`'s hex encoding is hand-rolled
+  because `pos-ports` is backbone and carries no hash dependency; the hashing itself belongs where
+  the token already exists.
+
+  **The idle timeout is deliberately not in the port.** It stores `last_seen_at` and hands the
+  session back; the caller decides expiry. So the rule is one pure comparison tested without a
+  database, and every adapter behaves identically because none of them knows it. What the suite
+  *does* pin is that `touch_session` actually moves the stored instant — a timeout reading a value
+  nothing updates would expire every session on schedule regardless of use.
+
+  Thirteen contract cases, passing against **both** the in-memory fake and real SQLite, so
+  "swappable" is checked rather than claimed. The two that matter most are about the tables
+  *disagreeing* rather than either one working: revoking a device must clear its sign-in (a session
+  belonging to no paired device is unreachable state a later feature could read as live), and a
+  revoked token must stop resolving (an implementation that stores but never forgets would pass
+  every other case and still be unusable). `FakeDeviceRegistry` keeps two maps rather than one so
+  the first of those has something real to get wrong.
+
+  **Migration:** additive `0005_device_registry.sql` — two tables, nothing renamed or removed. An
+  upgrading store starts with both empty, which is exactly today's post-restart state, so the
+  upgrade needs no special step and cannot be worse than the status quo. `ON DELETE CASCADE`
+  documents the revoke invariant and the adapter also deletes the session explicitly inside one
+  transaction, because the cascade depends on a `PRAGMA` and the invariant should not.
+
+  **Port-list bookkeeping**, following the pattern ADR-0053 set: `PortName::DeviceRegistry`,
+  `docs/architecture.md` §5 gains a row and now reads *eighteen*, and `pos-contract-tests`' registry
+  gains the suite the `every_port_has_a_suite` gate requires.
 - **The ADR index is complete again, and records ADR-0091** (`docs/adr/README.md`). The table stopped
   at 0066 and was **25 records behind** — every decision from the multi-admin console (0067) through
   the TLS postures (0090) existed as a file and was reachable only by guessing its filename. For a

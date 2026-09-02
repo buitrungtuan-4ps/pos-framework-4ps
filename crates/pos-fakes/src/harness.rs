@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Harness implementations, so `tests/contract.rs` can run all seventeen suites.
+//! Harness implementations, so `tests/contract.rs` can run all eighteen suites.
 //!
 //! Each one is thin, and that is the point: the destructive operations a suite needs — losing power,
 //! severing a link, emptying a paper roll, staging an ambiguous card result — are methods on the
@@ -15,9 +15,10 @@
 
 use pos_contract_tests::harness::{
     BlobStoreHarness, ClockSourceHarness, CloudSyncHarness, ConfigStoreHarness,
-    DeliveryVendorHarness, ErpSinkHarness, EventStoreHarness, FiscalizationHarness, HarnessError,
-    IdGeneratorHarness, KeyVaultHarness, MessageLinkHarness, MetricsSinkHarness, OrderInHarness,
-    PaymentTerminalHarness, PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
+    DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
+    FiscalizationHarness, HarnessError, IdGeneratorHarness, KeyVaultHarness, MessageLinkHarness,
+    MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness, PrinterDriverHarness, Setup,
+    ShippingDispatchHarness, SignerHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -30,7 +31,8 @@ use pos_proto::{
 use crate::determinism::{FakeClock, FakeIdGenerator};
 use crate::devices::{FakePaymentTerminal, FakePrinter};
 use crate::infra::{
-    FakeBlobStore, FakeCloudSync, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner,
+    FakeBlobStore, FakeCloudSync, FakeDeviceRegistry, FakeKeyVault, FakeLink, FakeMetricsSink,
+    FakeSigner,
 };
 use crate::store::FakeStore;
 use crate::vendors::{
@@ -179,6 +181,18 @@ impl KeyVaultHarness for VaultHarness {
 
     async fn fresh(&self) -> Setup<Self::Vault> {
         Ok(FakeKeyVault::new())
+    }
+}
+
+/// Harness for [`FakeDeviceRegistry`].
+#[derive(Debug, Default)]
+pub struct RegistryHarness;
+
+impl DeviceRegistryHarness for RegistryHarness {
+    type Registry = FakeDeviceRegistry;
+
+    async fn fresh(&self) -> Setup<Self::Registry> {
+        Ok(FakeDeviceRegistry::new())
     }
 }
 

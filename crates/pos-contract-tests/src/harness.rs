@@ -41,9 +41,9 @@ use core::fmt;
 use core::future::Future;
 
 use pos_ports::{
-    BlobStore, CloudSync, ConfigStore, DeliveryVendor, ErpSink, EventStore, Fiscalization,
-    KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver, ShippingDispatch,
-    Signer, UpdateReport,
+    BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
+    Fiscalization, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal, PrinterDriver,
+    ShippingDispatch, Signer, UpdateReport,
 };
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
@@ -199,6 +199,18 @@ pub trait KeyVaultHarness: Send + Sync {
 
     /// A vault holding nothing.
     fn fresh(&self) -> impl Future<Output = Setup<Self::Vault>> + Send;
+}
+
+/// Supplies a fresh [`DeviceRegistry`] holding no device and no sign-in.
+///
+/// The empty state is the interesting starting point: it is both a store's first boot and — before
+/// [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md) — what every restart produced.
+pub trait DeviceRegistryHarness: Send + Sync {
+    /// The implementation under test.
+    type Registry: DeviceRegistry;
+
+    /// A registry with nothing paired and nobody signed in.
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Registry>> + Send;
 }
 
 /// Supplies a fresh [`CloudSync`] seeded with one recognised activation and one published release.

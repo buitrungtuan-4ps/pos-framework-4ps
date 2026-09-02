@@ -92,8 +92,11 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 | `DeliveryVendor` / `ShippingDispatch` / `ErpSink` | Marketplaces, couriers, ERP | per vendor |
 | `OrderIn` | Inbound orders from outside the store | marketplaces, `POST /v1/orders`, QR ordering |
 | `CloudSync` | Store→cloud request/response: activation exchange, OTA artifact fetch | HTTP to the cloud |
+| `DeviceRegistry` | Which devices a store has admitted, and who is signed in on each | SQLite (edge-local) |
 
-The list above is authoritative and counts **seventeen** ports. [ADR-0006](adr/0006-ports-and-adapters.md) named fifteen: it omitted `OrderIn`, which [ADR-0012](adr/0012-qr-ordering-via-cloud.md) depends on, and [ADR-0021](adr/0021-corrected-port-list.md) supersedes it with sixteen. [ADR-0053](adr/0053-cloud-sync-port.md) adds the seventeenth, `CloudSync`, for the store↔cloud calls that need an answer back — distinct from `MessageLink`, which stays outbound-only so the store still sells offline.
+The list above is authoritative and counts **eighteen** ports. [ADR-0006](adr/0006-ports-and-adapters.md) named fifteen: it omitted `OrderIn`, which [ADR-0012](adr/0012-qr-ordering-via-cloud.md) depends on, and [ADR-0021](adr/0021-corrected-port-list.md) supersedes it with sixteen. [ADR-0053](adr/0053-cloud-sync-port.md) adds the seventeenth, `CloudSync`, for the store↔cloud calls that need an answer back — distinct from `MessageLink`, which stays outbound-only so the store still sells offline. [ADR-0091](adr/0091-durable-edge-auth-state.md) adds the eighteenth, `DeviceRegistry`, so that pairing and sign-in survive a restart instead of being erased by one; it stores a SHA-256 of each device token and never the token.
+
+**One known discrepancy, recorded rather than papered over.** `IntakeLedger` ([ADR-0064](adr/0064-edge-order-in.md)) is a trait in `pos-ports` that its own record calls a port, and it is *not* in the table above, has no `PortName` variant, and has no contract suite — it reports failures under `PortName::OrderIn`. It escaped the "every port has a suite" gate because that gate iterates `PortName::ALL`, so a trait added without a variant is invisible to it. Giving it a variant, a suite and a row is its own change.
 
 **Dependency rule, enforced by a CI test:** `pos-core` and `pos-ports` may depend only on `std`, `serde`, and pure computation crates. Adapters depend on core; core never depends on an adapter. Only the binaries know which adapters are wired in.
 

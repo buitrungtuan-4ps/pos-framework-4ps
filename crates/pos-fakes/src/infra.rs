@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The infrastructure fakes: link, blobs, metrics, signing, secrets.
+//! The infrastructure fakes: link, blobs, metrics, signing, secrets, the device registry.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pos_ports::blob_store::{BlobKey, BlobStore};
 use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
+use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
 use pos_ports::metrics_sink::{MetricSample, MetricsSink};
@@ -17,6 +18,7 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::protocol::{Hello, HelloOutcome, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};
 use pos_proto::text::ReleaseTag;
+use pos_proto::time::Timestamp;
 use pos_proto::{PROTOCOL_VERSION, Ulid};
 
 use crate::lock;
@@ -385,6 +387,88 @@ impl KeyVault for FakeKeyVault {
 
     async fn delete(&self, name: SecretName) -> Result<(), PortError> {
         lock(&self.secrets).remove(&name);
+        Ok(())
+    }
+}
+
+// -----------------------------------------------------------------------------------------------
+// DeviceRegistry
+// -----------------------------------------------------------------------------------------------
+
+/// An in-memory `DeviceRegistry` (ADR-0091).
+///
+/// Two maps rather than one, mirroring the two tables a real adapter keeps, so that the contract
+/// case which matters most here — revoking a device must clear its sign-in — has something real to
+/// get wrong. A single map keyed by device would make that case pass by construction and prove
+/// nothing.
+#[derive(Debug, Clone, Default)]
+pub struct FakeDeviceRegistry {
+    paired: Arc<Mutex<BTreeMap<DeviceId, PairedDevice>>>,
+    sessions: Arc<Mutex<BTreeMap<DeviceId, DeviceSession>>>,
+}
+
+impl FakeDeviceRegistry {
+    /// A registry with nothing paired and nobody signed in — a store's first boot.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl DeviceRegistry for FakeDeviceRegistry {
+    async fn record_pairing(&self, device: PairedDevice) -> Result<(), PortError> {
+        lock(&self.paired).insert(device.device_id, device);
+        Ok(())
+    }
+
+    async fn device_for_token(&self, digest: TokenDigest) -> Result<Option<DeviceId>, PortError> {
+        Ok(lock(&self.paired)
+            .values()
+            .find(|device| device.token_digest == digest)
+            .map(|device| device.device_id))
+    }
+
+    async fn paired_devices(&self) -> Result<Vec<PairedDevice>, PortError> {
+        Ok(lock(&self.paired).values().copied().collect())
+    }
+
+    async fn revoke_device(&self, device_id: DeviceId) -> Result<(), PortError> {
+        lock(&self.paired).remove(&device_id);
+        // Both tables, always: a session belonging to no paired device is unreachable state.
+        lock(&self.sessions).remove(&device_id);
+        Ok(())
+    }
+
+    async fn revoke_all_devices(&self) -> Result<(), PortError> {
+        lock(&self.paired).clear();
+        lock(&self.sessions).clear();
+        Ok(())
+    }
+
+    async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {
+        lock(&self.sessions).insert(session.device_id, session);
+        Ok(())
+    }
+
+    async fn sign_in_for(&self, device_id: DeviceId) -> Result<Option<DeviceSession>, PortError> {
+        Ok(lock(&self.sessions).get(&device_id).copied())
+    }
+
+    async fn sign_ins(&self) -> Result<Vec<DeviceSession>, PortError> {
+        Ok(lock(&self.sessions).values().copied().collect())
+    }
+
+    async fn touch_session(&self, device_id: DeviceId, now: Timestamp) -> Result<(), PortError> {
+        // Only an existing session moves. Touching must never *create* one, or a touch would be a
+        // way to sign a device in.
+        if let Some(session) = lock(&self.sessions).get_mut(&device_id) {
+            session.last_seen_at = now;
+        }
+        Ok(())
+    }
+
+    async fn clear_sign_in(&self, device_id: DeviceId) -> Result<(), PortError> {
+        lock(&self.sessions).remove(&device_id);
         Ok(())
     }
 }

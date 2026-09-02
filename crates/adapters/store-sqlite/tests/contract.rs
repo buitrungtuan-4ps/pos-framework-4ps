@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `store-sqlite` against the shared `EventStore` and `ConfigStore` contract suites.
+//! `store-sqlite` against the shared `EventStore`, `ConfigStore` and `DeviceRegistry` contract
+//! suites.
 //!
 //! The same cases that run against the in-memory fake run here, unchanged — including
 //! crash-mid-transaction, which the harness drives by reopening the database file without a clean
@@ -23,7 +24,9 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pos_contract_tests::harness::{ConfigStoreHarness, EventStoreHarness, HarnessError, Setup};
+use pos_contract_tests::harness::{
+    ConfigStoreHarness, DeviceRegistryHarness, EventStoreHarness, HarnessError, Setup,
+};
 use pos_proto::{StoreId, Ulid};
 use store_sqlite::SqliteStore;
 use tempfile::TempDir;
@@ -102,9 +105,24 @@ impl ConfigStoreHarness for StoreHarness {
     }
 }
 
+impl DeviceRegistryHarness for StoreHarness {
+    type Registry = SqliteStore;
+
+    async fn fresh(&self) -> Setup<SqliteStore> {
+        // A fresh file, so the registry starts with nothing paired — a store's first boot, and
+        // (before ADR-0091) what every restart produced.
+        Self::open(self.next_path())
+    }
+}
+
 mod event_store {
     use super::{StoreHarness, block_on};
     pos_contract_tests::event_store_suite!(StoreHarness::new(), block_on);
+}
+
+mod device_registry {
+    use super::{StoreHarness, block_on};
+    pos_contract_tests::device_registry_suite!(StoreHarness::new(), block_on);
 }
 
 mod config_store {

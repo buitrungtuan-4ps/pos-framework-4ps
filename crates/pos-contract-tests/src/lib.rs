@@ -56,6 +56,7 @@ pub mod cloud_sync;
 pub mod config_store;
 pub mod delivery;
 pub mod determinism;
+pub mod device_registry;
 pub mod erp;
 pub mod event_store;
 pub mod fiscalization;
@@ -82,6 +83,8 @@ pub const __PORT_CLOUD_SYNC: PortName = PortName::CloudSync;
 pub const __PORT_CONFIG_STORE: PortName = PortName::ConfigStore;
 #[doc(hidden)]
 pub const __PORT_DELIVERY_VENDOR: PortName = PortName::DeliveryVendor;
+#[doc(hidden)]
+pub const __PORT_DEVICE_REGISTRY: PortName = PortName::DeviceRegistry;
 #[doc(hidden)]
 pub const __PORT_ERP_SINK: PortName = PortName::ErpSink;
 #[doc(hidden)]
@@ -368,7 +371,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Seventeen entries, matching `PortName::ALL`.
+/// Eighteen entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -387,6 +390,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::ErpSink, "erp_sink_suite"),
     (PortName::OrderIn, "order_in_suite"),
     (PortName::CloudSync, "cloud_sync_suite"),
+    (PortName::DeviceRegistry, "device_registry_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.
@@ -452,8 +456,14 @@ mod tests {
 
     #[test]
     fn every_port_has_a_suite() {
-        // P2's exit criterion, checked rather than asserted in prose. A seventeenth port needs an
-        // ADR (ADR-0021), and this is what makes it also need a suite.
+        // P2's exit criterion, checked rather than asserted in prose. A new port needs an ADR
+        // (ADR-0021), and this is what makes it also need a suite.
+        //
+        // Note the limit of this guard, so nobody reads more into it than it says: it iterates
+        // `PortName::ALL`, so it can only see ports that were given a `PortName` variant. A trait
+        // added to `pos-ports` without one escapes it entirely — which is how `IntakeLedger`
+        // (ADR-0064) came to be a port with no variant, no suite, and no row in
+        // `docs/architecture.md` §5.
         for port in PortName::ALL {
             assert!(
                 SUITES.iter().any(|(named, _)| named == port),

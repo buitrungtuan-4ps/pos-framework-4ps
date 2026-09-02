@@ -35,6 +35,28 @@ pub(crate) struct IntakeWrite {
     pub(crate) record_json: String,
 }
 
+/// A device-registry row in the writer thread's own terms (ADR-0091).
+///
+/// Ids and the digest arrive already rendered as text and the instants as milliseconds, so this
+/// thread stays free of `pos_ports` and `pos_proto` types — the same reason [`IntakeWrite`] carries
+/// pre-serialised JSON. The digest is a SHA-256 of the device token computed by the caller; the
+/// token itself never reaches this file.
+#[derive(Debug)]
+pub(crate) struct PairedDeviceRow {
+    pub(crate) device_id: String,
+    pub(crate) token_digest: String,
+    pub(crate) paired_at_ms: i64,
+}
+
+/// A sign-in row, likewise.
+#[derive(Debug)]
+pub(crate) struct DeviceSessionRow {
+    pub(crate) device_id: String,
+    pub(crate) employee_id: String,
+    pub(crate) signed_in_at_ms: i64,
+    pub(crate) last_seen_at_ms: i64,
+}
+
 /// A unit of work for the writer thread. Every variant carries the channel its result returns on.
 pub(crate) enum Command {
     /// Flush a transaction's buffered events, config update, and intake row in one SQLite
@@ -106,6 +128,58 @@ pub(crate) enum Command {
         sales_channel: String,
         external_reference: String,
         reply: oneshot::Sender<Result<Option<String>, PortError>>,
+    },
+    /// Anything in the device registry (ADR-0091), grouped because it is a distinct concern from
+    /// the event store and keeps this enum's dispatch readable.
+    Registry(RegistryCommand),
+}
+
+/// A device-registry unit of work (ADR-0091).
+#[derive(Debug)]
+pub(crate) enum RegistryCommand {
+    /// Record (or replace) a paired device.
+    RecordPairing {
+        device: PairedDeviceRow,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// The device a token digest was issued to.
+    DeviceForDigest {
+        token_digest: String,
+        reply: oneshot::Sender<Result<Option<String>, PortError>>,
+    },
+    /// Every paired device.
+    PairedDevices {
+        reply: oneshot::Sender<Result<Vec<PairedDeviceRow>, PortError>>,
+    },
+    /// Retire one device, or — with `device_id` absent — every device.
+    RevokeDevices {
+        device_id: Option<String>,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// Record (or replace) a sign-in.
+    RecordSignIn {
+        session: DeviceSessionRow,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// The sign-in on one device.
+    SignInFor {
+        device_id: String,
+        reply: oneshot::Sender<Result<Option<DeviceSessionRow>, PortError>>,
+    },
+    /// Every sign-in.
+    SignIns {
+        reply: oneshot::Sender<Result<Vec<DeviceSessionRow>, PortError>>,
+    },
+    /// Move a device's `last_seen_at` forward. A no-op when it has no session.
+    TouchSession {
+        device_id: String,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// End the sign-in on one device.
+    ClearSignIn {
+        device_id: String,
+        reply: oneshot::Sender<Result<(), PortError>>,
     },
 }
 
@@ -196,6 +270,48 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     &external_reference,
                 ));
             }
+            Command::Registry(command) => run_registry(&mut conn, command),
+        }
+    }
+}
+
+/// Dispatches one device-registry command. Separate from [`run`] so neither match grows past the
+/// line budget, and because the two concerns share nothing but the connection.
+fn run_registry(conn: &mut Connection, command: RegistryCommand) {
+    match command {
+        RegistryCommand::RecordPairing { device, reply } => {
+            let _ = reply.send(record_pairing(conn, &device));
+        }
+        RegistryCommand::DeviceForDigest {
+            token_digest,
+            reply,
+        } => {
+            let _ = reply.send(device_for_digest(conn, &token_digest));
+        }
+        RegistryCommand::PairedDevices { reply } => {
+            let _ = reply.send(paired_devices(conn));
+        }
+        RegistryCommand::RevokeDevices { device_id, reply } => {
+            let _ = reply.send(revoke_devices(conn, device_id.as_deref()));
+        }
+        RegistryCommand::RecordSignIn { session, reply } => {
+            let _ = reply.send(record_sign_in(conn, &session));
+        }
+        RegistryCommand::SignInFor { device_id, reply } => {
+            let _ = reply.send(sign_in_for(conn, &device_id));
+        }
+        RegistryCommand::SignIns { reply } => {
+            let _ = reply.send(sign_ins(conn));
+        }
+        RegistryCommand::TouchSession {
+            device_id,
+            now_ms,
+            reply,
+        } => {
+            let _ = reply.send(touch_session(conn, &device_id, now_ms));
+        }
+        RegistryCommand::ClearSignIn { device_id, reply } => {
+            let _ = reply.send(clear_sign_in(conn, &device_id));
         }
     }
 }
@@ -574,6 +690,169 @@ fn look_up_intake(
     )
     .optional()
     .map_err(|error| db_error(port, error))
+}
+
+// -----------------------------------------------------------------------------------------------
+// The device registry (ADR-0091). Every function here is unconditional-write or plain read: the
+// idle timeout is the caller's rule, so nothing below knows it exists.
+// -----------------------------------------------------------------------------------------------
+
+/// The port these functions report failures under, so a registry fault is not attributed to
+/// whichever port happens to sit nearby in a metric label.
+const REGISTRY: PortName = PortName::DeviceRegistry;
+
+fn record_pairing(conn: &Connection, device: &PairedDeviceRow) -> Result<(), PortError> {
+    // Replace on either key. `device_id` is the primary key, and `token_digest` is UNIQUE — a
+    // re-pair of the same device mints a fresh token, so the old digest row has to go or the
+    // UNIQUE constraint refuses the insert. Deleting by digest first also covers the (impossible
+    // in practice, 128 bits) case of a digest arriving for a different device.
+    conn.execute(
+        "DELETE FROM paired_devices WHERE token_digest = ?1",
+        params![&device.token_digest],
+    )
+    .map_err(|error| db_error(REGISTRY, error))?;
+    conn.execute(
+        "INSERT INTO paired_devices (device_id, token_digest, paired_at_ms)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (device_id) DO UPDATE SET
+             token_digest = excluded.token_digest,
+             paired_at_ms = excluded.paired_at_ms",
+        params![&device.device_id, &device.token_digest, device.paired_at_ms],
+    )
+    .map(|_| ())
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn device_for_digest(conn: &Connection, token_digest: &str) -> Result<Option<String>, PortError> {
+    conn.query_row(
+        "SELECT device_id FROM paired_devices WHERE token_digest = ?1",
+        params![token_digest],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn paired_devices(conn: &Connection) -> Result<Vec<PairedDeviceRow>, PortError> {
+    let mut statement = conn
+        .prepare("SELECT device_id, token_digest, paired_at_ms FROM paired_devices")
+        .map_err(|error| db_error(REGISTRY, error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(PairedDeviceRow {
+                device_id: row.get(0)?,
+                token_digest: row.get(1)?,
+                paired_at_ms: row.get(2)?,
+            })
+        })
+        .map_err(|error| db_error(REGISTRY, error))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| db_error(REGISTRY, error))
+}
+
+/// Retires one device, or every device when `device_id` is `None`.
+///
+/// Both tables, in one transaction. `ON DELETE CASCADE` in migration 0005 says the same thing, and
+/// the session delete is issued explicitly anyway: a session belonging to no paired device is
+/// unreachable state a later feature could read as live, and that must not depend on a `PRAGMA`
+/// being set. The transaction is what makes the pair atomic — a crash between them would leave
+/// exactly the disagreement this guards against.
+fn revoke_devices(conn: &mut Connection, device_id: Option<&str>) -> Result<(), PortError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error(REGISTRY, error))?;
+    // `?1 IS NULL OR device_id = ?1` makes revoke-all the *same* statement as revoke-one, so there
+    // is one code path rather than two that could drift — and the break-glass cannot end up
+    // clearing one table while the single-device case clears both.
+    for sql in [
+        "DELETE FROM device_sessions WHERE ?1 IS NULL OR device_id = ?1",
+        "DELETE FROM paired_devices WHERE ?1 IS NULL OR device_id = ?1",
+    ] {
+        tx.execute(sql, params![device_id])
+            .map_err(|error| db_error(REGISTRY, error))?;
+    }
+    tx.commit().map_err(|error| db_error(REGISTRY, error))
+}
+
+fn record_sign_in(conn: &Connection, session: &DeviceSessionRow) -> Result<(), PortError> {
+    conn.execute(
+        "INSERT INTO device_sessions
+             (device_id, employee_id, signed_in_at_ms, last_seen_at_ms)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (device_id) DO UPDATE SET
+             employee_id     = excluded.employee_id,
+             signed_in_at_ms = excluded.signed_in_at_ms,
+             last_seen_at_ms = excluded.last_seen_at_ms",
+        params![
+            &session.device_id,
+            &session.employee_id,
+            session.signed_in_at_ms,
+            session.last_seen_at_ms
+        ],
+    )
+    .map(|_| ())
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn sign_in_for(conn: &Connection, device_id: &str) -> Result<Option<DeviceSessionRow>, PortError> {
+    conn.query_row(
+        "SELECT device_id, employee_id, signed_in_at_ms, last_seen_at_ms
+         FROM device_sessions WHERE device_id = ?1",
+        params![device_id],
+        |row| {
+            Ok(DeviceSessionRow {
+                device_id: row.get(0)?,
+                employee_id: row.get(1)?,
+                signed_in_at_ms: row.get(2)?,
+                last_seen_at_ms: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn sign_ins(conn: &Connection) -> Result<Vec<DeviceSessionRow>, PortError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT device_id, employee_id, signed_in_at_ms, last_seen_at_ms FROM device_sessions",
+        )
+        .map_err(|error| db_error(REGISTRY, error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(DeviceSessionRow {
+                device_id: row.get(0)?,
+                employee_id: row.get(1)?,
+                signed_in_at_ms: row.get(2)?,
+                last_seen_at_ms: row.get(3)?,
+            })
+        })
+        .map_err(|error| db_error(REGISTRY, error))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| db_error(REGISTRY, error))
+}
+
+/// Moves `last_seen_at` forward on an existing session only.
+///
+/// An `UPDATE` that matches no row affects nothing and reports success, which is exactly the
+/// contract: the gate touches on every request, including one racing a sign-out, and a touch must
+/// never *create* a session — that would make touching a way to sign a device in.
+fn touch_session(conn: &Connection, device_id: &str, now_ms: i64) -> Result<(), PortError> {
+    conn.execute(
+        "UPDATE device_sessions SET last_seen_at_ms = ?2 WHERE device_id = ?1",
+        params![device_id, now_ms],
+    )
+    .map(|_| ())
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn clear_sign_in(conn: &Connection, device_id: &str) -> Result<(), PortError> {
+    conn.execute(
+        "DELETE FROM device_sessions WHERE device_id = ?1",
+        params![device_id],
+    )
+    .map(|_| ())
+    .map_err(|error| db_error(REGISTRY, error))
 }
 
 fn snapshot(

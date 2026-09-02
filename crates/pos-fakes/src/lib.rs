@@ -48,7 +48,8 @@ pub use determinism::{FakeClock, FakeIdGenerator};
 pub use devices::{FakePaymentTerminal, FakePrinter};
 pub use executor::run_ready;
 pub use infra::{
-    FakeBlobStore, FakeCloudSync, FakeKeyVault, FakeLink, FakeMetricsSink, FakeSigner,
+    FakeBlobStore, FakeCloudSync, FakeDeviceRegistry, FakeKeyVault, FakeLink, FakeMetricsSink,
+    FakeSigner,
 };
 pub use store::{FakeStore, FakeTx};
 pub use vendors::{FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping};

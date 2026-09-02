@@ -91,6 +91,17 @@ first real store.
   `pos.db` yields no working credential; revocation becomes explicit, because a restart stops being
   the accidental revocation; and **both** tables survive a restart, with a 30-minute
   `sign_in_idle_timeout` carrying the risk that durable sign-in creates.
+
+  Split in two, the way [ADR-0053](adr/0053-cloud-sync-port.md)'s `CloudSync` was (port+suite+fake,
+  then adapter, then edge wiring):
+  - **S0d-1 — the port. Done.** `DeviceRegistry` in `pos-ports` with `TokenDigest` (hand-rolled hex,
+    because `pos-ports` is backbone and carries no hash dependency), `PortName::DeviceRegistry` as the
+    eighteenth, a 13-case contract suite, `FakeDeviceRegistry`, and the `store-sqlite` adapter with
+    additive migration `0005_device_registry.sql`. Both implementations pass the same 13 cases, so
+    "swappable" is checked rather than claimed. No behaviour change in `pos-edge` yet.
+  - **S0d-2 — the edge wiring.** `Pairing` and `Sessions` become write-through over the port with
+    in-memory reads, both tables load at boot, the idle timeout lands as a pure policy, and the
+    revoke-device / revoke-all routes join the pairing surface.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
   nothing writes the tag at build time, so every artifact reports the same version and the whole OTA
   progress model (ADR-0078) cannot tell one release from another.
