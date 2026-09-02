@@ -427,6 +427,43 @@ mod tests {
         assert!(v(1, 0, 0) < v(1, 0, 1));
         assert!(v(1, 2, 0) < v(2, 0, 0));
         assert!(v(1, 10, 0) > v(1, 9, 9));
+        // The major boundary, where a text comparison inverts: as strings, "10.0.0" < "9.9.9".
+        assert!(v(10, 0, 0) > v(9, 9, 9));
+    }
+
+    #[test]
+    fn a_two_digit_component_still_reads_as_newer_at_the_rollout_gate() {
+        // `decide_rollout`'s second step is `update.target <= device.current`, and the whole fleet's
+        // ability to keep updating rests on that comparison being numeric. It is, because
+        // `ReleaseVersion` is three `u16`s with a field-order `Ord` — but the version arrives as
+        // *text* on both sides (the tag the release workflow stamps into the binary, and the
+        // `target_version` string the cloud publishes), so a later "simplification" to a string type
+        // would compile, pass every other test here, and silently strand every store at the first
+        // two-digit component. These are the three places that happens.
+        for (current, target) in [
+            (v(9, 9, 9), v(10, 0, 0)),
+            (v(1, 9, 9), v(1, 10, 0)),
+            (v(1, 1, 9), v(1, 1, 10)),
+        ] {
+            let mut d = device(Ring::Fleet);
+            d.current = current;
+            let mut u = update();
+            u.target = target;
+            assert_eq!(
+                decide_rollout(&d, &u, &[]),
+                RolloutDecision::Install,
+                "{current:?} -> {target:?} is an upgrade, not AlreadyCurrent"
+            );
+
+            // And the same boundary the other way round is a downgrade the gate declines to take.
+            d.current = target;
+            u.target = current;
+            assert_eq!(
+                decide_rollout(&d, &u, &[]),
+                RolloutDecision::Skip(SkipReason::AlreadyCurrent),
+                "{target:?} -> {current:?} is a downgrade"
+            );
+        }
     }
 
     #[test]
@@ -606,6 +643,30 @@ mod config_tests {
         assert_eq!(ReleaseVersion::parse("1.2.3.4"), None);
         assert_eq!(ReleaseVersion::parse("1.2.x"), None);
         assert_eq!(ReleaseVersion::parse(""), None);
+        // A git tag is `vX.Y.Z`, and the `v` is not a numeric component. Whoever stamps or publishes
+        // a version strips it first — the edge's release stamp does (`crate::version`), and so does
+        // the cloud when it writes `target_version` — because this returns `None` rather than
+        // guessing.
+        assert_eq!(
+            ReleaseVersion::parse("v1.2.3"),
+            None,
+            "the tag's v is not ours to strip"
+        );
+    }
+
+    #[test]
+    fn parsing_is_what_makes_the_comparison_numeric_rather_than_textual() {
+        // Both sides of the rollout gate start life as text: the tag the release workflow stamps into
+        // the binary, and the `target_version` the cloud publishes. Parsing to `ReleaseVersion` is
+        // the step that turns them into numbers, and this pins that it matters — compared as text the
+        // order inverts at every two-digit component.
+        let nine = ReleaseVersion::parse("9.9.9").expect("three numeric components");
+        let ten = ReleaseVersion::parse("10.0.0").expect("three numeric components");
+        assert!(nine < ten, "9.9.9 precedes 10.0.0 once parsed");
+        assert!(
+            "10.0.0" < "9.9.9",
+            "as text it does not, which is why we parse"
+        );
     }
 
     #[test]

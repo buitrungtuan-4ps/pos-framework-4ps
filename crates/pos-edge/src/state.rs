@@ -22,7 +22,8 @@ use crate::pairing::Pairing;
 pub struct BuildInfo {
     /// The package name, from `CARGO_PKG_NAME`.
     pub service: &'static str,
-    /// The package version, from `CARGO_PKG_VERSION`.
+    /// The release this binary is, from [`crate::version::VERSION`] — the tag the release workflow
+    /// stamped, or `0.0.0` for a build that is not a release.
     pub version: &'static str,
     /// The cloud–edge wire protocol version this binary speaks
     /// ([`pos_proto::PROTOCOL_VERSION`]).
@@ -35,7 +36,7 @@ impl BuildInfo {
     pub const fn current() -> Self {
         Self {
             service: env!("CARGO_PKG_NAME"),
-            version: env!("CARGO_PKG_VERSION"),
+            version: crate::version::VERSION,
             protocol_version: pos_proto::PROTOCOL_VERSION,
         }
     }

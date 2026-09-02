@@ -17,6 +17,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A released binary now reports which release it is** (roadmap v3 slice **R1b**, #116). The release
+  workflow stamps the tag it already validates into the build as `POS_EDGE_RELEASE_VERSION`, and
+  `pos_edge::version` reads it through `option_env!` with `CARGO_PKG_VERSION` as the fallback. Before
+  this, `crates/pos-edge/Cargo.toml` was `version = "0.0.0"` and nothing wrote the tag at build time,
+  so **every artifact reported the same version**: `/healthz` said `0.0.0`, every store told the cloud
+  `0.0.0` over `CloudSync::report` ([ADR-0078](docs/adr/0078-sync-and-ota-closure.md)), and the OTA
+  progress model could not tell one release from another — a rollout's progress was a bar that never
+  moved.
+
+  **A hand-built binary still says `0.0.0`, and that is the honest answer** — it is not a release, and
+  `0.0.0` sorts below every published version, so such a box is eligible for any update rather than
+  wrongly believing itself current. No build script and no new dependency: a `git describe` script
+  would also need `.git` in the build context, which the Docker build does not have.
+
+  **The tag's `v` is stripped, and that is load-bearing.** `ReleaseVersion::parse` splits on `.` and
+  parses `u16`s, so a leading `v` makes it return `None`, and the cloud publishes `target_version` in
+  the same bare form. A test asserting the *compiled-in* value parses fails the build — not the fleet —
+  if a fork changes the workflow's expression.
+
+  **Upgrade note** No wire, schema or configuration change; `PROTOCOL_VERSION` is unchanged. A fork
+  that builds its own artifacts outside `.github/workflows/release.yml` should export
+  `POS_EDGE_RELEASE_VERSION=X.Y.Z` (no `v`) in its build, or every store it runs will report `0.0.0`
+  and its OTA rollouts will show no progress.
+
 - **A restart no longer unpairs the store, and no longer signs everyone out**
   ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md), roadmap v3 slice **S0d-2**). The half that
   changes behaviour. `Pairing` and `Sessions` now write through to the `DeviceRegistry` S0d-1 added
@@ -173,6 +197,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   will not open. Restrict `4222` at the host firewall where your stores' addresses are knowable.
 
 ### Fixed
+- **Pinned the comparison the whole fleet's ability to update rests on** (roadmap v3 slice **R1b**,
+  #116). `decide_rollout` gates on `update.target <= device.current`, and both sides arrive as *text* —
+  the tag stamped into the binary, and the `target_version` string the cloud publishes. The comparison
+  is numeric today because `ReleaseVersion` is three `u16`s with a field-order `Ord`, but nothing tested
+  it at a boundary where that matters. There are now cases at 9→10, 1.9→1.10 and 1.1.9→1.1.10, in both
+  directions and through `decide_rollout` itself: the exact places where a version "simplified" to a
+  string would compile, pass every other test, and silently strand every store at the first two-digit
+  component (as text, `"10.0.0" < "9.9.9"`). Not a live defect — a missing test under a live assumption,
+  found while wiring the stamp that makes the comparison start seeing real values at all.
+
 - **A NATS token written into the broker URL was silently discarded, so the documented way to arm
   the cloud's ingest cursor could not work** — and the event bus of
   [ADR-0089](docs/adr/0089-edge-event-bus-transport.md) would not have authenticated either.

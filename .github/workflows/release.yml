@@ -94,8 +94,20 @@ jobs:
       - name: Cross-compile pos-edge for both store architectures
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          # Stamp the release into the binary (R1b). `crates/pos-edge/Cargo.toml` is `0.0.0`, so
+          # without this every artifact reports the same version and the OTA progress model
+          # (ADR-0078) cannot tell one release from another.
+          #
+          # THE `v` IS STRIPPED ON PURPOSE. `ReleaseVersion::parse` splits on `.` and parses each
+          # component as a u16, so a leading `v` makes it return None — and the cloud publishes
+          # `target_version` in the same bare form. `${TAG#v}` is what keeps the two comparable;
+          # `crates/pos-edge/src/version.rs`'s `version_parses` test fails the build if this
+          # expression ever stops producing X.Y.Z.
+          POS_EDGE_RELEASE_VERSION: ${{ env.TAG }}
         run: |
           set -euo pipefail
+          export POS_EDGE_RELEASE_VERSION="${POS_EDGE_RELEASE_VERSION#v}"
+          echo "stamping version ${POS_EDGE_RELEASE_VERSION} from tag ${TAG}"
           cargo build --release --locked -p pos-edge --target x86_64-unknown-linux-gnu
           cargo build --release --locked -p pos-edge --target aarch64-unknown-linux-gnu
 
