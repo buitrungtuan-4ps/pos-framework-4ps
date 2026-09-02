@@ -156,12 +156,18 @@ tested and unreachable. Q1 runs immediately after A·P1x, before any new A·P2 o
 **Two more of the same, found after that was written.** The eighth: `cloud-sync-http`'s `fetch_update`
 POSTs to `POST /internal/ota/artifact`, and `pos-cloud` serves `/internal/ota/report` and **no artifact
 route at all** — so R5 would wire the fleet to a loop that reliably 404s. R5 therefore sits behind R2's
-artifact-storage slice, and R5's own scoping turned up three further gaps: `UpdatePlan.signature` has no
-production producer (`CloudSync` exposes no way to fetch the `.minisig`, so closing it is a **port change
-and needs an ADR first**), `DeviceState.last_self_test` is never persisted although an install
-deliberately reboots the box (so the highest-precedence safety rule in `decide_rollout` depends on the one
-fact a restart loses), and `trusted_keys` has no source anywhere — it must be baked in at build time, never
-read from the cloud-published config tree, or a compromised cloud could introduce a signing key.
+artifact-storage slice, and R5's own scoping turned up three further gaps. Two are **the artifact's trust
+chain and are now framed by [ADR-0092](adr/0092-artifact-trust-chain.md)**: `UpdatePlan.signature` had no
+production producer (`CloudSync` exposed no way to fetch the `.minisig`, which made closing it a port
+change and therefore ADR-first — the record amends `fetch_update` to return `SignedArtifact { bytes,
+signature }`, so *skipping verification stops being expressible* rather than merely discouraged, with the
+signature riding a response header because base64-ing a 30 MB body to carry a few hundred bytes is the
+wrong fleet-wide trade); and `trusted_keys` had no source anywhere — now compiled in through `option_env!`
+like R1b's release version, with a **prohibition** on any runtime path supplying them, because a key taken
+from the cloud-published config tree is a key an attacker controlling the cloud can choose, and a trust
+anchor cannot live inside the channel it protects. The third is separate and still open:
+`DeviceState.last_self_test` is never persisted although an install deliberately reboots the box, so the
+highest-precedence safety rule in `decide_rollout` depends on the one fact a restart loses.
 
 **The tenth was the enforcement machinery itself, and it is now closed.** `IntakeLedger` (ADR-0064) was
 a port with no `PortName` variant, so it had no contract suite, no row in `docs/architecture.md` §5, and
