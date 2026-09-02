@@ -84,7 +84,18 @@ pub async fn an_unrecognised_code_is_refused<H: CloudSyncHarness>(
     )
 }
 
-/// A published release's bytes come back intact.
+/// A published release's bytes come back intact, **and never without a signature**.
+///
+/// The second half is the obligation with teeth. `fetch_update` hands back a
+/// [`SignedArtifact`](pos_ports::SignedArtifact) precisely so that a caller cannot end up holding
+/// executable bytes with nothing to judge them ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)),
+/// and a channel that returned an empty or wrong signature beside good bytes would satisfy the
+/// intent of the type while defeating its purpose — the verify step would then fail on every
+/// release, or worse, be skipped as "the transport's problem".
+///
+/// Whether the signature *verifies* is deliberately not checked here: that is
+/// [`Signer`](pos_ports::Signer)'s question, a transport adapter holds no key, and asking a fake to
+/// produce real Ed25519 output would test the fixture rather than the port.
 ///
 /// # Errors
 ///
@@ -93,11 +104,21 @@ pub async fn fetch_update_returns_the_published_artifact<H: CloudSyncHarness>(
     harness: &H,
 ) -> Result<(), CaseFailure> {
     let channel = harness.fresh().await?;
-    let bytes = channel.fetch_update(&harness.known_release()).await?;
-    obligation().require_eq(
-        &bytes,
+    let artifact = channel.fetch_update(&harness.known_release()).await?;
+    let obligation = obligation();
+    obligation.require_eq(
+        &artifact.bytes,
         &harness.update_bytes(),
         "the published artifact bytes come back intact",
+    )?;
+    obligation.require(
+        !artifact.signature.as_bytes().is_empty(),
+        "an artifact came back with an empty signature, so nothing could ever verify it",
+    )?;
+    obligation.require_eq(
+        &artifact.signature,
+        &harness.update_signature(),
+        "the signature that comes back is the one published beside the artifact",
     )
 }
 

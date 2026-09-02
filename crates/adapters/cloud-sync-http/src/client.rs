@@ -9,7 +9,8 @@
 //! — a caller branches on the status, so a refused code that surfaced as anything but
 //! [`PortError::permission_denied`] would be a wrong retry policy.
 
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, SignedArtifact, UpdateReport};
+use pos_ports::signer::Signature;
 use pos_ports::{PortError, PortName, Secret};
 use pos_proto::ids::DeviceId;
 use pos_proto::text::ReleaseTag;
@@ -24,6 +25,13 @@ const ACTIVATE_PATH: &str = "/activate";
 
 /// The cloud route the OTA artifact fetch posts to ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)).
 const ARTIFACT_PATH: &str = "/internal/ota/artifact";
+
+/// The response header carrying the artifact's detached signature, as lowercase hex
+/// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Named after the existing
+/// `X-Pos-Webhook-Signature` convention. It rides a header rather than the body so the body stays
+/// the raw artifact: a JSON envelope would mean encoding tens of megabytes to move a few hundred
+/// bytes.
+const SIGNATURE_HEADER: &str = "X-Pos-Artifact-Signature";
 
 /// The cloud route an update report posts to ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
 const REPORT_PATH: &str = "/internal/ota/report";
@@ -92,7 +100,7 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
         parse_activate(&response)
     }
 
-    async fn fetch_update(&self, release: &ReleaseTag) -> Result<Vec<u8>, PortError> {
+    async fn fetch_update(&self, release: &ReleaseTag) -> Result<SignedArtifact, PortError> {
         let body = serde_json::to_vec(&FetchRequest {
             release: release.as_str(),
         })
@@ -177,9 +185,31 @@ fn parse_activate(response: &HttpResponse) -> Result<ActivationGrant, PortError>
 /// `2xx` is the signed artifact; `404` is an unpublished release
 /// ([`not_found`](PortError::not_found), so the caller installs nothing rather than empty bytes);
 /// anything else is retryable ([`unavailable`](PortError::unavailable)).
-fn parse_fetch(response: HttpResponse) -> Result<Vec<u8>, PortError> {
+fn parse_fetch(response: HttpResponse) -> Result<SignedArtifact, PortError> {
     match response.status {
-        200..=299 => Ok(response.body),
+        200..=299 => {
+            // The body is the raw artifact and the signature rides a header
+            // ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)), so a 2xx with no
+            // signature is bytes with nothing to judge them. Unusable, and reported as retryable:
+            // a proxy stripping the header or a cloud mid-deploy is the likely cause, and the edge
+            // should back off rather than treat it as terminal. It is never permission to install.
+            let encoded = response.header(SIGNATURE_HEADER).ok_or_else(|| {
+                PortError::unavailable(
+                    PORT,
+                    format!("the cloud served an artifact with no {SIGNATURE_HEADER}"),
+                )
+            })?;
+            let signature = decode_hex(encoded).ok_or_else(|| {
+                PortError::unavailable(
+                    PORT,
+                    format!("the cloud's {SIGNATURE_HEADER} is not lowercase hex"),
+                )
+            })?;
+            Ok(SignedArtifact {
+                bytes: response.body,
+                signature: Signature::new(signature),
+            })
+        }
         404 => Err(PortError::not_found(
             PORT,
             "the cloud publishes no such release",
@@ -188,6 +218,34 @@ fn parse_fetch(response: HttpResponse) -> Result<Vec<u8>, PortError> {
             PORT,
             format!("the cloud returned HTTP {other} for the artifact"),
         )),
+    }
+}
+
+/// Decodes lowercase hex, or `None` if `text` is not an even run of hex digits.
+///
+/// Hand-rolled for the same reason `pos_ports::TokenDigest` hand-rolls its own: adding a base64 or
+/// hex crate to this adapter would be a new third-party dependency, which `docs/adr/README.md` makes
+/// an ADR-first change. Hex over base64 costs about seventy extra bytes on a signature of a few
+/// hundred — against an artifact of tens of megabytes, which is why ADR-0092's base64 was corrected
+/// to hex rather than a dependency being added to honour it.
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if text.is_empty() || !text.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(text.len() / 2);
+    let mut digits = text.chars();
+    while let (Some(high), Some(low)) = (digits.next(), digits.next()) {
+        bytes.push((nibble(high)? << 4) | nibble(low)?);
+    }
+    Some(bytes)
+}
+
+/// The four bits one lowercase hex character stands for.
+fn nibble(character: char) -> Option<u8> {
+    match character {
+        '0'..='9' => Some(character as u8 - b'0'),
+        'a'..='f' => Some(character as u8 - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -213,7 +271,9 @@ fn parse_report(response: &HttpResponse) -> Result<(), PortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpResponse, parse_activate, parse_fetch, parse_report};
+    use super::{
+        HttpResponse, SIGNATURE_HEADER, decode_hex, parse_activate, parse_fetch, parse_report,
+    };
     use pos_proto::ids::DeviceId;
     use pos_proto::ulid::Ulid;
 
@@ -221,6 +281,45 @@ mod tests {
         HttpResponse {
             status,
             body: body.to_vec(),
+            ..HttpResponse::default()
+        }
+    }
+
+    /// A 2xx artifact response carrying `signature` in the header, hex-encoded as the cloud will.
+    ///
+    /// The header name is deliberately lowercased here, because that is how a real wire delivers it
+    /// while the constant is spelled in mixed case.
+    fn signed_response(body: &[u8], signature: &[u8]) -> HttpResponse {
+        // The encoder side, only needed by these tests: production only ever decodes.
+        const fn nibble_of(value: u8) -> char {
+            match value & 0x0f {
+                0 => '0',
+                1 => '1',
+                2 => '2',
+                3 => '3',
+                4 => '4',
+                5 => '5',
+                6 => '6',
+                7 => '7',
+                8 => '8',
+                9 => '9',
+                10 => 'a',
+                11 => 'b',
+                12 => 'c',
+                13 => 'd',
+                14 => 'e',
+                _ => 'f',
+            }
+        }
+        let mut hex = String::with_capacity(signature.len() * 2);
+        for byte in signature {
+            hex.push(nibble_of(byte >> 4));
+            hex.push(nibble_of(*byte));
+        }
+        HttpResponse {
+            status: 200,
+            body: body.to_vec(),
+            headers: vec![(SIGNATURE_HEADER.to_ascii_lowercase(), hex)],
         }
     }
 
@@ -260,9 +359,52 @@ mod tests {
     }
 
     #[test]
-    fn a_fetched_artifact_comes_back_intact() {
-        let bytes = parse_fetch(response(200, b"signed-artifact-bytes")).expect("bytes");
-        assert_eq!(bytes, b"signed-artifact-bytes");
+    fn a_fetched_artifact_comes_back_intact_with_its_signature() {
+        let fetched = parse_fetch(signed_response(b"signed-artifact-bytes", b"sig"))
+            .expect("an artifact and its signature");
+        assert_eq!(fetched.bytes, b"signed-artifact-bytes");
+        assert_eq!(fetched.signature.as_bytes(), b"sig");
+    }
+
+    #[test]
+    fn a_two_hundred_with_no_signature_header_is_unavailable_not_an_artifact() {
+        // The failure that matters: bytes with nothing to judge them. It must not come back as a
+        // successful fetch, because the next thing that happens to a successful fetch is `apply`.
+        let error = parse_fetch(response(200, b"signed-artifact-bytes"))
+            .expect_err("an unsigned artifact is not a usable answer");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+    }
+
+    #[test]
+    fn a_signature_header_that_is_not_hex_is_refused() {
+        let mut malformed = signed_response(b"artifact", b"sig");
+        malformed.headers = vec![(SIGNATURE_HEADER.to_ascii_lowercase(), "not-hex".to_owned())];
+        let error = parse_fetch(malformed).expect_err("a malformed signature is refused");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+    }
+
+    #[test]
+    fn the_signature_header_is_matched_case_insensitively() {
+        // HTTP header names are case-insensitive, so a cloud, a proxy, or a fork's own test stub may
+        // send any casing. Reading it case-sensitively would turn a valid artifact into a fetch
+        // failure for every store at once.
+        let mut shouting = signed_response(b"artifact", b"\x01\x02");
+        shouting.headers = vec![("X-POS-ARTIFACT-SIGNATURE".to_owned(), "0102".to_owned())];
+        let fetched = parse_fetch(shouting).expect("any casing is the same header");
+        assert_eq!(fetched.signature.as_bytes(), &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn hex_decoding_rejects_what_is_not_a_whole_run_of_hex_digits() {
+        assert_eq!(decode_hex("00ff"), Some(vec![0x00, 0xff]));
+        assert_eq!(decode_hex(""), None, "an empty signature is no signature");
+        assert_eq!(decode_hex("abc"), None, "an odd length is not whole bytes");
+        assert_eq!(
+            decode_hex("00FF"),
+            None,
+            "uppercase is not the agreed encoding"
+        );
+        assert_eq!(decode_hex("zz"), None);
     }
 
     #[test]

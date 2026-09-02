@@ -46,13 +46,36 @@ pub trait HttpTransport: Send + Sync {
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 }
 
-/// A response from the cloud: the HTTP status and the body bytes.
-#[derive(Debug, Clone)]
+/// A response from the cloud: the HTTP status, the body bytes, and the response headers.
+///
+/// Headers are carried because the artifact fetch needs one: the signature travels in
+/// `X-Pos-Artifact-Signature` while the body stays the raw artifact
+/// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Putting both in a JSON object would
+/// mean base64-encoding tens of megabytes to move a few hundred bytes.
+#[derive(Debug, Clone, Default)]
 pub struct HttpResponse {
     /// The HTTP status code.
     pub status: u16,
     /// The response body, verbatim.
     pub body: Vec<u8>,
+    /// The response headers, in the order received, as `(name, value)`. Names are lowercased on the
+    /// way in; read them through [`Self::header`] rather than by index.
+    pub headers: Vec<(String, String)>,
+}
+
+impl HttpResponse {
+    /// The first value for `name`, matched case-insensitively.
+    ///
+    /// HTTP header names are case-insensitive, and a stub transport in a test is exactly where
+    /// somebody writes `X-Pos-Artifact-Signature` while the wire delivers `x-pos-artifact-signature`
+    /// — so the comparison, not the caller, handles it.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(header, _value)| header.eq_ignore_ascii_case(name))
+            .map(|(_header, value)| value.as_str())
+    }
 }
 
 /// A transport-level failure — the cloud could not be reached — as distinct from a response the
@@ -196,6 +219,19 @@ impl TlsHttpTransport {
             .await
             .map_err(|error| TransportError::new(format!("sending the request failed: {error}")))?;
         let status = response.status().as_u16();
+        // Collected before the body is consumed, because `into_body` takes the response. A value
+        // that is not valid UTF-8 is dropped rather than failing the whole response: a header the
+        // caller does not read must not be able to break a fetch.
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|text| (name.as_str().to_ascii_lowercase(), text.to_owned()))
+            })
+            .collect();
         let bytes = response
             .into_body()
             .collect()
@@ -207,6 +243,7 @@ impl TlsHttpTransport {
         Ok(HttpResponse {
             status,
             body: bytes.to_vec(),
+            headers,
         })
     }
 }

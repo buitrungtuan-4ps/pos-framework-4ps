@@ -57,7 +57,8 @@ re-opened here.
 
 - **On the wire, the artifact stays the raw body and the signature travels in a response header.**
   `POST /internal/ota/artifact` keeps returning the bytes verbatim; the signature comes back
-  base64-encoded in a response header. The `HttpTransport` seam's `HttpResponse` gains a `headers`
+  hex-encoded (see Correction 1) in `X-Pos-Artifact-Signature`, following the existing
+  `X-Pos-Webhook-Signature` naming. The `HttpTransport` seam's `HttpResponse` gains a `headers`
   field to carry it — additive, and local to the one adapter.
 
   A detached minisign signature is a few hundred bytes; the artifact is tens of megabytes. Wrapping
@@ -127,3 +128,25 @@ re-opened here.
   as cattle ([ADR-0003](0003-cattle-not-pets.md)) and is expected to be re-imaged rather than
   audited. Compiled-in means replacing the anchor requires replacing the binary, and replacing the
   binary requires a signature from the anchor.
+
+**Corrections, made while implementing.** One claim above did not survive contact with the tree and
+is corrected here rather than quietly worked around.
+
+1. **"base64-encoded" was wrong, and hex replaces it.** There is no base64 crate anywhere in this
+   workspace — checked across every `Cargo.toml` — so honouring the word as written would have meant
+   adding a third-party dependency, which `docs/adr/README.md` makes an ADR-first change in its own
+   right. An ADR cannot require, as an implementation detail, a step that its own rules say needs
+   another ADR.
+
+   Hex needs nothing new: `pos_ports::device_registry::TokenDigest` already hand-rolls the same
+   encode/decode pair for exactly this reason, and the adapter now does too. The cost is arithmetic
+   — hex is 2 characters per byte against base64's 4-per-3, so a signature of a few hundred bytes
+   grows by roughly a third of a kilobyte. Set against an artifact of tens of megabytes that is
+   nothing, and it is *not* the comparison the decision above rests on: the point was never
+   base64-versus-hex, it was header-versus-body, and encoding the 30 MB body would have cost about a
+   third of its size on every download. That argument is untouched.
+
+   The encoding is fixed as **lowercase** hex and the decoder rejects uppercase, so there is one
+   spelling on the wire rather than two that happen to work. Header *names* stay case-insensitive,
+   as HTTP defines them — a proxy or a fork's stub may send any casing, and reading the name
+   case-sensitively would turn every store's fetch into a failure at once.

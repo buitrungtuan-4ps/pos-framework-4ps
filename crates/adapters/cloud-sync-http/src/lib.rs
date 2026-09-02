@@ -13,8 +13,12 @@
 //!   [`Secret`](pos_ports::Secret) to store in the [`KeyVault`](pos_ports::KeyVault).
 //! - [`CloudSync::fetch_update`](pos_ports::CloudSync::fetch_update) — the over-the-air artifact
 //!   ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): `POST /internal/ota/artifact` with a
-//!   release tag, and the *signed* artifact bytes come back to verify with the
-//!   [`Signer`](pos_ports::Signer) before staging.
+//!   release tag, and back come the artifact bytes **and** their detached signature, to verify with
+//!   the [`Signer`](pos_ports::Signer) before staging. The bytes are the raw response body and the
+//!   signature rides `X-Pos-Artifact-Signature` as lowercase hex
+//!   ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)) — a JSON envelope would mean
+//!   base64-encoding tens of megabytes to carry a few hundred bytes. A `2xx` with no signature
+//!   header is a failed fetch, not an artifact.
 //!
 //! # A transport seam, and a pure core
 //!
@@ -27,10 +31,16 @@
 //!
 //! # The transport is not a trust boundary
 //!
-//! [`CloudSync::fetch_update`](pos_ports::CloudSync::fetch_update) returns the bytes as received. The
-//! caller verifies the minisign signature with the [`Signer`](pos_ports::Signer)
-//! ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)) before trusting them, so a spoofed or
-//! compromised cloud cannot make the edge install code — it can only fail verification downstream.
+//! [`CloudSync::fetch_update`](pos_ports::CloudSync::fetch_update) returns the bytes as received,
+//! paired with the signature that judges them. The caller verifies with the
+//! [`Signer`](pos_ports::Signer) ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)) before
+//! trusting them, so a spoofed or compromised cloud cannot make the edge install code — it can only
+//! fail verification downstream.
+//!
+//! Pairing them is what makes that sentence enforceable rather than advisory: this adapter cannot
+//! hand a caller bytes with no signature, because
+//! [`SignedArtifact`](pos_ports::SignedArtifact) has nowhere to put "none". A cloud that answers
+//! `2xx` without the header gets a retryable failure here, never a successful fetch.
 
 #![forbid(unsafe_code)]
 

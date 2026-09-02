@@ -43,7 +43,7 @@ use core::future::Future;
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
     Fiscalization, IntakeLedger, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal,
-    PrinterDriver, ShippingDispatch, Signer, UpdateReport,
+    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, UpdateReport,
 };
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
@@ -179,7 +179,7 @@ pub trait SignerHarness: Send + Sync {
     /// # Errors
     ///
     /// [`HarnessError`] if the fixture cannot be prepared.
-    fn valid_triple(&self) -> Setup<(Vec<u8>, pos_ports::Signature, pos_ports::PublicKey)>;
+    fn valid_triple(&self) -> Setup<(Vec<u8>, Signature, PublicKey)>;
 
     /// A second key, which the signature above must **not** verify against.
     ///
@@ -189,7 +189,7 @@ pub trait SignerHarness: Send + Sync {
     /// # Errors
     ///
     /// [`HarnessError`] if the fixture cannot be prepared.
-    fn other_key(&self) -> Setup<pos_ports::PublicKey>;
+    fn other_key(&self) -> Setup<PublicKey>;
 }
 
 /// Supplies a fresh [`KeyVault`].
@@ -254,6 +254,13 @@ pub trait CloudSyncHarness: Send + Sync {
 
     /// The artifact bytes that release returns.
     fn update_bytes(&self) -> Vec<u8>;
+
+    /// The detached signature that release returns beside [`Self::update_bytes`].
+    ///
+    /// Whether it *verifies* is not this suite's question — that is [`pos_ports::Signer`]'s, and a
+    /// transport adapter has no key. What the suite checks is that the artifact and a signature
+    /// arrive together ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)).
+    fn update_signature(&self) -> Signature;
 
     /// A well-formed update report the channel should accept.
     fn sample_report(&self) -> UpdateReport;

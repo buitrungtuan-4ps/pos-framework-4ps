@@ -20,7 +20,7 @@ use pos_core::activation::{ActivationCode, PAYLOAD_LEN};
 use pos_edge::activation_router;
 use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::{FakeKeyVault, FakeStore};
-use pos_ports::cloud_sync::{ActivationGrant, CloudSync, UpdateReport};
+use pos_ports::cloud_sync::{ActivationGrant, CloudSync, SignedArtifact, UpdateReport};
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_ports::{PortError, PortName, Secret};
 use pos_proto::ids::{DeviceId, StoreId};
@@ -56,7 +56,7 @@ impl CloudSync for StubCloud {
         }
     }
 
-    async fn fetch_update(&self, _release: &ReleaseTag) -> Result<Vec<u8>, PortError> {
+    async fn fetch_update(&self, _release: &ReleaseTag) -> Result<SignedArtifact, PortError> {
         Err(PortError::not_found(
             PortName::CloudSync,
             "the stub cloud publishes no releases",
