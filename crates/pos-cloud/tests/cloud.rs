@@ -10909,3 +10909,78 @@ async fn an_absence_is_enveloped_and_names_no_field() {
         "an absent store is not a bad field: {body}"
     );
 }
+
+// --- The per-handler refusal tail (Q3b slice 4c) -------------------------------------------------
+//
+// The last 44 refusals, none of them a repeated family, so this is a conversion rather than a
+// helper. Three properties are worth pinning even so, and each is one a future reader could
+// reasonably get backwards.
+
+/// An authorisation refusal carries **no** `details`, ever.
+///
+/// This is the rule every slice of Q3b has held to and the only one that is a security property
+/// rather than an ergonomic one: naming the missing permission would tell a caller probing its own
+/// reach exactly which grant to go after. The `401`/`403`/credential refusals are the sites where
+/// the temptation to be helpful is strongest, so the absence is asserted rather than assumed.
+#[tokio::test]
+async fn an_authorisation_refusal_names_no_field() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = registry_app(admin, FakeRegistry::default());
+
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/tenants",
+            &serde_json::json!({ "name": "Pizza 4P's" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tenant");
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "a signed-in viewer lacks console.orgs.manage"
+    );
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "PERMISSION_DENIED", "got {body}");
+    assert_eq!(body["error"]["message"], "insufficient permissions");
+    assert!(
+        body["error"]["details"].is_null(),
+        "which permission was missing is exactly what a prober wants: {body}"
+    );
+}
+
+/// A mutual-exclusion refusal names **both** fields — the one case where that is right.
+///
+/// Every other multi-field refusal in Q3b was narrowed to name only what was wrong. This one is the
+/// deliberate exception, and the distinction is worth a test because it looks like the same bug:
+/// `/admin/assignments` wants exactly one of `store_id` or `employee_id`, so when the caller sends
+/// neither or both, *the pair* is the mistake and neither field alone is at fault.
+#[tokio::test]
+async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mistake() {
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // Neither filter given, so the handler cannot tell which listing was wanted.
+    let refused = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/assignments?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["message"], "name exactly one of store_id or employee_id",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["field"], "store_id");
+    assert_eq!(body["error"]["details"][0]["reason"], "MUTUALLY_EXCLUSIVE");
+    assert_eq!(body["error"]["details"][1]["field"], "employee_id");
+}

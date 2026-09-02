@@ -210,11 +210,12 @@ where
 
     let config = qr_config_for(&state.config_trees, table.tenant_id, table.store_id).await;
     if !config.enabled {
-        return (
-            StatusCode::NOT_FOUND,
+        // A `404`, not a `403`: a guest scanning a code for a store that has QR ordering switched
+        // off learns only that there is nothing here, which is what the store wants them to see.
+        return api_error(
+            ErrorStatus::NotFound,
             "QR ordering is not enabled for this store",
-        )
-            .into_response();
+        );
     }
 
     let now_ms = state.clock.now().as_milliseconds_since_epoch();

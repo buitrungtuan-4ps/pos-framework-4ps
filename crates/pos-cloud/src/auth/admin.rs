@@ -26,14 +26,17 @@
 use core::fmt;
 use core::future::Future;
 
+use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
-use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use pos_proto::determinism::ClockSource;
+use pos_proto::error::ErrorStatus;
 use pos_proto::time::Timestamp;
+
+use crate::http::{api_error, service_unavailable};
 
 use super::SuperAdminCredential;
 use super::session::COOKIE_NAME;
@@ -680,12 +683,10 @@ pub enum LoginDenied {
 impl IntoResponse for LoginDenied {
     fn into_response(self) -> Response {
         match self {
-            Self::Invalid => (StatusCode::UNAUTHORIZED, "sign-in failed").into_response(),
-            Self::StoreUnavailable => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the sign-in service is unavailable",
-            )
-                .into_response(),
+            // No `details`: naming what was wrong about a sign-in attempt tells a guesser which
+            // half to vary. The message is deliberately the same whichever half failed.
+            Self::Invalid => api_error(ErrorStatus::Unauthenticated, "sign-in failed"),
+            Self::StoreUnavailable => service_unavailable("sign-in"),
         }
     }
 }
@@ -703,12 +704,8 @@ pub enum SessionDenied {
 impl IntoResponse for SessionDenied {
     fn into_response(self) -> Response {
         match self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
-            Self::StoreUnavailable => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the sign-in service is unavailable",
-            )
-                .into_response(),
+            Self::Unauthorized => api_error(ErrorStatus::Unauthenticated, "unauthorized"),
+            Self::StoreUnavailable => service_unavailable("sign-in"),
         }
     }
 }

@@ -1602,8 +1602,21 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    if request.code.trim().is_empty() || request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "code and name are required").into_response();
+    // Two required fields, so name the ones actually blank rather than both — the same per-field
+    // rule the ULID and opening-hours refusals follow.
+    let mut missing: Vec<(&str, &str)> = Vec::with_capacity(2);
+    if request.code.trim().is_empty() {
+        missing.push(("code", "REQUIRED"));
+    }
+    if request.name.trim().is_empty() {
+        missing.push(("name", "REQUIRED"));
+    }
+    if !missing.is_empty() {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "code and name are required",
+            &missing,
+        );
     }
     let Some(employee_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(EmployeeId::new)
@@ -1678,7 +1691,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
@@ -1892,7 +1909,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     if let Some(unknown) = first_unknown_permission(&request.permissions) {
         return (
@@ -1973,7 +1994,11 @@ where
             Err(refusal) => return refusal,
         };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     if let Some(unknown) = first_unknown_permission(&request.permissions) {
         return (
@@ -2061,11 +2086,14 @@ where
             state.people.list_for_employee(tenant_id, employee_id).await
         }
         _ => {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "name exactly one of store_id or employee_id",
-            )
-                .into_response();
+                &[
+                    ("store_id", "MUTUALLY_EXCLUSIVE"),
+                    ("employee_id", "MUTUALLY_EXCLUSIVE"),
+                ],
+            );
         }
     };
     match result {
@@ -2761,14 +2789,18 @@ where
         Err(refusal) => return refusal,
     };
     if CurrencyCode::parse(&request.currency_code).is_err() {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "currency_code is not a 3-letter code",
-        )
-            .into_response();
+            &[("currency_code", "INVALID_FORMAT")],
+        );
     }
     if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
-        return (StatusCode::BAD_REQUEST, "timezone is not a valid IANA name").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "timezone is not a valid IANA name",
+            &[("timezone", "INVALID_FORMAT")],
+        );
     }
     if CutoffHour::new(request.cutoff_hour).is_err() {
         return api_error_with_details(
@@ -3420,11 +3452,11 @@ where
         .iter()
         .any(|policy| policy.availability.is_unspecified() || policy.availability.is_unrecognised())
     {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "a vendor policy names an unknown availability (open/busy/closed)",
-        )
-            .into_response();
+            &[("vendor_policies", "INVALID_ENUM_VALUE")],
+        );
     }
     let Ok(value) = serde_json::to_value(PublishedVendorPolicies::new(request.policies)) else {
         return channels_serialize_unavailable();
@@ -3752,7 +3784,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Some(area_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AreaId::new)
     else {
@@ -3822,7 +3858,11 @@ where
             Err(refusal) => return refusal,
         };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
@@ -3959,7 +3999,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Some(table_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TableId::new)
@@ -4041,7 +4085,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
@@ -4178,7 +4226,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Ok(backup_station_id) =
         parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
@@ -4258,7 +4310,11 @@ where
         Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
     }
     let Ok(backup_station_id) =
         parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
@@ -4376,11 +4432,14 @@ where
     // A rule must match exactly one of an item or a course — the same rule the §10 validator enforces
     // at publish, surfaced here so the console cannot store a rule that matches nothing or both.
     if menu_item_id.is_some() == course_id.is_some() {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "a routing rule must match exactly one of menu_item_id or course_id",
-        )
-            .into_response();
+            &[
+                ("menu_item_id", "MUTUALLY_EXCLUSIVE"),
+                ("course_id", "MUTUALLY_EXCLUSIVE"),
+            ],
+        );
     }
     let Some(rule_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoutingRuleId::new)
@@ -6579,28 +6638,32 @@ where
             Err(refusal) => return refusal,
         };
         if !known.contains(&tax_class_id) {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "a tax rate names an unknown tax class",
-            )
-                .into_response();
+                &[("tax_rates", "UNKNOWN_REFERENCE")],
+            );
         }
         let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "a tax rate names an unknown sales channel",
-            )
-                .into_response();
+                &[("tax_rates", "INVALID_ENUM_VALUE")],
+            );
         };
         if row.rate_bps > MAX_TAX_RATE_BPS {
-            return (StatusCode::BAD_REQUEST, "a tax rate exceeds 100%").into_response();
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate exceeds 100%",
+                &[("tax_rates", "OUT_OF_RANGE")],
+            );
         }
         if !seen.insert((tax_class_id, sales_channel)) {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "a (tax class, channel) pair is repeated",
-            )
-                .into_response();
+                &[("tax_rates", "DUPLICATE")],
+            );
         }
         entries.push(TaxRateEntry {
             tax_class_id,
@@ -8652,11 +8715,10 @@ where
         .and_then(|layer| layer.get("fleet_update"))
         .cloned()
     else {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error(
+            ErrorStatus::InvalidArgument,
             "the store has no published rollout to halt",
-        )
-            .into_response();
+        );
     };
     if let serde_json::Value::Object(map) = &mut node {
         map.insert("halted".to_owned(), serde_json::Value::Bool(request.halted));
@@ -9020,11 +9082,11 @@ where
     match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(campaign)) if campaign.kind == PublishedCampaignKind::Voucher => {}
         Ok(Some(_other)) => {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 "campaign is not a voucher-kind campaign",
-            )
-                .into_response();
+                &[("campaign_id", "WRONG_KIND")],
+            );
         }
         Ok(None) => return not_found("campaign"),
         Err(error) => return campaign_error_response(&error),
@@ -9552,11 +9614,10 @@ where
     let renditions = match images::render(&body) {
         Ok(renditions) => renditions,
         Err(ImagePipelineError::Decode(_)) => {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error(
+                ErrorStatus::InvalidArgument,
                 "the upload is not a decodable image",
-            )
-                .into_response();
+            );
         }
         Err(ImagePipelineError::Budget { .. }) => {
             return (
@@ -9567,11 +9628,7 @@ where
         }
         Err(ImagePipelineError::Encode(_)) => {
             tracing::error!("encoding a media rendition failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "could not encode the image",
-            )
-                .into_response();
+            return api_error(ErrorStatus::Internal, "could not encode the image");
         }
     };
     let Some(media_id) =
@@ -10326,7 +10383,7 @@ where
         Err(error) => return catalog_error_response(&error),
     };
     let Ok(body) = export::items_csv(&items) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
     };
     audit_action(
         &state.audit,
@@ -12992,7 +13049,7 @@ where
         Err(error) => return translation_error_response(&error),
     };
     let Ok(body) = export::translations_csv(&grid) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
     };
     audit_action(
         &state.audit,
@@ -13558,7 +13615,7 @@ where
         return api_error(ErrorStatus::NotFound, "setup is not enabled");
     };
     if !constant_time_eq(&request.setup_token, expected) {
-        return (StatusCode::UNAUTHORIZED, "setup failed").into_response();
+        return api_error(ErrorStatus::Unauthenticated, "setup failed");
     }
     if request.password.len() < MIN_PASSWORD_LEN {
         return (
@@ -13599,7 +13656,10 @@ where
             }
             (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response()
         }
-        Ok(false) => (StatusCode::CONFLICT, "an administrator is already enrolled").into_response(),
+        Ok(false) => api_error(
+            ErrorStatus::AlreadyExists,
+            "an administrator is already enrolled",
+        ),
         Err(_) => service_unavailable("setup"),
     }
 }
@@ -13701,7 +13761,10 @@ where
     if role_grants(context.admin.role, permission) {
         Ok(context)
     } else {
-        Err((StatusCode::FORBIDDEN, "insufficient permissions").into_response())
+        Err(api_error(
+            ErrorStatus::PermissionDenied,
+            "insufficient permissions",
+        ))
     }
 }
 
@@ -13993,7 +14056,11 @@ where
         Some(ms) => match pos_proto::time::Timestamp::from_milliseconds_since_epoch(ms) {
             Ok(timestamp) => Some(timestamp),
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "expires_at_ms is out of range").into_response();
+                return api_error_with_details(
+                    ErrorStatus::InvalidArgument,
+                    "expires_at_ms is out of range",
+                    &[("expires_at_ms", "OUT_OF_RANGE")],
+                );
             }
         },
         None => None,
@@ -14211,11 +14278,11 @@ where
         Err(denied) => return denied.into_response(),
     };
     let Some(token_hash) = hex_decode_32(&id) else {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             "the session id is not a valid handle",
-        )
-            .into_response();
+            &[("id", "INVALID_FORMAT")],
+        );
     };
     match app
         .admin
@@ -14368,7 +14435,12 @@ where
     }
     let credential = match app.admin.load_credential().await {
         Ok(Some(credential)) => credential,
-        Ok(None) => return (StatusCode::CONFLICT, "no administrator is enrolled").into_response(),
+        Ok(None) => {
+            return api_error(
+                ErrorStatus::FailedPrecondition,
+                "no administrator is enrolled",
+            );
+        }
         Err(error) => {
             tracing::error!(%error, "loading the credential for TOTP re-enrolment failed");
             return admin_service_unavailable();
@@ -14376,7 +14448,7 @@ where
     };
     if !credential.credential.password_matches(&request.password) {
         // A distinct 403: the caller is signed in but has not re-proved the knowledge factor.
-        return (StatusCode::FORBIDDEN, "the password is incorrect").into_response();
+        return api_error(ErrorStatus::PermissionDenied, "the password is incorrect");
     }
     let Some(secret) = mint_totp_secret() else {
         tracing::error!("could not read OS entropy to mint a TOTP secret");
@@ -14543,9 +14615,10 @@ where
             admin_service_unavailable()
         })?;
         if owners <= 1 {
-            return Err(
-                (StatusCode::CONFLICT, "cannot remove the last active owner").into_response(),
-            );
+            return Err(api_error(
+                ErrorStatus::FailedPrecondition,
+                "cannot remove the last active owner",
+            ));
         }
     }
     Ok(())
@@ -14608,19 +14681,26 @@ where
     };
     // No privilege escalation: only an owner may mint another owner.
     if role == AdminRole::Owner && context.admin.role != AdminRole::Owner {
-        return (StatusCode::FORBIDDEN, "only an owner may invite an owner").into_response();
+        return api_error(
+            ErrorStatus::PermissionDenied,
+            "only an owner may invite an owner",
+        );
     }
     let email = request.email.trim().to_ascii_lowercase();
     if email.is_empty() || !email.contains('@') {
-        return (StatusCode::BAD_REQUEST, "a valid email is required").into_response();
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a valid email is required",
+            &[("email", "INVALID_FORMAT")],
+        );
     }
     match app.admin.find_admin_user_by_email(&email).await {
         Ok(Some(_)) => {
-            return (
-                StatusCode::CONFLICT,
+            return api_error_with_details(
+                ErrorStatus::AlreadyExists,
                 "an admin with that email already exists",
-            )
-                .into_response();
+                &[("email", "ALREADY_EXISTS")],
+            );
         }
         Ok(None) => {}
         Err(error) => {
@@ -14820,11 +14900,10 @@ where
     {
         Ok(Some(invite)) => invite,
         Ok(None) => {
-            return (
-                StatusCode::UNAUTHORIZED,
+            return api_error(
+                ErrorStatus::Unauthenticated,
                 "the invite is invalid or has expired",
-            )
-                .into_response();
+            );
         }
         Err(error) => {
             tracing::error!(%error, "looking up an invite failed");
@@ -14839,11 +14918,10 @@ where
     match app.admin.mark_invite_accepted(&invite.id, now).await {
         Ok(true) => {}
         Ok(false) => {
-            return (
-                StatusCode::UNAUTHORIZED,
+            return api_error(
+                ErrorStatus::Unauthenticated,
                 "the invite is invalid or has expired",
-            )
-                .into_response();
+            );
         }
         Err(error) => {
             tracing::error!(%error, "claiming an invite failed");
@@ -14864,11 +14942,11 @@ where
     };
     match app.admin.create_admin_user(user).await {
         Ok(true) => (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response(),
-        Ok(false) => (
-            StatusCode::CONFLICT,
+        Ok(false) => api_error_with_details(
+            ErrorStatus::AlreadyExists,
             "an admin with that email already exists",
-        )
-            .into_response(),
+            &[("email", "ALREADY_EXISTS")],
+        ),
         Err(error) => {
             tracing::error!(%error, "creating the admin failed");
             admin_service_unavailable()
@@ -15602,7 +15680,7 @@ where
         Err(error) => return rollup_error_response(&error),
     };
     let Ok(body) = export::rollups_csv(&days) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
     };
     audit_action(
         &app.audit,
@@ -15661,7 +15739,7 @@ where
         Err(error) => return rollup_error_response(&error),
     };
     let Ok(body) = export::revenue_csv(&days) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "could not build the CSV").into_response();
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
     };
     audit_action(
         &app.audit,
@@ -16265,7 +16343,7 @@ fn no_published_configuration() -> Response {
 /// from [`ErrorStatus::http_code`] exists to keep: this refusal is **retryable** and the caller's
 /// request was fine. A client that reads it as its own fault stops retrying something that would
 /// have succeeded.
-fn service_unavailable(service: &str) -> Response {
+pub(crate) fn service_unavailable(service: &str) -> Response {
     api_error(
         ErrorStatus::Unavailable,
         format!("the {service} service is unavailable"),
