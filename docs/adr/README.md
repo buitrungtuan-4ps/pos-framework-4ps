@@ -98,5 +98,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0090](0090-tls-postures.md) | TLS termination is a fork-level posture, chosen explicitly | Accepted |
 | [0091](0091-durable-edge-auth-state.md) | Edge auth state is durable: a `DeviceRegistry` port, hashed tokens, and an idle timeout | Accepted |
 | [0092](0092-artifact-trust-chain.md) | The edge cannot fetch an artifact without its signature, and its trusted keys come only from the build | Accepted |
+| [0093](0093-bill-keyed-on-order.md) | A bill belongs to an order, not to a table | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
