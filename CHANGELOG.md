@@ -46,6 +46,50 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be wrong in, but wrong.
 
 ### Added
+- **ADR-0090 — TLS termination is a fork-level posture, chosen explicitly**
+  ([ADR-0090](docs/adr/0090-tls-postures.md), roadmap v3 slice **E7a**, debate D24). The decision record
+  ahead of the implementation, and the one ADR-0089 was sequenced behind.
+
+  `bootstrap.sh` infers the TLS method from `DOMAIN`'s suffix. Three problems, only one of them about
+  certificates. It reaches **two of the four legitimate postures**: a company with its own wildcard from
+  an internal CA, and a company whose load balancer or tunnel already terminates TLS, both have to patch
+  the repository — which for a framework meant to be forked is the same as unsupported. It **silently
+  downgrades**: a managed domain whose `CF_DNS_API_TOKEN` is empty (forgotten, or simply not defined in a
+  fork's Environment) falls through to HTTP-01 against a grey-clouded record where nothing inbound on
+  `:80` can reach ACME, and the log says it chose HTTP-01 on purpose. And the swap is
+  `cp Caddyfile.cloudflare Caddyfile`, which **overwrites a version-controlled file** and leaves the
+  posture recorded nowhere — both modes end up in a file called `Caddyfile`.
+
+  The decision: an explicit `TLS_MODE` with exactly four values (`acme-http01`, the default, so an
+  existing sslip.io cell is unchanged · `acme-dns01` · `byo-cert` · `external`), each mode's inputs
+  checked and **refused loudly** rather than downgraded, each a committed per-mode Caddyfile that
+  `bootstrap.sh` installs as a generated file so nothing in the repository is overwritten, the shared
+  proxy block imported from one place instead of copied four times, and the chosen mode recorded on the
+  box and printed on every run.
+
+  Two consequences beyond the proxy. **`secrets/tls/` becomes the single certificate path in every
+  mode**, with each mode saying who populates it — the operator under `byo-cert`, an exporter with a
+  loud failure and a renewal hook under the two ACME modes, nobody under `external`. That is the
+  dependency ADR-0089 named: TLS on the event bus needs a certificate some posture put there on purpose,
+  not a reach into Caddy's private volume layout whose failure mode is a silent expiry two months after
+  nobody noticed. And **`trusted_proxy_hops` becomes configuration** (default `1`, today's constant),
+  because under `external` the chain is `client, balancer, caddy` and the client is two back — without
+  it the login rate limit repaired in this same release keys every request on the balancer's one
+  address, so every admin in the company shares one bucket and one person's wrong passwords lock out the
+  rest.
+
+  Flagged deferrals rather than silent ones: a stale certificate export is not yet alerted on (an
+  exporter that quietly stopped reproduces the same silent expiry, further down the timeline); `caddy
+  validate` over all four modes is not in CI, because one mode needs the plugin build; and whether the
+  bus can use the exported certificate at all is ADR-0089's implementation to prove on a real box —
+  if it cannot, the fallback costs `link-nats` a root-certificate option, which is why that claim is
+  named here.
+
+  **Upgrade note.** No action for an existing deployment: `TLS_MODE` defaults to today's behaviour and
+  nothing rotates. When the implementation lands, a cell that believed it was on DNS-01 while silently
+  running HTTP-01 will **refuse to bootstrap** until either `CF_DNS_API_TOKEN` is set or `TLS_MODE` is
+  corrected to match reality.
+
 - **ADR-0089 — the edge reaches the event bus directly, over TLS on its own port**
   ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md), roadmap v3 slice **E7**, debate D23). The
   decision record ahead of the implementation.

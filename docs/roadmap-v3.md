@@ -41,16 +41,17 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 
 | Milestone | Contents | Meaning |
 |---|---|---|
-| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 (≈29 PR, 18 merged) | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
+| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 (≈31 PR, 21 merged) | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
 | **v1.1 — FnB & Management** | B·W2 + B·W3 + B·W7 + B·W8 + A·P4 + A·PF (≈29 PR) | Full order check → bill check → final bill; void/discount/split/refund with routes, events, ceilings; modifiers/notes/courses/fire-rounds; receipt engine per store/order; which item prints at which kitchen printer; config force/lock/fan-out with per-device drift; multi-floor drag-drop floor plan; alerting, network printing, backup; and the performance gates. |
 | **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (≈19 PR + ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
 | **v1.3 — Production International** | B·W10 + JP/IN go-live (≈3 PR code + ops, gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
 
 Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ +5–7 wk · v1.3 ≈ +2–3 wk of
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
-materially. **≈80 PR total** plus the gated W10 — up from the original ≈70 by A·P1x's six closing slices
-and the two posture ADRs (D23/D24). **18 merged** as of 2026-09-02 (#71–#74, #90–#103): all of A·P1's
-code, B9.1, R2's ADR and its release registry, and E5.
+materially. **≈82 PR total** plus the gated W10 — up from the original ≈70 by A·P1x's seven closing slices
+(E7a split out of E7 once ADR-0089 found it needed a certificate path) and the two posture ADRs
+(D23/D24). **21 merged** as of 2026-09-02 (#71–#74, #90–#107): all of A·P1's code, B9.1, R2's ADR and
+its release registry, E5, E6, the two posture ADRs, and the `X-Forwarded-For` rate-limit fix.
 
 ## Program A — Ship the Edge
 
@@ -67,7 +68,7 @@ code, B9.1, R2's ADR and its release registry, and E5.
 A·P1 shipped every slice's *code* and the wiring from `main.rs` was verified live. What the audit found is
 that the **chain** those slices form has never run end to end: a store provisioned by the guided wizard
 boots LAN-only, the relay cannot be granted its scope from the console, the event bus is unreachable from
-outside the box, and the OTA updater is never constructed. Six closing slices, all small, all blocking the
+outside the box, and the OTA updater is never constructed. Seven closing slices, all small, all blocking the
 first real store.
 
 - **S0c** — `/ws` requires the paired device token. It is mounted on the ungated infra router, outside both
@@ -84,17 +85,27 @@ first real store.
   says. Fix: emit `cloud_url`, offer a bind port, and generate the mode-0600 env file
   (`POS_EDGE_SYNC_KEY`, `POS_EDGE_NATS_URL`) beside it; and add `relay_orders` to the key-issuance UI,
   which today offers four scopes and not that one — so no operator can grant the relay its scope.
-- **E7** — Make the event bus reachable (D23). NATS sits on an `internal: true` Docker network with no
-  published port and no proxy route, so `POS_EDGE_NATS_URL` has nowhere valid to point and the outbox
-  publishes nowhere. The store keeps trading and the events stay durable, so the failure is silent: the
-  cloud simply never receives anything, and rollups, reports and reconciliation all read empty.
+- **E7a** — TLS becomes a chosen posture, not an inference (D24, [ADR-0090](adr/0090-tls-postures.md)).
+  `bootstrap.sh` picks the TLS method from `DOMAIN`'s suffix, which reaches only two of the four
+  legitimate postures, silently downgrades a managed domain with an empty `CF_DNS_API_TOKEN` to a method
+  that cannot work on a DNS-only record, and records the choice nowhere. An explicit `TLS_MODE`
+  (`acme-http01` | `acme-dns01` | `byo-cert` | `external`) selects a committed per-mode Caddyfile instead
+  of overwriting one, establishes `secrets/tls/` as the certificate path every consumer reads, and makes
+  `trusted_proxy_hops` configuration — without which `external` collapses the whole company onto one
+  login-rate-limit bucket. **Sequenced before E7**: ADR-0089 binds TLS to the published port and needs a
+  certificate path some posture put there on purpose.
+- **E7** — Make the event bus reachable (D23, [ADR-0089](adr/0089-edge-event-bus-transport.md)). NATS sits
+  on an `internal: true` Docker network with no published port and no proxy route, so
+  `POS_EDGE_NATS_URL` has nowhere valid to point and the outbox publishes nowhere. The store keeps
+  trading and the events stay durable, so the failure is silent: the cloud simply never receives
+  anything, and rollups, reports and reconciliation all read empty. **Follows E7a** for the certificate.
 - **R5** — Wire `OtaUpdater` into the running edge. It has **zero production callers** — the only
   construction in the tree is `crates/pos-edge/tests/ota.rs`. Four merged slices (P9a/P9b/P9e-4, ADR-0047/
   0048/0055) built update decision, signature verification, self-test and rollback, and none of it runs.
   Principle 3 ("dễ cập nhật") is unmet until this lands, and it must land with R4's real installer.
 
 **Q1 moves up.** The in-process end-to-end acceptance suite is listed under A·P3, but it is the gate that
-would have caught every one of the six above — seven times this program has merged code that was written,
+would have caught every one of the seven above — seven times this program has merged code that was written,
 tested and unreachable. Q1 runs immediately after A·P1x, before any new A·P2 or Program B slice.
 
 ### A·P2 — Publish from the cloud
@@ -214,7 +225,7 @@ The full debate log (D1–D22) lives in the planning artifact. The load-bearing 
 - **D21** — A tenant is a legal entity; country/currency/timezone are attributes of a *store*. A tenant typically maps to a country because fiscal credentials live on the legal entity.
 - **D22** — Non-functional promises (fast, light, few steps) are protected by CI gates, not prose.
 - **D23** — The edge reaches NATS **directly over TCP**, not through the HTTP reverse proxy. Both were viable and performance-indistinguishable at this workload — the publisher drains the outbox in batches every 5 s, ~135 events ≈ 40–100 KB, so ~20 KB/s per store, nowhere near any transport's limit, and WebSocket's per-frame mask is a rounding error there. Direct TCP wins on four things a proxy cannot give: TLS terminates *at NATS*, which is the only way to authenticate a store by **client certificate** (through a proxy the identity dies at the proxy — a header NATS will not read); NATS's own cluster gossip lets clients failover across nodes, which a proxy hides behind internal addresses; the proxy is not a shared chokepoint for both the console and the bus (Caddy runs on `cpus: 0.25` / `mem_limit: 96m` and already carries the long-polls); and there is no upgrade round-trip per reconnect, which matters for the deferred live mode (ADR-0062). It also needs **no** proxy plugin: the `nats` container publishes `4222` itself and Caddy is not in the path. **Revisit if** the fleet outgrows one NATS node, per-store mTLS is dropped, the bus starts carrying large payloads (the deferred log tail), or the proxy measurably stops being the constraint — the transport is a URL, so reversing costs a config line, not code (`async_nats::connect` takes either scheme from the same binary).
-- **D24** — TLS termination is a **fork-level posture, not a fixed choice**. Four are legitimate and a framework must serve all four: ACME HTTP-01 (the default; sslip.io and any A-record domain), ACME DNS-01 (a Cloudflare-managed domain, grey-clouded), **bring-your-own certificate files** (a company with a wildcard or an internal CA and no ACME), and **termination upstream** (a company whose own load balancer, ingress or tunnel already does TLS and where the bundled proxy should do none). An explicit `TLS_MODE` selects a snippet; nothing overwrites the committed `Caddyfile`. The `external` mode is the one with a hidden edge: the app must then trust `X-Forwarded-For`/`X-Forwarded-Proto` from *that* balancer, or the login rate limit collapses every user onto one source IP and one wrong password locks the whole company out.
+- **D24** — TLS termination is a **fork-level posture, not a fixed choice**. Four are legitimate and a framework must serve all four: ACME HTTP-01 (the default; sslip.io and any A-record domain), ACME DNS-01 (a Cloudflare-managed domain, grey-clouded), **bring-your-own certificate files** (a company with a wildcard or an internal CA and no ACME), and **termination upstream** (a company whose own load balancer, ingress or tunnel already does TLS and where the bundled proxy should do none). An explicit `TLS_MODE` selects a committed per-mode file; nothing overwrites one. **Recorded in [ADR-0090](adr/0090-tls-postures.md)**, which also establishes `secrets/tls/` as the single certificate path — the dependency ADR-0089 was waiting on. The `external` mode is the one with a hidden edge: the app must then trust `X-Forwarded-For`/`X-Forwarded-Proto` from *that* balancer, or the login rate limit collapses every user onto one source IP and one wrong password locks the whole company out.
 - **D25** — For mTLS on the bus, the **server certificate and the client CA are different trust decisions**. The server certificate may be public (ACME or brought). The CA that verifies *store* certificates must be **private and ours** — configure a public CA there and anyone who can obtain a certificate from it can speak to the bus, which is the most common way mTLS is misconfigured into a no-op. Store certificates carry the `store_id` as their subject and NATS maps it (`verify_and_map`), which is what finally gives a box a real fleet identity rather than one derived from its store id. Custody follows D1's reasoning: a CA key on the VPS means owning the VPS is owning every store's identity, so the pilot may generate it on the box (documented as a pilot posture) and a fleet moves it offline before scale.
 
 ## Cadence
