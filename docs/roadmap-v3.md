@@ -84,6 +84,13 @@ first real store.
   necessity.
 - **S0d** — Durable pairing and sign-in state. Both live in process memory today, so an edge restart
   re-pairs and re-signs-in every device — mid-service, on a box that is expected to be power-cycled.
+  **Framed by [ADR-0091](adr/0091-durable-edge-auth-state.md)**, which had to precede it: every adapter
+  depends on exactly `pos-proto` + `pos-ports`, so a trait `store-sqlite` implements has to live in
+  `pos-ports` — S0d is the **eighteenth port**, `DeviceRegistry`, and therefore an ADR first. The
+  record also settles what persistence *changes*: the token is stored as a SHA-256 digest so a stolen
+  `pos.db` yields no working credential; revocation becomes explicit, because a restart stops being
+  the accidental revocation; and **both** tables survive a restart, with a 30-minute
+  `sign_in_idle_timeout` carrying the risk that durable sign-in creates.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
   nothing writes the tag at build time, so every artifact reports the same version and the whole OTA
   progress model (ADR-0078) cannot tell one release from another.
