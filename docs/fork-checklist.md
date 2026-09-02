@@ -11,7 +11,7 @@ secrets belong to GitHub, and which belong to a machine.**
 Everything below is derived from the workflows themselves (`grep -rno "secrets\.[A-Z_]*" .github/workflows/`),
 not from prose, so it stays checkable.
 
-## 1. GitHub Actions secrets — 12, of which 5 are optional
+## 1. GitHub Actions secrets — 13, of which 6 are optional
 
 Repository → Settings → Secrets and variables → Actions.
 
@@ -24,8 +24,9 @@ Repository → Settings → Secrets and variables → Actions.
 | `VPS_SSH_KEY` | yes | that user's private key, PEM |
 | `VPS_KNOWN_HOSTS` | yes | `ssh-keyscan <host>` output (add `-p <port>` for a non-default port), so the deploy is not trust-on-first-use |
 | `DOMAIN` | yes | the hostname, or `<vps-ip>.sslip.io` |
-| `ACME_EMAIL` | yes | contact address for the certificate |
-| `CF_DNS_API_TOKEN` | **conditional** | a Cloudflare token scoped to *Zone → DNS → Edit* on the one zone. Required **unless** `DOMAIN` ends in `.sslip.io`, which issues over HTTP-01 instead |
+| `TLS_MODE` | no | the TLS posture ([ADR-0090](adr/0090-tls-postures.md)): `acme-http01` · `acme-dns01` · `byo-cert` · `external`. Unset means `acme-http01`, which is what sslip.io and any A-record hostname want. It also decides which Caddy image CI builds |
+| `ACME_EMAIL` | **conditional** | contact address for the certificate. Required by the two `acme-*` modes; unused by `byo-cert` and `external` |
+| `CF_DNS_API_TOKEN` | **conditional** | a Cloudflare token scoped to *Zone → DNS → Edit* on the one zone. Required by **`TLS_MODE=acme-dns01` and nothing else**. That mode refuses to bootstrap without it rather than falling back to HTTP-01, which cannot answer a challenge for a DNS-only record |
 | `VPS_PORT` | no | SSH port when it is not 22 |
 
 ### Release — `.github/workflows/release.yml`
@@ -74,6 +75,8 @@ every one of them, and in a fork it would travel with the repository.
 | `table_token_secret`, the NATS token, `retention_days`, the database password | `deploy/secrets/cloud.toml` on the box | The box mints or holds these; they never leave it. `bootstrap.sh` generates most of them |
 | Garage S3 access keys | minted on the box with `garage key create` | Garage generates them at runtime; they cannot be pre-created |
 | `RCLONE_REMOTE` | the box's environment, read by `deploy/backup.sh` | **No workflow reads it.** It was previously listed as a GitHub secret; setting it there does nothing and leaves off-box backups silently disabled |
+| The TLS certificate and key under `TLS_MODE=byo-cert` | `deploy/secrets/tls/{fullchain,privkey}.pem` on the box, root-owned, the key mode 0600 | A private key must not cross the repository boundary, and `TLS_MODE` is the only part of that posture GitHub needs to know ([ADR-0090](adr/0090-tls-postures.md)) |
+| `EXTERNAL_HTTP_PORT` | the box's environment on the first bootstrap under `TLS_MODE=external`; recorded in the generated `deploy/.env` | A port binding on one machine. Default `80`; set it when the box already runs something there |
 
 ## 3. Per-store provisioning
 
@@ -93,16 +96,39 @@ every poll, so orders placed in the cloud never reach the kitchen. The wizard pr
 gate no route, so they are deliberately absent from both scope pickers. Do not issue a key expecting
 them to grant anything.
 
-## 4. TLS
+## 4. TLS — pick one of four postures
 
-The default is ACME over HTTP-01, which needs `:80` and `:443` reachable from the internet — an
-`*.sslip.io` name satisfies that with no DNS work and no Cloudflare token, which is the fastest way to
-a real certificate on a fresh box. Note that such a name is **bound to the IP**: change the VPS
-address and the hostname changes with it, and every store's `cloud_url` must be re-issued. Move to a
-domain you own before the first real store.
+`TLS_MODE` is explicit; nothing is inferred from the hostname
+([ADR-0090](adr/0090-tls-postures.md)). Unset means `acme-http01`.
 
-A Cloudflare-managed domain issues over DNS-01 instead and needs `CF_DNS_API_TOKEN`; that path builds
-a Caddy image with the DNS provider compiled in, where the sslip.io path uses the stock image.
+| `TLS_MODE` | Pick it when | Also needs | Caddy image |
+|---|---|---|---|
+| `acme-http01` (default) | sslip.io, or any domain whose A record points at the box and whose `:80` is reachable from the internet | `ACME_EMAIL` | stock |
+| `acme-dns01` | a Cloudflare-managed domain, grey-clouded, with no inbound `:80` reaching ACME | `ACME_EMAIL`, `CF_DNS_API_TOKEN` | custom, with the DNS plugin compiled in |
+| `byo-cert` | you already hold a certificate — a wildcard, or one from your internal CA — and want no ACME anywhere near this box | `deploy/secrets/tls/{fullchain,privkey}.pem` installed on the box | stock |
+| `external` | your own load balancer, ingress controller, or tunnel already terminates TLS | an upstream terminator that sets `X-Forwarded-*` | stock |
 
-Bringing your own certificate, or terminating TLS at your own load balancer, is
-[D24](roadmap-v3.md) — a `TLS_MODE` setting, landing with ADR-0090.
+The fastest path on a fresh box is the default with an `*.sslip.io` name: no DNS work, no Cloudflare
+token, and a real certificate. But such a name is **bound to the IP** — change the VPS address and
+the hostname changes with it, and every store's `cloud_url` must be re-issued. Move to a domain you
+own before the first real store.
+
+**`byo-cert`.** Put `fullchain.pem` and `privkey.pem` in `deploy/secrets/tls/` on the box before
+deploying. `bootstrap.sh` refuses to bring the stack up when either is missing, rather than starting
+a Caddy that fails to load them. Renewal is yours: replace both files and
+`docker compose -f deploy/compose.yml kill -s HUP caddy`. Nothing here can renew a certificate it did
+not issue.
+
+**`external`.** Two things change beyond the proxy. `443` stops being offered to the internet (it is
+published on loopback, because Compose cannot conditionally omit a port), and the site is served as
+plain HTTP on `EXTERNAL_HTTP_PORT` (default `80`) for your terminator to reach — firewall it to that
+terminator. And `trusted_proxy_hops` becomes `2`, which `bootstrap.sh` writes into
+`secrets/cloud.toml` for you. **If that value is wrong, the `/admin/login` rate limit keys every
+request on your balancer's single address**: all admins share one bucket and one person's wrong
+passwords lock out the rest. Watch the bootstrap log for a `warn` that it could not write the line.
+
+**The certificate path.** `deploy/secrets/tls/` is where every consumer looks, in all four modes. On
+the two ACME modes, `deploy/tls-export.sh` republishes Caddy's certificate there; add its cron line
+from the [deploy runbook](deploy-runbook.md) so a renewal reaches the exported copy. Nothing alerts
+on a stale export yet — a flagged follow-up in ADR-0090 — so an exporter that quietly stops shows up
+only when the old certificate expires.

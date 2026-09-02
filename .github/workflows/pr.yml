@@ -51,6 +51,8 @@ jobs:
         run: cargo run -q -p xtask -- mirrored-files
       - name: no vendor brand name in pos-core / pos-proto production code
         run: cargo run -q -p xtask -- vendor-neutral-core
+      - name: every accepted TLS_MODE has its Caddyfile and imports the shared block
+        run: cargo run -q -p xtask -- tls-modes
       - name: nothing removed from a committed snapshot
         run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
       - name: migrations are additive-only

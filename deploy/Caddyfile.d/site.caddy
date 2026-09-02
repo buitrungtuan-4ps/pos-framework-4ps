@@ -1,0 +1,17 @@
+# The part of the site that is identical in every TLS posture (ADR-0090).
+#
+# Imported from *inside* the site block of each deploy/Caddyfile.d/<TLS_MODE>.caddy, so this file
+# holds site directives only: no site address, no global options, and nothing about TLS. Those are
+# exactly the three things a posture changes, and keeping them out of here is what lets the proxy
+# configuration exist once instead of in four copies that drift.
+
+encode zstd gzip
+
+# pos_cloud speaks plain HTTP on :8080 inside the network. Active health checks against /health
+# take the upstream out of rotation if the app stops answering, so Caddy returns 502 rather than
+# proxying into a dead process.
+reverse_proxy pos_cloud:8080 {
+	health_uri /health
+	health_interval 10s
+	health_timeout 2s
+}

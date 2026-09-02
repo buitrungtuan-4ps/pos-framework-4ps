@@ -46,6 +46,56 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   be wrong in, but wrong.
 
 ### Added
+- **`TLS_MODE` — four TLS postures, so a fork can bring its own certificate or terminate upstream**
+  ([ADR-0090](docs/adr/0090-tls-postures.md), roadmap v3 slice **E7a**). The implementation of the
+  record below.
+
+  `TLS_MODE` is `acme-http01` (the default when unset, so an existing cell is unchanged) ·
+  `acme-dns01` · `byo-cert` · `external`. Each is a committed Caddyfile under `deploy/Caddyfile.d/`
+  importing one shared `site.caddy`, and `bootstrap.sh` installs the selected one as a **generated**
+  `deploy/secrets/Caddyfile` — nothing overwrites a version-controlled file any more, the proxy block
+  exists once instead of per mode, and the chosen posture is recorded in `secrets/caddy.env` and
+  printed on every run. CI builds the Cloudflare-plugin Caddy image only for `acme-dns01`; every
+  other posture ships the stock image.
+
+  **`deploy/secrets/tls/` is now the certificate path in every mode.** The operator fills it under
+  `byo-cert`; the new `deploy/tls-export.sh` fills it under the two ACME modes, reading Caddy's
+  certificate *through* the container (so it needs neither root nor Docker's volume layout), refusing
+  to guess when the ACME-directory glob is not unique, writing only on a real change, and `SIGHUP`-ing
+  whatever `TLS_RELOAD_SERVICES` names. That is the renewal hook ADR-0089's event bus was waiting for.
+
+  **`trusted_proxy_hops` is configuration** (`cloud.toml`, default `1` — today's constant), and
+  `client_ip` reads it instead of a hard-coded `TRUSTED_PROXY_HOPS`. `bootstrap.sh` derives it from
+  the posture — `2` under `external`, where the chain is `client, terminator, caddy` — and reconciles
+  the line on **every** run, because switching a live cell to `external` would otherwise leave it at
+  `1` and key the `/admin/login` rate limit on the terminator's single address: every admin in one
+  bucket, one person's wrong passwords locking out the rest. `0` is refused at load rather than read
+  as caution. Five new unit tests cover both postures, including the one-hop misconfiguration
+  directly.
+
+  **A new gate, `cargo xtask tls-modes`**, keeps the accept-list in `bootstrap.sh` and the files in
+  `deploy/Caddyfile.d/` in agreement, and requires every posture to import the shared site block.
+  `bootstrap.sh` selects a Caddyfile *by name*, so a renamed or missing file would otherwise surface
+  on someone's box in the one posture nobody here runs. It does not validate Caddy syntax — that
+  needs the binary, and one mode needs a plugin build, which ADR-0090 records as deferred.
+
+  Two fixes that came with it, both in the "supplied configuration is not a generated secret"
+  category. **`secrets/caddy.env` is now rewritten when the environment supplies `DOMAIN`** — until
+  now changing the `DOMAIN` secret and redeploying did nothing, because the file was kept under the
+  never-rotate rule that exists for the database password. And the port publishes are written to a
+  generated `deploy/.env`, which Compose reads automatically, so a `docker compose up -d` typed by
+  hand keeps the posture instead of silently restoring an internet-facing `:443` on a cell whose
+  operator believes TLS terminates upstream.
+
+  **Upgrade note.** No action for an existing deployment: `TLS_MODE` unset means `acme-http01`, and a
+  `secrets/caddy.env` written before this change has its posture **inferred once from the old rule and
+  recorded**, so a cell already on the Cloudflare path stays on it. Two behaviour changes to know:
+  `acme-dns01` with an empty `CF_DNS_API_TOKEN` now **refuses to bootstrap** instead of silently
+  downgrading to a challenge that cannot answer for a DNS-only record; and `byo-cert` refuses when the
+  certificate files are absent. Add the `tls-export.sh` cron line from
+  [`docs/deploy-runbook.md`](docs/deploy-runbook.md) on the ACME modes. Nothing yet alerts on a stale
+  export — a deferral flagged in ADR-0090.
+
 - **ADR-0090 — TLS termination is a fork-level posture, chosen explicitly**
   ([ADR-0090](docs/adr/0090-tls-postures.md), roadmap v3 slice **E7a**, debate D24). The decision record
   ahead of the implementation, and the one ADR-0089 was sequenced behind.

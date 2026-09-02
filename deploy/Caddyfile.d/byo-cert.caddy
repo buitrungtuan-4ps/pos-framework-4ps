@@ -1,0 +1,21 @@
+# TLS_MODE=byo-cert — the operator brought the certificate (ADR-0090).
+#
+# For a company that already has a wildcard, or issues from its own internal CA, and does not want
+# ACME anywhere near this box. Caddy serves the two files and never contacts an ACME directory, so
+# this mode needs no ACME_EMAIL, no DNS token, and the **stock official caddy image**.
+#
+# The files are ./secrets/tls/{fullchain.pem,privkey.pem}, mounted read-only at /etc/caddy/tls.
+# bootstrap.sh refuses to bring the stack up when either is missing or empty, rather than starting a
+# Caddy that fails to load them. :80 stays published for the HTTP→HTTPS redirect, not for issuance.
+#
+# Renewal is the operator's: this deployment cannot renew a certificate it did not issue. Replace
+# both files and reload Caddy — the step is in docs/deploy-runbook.md.
+#
+# TLS_MODE and DOMAIN come from ./secrets/caddy.env, written on the box by bootstrap.sh and never
+# committed. The private key never leaves the box either.
+
+{$DOMAIN} {
+	tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem
+
+	import /etc/caddy/Caddyfile.d/site.caddy
+}

@@ -1,0 +1,27 @@
+# TLS_MODE=external — TLS terminates upstream, not here (ADR-0090).
+#
+# For a company whose own load balancer, ingress controller, or tunnel already terminates TLS and
+# where this proxy should terminate none. Caddy serves plain HTTP for that terminator to reach, and
+# holds no certificate at all: ./secrets/tls stays empty and no ACME directory is ever contacted.
+#
+# Two things bootstrap.sh does for this mode, both load-bearing:
+#
+#   * 443 is published to **loopback only** rather than to the internet. Compose cannot
+#     conditionally omit a port, and a 127.0.0.1 publish is the honest equivalent of not offering
+#     one. The HTTP publish is a variable (EXTERNAL_HTTP_PORT, default 80) because a box that
+#     already runs the company's own proxy will not have :80 free.
+#
+#   * pos_cloud's `trusted_proxy_hops` is set to 2. The chain that reaches the app is
+#     `client, upstream-terminator, caddy` — the terminator appends the client, Caddy appends the
+#     terminator — so the real client is two entries back. Left at 1, the /admin/login rate limit
+#     keys every request on the terminator's single address: every admin in the company shares one
+#     bucket and one person's wrong passwords lock out the rest (ADR-0067 slice 5, ADR-0090).
+#
+# The site address is `:80`, which matches any Host. Host matching is delegated to the upstream
+# terminator deliberately — that is the component holding the certificate, so it is the component
+# that knows which hostnames are legitimate — and it keeps a balancer's IP-addressed health check
+# from getting a 404 from us.
+
+:80 {
+	import /etc/caddy/Caddyfile.d/site.caddy
+}

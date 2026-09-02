@@ -1,0 +1,26 @@
+# TLS_MODE=acme-http01 — the default posture (ADR-0090).
+#
+# Caddy issues and renews the certificate itself over HTTP-01 / TLS-ALPN, which needs :80 and :443
+# reachable from the internet. This is what the *.sslip.io fallback uses — <vps-ip>.sslip.io
+# resolves straight to the box for free, so the certificate is real — and it works for any domain
+# whose A record points here. It needs no DNS provider, no API token, and therefore the **stock
+# official caddy image**: the custom plugin build exists only for acme-dns01.
+#
+# Caddy fronts pos_cloud (ADR-0044): it terminates real TLS and reverse-proxies plaintext to the app
+# on the internal Docker network. Cloudflare "Flexible" SSL is forbidden — the origin is always real
+# TLS here; if Cloudflare proxies at all it must be Full (strict), the same "redirect, never proxy,
+# never Flexible" rule ADR-0023 fixed for tenant hostnames.
+#
+# TLS_MODE, DOMAIN and ACME_EMAIL come from ./secrets/caddy.env, written on the box by bootstrap.sh
+# and never committed.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	# No `tls` directive on purpose: Caddy's default already issues over ACME with the HTTP-01 and
+	# TLS-ALPN challenges, which is exactly this posture. The other three files each say what they
+	# do differently, and this one's difference is that it does nothing.
+	import /etc/caddy/Caddyfile.d/site.caddy
+}
