@@ -7,11 +7,33 @@
 
 encode zstd gzip
 
-# pos_cloud speaks plain HTTP on :8080 inside the network. Active health checks against /health
-# take the upstream out of rotation if the app stops answering, so Caddy returns 502 rather than
-# proxying into a dead process.
-reverse_proxy pos_cloud:8080 {
-	health_uri /health
-	health_interval 10s
-	health_timeout 2s
+# `/internal/*` is the cloud's own trusted-network surface and is NOT part of the public one.
+# Those handlers take no `HeaderMap` and perform no authentication — deliberately, because they are
+# documented as private-network-only (`/internal/ingest` is the reconciliation re-push,
+# `/internal/reconcile` the id-diff endpoint, `/internal/ota/report` the fleet report). Nothing
+# enforced that assumption: this file used to proxy every path, so all three were reachable,
+# unauthenticated, from the internet — event injection, an id-holding oracle, and falsifiable fleet
+# state for any tenant. This is the enforcement.
+#
+# `handle` blocks are mutually exclusive and matched most-specific-first, so the deny cannot be
+# reordered behind the proxy by a later edit. It answers **404**, not 403: a 403 confirms the route
+# exists, and an internal surface should tell an unauthenticated caller nothing at all.
+#
+# A deployment that genuinely needs to reach these (a fork running its own cloud-side tooling from
+# another host) opens them on the private network, never here. The store's own reporting rides the
+# authenticated store surface (`/sync/stores/{id}/…`), where the cloud resolves the tenant from the
+# scoped key rather than trusting a body field.
+handle /internal/* {
+	respond 404
+}
+
+# Everything else is the public surface. pos_cloud speaks plain HTTP on :8080 inside the network.
+# Active health checks against /health take the upstream out of rotation if the app stops answering,
+# so Caddy returns 502 rather than proxying into a dead process.
+handle {
+	reverse_proxy pos_cloud:8080 {
+		health_uri /health
+		health_interval 10s
+		health_timeout 2s
+	}
 }

@@ -16,6 +16,76 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **ADR-0093 — a bill belongs to an order, not to a table**
+  ([ADR-0093](docs/adr/0093-bill-keyed-on-order.md)). No behaviour change in this entry: the record
+  lands first because it changes an app-layer domain contract, and roadmap v3 finding #9 booked it
+  that way.
+
+  **Takeaway revenue is uncollectable at the counter** — not degraded, impossible. `EdgeOrderIn`
+  accepts a relayed order, reprices it, stores it transactionally and issues a queue number, and then
+  the path ends: `Edge::open_bill` is the only route to a bill anywhere in the tree, and it takes a
+  `TableId`, gates on that table being `Occupied`, resolves the order *through* the table, and stores
+  a non-optional `table_id`. A takeaway order is tableless by design (ADR-0064). So every takeaway
+  order a store accepts is priced, queued, fired — and cannot be charged for.
+
+  **What the ADR found, which shrinks the follow-up:** the event log has never been table-keyed.
+  `BillingBillOpened` carries only `{bill_id, order_id}`, and not one billing event mentions a table.
+  The projection already admits it — `table_for_order` exists with the comment *"a bill event names
+  its order, not its table"*. So the durable truth already says a bill belongs to an order, and the
+  coupling is entirely the edge's in-memory reach for it. **No `pos-proto` change, no
+  `PROTOCOL_VERSION` bump, and no migration.**
+
+  Decided: `open_bill_for_order(actor, order_id)` becomes the primitive with `open_bill(actor,
+  table_id)` delegating (the floor keeps its `Occupied` gate, which ADR-0072 owns);
+  `BillRecord.table_id` becomes `Option<TableId>` and settling cycles a table only when there is one;
+  and the projection gains an order→bill index that refuses a second bill on one order — because the
+  table state machine was enforcing that as a *side effect*, and moving to an order key would
+  silently drop it. Two open bills on one order means two receipts and double payment for one meal.
+
+  Rejected, and it was the tempting one: minting a synthetic `TableId` per takeaway order needs no
+  domain change at all, and puts rows that are not tables into the floor plan — so the floor screen,
+  the table count, the `NeedsCleaning` queue and every future floor report inherit phantom entries,
+  each needing an exclusion that is invisible until someone counts tables and gets the wrong number.
+
+  The implementation slice includes the HTTP route and the edge-UI takeaway screen, because a domain
+  change nothing can reach is the pattern this roadmap keeps catching.
+
+### Security
+- **`/internal/*` is no longer reachable from the internet** (`deploy/Caddyfile.d/site.caddy`).
+
+  Two facts that were each documented and together were a hole. The three `/internal` handlers take
+  no `HeaderMap` and perform **no authentication** — deliberately, because the code describes them as
+  private-network-only. And the shared proxy block was a bare `reverse_proxy pos_cloud:8080` with no
+  path allowlist, imported by every TLS posture. Nothing enforced the assumption the routes were
+  written under.
+
+  On a deployed instance an unauthenticated client could therefore:
+
+  - `POST /internal/ingest` — inject arbitrary event envelopes for **any** tenant and store, feeding
+    rollups, X/Z reports and ERP posting. (Not the edge's path: the edge publishes over NATS; this
+    route exists only for the reconciliation re-push.)
+  - `POST /internal/reconcile` — probe which event ids a store holds, and write fabricated
+    reconciliation runs into the history the console shows.
+  - `POST /internal/ota/report` — falsify `installed_version` and `self_test_ok` for any store,
+    driving the Fleet and OTA views.
+
+  The shared block now denies `/internal/*` with a `handle` block. `handle` blocks are mutually
+  exclusive and matched most-specific-first, so the deny cannot be reordered behind the proxy by a
+  later edit. It answers **404**, not 403 — a 403 confirms the route exists, and an internal surface
+  should tell an unauthenticated caller nothing.
+
+  **The `tls-modes` xtask gate now requires the deny**, so a fork cannot drop it silently; removing
+  it fails the gate with a hint explaining why. Verified by mutation: with the deny removed the gate
+  exits 1 and names the file, and it passes again once restored.
+
+  No legitimate caller is affected: all three routes have zero external callers today —
+  `/internal/ingest` is the cloud's own re-push, the edge reconcile caller is deferred by ADR-0078,
+  and `/internal/ota/report` has no production caller at all. A store's own OTA reporting is being
+  moved onto the authenticated store surface (`/sync/stores/{id}/…`), where the cloud resolves the
+  tenant from the scoped key rather than trusting a body field; that is a port change and gets its
+  own record.
+
 ### Changed
 - **An OTA report can now say "no self-test yet"** — `UpdateReport.self_test_passed` and the
   `/internal/ota/report` field become `Option<bool>` / optional, implementing

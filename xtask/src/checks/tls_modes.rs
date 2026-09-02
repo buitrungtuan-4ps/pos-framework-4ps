@@ -24,6 +24,9 @@ use crate::Finding;
 const ACCEPT_MARKER: &str = ") return 0 ;;";
 const SHARED: &str = "site.caddy";
 const IMPORT: &str = "import /etc/caddy/Caddyfile.d/site.caddy";
+/// The `handle` block that keeps the cloud's trusted-network surface off the public one. Checked by
+/// name, because the whole point is that every posture inherits it from the one shared file.
+const INTERNAL_DENY: &str = "handle /internal/*";
 
 /// Checks the mode accept-list against the committed per-mode Caddyfiles.
 pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
@@ -81,6 +84,25 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
                     );
                     break;
                 }
+            }
+            // `/internal/*` must be denied here, in the shared block, so all four postures inherit
+            // it. Those handlers authenticate nothing — they are documented as private-network-only
+            // — and this file is the only thing standing between them and the internet. Dropping
+            // the deny re-opens unauthenticated event injection and falsifiable fleet state for any
+            // tenant, which is not the kind of regression that shows up in a test run.
+            if !text.contains(INTERNAL_DENY) {
+                findings.push(
+                    Finding::new(
+                        "deploy/Caddyfile.d/site.caddy",
+                        "tls-modes",
+                        "the shared site block does not deny `/internal/*`".to_owned(),
+                    )
+                    .with_hint(
+                        "the /internal routes carry no authentication by design; the proxy is \
+                         what keeps them private, so the deny belongs in the shared block where \
+                         every TLS posture inherits it",
+                    ),
+                );
             }
             continue;
         }
