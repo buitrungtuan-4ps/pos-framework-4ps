@@ -1167,7 +1167,7 @@ mod config_tree_store {
 
             // A store reports before it has ever pulled config: the row is created, last_seen_at set.
             trees
-                .record_ota_report(tenant, store_id, "v1.2.3", true, 5000)
+                .record_ota_report(tenant, store_id, "v1.2.3", Some(true), 5000)
                 .await
                 .expect("record report");
             let row = admin
@@ -1185,7 +1185,7 @@ mod config_tree_store {
 
             // A later failed-self-test report upserts in place — one row, advanced instant.
             trees
-                .record_ota_report(tenant, store_id, "v1.3.0", false, 9000)
+                .record_ota_report(tenant, store_id, "v1.3.0", Some(false), 9000)
                 .await
                 .expect("record report again");
             let row = admin
@@ -1202,6 +1202,29 @@ mod config_tree_store {
                 row.get::<_, Option<bool>>(2),
                 Some(false),
                 "a failed self-test is recorded, not dropped"
+            );
+
+            // A store with no self-test at all writes SQL NULL (ADR-0078 Amendment 1). The column was
+            // always nullable and `FleetStore::self_test_ok` was always `Option<bool>`; before the
+            // amendment nothing could put a reported row in that state, so the console's "Not
+            // reported" was unreachable for a store that *had* reported. This is that state.
+            trees
+                .record_ota_report(tenant, store_id, "v1.4.0", None, 12_000)
+                .await
+                .expect("record a report with no self-test");
+            let row = admin
+                .query_one(
+                    "SELECT installed_version, self_test_ok FROM store_liveness \
+                     WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .expect("row");
+            assert_eq!(row.get::<_, Option<String>>(0).as_deref(), Some("v1.4.0"));
+            assert_eq!(
+                row.get::<_, Option<bool>>(1),
+                None,
+                "no self-test is NULL, not a fabricated pass or failure"
             );
         });
     }

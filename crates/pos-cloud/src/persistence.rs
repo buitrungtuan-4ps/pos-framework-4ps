@@ -443,7 +443,7 @@ impl OtaReportStore for PostgresConfigTrees {
         tenant: TenantId,
         store: StoreId,
         installed: &str,
-        self_test_passed: bool,
+        self_test_passed: Option<bool>,
         reported_at: Timestamp,
     ) -> Result<(), FleetStoreError> {
         self.record_ota_report(

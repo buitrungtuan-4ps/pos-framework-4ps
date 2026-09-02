@@ -49,7 +49,7 @@ use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
-use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError};
+use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use pos_cloud::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
     RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
@@ -6734,6 +6734,129 @@ async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
     let tax = &state.layers[2]["tax"];
     assert!(tax.is_array(), "the tax node is the serialized rate table");
     assert_eq!(tax.as_array().expect("array").len(), 1);
+}
+
+/// A capturing [`OtaReportStore`] — what the `/internal/ota/report` route actually recorded.
+///
+/// The route had no test coverage before ADR-0078 Amendment 1, which is how a two-state field
+/// survived into a three-state read model unnoticed.
+#[derive(Clone, Default)]
+struct FakeOtaReports {
+    rows: Arc<Mutex<Vec<RecordedReport>>>,
+}
+
+/// One captured report: who reported, the version, and the tri-state verdict.
+type RecordedReport = (TenantId, StoreId, String, Option<bool>);
+
+impl OtaReportStore for FakeOtaReports {
+    async fn record_report(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        installed: &str,
+        self_test_passed: Option<bool>,
+        _reported_at: Timestamp,
+    ) -> Result<(), FleetStoreError> {
+        self.rows.lock().expect("lock").push((
+            tenant,
+            store,
+            installed.to_owned(),
+            self_test_passed,
+        ));
+        Ok(())
+    }
+}
+
+/// The router with the OTA-report ingest merged in.
+fn ota_report_app(reports: FakeOtaReports) -> axum::Router {
+    let app = app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    );
+    http::router(app).merge(http::ota_report_router(reports, clock()))
+}
+
+/// The body an edge posts, with `self_test_passed` supplied by the caller so each case can choose
+/// present-and-true, present-and-false, or absent.
+fn report_body(self_test: Option<bool>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "installed": "1.4.0",
+    });
+    if let Some(passed) = self_test {
+        body["self_test_passed"] = serde_json::json!(passed);
+    }
+    body
+}
+
+#[tokio::test]
+async fn an_ota_report_records_all_three_self_test_states() {
+    // A store that has never installed anything omits the field. This is the case the amendment
+    // exists for: the report still says which binary the store runs, and the verdict is recorded as
+    // absent rather than as a pass or a failure it never earned.
+    let reports = FakeOtaReports::default();
+    let accepted = ota_report_app(reports.clone())
+        .oneshot(post_json("/internal/ota/report", &report_body(None)))
+        .await
+        .expect("route the report");
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        reports.rows.lock().expect("lock").as_slice(),
+        [(tenant(), store_id(), "1.4.0".to_owned(), None)],
+        "an omitted self-test is recorded as absent, not defaulted"
+    );
+
+    // An edge built before the amendment still posts the field, and its verdict is read unchanged —
+    // in both directions, because a dropped `false` would hide exactly the failure the column warns
+    // about.
+    for passed in [true, false] {
+        let reports = FakeOtaReports::default();
+        let accepted = ota_report_app(reports.clone())
+            .oneshot(post_json(
+                "/internal/ota/report",
+                &report_body(Some(passed)),
+            ))
+            .await
+            .expect("route the report");
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            reports.rows.lock().expect("lock").as_slice(),
+            [(tenant(), store_id(), "1.4.0".to_owned(), Some(passed))],
+            "an explicit self_test_passed={passed} is recorded as given"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_malformed_ota_report_is_refused_and_records_nothing() {
+    let reports = FakeOtaReports::default();
+    let router = ota_report_app(reports.clone());
+
+    // A store id that is not a ULID.
+    let mut bad_id = report_body(Some(true));
+    bad_id["store_id"] = serde_json::json!("not-a-ulid");
+    let refused = router
+        .clone()
+        .oneshot(post_json("/internal/ota/report", &bad_id))
+        .await
+        .expect("route the report");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    // An empty installed version — the one field a report cannot be useful without.
+    let mut blank = report_body(Some(true));
+    blank["installed"] = serde_json::json!("   ");
+    let refused = router
+        .oneshot(post_json("/internal/ota/report", &blank))
+        .await
+        .expect("route the report");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    assert!(
+        reports.rows.lock().expect("lock").is_empty(),
+        "a refused report writes nothing to the read model"
+    );
 }
 
 /// The router with the OTA levers merged in ([ADR-0052](../../docs/adr/0052-ota-rollout-config.md),

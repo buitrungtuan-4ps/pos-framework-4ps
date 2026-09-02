@@ -84,9 +84,17 @@ pub struct UpdateReport {
     /// The release the store is running after the update cycle — the target on a successful install,
     /// the prior version on a rollback.
     pub installed: ReleaseTag,
-    /// Whether the post-install self-test passed. `false` is a rollback the cloud should surface, not
-    /// an error.
-    pub self_test_passed: bool,
+    /// Whether the post-install self-test passed, or `None` when there has not been one.
+    ///
+    /// Three states, not two ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)
+    /// Amendment 1). `Some(false)` is a rollback the cloud should surface, not an error. `None` is a
+    /// store that has never installed an update — most of a fleet, most of the time — and it matters
+    /// that this is expressible: a report exists chiefly to say *which binary a store is running*,
+    /// which is worth knowing from a store's first boot, and a two-state field would force the edge
+    /// to invent a verdict. `Some(true)` would show a pass earned by nothing; `Some(false)` would
+    /// show red on every healthy store in a fresh fleet, which teaches an operator to ignore the one
+    /// column meant to warn them.
+    pub self_test_passed: Option<bool>,
 }
 
 /// The store's request/response channel to the cloud

@@ -78,7 +78,12 @@ struct ReportRequest<'a> {
     tenant_id: String,
     store_id: String,
     installed: &'a str,
-    self_test_passed: bool,
+    /// Omitted entirely when the store has never self-tested (ADR-0078 Amendment 1), rather than
+    /// sent as `null`: the cloud's field is `#[serde(default)]`, so an absent field and a `null` mean
+    /// the same thing there, and omitting keeps the body byte-identical to the pre-amendment shape
+    /// for every store that does have a verdict.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    self_test_passed: Option<bool>,
 }
 
 impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {

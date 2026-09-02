@@ -93,8 +93,12 @@ pub trait FleetStore {
 /// config-pull/heartbeat liveness capture; a trait so it runs against a fake in tests and a
 /// `store-postgres` upsert in the cloud.
 pub trait OtaReportStore {
-    /// Records that `store` (in `tenant`) is now running `installed` and whether its self-test passed,
-    /// at `reported_at`.
+    /// Records that `store` (in `tenant`) is now running `installed` and whether its self-test
+    /// passed, at `reported_at`.
+    ///
+    /// `self_test_passed` is `None` for a store that has never self-tested, which writes SQL `NULL`
+    /// into a column that was always nullable — so [`FleetStore::self_test_ok`]'s `None` becomes
+    /// reachable for the case the console already renders it as (ADR-0078 Amendment 1).
     ///
     /// # Errors
     ///
@@ -104,7 +108,7 @@ pub trait OtaReportStore {
         tenant: TenantId,
         store: StoreId,
         installed: &str,
-        self_test_passed: bool,
+        self_test_passed: Option<bool>,
         reported_at: Timestamp,
     ) -> impl Future<Output = Result<(), FleetStoreError>> + Send;
 }
