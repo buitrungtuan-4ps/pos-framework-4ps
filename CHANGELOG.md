@@ -17,6 +17,54 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **ADR-0092 — the artifact trust chain, ahead of roadmap v3 slice R5**
+  ([ADR-0092](docs/adr/0092-artifact-trust-chain.md)). No behaviour change in this entry: the record
+  lands first because closing the gap changes a **port** — `CloudSync::fetch_update`'s return type —
+  and because the other half of it is a security boundary that has one convenient wrong answer.
+
+  `OtaUpdater` already fetches, verifies, then writes to disk, in that order. Two of the three things
+  verification needs have **no production source at all**:
+
+  - **The signature has no producer.** `UpdatePlan.signature` is what `OtaUpdater::verify` reads the
+    claimed key id from, checks against the revocation list, and verifies. But `fetch_update` returns
+    `Vec<u8>` — the artifact and nothing else — and no port method offers a `.minisig`. The only
+    `UpdatePlan` in the tree is in `crates/pos-edge/tests/ota.rs`, which builds its own.
+  - **The trusted keys have no source.** `OtaUpdater::new` takes `trusted_keys: Vec<PublicKey>` and
+    nothing in production ever builds that vector. ADR-0047 said the keys are baked into the binary;
+    the mechanism to bake them was never written.
+
+  Neither is a live defect — R5 has not wired the updater in, so the whole thing has zero production
+  callers — and that is precisely the argument for settling it now. R5 is otherwise where these get
+  discovered one at a time, under pressure to make it compile, and the easiest way to fill a
+  `trusted_keys` vector at that moment is from the config tree, which is already parsed and already
+  in `EdgeSession`. That would hand a cloud the ability to choose the key its own artifact is
+  verified against.
+
+  What the record settles:
+
+  - **`fetch_update` returns `SignedArtifact { bytes, signature }`.** Not for convenience — so that
+    **skipping verification stops being expressible**. Two independent calls let a caller hold 30 MB
+    of executable bytes with no signature and no complaint from the type system; returning the pair
+    means the only way to get the bytes is to also be handed the thing that judges them.
+  - **On the wire the artifact stays the raw body and the signature rides a response header.** A
+    detached minisign signature is a few hundred bytes and the artifact is tens of megabytes, so
+    wrapping both in JSON would cost roughly +33 % on every download by every store in every ring to
+    move a payload that fits in a header. The `HttpTransport` seam's `HttpResponse` gains an additive
+    `headers` field.
+  - **Trusted keys are compiled in through `option_env!`** — the same mechanism R1b used for the
+    release version, so no build script and no new dependency — **and no runtime path may supply
+    them.** Stated as a prohibition rather than a preference: a key taken from the cloud-published
+    config tree is a key an attacker controlling the cloud can choose, which makes the check verify
+    the attacker's artifact against the attacker's key. A trust anchor cannot live inside the channel
+    it protects.
+
+  **Upgrade note** None yet — nothing is wired. A fork will need to set the trusted-key build
+  variable, and a binary built without it cannot install an update, which is the correct failure for
+  an updater with no trust anchor. `PROTOCOL_VERSION` is unaffected: `/internal` is unversioned and
+  the header is additive. `arch` is *not* re-decided here — [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Correction 2 already settled it as an additive request field the adapter fills from its own build
+  target.
+
 - **A locale that falls behind `en` now fails the build instead of falling back silently** (roadmap
   v3 slice **Q2**, #119). `scripts/i18n-parity.mjs`, mirrored into both front-end roots and wired
   into `pnpm build`, requires every catalogue to carry exactly the key set `en.json` carries.
