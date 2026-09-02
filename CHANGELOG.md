@@ -17,6 +17,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **ADR-0078 Amendment 1 — an OTA report says "no self-test yet" instead of guessing**
+  ([ADR-0078](docs/adr/0078-sync-and-ota-closure.md)). No behaviour change in this entry: the record
+  lands first because it changes a **port** (`UpdateReport` in `pos-ports`).
+
+  `UpdateReport.self_test_passed` becomes `Option<bool>`, and the `/internal/ota/report` field becomes
+  optional. The original shaped `report()` around the case it was written for — a store that has just
+  installed and self-tested — where a `bool` says everything needed. The reporting loop exposed the
+  case it cannot express: the loop's primary value is telling the cloud **which binary each store is
+  running**, which matters on every store from its first boot, long before any store has taken an
+  update. For those stores there is no verdict, and a `bool` forces the edge to invent one — `true`
+  shows a green **Passed** badge earned by nothing, `false` shows red on every healthy store in a
+  fresh fleet, which trains an operator to ignore the column that exists to warn them.
+
+  Reporting *only* once a self-test exists keeps the wire honest and loses the point: the installed
+  version would stay empty for every store until it OTAs once, so the fleet view would be blank in
+  exactly the state an operator most wants it.
+
+  What makes this an amendment rather than a new decision is that **the read model was already right
+  and unreachable**: `FleetStore.self_test_ok` is `Option<bool>`, the Postgres column is nullable, and
+  the console already renders `null` as "Not reported" — but that `None` was only reachable for a store
+  that had never reported *at all*. The three-state model existed end to end except in the one place
+  that produces the value.
+
+  Additive and no `PROTOCOL_VERSION` bump: `/internal` is unversioned, and the field becomes optional
+  rather than changing type, so an edge built before this posts the same body and its `true`/`false`
+  reads unchanged. The console needs no change — it renders the `null` it was already written to
+  expect.
 - **The store now remembers its OTA self-test across the restart an install performs**
   ([ADR-0048](docs/adr/0048-ota-rollout-model.md)'s rollback rule,
   [ADR-0055](docs/adr/0055-edge-ota-updater.md), roadmap v3 slice R5).
