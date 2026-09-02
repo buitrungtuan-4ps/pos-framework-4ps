@@ -18,7 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 - **The console's four registry writes stop losing edits: `ETag` on read, `If-Match` on write, `412`
-  on a stale one.** Q3c slice 2, the mechanism [ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)
+  on a stale one** (#138). Q3c slice 2, the mechanism [ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)
   frames, proven end to end on the smallest complete family — tenants, brands, stores, devices.
 
   **`pos-cloud` gains `version::{Version, Versioned, UpdateOutcome}`.** A `Version` is an opaque
