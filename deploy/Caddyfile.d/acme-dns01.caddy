@@ -1,0 +1,31 @@
+# TLS_MODE=acme-dns01 — ACME over the Cloudflare DNS-01 challenge (ADR-0090).
+#
+# For a Cloudflare-managed domain that is grey-clouded (DNS-only), where nothing inbound on :80 has
+# to reach ACME and the origin is never proxied. Requires a scoped CF_DNS_API_TOKEN
+# (Zone:DNS:Edit on the one zone, nothing wider) and the caddy image built with the Cloudflare DNS
+# provider (deploy/caddy.Dockerfile) — the deploy workflow builds that only on this mode.
+#
+# bootstrap.sh refuses this mode outright when CF_DNS_API_TOKEN is empty. It used to fall through to
+# HTTP-01 instead, which cannot work on a DNS-only record: the deployment simply had no certificate
+# and the log said it had chosen HTTP-01 on purpose (ADR-0090).
+#
+# Caddy fronts pos_cloud (ADR-0044): it terminates real TLS and reverse-proxies plaintext to the app
+# on the internal Docker network. Cloudflare "Flexible" SSL is forbidden — the origin is always real
+# TLS here; if Cloudflare proxies at all it must be Full (strict), the same "redirect, never proxy,
+# never Flexible" rule ADR-0023 fixed for tenant hostnames.
+#
+# TLS_MODE, DOMAIN, ACME_EMAIL and CF_DNS_API_TOKEN come from ./secrets/caddy.env, written on the
+# box by bootstrap.sh and never committed.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	tls {
+		dns cloudflare {env.CF_DNS_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+
+	import /etc/caddy/Caddyfile.d/site.caddy
+}

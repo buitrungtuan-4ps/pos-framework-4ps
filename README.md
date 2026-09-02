@@ -73,7 +73,7 @@ pos-framework/
 │   ├── zz/                    Reference module — copy this to start a country
 │   └── vn/                    Vietnam (arrives in P10)
 ├── ui/                        SolidJS + Tailwind, embedded into binaries
-├── deploy/                    compose.yml, Caddyfile, bootstrap.sh, k8s/
+├── deploy/                    compose.yml, Caddyfile.d/, bootstrap.sh, k8s/
 ├── examples/                  Runnable examples (built by CI)
 ├── templates/adapter-template/   Extracted at the *third* adapter, not before (rule of three)
 └── docs/                      See map below

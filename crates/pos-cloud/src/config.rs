@@ -133,6 +133,13 @@ const fn default_alert_jetstream_capacity_percent() -> u32 {
     80
 }
 
+/// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`, when
+/// the config does not say — **one**, the TLS-terminating Caddy of ADR-0044, which is what every
+/// posture except `TLS_MODE=external` deploys.
+const fn default_trusted_proxy_hops() -> usize {
+    1
+}
+
 /// How the `pos_cloud` process boots.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudConfig {
@@ -233,6 +240,20 @@ pub struct CloudConfig {
     /// applies it the day a cloud-side JetStream capacity probe is wired (a flagged follow-up).
     #[serde(default = "default_alert_jetstream_capacity_percent")]
     pub alert_jetstream_capacity_percent: u32,
+    /// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`
+    /// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)).
+    ///
+    /// It is the **client address the `/admin/login` rate limit keys on**, counted back from the
+    /// right of the chain, so getting it wrong is a security matter in both directions: too few hops
+    /// and a client can choose its own bucket, too many and every caller behind the same proxy
+    /// shares one. One is right behind the bundled Caddy alone; a deployment whose own load balancer
+    /// terminates TLS in front of it (`TLS_MODE=external`) has two, and `bootstrap.sh` derives the
+    /// value from the posture rather than leaving it to be remembered.
+    ///
+    /// Zero is refused at load ([`CloudConfig::validate`]): it would resolve to no address at all,
+    /// collapsing every request onto one shared bucket while reading like "trust nothing".
+    #[serde(default = "default_trusted_proxy_hops")]
+    pub trusted_proxy_hops: usize,
 }
 
 /// The optional monitoring profile: where the sparse metrics heartbeat imports, and how often.
@@ -277,6 +298,28 @@ impl CloudConfig {
     /// [`toml::de::Error`] if the text is not a valid configuration document.
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
+    }
+
+    /// Checks the values that are only *meaningful* in a range serde cannot express.
+    ///
+    /// Kept separate from [`Self::from_toml`] because a range violation is not a parse error and
+    /// pretending it is would mean fabricating a [`toml::de::Error`]. The binary calls this straight
+    /// after parsing, so an out-of-range value stops the boot rather than becoming a live default.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable message naming the field, when a value cannot be honoured.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.trusted_proxy_hops == 0 {
+            // Zero would index past the end of every forwarded chain, so `client_ip` returns `None`
+            // and the whole fleet shares one `ip:unknown` rate-limit bucket — a denial of service
+            // that reads, in the config file, like the cautious choice.
+            return Err(
+                "trusted_proxy_hops must be at least 1: it counts back from the right of                  X-Forwarded-For, so 0 resolves to no address at all and collapses every caller                  onto one rate-limit bucket (ADR-0090)"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -344,6 +387,47 @@ mod tests {
         assert!(
             config.metrics.is_none(),
             "no [metrics] means the monitoring profile is off — sparse-sampling posture below ~50 stores"
+        );
+        assert_eq!(
+            config.trusted_proxy_hops, 1,
+            "one trusted proxy — the bundled Caddy — when the posture does not say otherwise"
+        );
+        config
+            .validate()
+            .expect("the defaults are a valid configuration");
+    }
+
+    #[test]
+    fn the_external_tls_posture_configures_two_trusted_hops() {
+        // What bootstrap.sh writes for TLS_MODE=external (ADR-0090): a load balancer terminates TLS
+        // in front of Caddy, so the chain is client, balancer, caddy and the client is two back.
+        let config = CloudConfig::from_toml(
+            "bind = \"127.0.0.1:8443\"\n\
+             database_url = \"host=localhost dbname=poscloud\"\n\
+             trusted_proxy_hops = 2\n",
+        )
+        .expect("valid config");
+        assert_eq!(config.trusted_proxy_hops, 2);
+        config.validate().expect("two hops is valid");
+    }
+
+    #[test]
+    fn zero_trusted_hops_is_refused_rather_than_treated_as_cautious() {
+        // It parses — usize accepts it — and it would silently disable the login rate limit's
+        // per-client keying, putting every caller in one bucket. Refusing at load is the only
+        // reading of it that is not a denial of service disguised as prudence.
+        let config = CloudConfig::from_toml(
+            "bind = \"127.0.0.1:8443\"\n\
+             database_url = \"host=localhost dbname=poscloud\"\n\
+             trusted_proxy_hops = 0\n",
+        )
+        .expect("it parses; the range check is separate");
+        let error = config
+            .validate()
+            .expect_err("zero trusted hops must not boot");
+        assert!(
+            error.contains("trusted_proxy_hops"),
+            "the message names the field: {error}"
         );
     }
 

@@ -17,8 +17,13 @@ name: deploy
 #                     entries are then keyed as `[host]:port`, which is what SSH looks up)
 #   VPS_PORT          SSH port (optional; defaults to 22 when unset or empty)
 #   DOMAIN            the cell's hostname (or <vps-ip>.sslip.io with no purchased domain)
-#   ACME_EMAIL        contact address for the TLS certificate
-#   CF_DNS_API_TOKEN  Cloudflare Zone:DNS:Edit token (leave empty for an *.sslip.io DOMAIN)
+#   TLS_MODE          the TLS posture (ADR-0090), one of acme-http01 | acme-dns01 | byo-cert |
+#                     external. Optional: unset means acme-http01, which is what an sslip.io or
+#                     any A-record DOMAIN wants. It is never inferred from DOMAIN.
+#   ACME_EMAIL        contact address for the TLS certificate (the two acme-* modes require it)
+#   CF_DNS_API_TOKEN  Cloudflare Zone:DNS:Edit token — required by TLS_MODE=acme-dns01 and unused
+#                     by every other mode. bootstrap.sh refuses that mode without it rather than
+#                     falling back to a challenge that cannot answer for a DNS-only record.
 #
 # reset_admin=true is the break-glass (ADR-0045): after bring-up it clears the super-admin and
 # every session on the box, so the operator can re-enrol at /admin/setup. It — and every
@@ -84,7 +89,7 @@ jobs:
 
       - name: Build the images
         env:
-          DOMAIN: ${{ secrets.DOMAIN }}
+          TLS_MODE: ${{ secrets.TLS_MODE }}
         run: |
           TAG="${GITHUB_SHA}"
           # Build for the box's architecture (TARGET_PLATFORM), not the runner's — but WITHOUT
@@ -97,20 +102,27 @@ jobs:
           docker buildx create --use --name posdeploy >/dev/null 2>&1 || docker buildx use posdeploy
           docker buildx build --platform "$TARGET_PLATFORM" --load \
             -f deploy/Dockerfile -t "pos-cloud:${TAG}" .
-          # The custom Caddy image exists ONLY to embed the Cloudflare DNS-01 plugin, used on a
-          # managed-domain DOMAIN. On the sslip.io fallback (HTTP-01, no plugin) ship the stock
-          # official image (multi-arch) for the box's platform and skip the xcaddy build. Both
-          # paths ship their caddy image inside the same tarball, so the box loads it and Compose
-          # never builds.
-          case "$DOMAIN" in
-            *.sslip.io)
+          # The custom Caddy image exists ONLY to embed the Cloudflare DNS-01 plugin, so it is
+          # built ONLY for TLS_MODE=acme-dns01. Every other posture — HTTP-01, a brought
+          # certificate, TLS terminated upstream — needs no plugin and ships the stock official
+          # image (multi-arch) for the box's platform, skipping the xcaddy build entirely. This
+          # keys off TLS_MODE rather than DOMAIN's suffix (ADR-0090): the old rule built the plugin
+          # image for any non-sslip.io hostname, including deployments that never use DNS-01.
+          # Both paths ship their caddy image inside the same tarball, so the box loads it and
+          # Compose never builds.
+          case "${TLS_MODE:-acme-http01}" in
+            acme-dns01)
+              CADDY_REF="pos-caddy:${TAG}"
+              docker buildx build --platform "$TARGET_PLATFORM" --load \
+                -f deploy/caddy.Dockerfile -t "$CADDY_REF" deploy
+              ;;
+            acme-http01 | byo-cert | external)
               CADDY_REF="caddy:2.8.4"
               docker pull --platform "$TARGET_PLATFORM" "$CADDY_REF"
               ;;
             *)
-              CADDY_REF="pos-caddy:${TAG}"
-              docker buildx build --platform "$TARGET_PLATFORM" --load \
-                -f deploy/caddy.Dockerfile -t "$CADDY_REF" deploy
+              echo "TLS_MODE='${TLS_MODE}' is not one of: acme-http01 acme-dns01 byo-cert external" >&2
+              exit 1
               ;;
           esac
           docker save "pos-cloud:${TAG}" "$CADDY_REF" | gzip > /tmp/images.tgz
@@ -126,7 +138,9 @@ jobs:
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           # Ship the deploy tree, but never the local secrets/ — the box holds its own.
-          tar -C deploy --exclude=secrets -czf /tmp/deploy.tgz .
+          # Never the local secrets/, and never a local .env: the box generates its own from
+          # TLS_MODE (ADR-0090), and shipping a developer's would silently override the posture.
+          tar -C deploy --exclude=secrets --exclude=.env -czf /tmp/deploy.tgz .
           scp -P "$port" $ssh_opts /tmp/deploy.tgz /tmp/images.tgz "${target}:/tmp/"
           ssh -p "$port" $ssh_opts "$target" '
             set -e
@@ -161,6 +175,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           DOMAIN: ${{ secrets.DOMAIN }}
+          TLS_MODE: ${{ secrets.TLS_MODE }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
@@ -170,12 +185,14 @@ jobs:
           target="${VPS_USER}@${VPS_HOST}"
           tag="${GITHUB_SHA}"
           # Uses the images just loaded (POS_BOOTSTRAP_NO_BUILD=1 so the box never rebuilds from
-          # source). CADDY_IMAGE was chosen per-DOMAIN in "Build the images" (custom pos-caddy for
-          # the Cloudflare path, stock caddy for sslip.io) and carried via $GITHUB_ENV.
-          # bootstrap.sh keeps any existing secret, so a redeploy does not rotate them.
+          # source). CADDY_IMAGE was chosen per-TLS_MODE in "Build the images" (the plugin image
+          # only for acme-dns01, stock caddy otherwise) and carried via $GITHUB_ENV.
+          # bootstrap.sh keeps every generated secret, so a redeploy does not rotate them; TLS_MODE
+          # and DOMAIN are supplied configuration, so changing either here does take effect.
           ssh -p "$port" $ssh_opts "$target" \
-            "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh && \
-             DOMAIN='${DOMAIN}' ACME_EMAIL='${ACME_EMAIL}' CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
+            "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh tls-export.sh && \
+             DOMAIN='${DOMAIN}' TLS_MODE='${TLS_MODE}' ACME_EMAIL='${ACME_EMAIL}' \
+             CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
              POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='${CADDY_IMAGE}' POS_BOOTSTRAP_NO_BUILD=1 \
              ./bootstrap.sh"
 

@@ -240,6 +240,10 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
     login_rate_limiter: LoginRateLimiter,
+    /// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`
+    /// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)). It is the rate limit's client key, so
+    /// it belongs to the deployment's TLS posture rather than to this code.
+    trusted_proxy_hops: usize,
     /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
     /// no-op, so a route can always record unconditionally; the binary wires the real store in.
     audit: Arc<dyn AuditRecorder>,
@@ -277,6 +281,7 @@ where
             admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
             login_rate_limiter: self.login_rate_limiter.clone(),
+            trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
         }
     }
@@ -311,6 +316,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
                 DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
                 DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
             ),
+            trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
             audit: Arc::new(NoopAuditRecorder),
         }
     }
@@ -357,6 +363,20 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_admin_invite_ttl_secs(mut self, secs: u64) -> Self {
         self.admin_invite_ttl_secs = secs;
+        self
+    }
+
+    /// Sets how many proxies in front of this process are trusted to have appended to
+    /// `X-Forwarded-For` — the binary threads the configured value in
+    /// ([`crate::config::CloudConfig::trusted_proxy_hops`],
+    /// [ADR-0090](../../../docs/adr/0090-tls-postures.md)).
+    ///
+    /// This is the `/admin/login` rate limit's client key. One is correct behind the bundled Caddy
+    /// alone; a deployment where TLS terminates further upstream has two, and `bootstrap.sh` derives
+    /// the value from `TLS_MODE` so nobody has to remember it. `0` is refused at config load.
+    #[must_use]
+    pub const fn with_trusted_proxy_hops(mut self, hops: usize) -> Self {
+        self.trusted_proxy_hops = hops;
         self
     }
 
@@ -13485,7 +13505,7 @@ where
     // meets a cheap `429` rather than an Argon2id hashing storm, and a refused attempt is not even
     // recorded, so a legitimate admin's next try is not pushed further out. Keyed by client IP today;
     // the per-email key lights up when email login lands.
-    let ip = client_ip(&headers);
+    let ip = client_ip(&headers, app.trusted_proxy_hops);
     let rate_keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
     if let Err(retry_after_secs) = app
         .login_rate_limiter
@@ -13525,14 +13545,18 @@ where
     }
 }
 
-/// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`.
+/// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`,
+/// when the configuration does not say.
 ///
-/// One: the Caddy that terminates TLS ([ADR-0044](../../../docs/adr/0044-fork-and-deploy.md)). A
-/// deployment that terminates TLS further upstream — its own load balancer or ingress — has more
-/// hops and must raise this, which is why debate D24's `TLS_MODE` work owns making it configurable
-/// rather than a constant. Until then a fork that fronts this with a second proxy under-counts and
-/// throttles by the wrong address, which is the safe direction to be wrong in.
-const TRUSTED_PROXY_HOPS: usize = 1;
+/// One: the Caddy that terminates TLS ([ADR-0044](../../../docs/adr/0044-fork-and-deploy.md)), which
+/// is every TLS posture except `TLS_MODE=external`. A deployment whose own load balancer or ingress
+/// terminates upstream has two, and sets
+/// [`crate::config::CloudConfig::trusted_proxy_hops`] accordingly —
+/// [ADR-0090](../../../docs/adr/0090-tls-postures.md) derives it from the posture in `bootstrap.sh`
+/// so it is not a value anyone has to remember. Under-counting is the safe direction to be wrong in
+/// (the client can choose its bucket); over-counting collapses everyone behind one proxy into a
+/// single bucket. Neither is acceptable, which is why this is configuration and not a guess.
+const DEFAULT_TRUSTED_PROXY_HOPS: usize = 1;
 
 /// The client IP for an admin request, taken from the **trusted** tail of `X-Forwarded-For`.
 ///
@@ -13548,7 +13572,16 @@ const TRUSTED_PROXY_HOPS: usize = 1;
 /// It stopped being true when [`admin_login`] began using it as the sole sliding-window rate-limit
 /// key: a guesser could then send a fresh fake header per attempt, land in a fresh bucket every time,
 /// and never meet the throttle at all. Counting from the right fixes that, because the rightmost
-/// [`TRUSTED_PROXY_HOPS`] entries are the only ones this deployment wrote.
+/// `trusted_hops` entries are the only ones this deployment wrote.
+///
+/// # Why the count is a parameter
+///
+/// It is a property of the *deployment*, not of the code: one hop behind the bundled Caddy, two when
+/// a load balancer terminates TLS in front of it. It arrives from
+/// [`crate::config::CloudConfig::trusted_proxy_hops`], which `bootstrap.sh` derives from `TLS_MODE`
+/// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)). A value of `0` is refused at config load;
+/// were it to reach here it would resolve to `None` for every request, which over-throttles rather
+/// than exempts.
 ///
 /// `None` when the header is absent, which is what a request that did not come through the proxy
 /// looks like. Callers key that as one shared bucket — over-throttling a direct caller rather than
@@ -13556,13 +13589,15 @@ const TRUSTED_PROXY_HOPS: usize = 1;
 ///
 /// `X-Real-IP` is deliberately **not** consulted as a fallback: it is a single client-settable value
 /// with no chain to count back along, so honouring it would reopen exactly the hole this closes.
-fn client_ip(headers: &HeaderMap) -> Option<&str> {
+fn client_ip(headers: &HeaderMap, trusted_hops: usize) -> Option<&str> {
     let chain = header_str(headers, "x-forwarded-for")?;
     let hops: Vec<&str> = chain.split(',').map(str::trim).collect();
     // Take the leftmost hop this deployment is responsible for: with one trusted proxy that is the
     // last entry, the address Caddy itself observed. `saturating_sub` keeps a short chain (a proxy
-    // that sent no chain, or a misconfigured hop count) at the first entry rather than panicking.
-    hops.get(hops.len().saturating_sub(TRUSTED_PROXY_HOPS))
+    // that sent no chain, or a hop count larger than the chain) at the first entry rather than
+    // panicking — the conservative end, since the first entry of a too-short chain is the only
+    // address there is.
+    hops.get(hops.len().saturating_sub(trusted_hops))
         .copied()
         .filter(|ip| !ip.is_empty())
 }
@@ -16355,8 +16390,17 @@ mod client_ip_tests {
     //! `/admin/login` sliding-window rate limit, and the first version of this function read the
     //! *leftmost* `X-Forwarded-For` hop — a value the client writes — so a guesser could mint a fresh
     //! bucket per attempt and never meet the throttle. These are the tests that would have caught it.
-    use super::client_ip;
+    //!
+    //! The hop count is now configuration ([ADR-0090](../../../docs/adr/0090-tls-postures.md)), so
+    //! both postures are covered: `ONE_PROXY` is the bundled Caddy alone, `TWO_PROXIES` is
+    //! `TLS_MODE=external`, where a load balancer terminates TLS in front of it.
+    use super::{DEFAULT_TRUSTED_PROXY_HOPS, client_ip};
     use axum::http::{HeaderMap, HeaderName};
+
+    /// The bundled Caddy alone — every posture but `external`.
+    const ONE_PROXY: usize = 1;
+    /// An upstream terminator in front of Caddy: `TLS_MODE=external`.
+    const TWO_PROXIES: usize = 2;
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
@@ -16373,7 +16417,7 @@ mod client_ip_tests {
     #[test]
     fn one_proxy_hop_is_the_address_the_proxy_saw() {
         let map = headers(&[("x-forwarded-for", "203.0.113.9")]);
-        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+        assert_eq!(client_ip(&map, ONE_PROXY), Some("203.0.113.9"));
     }
 
     #[test]
@@ -16383,7 +16427,7 @@ mod client_ip_tests {
         // Trusting the left end let a password guesser rotate buckets at will.
         let map = headers(&[("x-forwarded-for", "1.1.1.1, 203.0.113.9")]);
         assert_eq!(
-            client_ip(&map),
+            client_ip(&map, ONE_PROXY),
             Some("203.0.113.9"),
             "the trusted hop is the one this deployment appended, not the one the caller claimed"
         );
@@ -16392,13 +16436,13 @@ mod client_ip_tests {
     #[test]
     fn a_long_forged_chain_still_resolves_to_the_real_peer() {
         let map = headers(&[("x-forwarded-for", "9.9.9.9, 8.8.8.8, 7.7.7.7, 203.0.113.9")]);
-        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+        assert_eq!(client_ip(&map, ONE_PROXY), Some("203.0.113.9"));
     }
 
     #[test]
     fn surrounding_whitespace_does_not_change_the_hop() {
         let map = headers(&[("x-forwarded-for", "1.1.1.1 ,  203.0.113.9  ")]);
-        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+        assert_eq!(client_ip(&map, ONE_PROXY), Some("203.0.113.9"));
     }
 
     #[test]
@@ -16406,7 +16450,7 @@ mod client_ip_tests {
         // A request that did not come through the proxy. Callers key this as one shared bucket, which
         // over-throttles a direct caller instead of exempting it — an absent header must not be a way
         // through either.
-        assert_eq!(client_ip(&headers(&[])), None);
+        assert_eq!(client_ip(&headers(&[]), ONE_PROXY), None);
     }
 
     #[test]
@@ -16414,13 +16458,57 @@ mod client_ip_tests {
         // Single-valued and client-settable, with no chain to count back along: honouring it would
         // reopen the hole this function closes.
         let map = headers(&[("x-real-ip", "1.1.1.1")]);
-        assert_eq!(client_ip(&map), None);
+        assert_eq!(client_ip(&map, ONE_PROXY), None);
     }
 
     #[test]
     fn an_empty_header_is_none() {
         let map = headers(&[("x-forwarded-for", "")]);
-        assert_eq!(client_ip(&map), None);
+        assert_eq!(client_ip(&map, ONE_PROXY), None);
+    }
+
+    #[test]
+    fn the_default_hop_count_is_one_trusted_proxy() {
+        // The default has to match the deployment the repository ships (ADR-0044): one Caddy.
+        let map = headers(&[("x-forwarded-for", "1.1.1.1, 203.0.113.9")]);
+        assert_eq!(DEFAULT_TRUSTED_PROXY_HOPS, ONE_PROXY);
+        assert_eq!(
+            client_ip(&map, DEFAULT_TRUSTED_PROXY_HOPS),
+            Some("203.0.113.9")
+        );
+    }
+
+    #[test]
+    fn two_trusted_proxies_reach_past_the_upstream_terminator() {
+        // TLS_MODE=external: the terminator appends the client, then Caddy appends the terminator.
+        // The real client is two entries back, and this is the case that made the count
+        // configuration — at one hop this would key every request on the terminator's address.
+        let map = headers(&[("x-forwarded-for", "203.0.113.9, 10.0.0.7")]);
+        assert_eq!(
+            client_ip(&map, TWO_PROXIES),
+            Some("203.0.113.9"),
+            "with two trusted hops the client is the entry before the two we appended"
+        );
+        assert_eq!(
+            client_ip(&map, ONE_PROXY),
+            Some("10.0.0.7"),
+            "and at one hop it would be the terminator — the misconfiguration this pins"
+        );
+    }
+
+    #[test]
+    fn two_trusted_proxies_still_ignore_a_forged_prefix() {
+        let map = headers(&[("x-forwarded-for", "1.1.1.1, 2.2.2.2, 203.0.113.9, 10.0.0.7")]);
+        assert_eq!(client_ip(&map, TWO_PROXIES), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn a_chain_shorter_than_the_hop_count_falls_back_to_its_first_entry() {
+        // A misconfigured deployment, or an upstream that sent no chain of its own. Saturating at the
+        // first entry is the conservative answer: it is the only address present, and it is one this
+        // deployment or its trusted proxy wrote — never a value further left that a client chose.
+        let map = headers(&[("x-forwarded-for", "10.0.0.7")]);
+        assert_eq!(client_ip(&map, TWO_PROXIES), Some("10.0.0.7"));
     }
 }
 

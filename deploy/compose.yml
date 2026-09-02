@@ -16,7 +16,18 @@
 #                        uid 10001 and reads this file (root ignores the mode; the app
 #                        user needs it). bootstrap.sh sets both.
 #   secrets/garage.toml  Garage server config (rpc_secret, data/meta paths).
-#   secrets/caddy.env    DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN for TLS issuance.
+#   secrets/caddy.env    TLS_MODE / DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN — the TLS posture and
+#                        the hostname (ADR-0090).
+#   secrets/Caddyfile    the generated Caddyfile for that posture, copied by bootstrap.sh from
+#                        ./Caddyfile.d/<TLS_MODE>.caddy. The four per-mode files are committed and
+#                        read-only here; nothing overwrites one.
+#   secrets/tls/         fullchain.pem + privkey.pem — the one certificate path every consumer
+#                        reads. The operator fills it on TLS_MODE=byo-cert, ./tls-export.sh fills
+#                        it on the ACME modes, and it stays empty on TLS_MODE=external.
+#
+# The CADDY_HTTP_PUBLISH / CADDY_HTTPS_PUBLISH values below come from the generated ./.env, also
+# written by bootstrap.sh from TLS_MODE. Their defaults here are the ACME/byo-cert posture, so a
+# tree with no ./.env still behaves exactly as it did before ADR-0090.
 #
 # Bring-up, once bootstrap.sh has written ./secrets/*:  docker compose up -d --build
 name: pos-cloud
@@ -42,11 +53,21 @@ services:
     env_file:
       - ./secrets/caddy.env
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      # Both host-side bindings are set by bootstrap.sh from TLS_MODE (ADR-0090). Under
+      # TLS_MODE=external the HTTPS binding becomes `127.0.0.1:443`, which stops offering the port
+      # to the internet — Compose cannot conditionally omit a port, and a loopback publish is the
+      # honest equivalent of not publishing one.
+      - "${CADDY_HTTP_PUBLISH:-0.0.0.0:80}:80"
+      - "${CADDY_HTTPS_PUBLISH:-0.0.0.0:443}:443"
+      - "${CADDY_HTTPS_PUBLISH:-0.0.0.0:443}:443/udp"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The generated per-posture Caddyfile, plus the committed directory it imports the shared
+      # site block from — that block exists once instead of being copied into all four modes.
+      - ./secrets/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.d:/etc/caddy/Caddyfile.d:ro
+      # The certificate path. Read by Caddy itself only under TLS_MODE=byo-cert; mounted in every
+      # mode so the same file layout holds everywhere and other consumers have one place to look.
+      - ./secrets/tls:/etc/caddy/tls:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

@@ -59,6 +59,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("POS_CLOUD_CONFIG")
         .map_err(|_| "POS_CLOUD_CONFIG must name a configuration file")?;
     let config = CloudConfig::from_toml(&std::fs::read_to_string(&config_path)?)?;
+    // Range checks serde cannot express (ADR-0090). Fail the boot rather than run with a value that
+    // silently disables a control — a wrong `trusted_proxy_hops` is a wrong rate-limit key.
+    config.validate()?;
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
@@ -89,6 +92,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.admin_login_max_attempts,
         config.admin_login_window_secs,
     )
+    .with_trusted_proxy_hops(config.trusted_proxy_hops)
     .with_admin_setup_token(config.admin_setup_token.clone());
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same

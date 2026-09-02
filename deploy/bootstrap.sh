@@ -13,16 +13,38 @@
 #                   chowned to uid 10001 so the non-root app container can read it
 #   nats.conf       NATS JetStream + a token, enforced on the internal network
 #   garage.toml     Garage single-node config with an rpc_secret
-#   caddy.env       DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN — the only values that come
-#                   from OUTSIDE the box (GitHub secrets in the deploy workflow); required
-#                   on the first run, via environment variables (see below)
+#   caddy.env       TLS_MODE / DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN — the only values that
+#                   come from OUTSIDE the box (GitHub secrets in the deploy workflow), plus
+#                   TLS_RELOAD_SERVICES. Unlike the generated secrets above, these are SUPPLIED
+#                   configuration: when the environment provides DOMAIN the file is rewritten,
+#                   so changing a secret and redeploying actually takes effect.
+#   Caddyfile       the per-mode Caddyfile for the selected TLS_MODE, copied from
+#                   ./Caddyfile.d/<mode>.caddy (ADR-0090). Generated, never committed — nothing
+#                   here overwrites a version-controlled file.
+#   tls/            fullchain.pem + privkey.pem, the one certificate path every consumer reads.
+#                   Populated by the operator on TLS_MODE=byo-cert, by ./tls-export.sh on the
+#                   two ACME modes, and by nobody on TLS_MODE=external.
 #   setup-token.txt a one-time super-admin setup token, printed once — it authorizes
 #                   enrolling the first super-admin (password + TOTP) through the
 #                   first-boot provisioning route (wired in P8c), and is void thereafter
 #
+# It also writes ./.env beside compose.yml — NOT a secret, just the port publishes and image
+# tags the selected posture implies, so a later `docker compose up -d` typed by hand reproduces
+# the same posture instead of silently reverting to the defaults (ADR-0090).
+#
+# TLS_MODE (ADR-0090) is one of:
+#   acme-http01  Caddy issues over HTTP-01 / TLS-ALPN. The default; needs :80 reachable.
+#   acme-dns01   Caddy issues over Cloudflare DNS-01. Needs CF_DNS_API_TOKEN and the plugin image.
+#   byo-cert     the operator installed secrets/tls/{fullchain,privkey}.pem. No ACME.
+#   external     TLS terminates upstream; this box publishes HTTP only and trusts two proxy hops.
+# It is never inferred from DOMAIN: inference cannot express the last two postures at all, and its
+# fallthrough silently downgraded a managed domain with an empty token to a method that cannot work
+# on a DNS-only record.
+#
 # First run needs the reach-the-box + certificate values in the environment, e.g.:
-#   DOMAIN=cloud.example.com ACME_EMAIL=ops@example.com CF_DNS_API_TOKEN=xxxx ./bootstrap.sh
-# With no purchased domain, use the sslip.io fallback (HTTP-01, no Cloudflare token):
+#   DOMAIN=cloud.example.com TLS_MODE=acme-dns01 ACME_EMAIL=ops@example.com \
+#     CF_DNS_API_TOKEN=xxxx ./bootstrap.sh
+# With no purchased domain, use the sslip.io fallback (the default mode, no Cloudflare token):
 #   DOMAIN=203-0-113-9.sslip.io ACME_EMAIL=ops@example.com ./bootstrap.sh
 #
 # Set POS_BOOTSTRAP_NO_UP=1 to generate secrets without starting the stack.
@@ -64,6 +86,98 @@ PG_USER="$(sed -n 's/^POSTGRES_USER=//p' "$SECRETS/pos.env")"
 PG_PW="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$SECRETS/pos.env")"
 PG_DB="$(sed -n 's/^POSTGRES_DB=//p' "$SECRETS/pos.env")"
 
+# 1b. The TLS posture (ADR-0090). Resolved BEFORE cloud.toml, because the posture decides
+#     trusted_proxy_hops and that value has to be right the first time cloud.toml is written.
+#
+#     caddy.env holds SUPPLIED configuration, not generated secrets, so the "keep, never rotate"
+#     rule does not apply to it: when the environment provides DOMAIN the file is rewritten. That is
+#     deliberate and it fixes a real wart — until now, changing the DOMAIN secret and redeploying
+#     did nothing at all, because the file was kept. An empty DOMAIN counts as "not supplied" (the
+#     deploy workflow interpolates an empty string for an unset secret), so a re-run with no
+#     environment keeps whatever the box already has.
+tls_mode_is_valid() {
+  case "$1" in
+    acme-http01 | acme-dns01 | byo-cert | external) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -n "${DOMAIN:-}" ]; then
+  TLS_MODE="${TLS_MODE:-acme-http01}"
+  tls_mode_is_valid "$TLS_MODE" ||
+    { echo "TLS_MODE='$TLS_MODE' is not one of: acme-http01 acme-dns01 byo-cert external" >&2; exit 1; }
+  # Per-mode inputs, checked here and REFUSED rather than downgraded. The old code fell through to
+  # HTTP-01 when a managed domain had no token, which cannot work on a DNS-only record: the cell got
+  # no certificate and the log said HTTP-01 was chosen on purpose.
+  case "$TLS_MODE" in
+    acme-http01 | acme-dns01)
+      : "${ACME_EMAIL:?set ACME_EMAIL=you@example.com — TLS_MODE=$TLS_MODE issues over ACME}"
+      ;;
+    *) : "${ACME_EMAIL:=}" ;;
+  esac
+  if [ "$TLS_MODE" = "acme-dns01" ]; then
+    : "${CF_DNS_API_TOKEN:?TLS_MODE=acme-dns01 needs CF_DNS_API_TOKEN (Cloudflare Zone:DNS:Edit on the one zone). It is not optional and is never downgraded to HTTP-01, which cannot answer a challenge for a DNS-only record}"
+  else
+    : "${CF_DNS_API_TOKEN:=}"
+  fi
+  cat > "$SECRETS/caddy.env" <<EOF
+# Caddy TLS posture and hostname (written by bootstrap.sh from the deploy environment; ADR-0090).
+# Never commit. TLS_MODE is one of acme-http01 | acme-dns01 | byo-cert | external.
+TLS_MODE=$TLS_MODE
+DOMAIN=$DOMAIN
+ACME_EMAIL=$ACME_EMAIL
+CF_DNS_API_TOKEN=$CF_DNS_API_TOKEN
+# Compose services that tls-export.sh should SIGHUP after a certificate change (space-separated).
+# Empty until a slice adds a consumer; ADR-0089's event bus is the first.
+TLS_RELOAD_SERVICES=${TLS_RELOAD_SERVICES:-}
+EOF
+  chmod 600 "$SECRETS/caddy.env"
+  echo "write  caddy.env (TLS_MODE=$TLS_MODE, DOMAIN=$DOMAIN)"
+elif [ ! -e "$SECRETS/caddy.env" ]; then
+  echo "set DOMAIN=your.host (or <vps-ip>.sslip.io) before the first bootstrap" >&2
+  exit 1
+else
+  echo "keep   caddy.env (no DOMAIN in the environment)"
+fi
+
+CADDY_TLS_MODE="$(sed -n 's/^TLS_MODE=//p' "$SECRETS/caddy.env")"
+CADDY_DOMAIN="$(sed -n 's/^DOMAIN=//p' "$SECRETS/caddy.env")"
+# A caddy.env written before ADR-0090 has no TLS_MODE line. Do NOT default it to acme-http01 —
+# a box that was on the Cloudflare path would silently change posture and stop renewing. Infer the
+# posture once from the rule that file was written under, record it, and say so.
+if [ -z "$CADDY_TLS_MODE" ]; then
+  CADDY_CF_TOKEN="$(sed -n 's/^CF_DNS_API_TOKEN=//p' "$SECRETS/caddy.env")"
+  case "$CADDY_DOMAIN" in
+    *.sslip.io) CADDY_TLS_MODE=acme-http01 ;;
+    *) [ -n "$CADDY_CF_TOKEN" ] && CADDY_TLS_MODE=acme-dns01 || CADDY_TLS_MODE=acme-http01 ;;
+  esac
+  printf 'TLS_MODE=%s\n' "$CADDY_TLS_MODE" >> "$SECRETS/caddy.env"
+  echo "migrate caddy.env had no TLS_MODE; recorded the posture it was already running: $CADDY_TLS_MODE"
+fi
+tls_mode_is_valid "$CADDY_TLS_MODE" ||
+  { echo "TLS_MODE='$CADDY_TLS_MODE' in $SECRETS/caddy.env is not a known posture" >&2; exit 1; }
+
+# How many proxies in front of pos_cloud are trusted to have appended to X-Forwarded-For. One is
+# the bundled Caddy. Under `external` the chain is client, upstream-terminator, caddy — so the real
+# client is two back, and leaving this at 1 would key the /admin/login rate limit on the
+# terminator's single address: every admin in one bucket, one person's wrong passwords locking out
+# the rest (ADR-0067 slice 5, ADR-0090).
+case "$CADDY_TLS_MODE" in
+  external) TRUSTED_PROXY_HOPS=2 ;;
+  *) TRUSTED_PROXY_HOPS=1 ;;
+esac
+
+# Refuse a byo-cert posture with no certificate HERE, before anything else is generated. Checking it
+# later would mean a first run that mints the one-time super-admin setup token, prints it, and then
+# aborts — the token survives in cloud.toml but the operator never sees it again, because a re-run
+# takes the "keep" branch and prints nothing.
+if [ "$CADDY_TLS_MODE" = "byo-cert" ]; then
+  for f in fullchain.pem privkey.pem; do
+    [ -s "$SECRETS/tls/$f" ] ||
+      { echo "TLS_MODE=byo-cert needs $SECRETS/tls/$f (non-empty). Install the certificate and key there, then re-run." >&2; exit 1; }
+  done
+fi
+
 # 2. pos_cloud config. The database password lives here (libpq keyword form), never in the
 #    environment. The ingest cursor and the retention cron start off — each is armed by
 #    editing this file, both deliberate decisions rather than defaults (ADR-0031, ADR-0035).
@@ -80,6 +194,12 @@ database_url = "host=postgres port=5432 user=$PG_USER password=$PG_PW dbname=$PG
 # at POST /admin/setup and is void once that admin exists. Remove this line after enrolment to
 # turn the setup route off (a 404).
 admin_setup_token = "$SETUP_TOKEN"
+
+# How many proxies in front of this process are trusted to have appended to X-Forwarded-For
+# (ADR-0090). Derived from TLS_MODE, not hand-set: 1 behind the bundled Caddy, 2 when TLS
+# terminates upstream. bootstrap.sh reconciles this line on every run, because getting it wrong
+# keys the /admin/login rate limit on the wrong address.
+trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 
 # The ingest cursor is off until stores publish to JetStream (ADR-0031). To arm it,
 # uncomment and use the token from secrets/nats.conf:
@@ -98,6 +218,24 @@ EOF
 else
   echo "keep   cloud.toml"
   CLOUD_TOML_CREATED=0
+  # trusted_proxy_hops is DERIVED from TLS_MODE, not a secret, so unlike everything else in this
+  # file it is reconciled on every run — otherwise switching a live cell to TLS_MODE=external would
+  # leave the hop count at 1 and quietly collapse every admin onto one rate-limit bucket. A previous
+  # run chowned this file to $APP_UID mode 600, so a non-root deploy user can neither read nor write
+  # it; that is why this uses the same `sudo -n` ladder as the chown below, and why failing at both
+  # is reported loudly rather than passed over.
+  hops_cmd="if grep -q '^trusted_proxy_hops' '$SECRETS/cloud.toml'; then"
+  hops_cmd="$hops_cmd sed -i 's/^trusted_proxy_hops = .*/trusted_proxy_hops = $TRUSTED_PROXY_HOPS/' '$SECRETS/cloud.toml';"
+  hops_cmd="$hops_cmd else printf '\n# Trusted X-Forwarded-For hops, derived from TLS_MODE (ADR-0090).\ntrusted_proxy_hops = %s\n'"
+  hops_cmd="$hops_cmd '$TRUSTED_PROXY_HOPS' >> '$SECRETS/cloud.toml'; fi"
+  if sh -c "$hops_cmd" 2>/dev/null; then
+    echo "set    cloud.toml trusted_proxy_hops = $TRUSTED_PROXY_HOPS (TLS_MODE=$CADDY_TLS_MODE)"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n sh -c "$hops_cmd" 2>/dev/null; then
+    echo "set    cloud.toml trusted_proxy_hops = $TRUSTED_PROXY_HOPS (via sudo; TLS_MODE=$CADDY_TLS_MODE)"
+  else
+    echo "warn   could not set trusted_proxy_hops = $TRUSTED_PROXY_HOPS in $SECRETS/cloud.toml (need root or passwordless sudo)"
+    echo "warn   TLS_MODE=$CADDY_TLS_MODE requires it: set it by hand and restart pos_cloud, or the /admin/login rate limit throttles by the proxy's address instead of the client's"
+  fi
 fi
 # The pos_cloud container runs as uid $APP_UID and must read this 600 file (root ignores the
 # mode; the app user does not). Deploying as root chowns directly; deploying as a non-root sudo
@@ -155,44 +293,58 @@ else
   echo "keep   garage.toml"
 fi
 
-# 5. Caddy TLS secrets — the only values from outside the box. DOMAIN and ACME_EMAIL are
-#    always required; CF_DNS_API_TOKEN is required unless DOMAIN is an *.sslip.io fallback
-#    host (which issues over HTTP-01, no Cloudflare token). These are only consulted on the
-#    first run; a re-run keeps the existing file and needs no environment.
-if [ ! -e "$SECRETS/caddy.env" ]; then
-  : "${DOMAIN:?set DOMAIN=your.host (or <vps-ip>.sslip.io) before the first bootstrap}"
-  : "${ACME_EMAIL:?set ACME_EMAIL=you@example.com before the first bootstrap}"
-  case "$DOMAIN" in
-    *.sslip.io) : "${CF_DNS_API_TOKEN:=}" ;;
-    *)          : "${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN (Cloudflare Zone:DNS:Edit) or use an *.sslip.io DOMAIN}" ;;
-  esac
-  cat > "$SECRETS/caddy.env" <<EOF
-DOMAIN=$DOMAIN
-ACME_EMAIL=$ACME_EMAIL
-CF_DNS_API_TOKEN=$CF_DNS_API_TOKEN
-EOF
-  chmod 600 "$SECRETS/caddy.env"
-  echo "create caddy.env"
-else
-  echo "keep   caddy.env"
+# 5. Install the Caddyfile for the resolved posture, and the certificate directory every consumer
+#    reads (ADR-0090). Nothing here overwrites a version-controlled file: the four per-mode files
+#    under ./Caddyfile.d/ are committed and read-only to this script, and the *generated* copy lands
+#    in ./secrets/. That is why the mode is legible from a filename instead of only from content.
+MODE_FILE="$HERE/Caddyfile.d/$CADDY_TLS_MODE.caddy"
+[ -e "$MODE_FILE" ] || { echo "missing $MODE_FILE for TLS_MODE=$CADDY_TLS_MODE" >&2; exit 1; }
+
+mkdir -p "$SECRETS/tls"
+chmod 700 "$SECRETS/tls"
+if [ "$CADDY_TLS_MODE" = "byo-cert" ]; then
+  # Their presence was already required in step 1b, before anything was generated. Here we only fix
+  # the permissions: a brought private key arrives with whatever mode the operator's copy left.
+  chmod 644 "$SECRETS/tls/fullchain.pem"
+  chmod 600 "$SECRETS/tls/privkey.pem"
 fi
 
-# 5b. Select the Caddyfile matching the DOMAIN. The default committed ./Caddyfile issues over
-#     HTTP-01 (sslip.io and any A-record domain, no Cloudflare, no plugin). For a
-#     Cloudflare-managed DOMAIN with a token, swap in the DNS-01 variant. Read from caddy.env
-#     (always present after the first run) so a re-run selects correctly with no environment.
-CADDY_DOMAIN="$(sed -n 's/^DOMAIN=//p' "$SECRETS/caddy.env")"
-CADDY_CF_TOKEN="$(sed -n 's/^CF_DNS_API_TOKEN=//p' "$SECRETS/caddy.env")"
-case "$CADDY_DOMAIN" in
-  *.sslip.io) USE_CLOUDFLARE=0 ;;
-  *)          [ -n "$CADDY_CF_TOKEN" ] && USE_CLOUDFLARE=1 || USE_CLOUDFLARE=0 ;;
+cp "$MODE_FILE" "$SECRETS/Caddyfile"
+chmod 644 "$SECRETS/Caddyfile"
+echo "caddy  TLS_MODE=$CADDY_TLS_MODE for ${CADDY_DOMAIN:-unset} (from Caddyfile.d/$CADDY_TLS_MODE.caddy)"
+
+# 5b. The Compose variables the posture implies, written to ../.env beside compose.yml. Compose
+#     reads that file automatically, so a later `docker compose up -d` typed by hand reproduces the
+#     same posture — without it, the port publishes would silently revert to their defaults and an
+#     internet-facing :443 would reappear on a cell whose operator believes TLS terminates upstream.
+#     Not a secret: it holds port bindings and image tags. Still git-ignored, since it is generated.
+case "$CADDY_TLS_MODE" in
+  external)
+    # 443 becomes loopback-only rather than absent: Compose cannot conditionally omit a port, and a
+    # 127.0.0.1 publish is the honest equivalent of not offering one. The HTTP publish is a variable
+    # because a box already running the company's own proxy will not have :80 free.
+    CADDY_HTTP_PUBLISH="0.0.0.0:${EXTERNAL_HTTP_PORT:-80}"
+    CADDY_HTTPS_PUBLISH="127.0.0.1:443"
+    ;;
+  *)
+    CADDY_HTTP_PUBLISH="0.0.0.0:80"
+    CADDY_HTTPS_PUBLISH="0.0.0.0:443"
+    ;;
 esac
-if [ "$USE_CLOUDFLARE" = "1" ] && [ -e "$HERE/Caddyfile.cloudflare" ]; then
-  cp "$HERE/Caddyfile.cloudflare" "$HERE/Caddyfile"
-  echo "caddy  Caddyfile = DNS-01 (Cloudflare) for $CADDY_DOMAIN"
-else
-  echo "caddy  Caddyfile = HTTP-01 (default; sslip.io / no Cloudflare) for ${CADDY_DOMAIN:-unset}"
-fi
+{
+  echo "# Generated by bootstrap.sh from TLS_MODE=$CADDY_TLS_MODE (ADR-0090). Not a secret; not committed."
+  echo "# Compose reads this automatically, so a hand-typed \`docker compose up -d\` keeps this posture."
+  echo "CADDY_HTTP_PUBLISH=$CADDY_HTTP_PUBLISH"
+  echo "CADDY_HTTPS_PUBLISH=$CADDY_HTTPS_PUBLISH"
+  # Pin the images the deploy just loaded, when it told us which. Without this a manual bring-up
+  # falls back to `:local` tags that may not exist and Compose rebuilds from source on the box.
+  # Written as `if`, not `[ … ] && echo`: as the last command in this group a false test would make
+  # the group exit non-zero and `set -e` would abort the bootstrap.
+  if [ -n "${POS_CLOUD_IMAGE:-}" ]; then echo "POS_CLOUD_IMAGE=$POS_CLOUD_IMAGE"; fi
+  if [ -n "${CADDY_IMAGE:-}" ]; then echo "CADDY_IMAGE=$CADDY_IMAGE"; fi
+} > "$HERE/.env"
+chmod 644 "$HERE/.env"
+echo "write  .env (http=$CADDY_HTTP_PUBLISH https=$CADDY_HTTPS_PUBLISH)"
 
 # 6. Announce the one-time super-admin setup token (ADR-0045). It was captured into SETUP_TOKEN
 #    when cloud.toml was created above (step 2), so we do not re-read the file — which the chown
@@ -226,4 +378,21 @@ else
   echo "note   docker not found; when installed, run: docker compose -f \"$COMPOSE\" up -d --build"
 fi
 
-echo "done   bootstrap complete"
+# 8. Publish the certificate to secrets/tls on the two ACME modes (ADR-0090), so the path exists
+#    from the first deploy instead of only after cron's first pass. Best-effort and non-fatal: on a
+#    first bring-up ACME has usually not finished yet, and "not issued yet" is the normal answer.
+#    Add the cron line from docs/deploy-runbook.md so renewals keep the exported copy current — a
+#    consumer that reads a stale certificate fails only when the old one expires, weeks later.
+case "$CADDY_TLS_MODE" in
+  acme-http01 | acme-dns01)
+    chmod +x "$HERE/tls-export.sh" 2>/dev/null || true
+    if "$HERE/tls-export.sh"; then
+      :
+    else
+      echo "note   tls-export.sh did not export yet (normal on a first deploy, before ACME issues); cron picks it up"
+    fi
+    ;;
+  *) ;;
+esac
+
+echo "done   bootstrap complete (TLS_MODE=$CADDY_TLS_MODE, trusted_proxy_hops=$TRUSTED_PROXY_HOPS)"

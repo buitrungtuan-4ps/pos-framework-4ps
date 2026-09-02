@@ -3,6 +3,13 @@
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-20
 **Relates to** [ADR-0003](0003-cattle-not-pets.md) · [ADR-0023](0023-tenant-hostname-and-slug.md) · [ADR-0016](0016-postgres-access.md) · [ADR-0031](0031-cloud-adapter-transports.md) · `docs/roadmap.md` P8
 
+> **Amended by [ADR-0090](0090-tls-postures.md) (2026-09-02), on how the certificate arrives.** This
+> record's TLS decision — Caddy terminating with ACME, over DNS-01 or HTTP-01 depending on the
+> hostname — is now one of **four** postures selected by an explicit `TLS_MODE`, and the single
+> `deploy/Caddyfile` is four committed files under `deploy/Caddyfile.d/` sharing one imported site
+> block. Everything else here stands: Caddy still terminates, the origin is still real TLS, and the
+> box still mints every application secret itself.
+
 **Context.** `docs/roadmap.md` P8 is fork-and-deploy: someone forks this repository, sets a handful of
 secrets, runs one workflow, and ~15 minutes later has a working cloud — admin UI live behind HTTPS,
 **with no command typed on the server**. The cloud is one country cell on **one VPS** (Kubernetes was
@@ -31,7 +38,7 @@ one thing a fork must never do is commit a database password or a signing key to
   the deploy channel, not the database, and rotating an internal secret is a server-side action, not a
   repository edit.
 
-- **Caddy terminates TLS and reverse-proxies to `pos_cloud`.** A tiny `deploy/Caddyfile` fronts the
+- **Caddy terminates TLS and reverse-proxies to `pos_cloud`.** A tiny Caddyfile fronts the
   stack: Caddy obtains and renews a certificate over **DNS-01** (the `CF_DNS_API_TOKEN`), so the box
   needs no inbound `:80` reachable to ACME and the record can stay **grey-clouded** (DNS-only) at
   Cloudflare. With no purchased domain, `DOMAIN=<vps-ip>.sslip.io` gives a real hostname that resolves
@@ -65,7 +72,7 @@ one thing a fork must never do is commit a database password or a signing key to
 
 **Consequences.**
 
-- `deploy/` gains `Dockerfile`, `compose.yml`, `Caddyfile`, and (P8b) `bootstrap.sh`; `k8s/` (P8e) is
+- `deploy/` gains `Dockerfile`, `compose.yml`, a Caddyfile, and (P8b) `bootstrap.sh`; `k8s/` (P8e) is
   the optional lane. The deploy workflow (P8c) ships the image and runs bootstrap over the existing
   SSH channel; backups and the restore drill (P8d) are the durability half.
 - This environment has no Docker daemon, so the artifacts are validated by what tooling allows — YAML
