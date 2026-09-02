@@ -43,6 +43,7 @@ use pos_proto::{Open, Quantity, SalesChannel, Timestamp};
 
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope};
+use crate::http::api_error;
 use crate::relay::{LookUpQuery, parse_look_up};
 
 /// Maps a request's store to the tenant that owns it, so the endpoint can refuse a cross-tenant
@@ -199,13 +200,12 @@ where
     // collapse to one `404`, so a prober cannot map another tenant's stores.
     match state.directory.tenant_of(order.store_id).await {
         Ok(Some(owner)) if owner == grant.tenant() => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Ok(_) => return api_error(ErrorStatus::NotFound, "no such store"),
         Err(_error) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
+            return api_error(
+                ErrorStatus::Unavailable,
                 "the store directory is unavailable",
-            )
-                .into_response();
+            );
         }
     }
 
@@ -368,13 +368,12 @@ where
     };
     match state.directory.tenant_of(store_id).await {
         Ok(Some(owner)) if owner == grant.tenant() => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "no such store").into_response(),
+        Ok(_) => return api_error(ErrorStatus::NotFound, "no such store"),
         Err(_error) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
+            return api_error(
+                ErrorStatus::Unavailable,
                 "the store directory is unavailable",
-            )
-                .into_response();
+            );
         }
     }
     match state
@@ -383,27 +382,17 @@ where
         .await
     {
         Ok(Some(acceptance)) => (StatusCode::OK, Json(order_body(&acceptance))).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such order").into_response(),
+        Ok(None) => api_error(ErrorStatus::NotFound, "no such order"),
         Err(error) => intake_error(&error),
     }
 }
 
 /// Maps a submission [`PortError`] to the status the endpoint answers with.
 pub(crate) fn intake_error(error: &PortError) -> Response {
-    let status = match error.status() {
-        ErrorStatus::InvalidArgument => StatusCode::BAD_REQUEST,
-        ErrorStatus::FailedPrecondition | ErrorStatus::AlreadyExists => StatusCode::CONFLICT,
-        ErrorStatus::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
-        ErrorStatus::NotFound => StatusCode::NOT_FOUND,
-        ErrorStatus::PermissionDenied => StatusCode::FORBIDDEN,
-        ErrorStatus::Unauthenticated => StatusCode::UNAUTHORIZED,
-        ErrorStatus::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-        ErrorStatus::Internal | ErrorStatus::Unspecified => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, error.to_string()).into_response()
+    api_error(error.status(), error.to_string())
 }
 
-/// A `400` carrying a one-line reason.
+/// A `400` carrying a one-line reason, in the envelope `/v1` documents.
 fn bad_request(reason: &'static str) -> Response {
-    (StatusCode::BAD_REQUEST, reason).into_response()
+    api_error(ErrorStatus::InvalidArgument, reason)
 }

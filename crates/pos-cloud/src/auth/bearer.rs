@@ -26,8 +26,10 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use pos_proto::determinism::ClockSource;
+use pos_proto::error::ErrorStatus;
 
 use super::apikey::{ApiKeyStore, Grant, Scope, parse, verify};
+use crate::http::api_error;
 
 /// The authentication scheme this surface accepts.
 const SCHEME: &str = "Bearer";
@@ -124,15 +126,16 @@ impl AuthDenied {
 impl IntoResponse for AuthDenied {
     fn into_response(self) -> Response {
         if self.is_store_unavailable() {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
+            return api_error(
+                ErrorStatus::Unavailable,
                 "the authentication service is unavailable",
-            )
-                .into_response();
+            );
         }
-        // One generic 401 for every credential problem. `WWW-Authenticate` names the scheme so a
-        // well-behaved client knows how to present a key, without revealing anything about this one.
-        let mut response = (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+        // One generic 401 for every credential problem, and one generic *body*: the envelope carries
+        // no `details`, because a field-level reason here would be the oracle this arm exists to
+        // avoid. `WWW-Authenticate` names the scheme so a well-behaved client knows how to present a
+        // key, without revealing anything about this one.
+        let mut response = api_error(ErrorStatus::Unauthenticated, "unauthorized");
         response
             .headers_mut()
             .insert(WWW_AUTHENTICATE, HeaderValue::from_static(SCHEME));
