@@ -102,9 +102,29 @@ jobs:
           echo "NATS did not become ready" >&2
           docker logs nats || true
           exit 1
+      - name: start a second NATS that enforces a token
+        # The broker above runs with no authorization, which is how a real defect survived: a token
+        # written into the URL was silently dropped, and every deployment's generated `nats.conf`
+        # carries an `authorization { token: … }` block. A tokenless server can never catch that, so
+        # the auth cases get a broker that actually refuses. Same pinned digest, `--auth` set, on a
+        # second port so both are up at once.
+        run: |
+          docker run -d --name nats-auth -p 4223:4222 -p 8223:8222 \
+            nats@sha256:5498ba57b9471840be3d15b033a4eec554d1c02fa6c2cc0ca2d888637f6c6e2f \
+            -js -m 8222 --auth ci-nats-token
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:8223/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "the token-enforcing NATS did not become ready" >&2
+          docker logs nats-auth || true
+          exit 1
       - name: link-nats against a real NATS
         env:
           NATS_URL: "127.0.0.1:4222"
+          # The credentials are in the URL on purpose: that is the form every document in this tree
+          # tells an operator to use, so it is the form the test must prove works.
+          NATS_AUTH_URL: "nats://:ci-nats-token@127.0.0.1:4223"
         run: cargo test -p link-nats --features integration --locked
       - name: pos_cloud ingest cursor against a real NATS
         # The end-to-end proof that the durable cursor drives Cloud::ingest idempotently against real

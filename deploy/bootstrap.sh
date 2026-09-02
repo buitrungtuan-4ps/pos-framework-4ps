@@ -202,7 +202,9 @@ admin_setup_token = "$SETUP_TOKEN"
 trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 
 # The ingest cursor is off until stores publish to JetStream (ADR-0031). To arm it,
-# uncomment and use the token from secrets/nats.conf:
+# uncomment and use the token from secrets/nats.conf. The token belongs in the URL's userinfo
+# exactly as written — link-nats lifts it into the connect options, because async-nats itself reads
+# credentials only from there and would otherwise drop it (ADR-0089's correction):
 # [nats]
 # url = "nats://:THE_NATS_TOKEN@nats:4222"
 # stream = "POS_FLEET"
