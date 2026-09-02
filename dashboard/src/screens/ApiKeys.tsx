@@ -20,9 +20,17 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 
+// The scopes that gate a live route. `relay_orders` belongs here because a store key without it
+// leaves the order relay answering 403 on every poll while config-pull works fine — a half-connected
+// store whose only symptom is a log line (roadmap-v3 E6).
+//
+// `read_events` and `manage_webhooks` are deliberately absent: they exist in the cloud's `Scope` enum
+// but gate no route, so offering them would let an operator grant an authority that does nothing.
+// They are listed as dead in docs/fork-checklist.md instead.
 const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_rollups", key: "scope.read_rollups" },
   { wire: "read_config", key: "scope.read_config" },
+  { wire: "relay_orders", key: "scope.relay_orders" },
   { wire: "place_orders", key: "scope.place_orders" },
   { wire: "manage_devices", key: "scope.manage_devices" },
 ];

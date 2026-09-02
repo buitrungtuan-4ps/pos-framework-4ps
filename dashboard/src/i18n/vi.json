@@ -154,7 +154,7 @@
   "wizard.storeLabel": "Cửa hàng",
   "wizard.keyLabel": "Mã khoá API",
   "wizard.configTitle": "Tệp cấu hình cửa hàng (config.toml)",
-  "wizard.configHint": "Lưu tệp này thành config.toml trên máy chủ cửa hàng, cạnh tệp chạy pos_edge (hoặc trỏ POS_EDGE_CONFIG tới nó). Tệp xác định máy này là cửa hàng nào; máy nhận thông tin xác thực qua bước kích hoạt, không phải từ tệp này.",
+  "wizard.configHint": "Lưu tệp này thành config.toml trên máy chủ cửa hàng, cạnh binary pos_edge (hoặc trỏ POS_EDGE_CONFIG vào nó). Nó cho biết máy này là cửa hàng nào và gọi về cloud nào. Nó không chứa bí mật — phần đó nằm ở tệp env bên dưới.",
   "wizard.downloadConfig": "Tải config.toml",
   "wizard.configCopied": "Đã sao chép.",
   "reports.title": "Báo cáo",
@@ -1224,5 +1224,12 @@
   "stations.publish": "Xuất bản sơ đồ",
   "stations.publishHint": "Việc xuất bản biên dịch các trạm bếp và định tuyến — cùng các khu vực và bàn — thành sơ đồ mà cửa hàng áp dụng. Hãy xuất bản sau khi thay đổi trạm hoặc định tuyến.",
   "stations.publishAction": "Xuất bản cho cửa hàng",
-  "stations.published": "Đã xuất bản cho cửa hàng."
+  "stations.published": "Đã xuất bản cho cửa hàng.",
+  "wizard.bindPort": "Cổng lắng nghe",
+  "wizard.bindPortHint": "Để trống để dùng mặc định 8787. Chỉ đặt khi máy đã có thứ khác chiếm cổng đó — đây là thuộc tính của máy, không phải của cửa hàng, nên nó không bao giờ gửi lên cloud.",
+  "wizard.envTitle": "Tệp môi trường của cửa hàng (env)",
+  "wizard.envHint": "Bí mật duy nhất của cửa hàng. Cài bằng quyền root, chế độ 0600, tại /etc/pos-edge/env — service unit đọc từ đó. Không để trong config.toml và không commit vào git.",
+  "wizard.envNoKey": "Chưa cấp khoá nào nên tệp này không có thông tin xác thực. Quay lại cấp khoá, hoặc dán một khoá sẵn có vào tệp trước khi cài.",
+  "wizard.downloadEnv": "Tải tệp env",
+  "scope.relay_orders": "Chuyển đơn về cửa hàng"
 }
