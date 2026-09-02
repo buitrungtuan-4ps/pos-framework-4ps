@@ -639,15 +639,12 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "tenant_id or store_id is not a ULID",
-            &[("tenant_id", "NOT_A_ULID"), ("store_id", "NOT_A_ULID")],
-        );
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let mut candidates = Vec::with_capacity(request.event_ids.len());
     for raw in &request.event_ids {
@@ -773,13 +770,14 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let store = match query.store_id.as_deref() {
         Some(raw) => match raw.parse::<Ulid>().map(StoreId::new) {
             Ok(store) => Some(store),
-            Err(_) => return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response(),
+            Err(_) => return ulid_refusal(&["store_id"]),
         },
         None => None,
     };
@@ -859,15 +857,12 @@ where
     R: OtaReportStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "tenant_id or store_id is not a ULID",
-            &[("tenant_id", "NOT_A_ULID"), ("store_id", "NOT_A_ULID")],
-        );
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let installed = request.installed.trim();
     if installed.is_empty() {
@@ -1008,12 +1003,9 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
         return forbidden.into_response();
     }
-    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the store id is not a ULID",
-            &[("store_id", "NOT_A_ULID")],
-        );
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
     let Some(kind) = DeviceKind::from_wire(&request.kind) else {
         return api_error_with_details(
@@ -1090,12 +1082,9 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ManageDevices) {
         return forbidden.into_response();
     }
-    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the store id is not a ULID",
-            &[("store_id", "NOT_A_ULID")],
-        );
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
     match state
         .devices
@@ -1135,8 +1124,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state
         .devices
@@ -1208,15 +1198,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        id.parse::<Ulid>().map(DeviceProposalId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the proposal id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &query.tenant_id), ("id", id)]) {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
     };
     match state.devices.resolve(tenant_id, id, approved).await {
         Ok(found) => {
@@ -1561,8 +1545,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.people.list(tenant_id).await {
         Ok(employees) => (StatusCode::OK, Json::<Vec<Employee>>(employees)).into_response(),
@@ -1592,15 +1577,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(employee_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        employee_id.parse::<Ulid>().map(EmployeeId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the employee id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, employee_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("employee_id", &employee_id),
+    ]) {
+        Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
+        Err(refusal) => return refusal,
     };
     match state.people.get(tenant_id, employee_id).await {
         Ok(Some(employee)) => (StatusCode::OK, Json(employee)).into_response(),
@@ -1632,8 +1614,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     if request.code.trim().is_empty() || request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "code and name are required").into_response();
@@ -1703,15 +1686,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(employee_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        employee_id.parse::<Ulid>().map(EmployeeId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the employee id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, employee_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("employee_id", &employee_id),
+    ]) {
+        Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -1787,15 +1767,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(employee_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        employee_id.parse::<Ulid>().map(EmployeeId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the employee id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, employee_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("employee_id", &employee_id),
+    ]) {
+        Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
+        Err(refusal) => return refusal,
     };
     if !pin_is_well_formed(&request.pin) {
         return (StatusCode::BAD_REQUEST, "the PIN must be 4 to 8 digits").into_response();
@@ -1847,8 +1824,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.people.list(tenant_id).await {
         Ok(roles) => (StatusCode::OK, Json::<Vec<RoleTemplate>>(roles)).into_response(),
@@ -1878,16 +1856,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(role_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        role_id.parse::<Ulid>().map(RoleTemplateId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the role id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, role_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("role_id", &role_id)]) {
+            Ok([tenant_id, role_id]) => (TenantId::new(tenant_id), RoleTemplateId::new(role_id)),
+            Err(refusal) => return refusal,
+        };
     match state.people.get(tenant_id, role_id).await {
         Ok(Some(role)) => (StatusCode::OK, Json(role)).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such role").into_response(),
@@ -1926,8 +1899,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -2002,16 +1976,14 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(role_template_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        role_id.parse::<Ulid>().map(RoleTemplateId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the role id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, role_template_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("role_id", &role_id)]) {
+            Ok([tenant_id, role_template_id]) => (
+                TenantId::new(tenant_id),
+                RoleTemplateId::new(role_template_id),
+            ),
+            Err(refusal) => return refusal,
+        };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
     }
@@ -2081,19 +2053,22 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let result = match (query.store_id.as_deref(), query.employee_id.as_deref()) {
         (Some(store), None) => {
-            let Ok(store_id) = store.parse::<Ulid>().map(StoreId::new) else {
-                return (StatusCode::BAD_REQUEST, "store_id is not a ULID").into_response();
+            let store_id = match parse_ulid_fields([("store_id", store)]) {
+                Ok([store_id]) => StoreId::new(store_id),
+                Err(refusal) => return refusal,
             };
             state.people.list_for_store(tenant_id, store_id).await
         }
         (None, Some(employee)) => {
-            let Ok(employee_id) = employee.parse::<Ulid>().map(EmployeeId::new) else {
-                return (StatusCode::BAD_REQUEST, "employee_id is not a ULID").into_response();
+            let employee_id = match parse_ulid_fields([("employee_id", employee)]) {
+                Ok([employee_id]) => EmployeeId::new(employee_id),
+                Err(refusal) => return refusal,
             };
             state.people.list_for_employee(tenant_id, employee_id).await
         }
@@ -2134,20 +2109,19 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(employee_id), Ok(store_id), Ok(role_template_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.employee_id.parse::<Ulid>().map(EmployeeId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request
-            .role_template_id
-            .parse::<Ulid>()
-            .map(RoleTemplateId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, employee_id, store_id, or role_template_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, employee_id, store_id, role_template_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("employee_id", &request.employee_id),
+        ("store_id", &request.store_id),
+        ("role_template_id", &request.role_template_id),
+    ]) {
+        Ok([tenant_id, employee_id, store_id, role_template_id]) => (
+            TenantId::new(tenant_id),
+            EmployeeId::new(employee_id),
+            StoreId::new(store_id),
+            RoleTemplateId::new(role_template_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(assignment_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AssignmentId::new)
@@ -2215,15 +2189,14 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(assignment_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        assignment_id.parse::<Ulid>().map(AssignmentId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the assignment id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, assignment_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("assignment_id", &assignment_id),
+    ]) {
+        Ok([tenant_id, assignment_id]) => {
+            (TenantId::new(tenant_id), AssignmentId::new(assignment_id))
+        }
+        Err(refusal) => return refusal,
     };
     match state.people.remove(tenant_id, assignment_id).await {
         Ok(true) => {
@@ -2460,15 +2433,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     // Every key must be a known §10 capability flag — the form only sends catalogue keys, and this
     // keeps a typo from writing a stray boolean into the config document.
@@ -2631,15 +2601,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let entries = match state.tax_rates.list_tax_rates(tenant_id).await {
         Ok(entries) => entries,
@@ -2810,15 +2777,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     if CurrencyCode::parse(&request.currency_code).is_err() {
         return (
@@ -3123,15 +3087,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match read_store_node(&state.config_trees, tenant_id, store_id, "channels").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
@@ -3161,15 +3122,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let enabled = match parse_known_tokens::<SalesChannel>(&request.enabled) {
         Ok(tokens) => tokens,
@@ -3211,15 +3169,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match read_store_node(&state.config_trees, tenant_id, store_id, "tender").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
@@ -3249,15 +3204,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let accepted = match parse_known_tokens::<PaymentMethod>(&request.accepted) {
         Ok(tokens) => tokens,
@@ -3332,15 +3284,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
@@ -3370,15 +3319,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let mut node = serde_json::json!({
         "enabled": request.enabled,
@@ -3447,15 +3393,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
@@ -3486,15 +3429,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     if request
         .policies
@@ -3721,10 +3661,8 @@ where
     reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
 )]
 fn floor_tenant(tenant_id: &str) -> Result<TenantId, Response> {
-    tenant_id
-        .parse::<Ulid>()
-        .map(TenantId::new)
-        .map_err(|_ignored| (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response())
+    let [tenant] = parse_ulid_fields([("tenant_id", tenant_id)])?;
+    Ok(TenantId::new(tenant))
 }
 
 /// Reads a (tenant, store) list query, or returns the `400`.
@@ -3733,17 +3671,11 @@ fn floor_tenant(tenant_id: &str) -> Result<TenantId, Response> {
     reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
 )]
 fn floor_tenant_store(query: &FloorListQuery) -> Result<(TenantId, StoreId), Response> {
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response());
-    };
-    Ok((tenant_id, store_id))
+    let [tenant, store] = parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ])?;
+    Ok((TenantId::new(tenant), StoreId::new(store)))
 }
 
 async fn admin_list_areas<F, A, C>(
@@ -3801,8 +3733,9 @@ where
         Ok(id) => id,
         Err(response) => return response,
     };
-    let Ok(area_id) = area_id.parse::<Ulid>().map(AreaId::new) else {
-        return (StatusCode::BAD_REQUEST, "the area id is not a ULID").into_response();
+    let area_id = match parse_ulid_fields([("area_id", &area_id)]) {
+        Ok([area_id]) => AreaId::new(area_id),
+        Err(refusal) => return refusal,
     };
     match AreaStore::get(&state.floor, tenant_id, area_id).await {
         Ok(Some(area)) => (StatusCode::OK, Json(area)).into_response(),
@@ -3832,15 +3765,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -3907,16 +3837,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(area_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        area_id.parse::<Ulid>().map(AreaId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the area id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, area_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("area_id", &area_id)]) {
+            Ok([tenant_id, area_id]) => (TenantId::new(tenant_id), AreaId::new(area_id)),
+            Err(refusal) => return refusal,
+        };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
     }
@@ -4010,8 +3935,9 @@ where
         Ok(id) => id,
         Err(response) => return response,
     };
-    let Ok(table_id) = table_id.parse::<Ulid>().map(TableId::new) else {
-        return (StatusCode::BAD_REQUEST, "the table id is not a ULID").into_response();
+    let table_id = match parse_ulid_fields([("table_id", &table_id)]) {
+        Ok([table_id]) => TableId::new(table_id),
+        Err(refusal) => return refusal,
     };
     match TableStore::get(&state.floor, tenant_id, table_id).await {
         Ok(Some(table)) => (StatusCode::OK, Json(table)).into_response(),
@@ -4041,16 +3967,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id), Ok(area_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request.area_id.parse::<Ulid>().map(AreaId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, or area_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, area_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("area_id", &request.area_id),
+    ]) {
+        Ok([tenant_id, store_id, area_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            AreaId::new(area_id),
+        ),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -4122,16 +4049,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(table_id), Ok(area_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        table_id.parse::<Ulid>().map(TableId::new),
-        request.area_id.parse::<Ulid>().map(AreaId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the table id, tenant_id, or area_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, table_id, area_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("table_id", &table_id),
+        ("area_id", &request.area_id),
+    ]) {
+        Ok([tenant_id, table_id, area_id]) => (
+            TenantId::new(tenant_id),
+            TableId::new(table_id),
+            AreaId::new(area_id),
+        ),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -4231,8 +4159,9 @@ where
         Ok(id) => id,
         Err(response) => return response,
     };
-    let Ok(station_id) = station_id.parse::<Ulid>().map(StationId::new) else {
-        return (StatusCode::BAD_REQUEST, "the station id is not a ULID").into_response();
+    let station_id = match parse_ulid_fields([("station_id", &station_id)]) {
+        Ok([station_id]) => StationId::new(station_id),
+        Err(refusal) => return refusal,
     };
     match StationStore::get(&state.floor, tenant_id, station_id).await {
         Ok(Some(station)) => (StatusCode::OK, Json(station)).into_response(),
@@ -4262,15 +4191,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -4278,7 +4204,7 @@ where
     let Ok(backup_station_id) =
         parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
     else {
-        return (StatusCode::BAD_REQUEST, "backup_station_id is not a ULID").into_response();
+        return ulid_refusal(&["backup_station_id"]);
     };
     let Some(station_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StationId::new)
@@ -4345,15 +4271,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(station_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        station_id.parse::<Ulid>().map(StationId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the station id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, station_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("station_id", &station_id),
+    ]) {
+        Ok([tenant_id, station_id]) => (TenantId::new(tenant_id), StationId::new(station_id)),
+        Err(refusal) => return refusal,
     };
     if request.name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "name is required").into_response();
@@ -4361,7 +4284,7 @@ where
     let Ok(backup_station_id) =
         parse_optional_ulid(request.backup_station_id.as_deref(), StationId::new)
     else {
-        return (StatusCode::BAD_REQUEST, "backup_station_id is not a ULID").into_response();
+        return ulid_refusal(&["backup_station_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -4452,23 +4375,24 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id), Ok(station_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request.station_id.parse::<Ulid>().map(StationId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, or station_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, station_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("station_id", &request.station_id),
+    ]) {
+        Ok([tenant_id, store_id, station_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            StationId::new(station_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Ok(menu_item_id) = parse_optional_ulid(request.menu_item_id.as_deref(), MenuItemId::new)
     else {
-        return (StatusCode::BAD_REQUEST, "menu_item_id is not a ULID").into_response();
+        return ulid_refusal(&["menu_item_id"]);
     };
     let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
-        return (StatusCode::BAD_REQUEST, "course_id is not a ULID").into_response();
+        return ulid_refusal(&["course_id"]);
     };
     // A rule must match exactly one of an item or a course — the same rule the §10 validator enforces
     // at publish, surfaced here so the console cannot store a rule that matches nothing or both.
@@ -4546,16 +4470,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(rule_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        rule_id.parse::<Ulid>().map(RoutingRuleId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the rule id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, rule_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("rule_id", &rule_id)]) {
+            Ok([tenant_id, rule_id]) => (TenantId::new(tenant_id), RoutingRuleId::new(rule_id)),
+            Err(refusal) => return refusal,
+        };
     match RoutingRuleStore::remove(&state.floor, tenant_id, rule_id).await {
         Ok(true) => {
             audit_action(
@@ -4662,15 +4581,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
 
     // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified.
@@ -5024,8 +4940,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant]) => TenantId::new(tenant),
+        Err(refusal) => return refusal,
     };
     let now_ms = state.clock.now().as_milliseconds_since_epoch();
     match state.fleet.list_fleet(tenant).await {
@@ -5063,16 +4980,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant), Ok(store)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the tenant_id or store id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant, store) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store)),
+            Err(refusal) => return refusal,
+        };
     let now_ms = state.clock.now().as_milliseconds_since_epoch();
     match state.fleet.store_detail(tenant, store).await {
         Ok(Some(row)) => {
@@ -5654,8 +5566,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "the tenant id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -5708,8 +5621,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.registry.list_brands(tenant_id).await {
         Ok(brands) => (StatusCode::OK, Json::<Vec<BrandRecord>>(brands)).into_response(),
@@ -5739,8 +5653,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(brand_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(BrandId::new)
@@ -5797,16 +5712,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(brand_id), Ok(tenant_id)) = (
-        brand_id.parse::<Ulid>().map(BrandId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the brand id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (brand_id, tenant_id) =
+        match parse_ulid_fields([("brand_id", &brand_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([brand_id, tenant_id]) => (BrandId::new(brand_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
     };
@@ -5859,8 +5769,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.registry.list_stores(tenant_id).await {
         Ok(stores) => (StatusCode::OK, Json::<Vec<StoreRecord>>(stores)).into_response(),
@@ -5902,11 +5813,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "brand_id is not a ULID").into_response();
+        return ulid_refusal(&["brand_id"]);
     };
     let Some(store_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StoreId::new)
@@ -5964,18 +5876,13 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(store_id), Ok(tenant_id)) = (
-        store_id.parse::<Ulid>().map(StoreId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the store id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (store_id, tenant_id) =
+        match parse_ulid_fields([("store_id", &store_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([store_id, tenant_id]) => (StoreId::new(store_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
     let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "brand_id is not a ULID").into_response();
+        return ulid_refusal(&["brand_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -6031,16 +5938,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the store id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     match state.registry.list_devices(tenant_id, store_id).await {
         Ok(devices) => (StatusCode::OK, Json::<Vec<DeviceRecord>>(devices)).into_response(),
         Err(error) => registry_error_response(&error),
@@ -6070,16 +5972,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the store id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let Some(device_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceId::new)
     else {
@@ -6137,16 +6034,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-        device_id.parse::<Ulid>().map(DeviceId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, the store id, or the device id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, device_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &store_id),
+        ("device_id", &device_id),
+    ]) {
+        Ok([tenant_id, store_id, device_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            DeviceId::new(device_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -6655,8 +6553,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.tax_rates.list_tax_rates(tenant_id).await {
         Ok(rows) => {
@@ -6694,8 +6593,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let known: BTreeSet<TaxClassId> = match state.catalog.list_tax_classes(tenant_id).await {
         Ok(classes) => classes.iter().map(|class| class.tax_class_id).collect(),
@@ -6704,8 +6604,9 @@ where
     let mut entries = Vec::with_capacity(request.rates.len());
     let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
     for row in &request.rates {
-        let Ok(tax_class_id) = row.tax_class_id.parse::<Ulid>().map(TaxClassId::new) else {
-            return (StatusCode::BAD_REQUEST, "a tax_class_id is not a ULID").into_response();
+        let tax_class_id = match parse_ulid_fields([("tax_class_id", &row.tax_class_id)]) {
+            Ok([tax_class_id]) => TaxClassId::new(tax_class_id),
+            Err(refusal) => return refusal,
         };
         if !known.contains(&tax_class_id) {
             return (
@@ -6924,8 +6825,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.campaigns.list_campaigns(tenant_id).await {
         Ok(campaigns) => (StatusCode::OK, Json(campaigns)).into_response(),
@@ -6955,15 +6857,12 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(campaign_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or campaign_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, campaign_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("campaign_id", &campaign_id),
+    ]) {
+        Ok([tenant_id, campaign_id]) => (TenantId::new(tenant_id), CampaignId::new(campaign_id)),
+        Err(refusal) => return refusal,
     };
     match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(campaign)) => (StatusCode::OK, Json(campaign)).into_response(),
@@ -6994,8 +6893,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(campaign_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(CampaignId::new)
@@ -7049,15 +6949,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(campaign_id)) = (
-        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or campaign_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, campaign_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("campaign_id", &campaign_id),
+    ]) {
+        Ok([tenant_id, campaign_id]) => (TenantId::new(tenant_id), CampaignId::new(campaign_id)),
+        Err(refusal) => return refusal,
     };
     let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(existing)) => existing,
@@ -7111,15 +7008,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(campaign_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or campaign_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, campaign_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("campaign_id", &campaign_id),
+    ]) {
+        Ok([tenant_id, campaign_id]) => (TenantId::new(tenant_id), CampaignId::new(campaign_id)),
+        Err(refusal) => return refusal,
     };
     let before = match state.campaigns.get_campaign(tenant_id, campaign_id).await {
         Ok(Some(existing)) => existing,
@@ -7402,8 +7296,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.inventory.list_ingredients(tenant_id).await {
         Ok(ingredients) => (StatusCode::OK, Json(ingredients)).into_response(),
@@ -7433,15 +7328,14 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(ingredient_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or ingredient_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
     };
     match state.inventory.list_ingredients(tenant_id).await {
         Ok(ingredients) => match ingredients.into_iter().find(|i| i.id == ingredient_id) {
@@ -7474,8 +7368,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(ingredient_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(IngredientId::new)
@@ -7533,15 +7428,14 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(ingredient_id)) = (
-        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or ingredient_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_ingredients(tenant_id).await {
         Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
@@ -7601,15 +7495,14 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(ingredient_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        ingredient_id.parse::<Ulid>().ok().map(IngredientId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or ingredient_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_ingredients(tenant_id).await {
         Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
@@ -7663,8 +7556,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.inventory.list_recipes(tenant_id).await {
         Ok(recipes) => (StatusCode::OK, Json(recipes)).into_response(),
@@ -7694,16 +7588,11 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(item)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or item_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, item) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("item_id", &item_id)]) {
+            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
+            Err(refusal) => return refusal,
+        };
     match state.inventory.list_recipes(tenant_id).await {
         Ok(recipes) => match recipes.into_iter().find(|r| r.item == item) {
             Some(recipe) => (StatusCode::OK, Json(recipe)).into_response(),
@@ -7737,16 +7626,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(item)) = (
-        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or item_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, item) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("item_id", &item_id)]) {
+            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
+            Err(refusal) => return refusal,
+        };
     let before = match state.inventory.list_recipes(tenant_id).await {
         Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
         Err(error) => return inventory_error_response(&error),
@@ -7804,16 +7688,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(item)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        item_id.parse::<Ulid>().ok().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or item_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, item) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("item_id", &item_id)]) {
+            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
+            Err(refusal) => return refusal,
+        };
     let before = match state.inventory.list_recipes(tenant_id).await {
         Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
         Err(error) => return inventory_error_response(&error),
@@ -7862,8 +7741,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.inventory.list_suppliers(tenant_id).await {
         Ok(suppliers) => (StatusCode::OK, Json(suppliers)).into_response(),
@@ -7893,15 +7773,12 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(supplier_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or supplier_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, supplier_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("supplier_id", &supplier_id),
+    ]) {
+        Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
+        Err(refusal) => return refusal,
     };
     match state.inventory.list_suppliers(tenant_id).await {
         Ok(suppliers) => match suppliers.into_iter().find(|s| s.id == supplier_id) {
@@ -7934,8 +7811,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(supplier_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(SupplierId::new)
@@ -7989,15 +7867,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(supplier_id)) = (
-        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or supplier_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, supplier_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("supplier_id", &supplier_id),
+    ]) {
+        Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
+        Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_suppliers(tenant_id).await {
         Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
@@ -8053,15 +7928,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(supplier_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        supplier_id.parse::<Ulid>().ok().map(SupplierId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or supplier_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, supplier_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("supplier_id", &supplier_id),
+    ]) {
+        Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
+        Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_suppliers(tenant_id).await {
         Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
@@ -8247,15 +8119,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let (ingredients, recipes, suppliers) =
         match list_inventory_parts(&state.inventory, tenant_id).await {
@@ -8419,15 +8288,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
         Ok(campaigns) => campaigns,
@@ -8600,15 +8466,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
         Ok(campaigns) => campaigns,
@@ -8761,15 +8624,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     // A fresh publish is live: `halted` is omitted so it defaults false in the node.
     let node = serde_json::json!({
@@ -8825,15 +8685,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let state_before = match state.config_trees.load(tenant_id, store_id).await {
         Ok(state) => state,
@@ -8984,15 +8841,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match state.config_trees.load(tenant_id, store_id).await {
         Ok(state_before) => {
@@ -9041,15 +8895,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     let node = serde_json::json!({
         "ring": request.ring,
@@ -9093,15 +8944,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        query.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match state.config_trees.load(tenant_id, store_id).await {
         Ok(state_before) => {
@@ -9207,15 +9055,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Some(tenant_id), Some(campaign_id)) = (
-        request.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or campaign_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, campaign_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("campaign_id", &campaign_id),
+    ]) {
+        Ok([tenant_id, campaign_id]) => (TenantId::new(tenant_id), CampaignId::new(campaign_id)),
+        Err(refusal) => return refusal,
     };
     if request.count == 0 || request.count > MAX_VOUCHER_BATCH {
         return (StatusCode::BAD_REQUEST, "count must be between 1 and 10000").into_response();
@@ -9301,15 +9146,12 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(campaign_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        campaign_id.parse::<Ulid>().ok().map(CampaignId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or campaign_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, campaign_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("campaign_id", &campaign_id),
+    ]) {
+        Ok([tenant_id, campaign_id]) => (TenantId::new(tenant_id), CampaignId::new(campaign_id)),
+        Err(refusal) => return refusal,
     };
     match state
         .vouchers
@@ -9446,15 +9288,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     if request.effective_at_ms <= state.clock.now().as_milliseconds_since_epoch() {
         return (
@@ -9540,15 +9379,12 @@ where
     {
         return denied;
     }
-    let (Some(tenant_id), Some(store_id)) = (
-        query.tenant_id.parse::<Ulid>().ok().map(TenantId::new),
-        query.store_id.parse::<Ulid>().ok().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
     match state.scheduled.list_for_store(tenant_id, store_id).await {
         Ok(rows) => {
@@ -9592,8 +9428,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.scheduled.cancel(tenant_id, &id).await {
         Ok(true) => {
@@ -9717,8 +9554,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.media.list(tenant_id).await {
         Ok(rows) => {
@@ -9761,8 +9599,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let renditions = match images::render(&body) {
         Ok(renditions) => renditions,
@@ -9847,11 +9686,13 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = tenant.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", tenant)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
-    let Ok(media_id) = media_id.parse::<Ulid>().map(MediaId::new) else {
-        return (StatusCode::BAD_REQUEST, "media id is not a ULID").into_response();
+    let media_id = match parse_ulid_fields([("media_id", media_id)]) {
+        Ok([media_id]) => MediaId::new(media_id),
+        Err(refusal) => return refusal,
     };
     match state.media.get(tenant_id, media_id, rendition).await {
         Ok(Some(bytes)) => (
@@ -9938,11 +9779,13 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
-    let Ok(media_id) = media_id.parse::<Ulid>().map(MediaId::new) else {
-        return (StatusCode::BAD_REQUEST, "media id is not a ULID").into_response();
+    let media_id = match parse_ulid_fields([("media_id", &media_id)]) {
+        Ok([media_id]) => MediaId::new(media_id),
+        Err(refusal) => return refusal,
     };
     match state.media.delete(tenant_id, media_id).await {
         Ok(true) => {
@@ -10052,12 +9895,23 @@ where
         })
 }
 
-/// Parses `?tenant_id=` and the `{subject_id}` path into their ids, or `None` if either is not a ULID.
-/// The caller turns `None` into the `400`. Shared by the three subject routes.
-fn parse_subject_target(tenant_id: &str, subject_id: &str) -> Option<(TenantId, SubjectId)> {
-    let tenant = tenant_id.parse::<Ulid>().map(TenantId::new).ok()?;
-    let subject = subject_id.parse::<Ulid>().map(SubjectId::new).ok()?;
-    Some((tenant, subject))
+/// Parses `?tenant_id=` and the `{subject_id}` path into their ids, or the refusal naming whichever
+/// one is not a ULID. Shared by the three subject routes.
+///
+/// It used to return `Option`, which threw away *which* of the two failed and left each caller to
+/// write `"tenant_id or subject_id is not a ULID"` — a refusal that named both because by then the
+/// information was gone. Handing back the response keeps it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these three routes return"
+)]
+fn parse_subject_target(
+    tenant_id: &str,
+    subject_id: &str,
+) -> Result<(TenantId, SubjectId), Response> {
+    let ids = parse_ulid_fields([("tenant_id", tenant_id), ("subject_id", subject_id)])?;
+    let [tenant, subject] = ids;
+    Ok((TenantId::new(tenant), SubjectId::new(subject)))
 }
 
 /// Looks a subject up — its existence and whether it is masked — without returning the personal fields.
@@ -10083,12 +9937,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Some((tenant, subject)) = parse_subject_target(&query.tenant_id, &subject_id) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or subject_id is not a ULID",
-        )
-            .into_response();
+    let (tenant, subject) = match parse_subject_target(&query.tenant_id, &subject_id) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
     };
     match state.subjects.fetch(tenant, subject).await {
         Ok(Some(record)) => {
@@ -10144,12 +9995,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Some((tenant, subject)) = parse_subject_target(&query.tenant_id, &subject_id) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or subject_id is not a ULID",
-        )
-            .into_response();
+    let (tenant, subject) = match parse_subject_target(&query.tenant_id, &subject_id) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
     };
     match state.subjects.fetch(tenant, subject).await {
         Ok(Some(record)) => {
@@ -10208,12 +10056,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Some((tenant, subject)) = parse_subject_target(&query.tenant_id, &subject_id) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or subject_id is not a ULID",
-        )
-            .into_response();
+    let (tenant, subject) = match parse_subject_target(&query.tenant_id, &subject_id) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
     };
     let record = match state.subjects.fetch(tenant, subject).await {
         Ok(Some(record)) => record,
@@ -10471,8 +10316,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_items(tenant_id).await {
         Ok(items) => (StatusCode::OK, Json::<Vec<CatalogItem>>(items)).into_response(),
@@ -10525,8 +10371,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let items = match state.catalog.list_items(tenant_id).await {
         Ok(items) => items,
@@ -10572,28 +10419,23 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(tax_class_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.tax_class_id.parse::<Ulid>().map(TaxClassId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or tax_class_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, tax_class_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("tax_class_id", &request.tax_class_id),
+    ]) {
+        Ok([tenant_id, tax_class_id]) => (TenantId::new(tenant_id), TaxClassId::new(tax_class_id)),
+        Err(refusal) => return refusal,
     };
-    let (Ok(item_category_id), Ok(item_subcategory_id)) = (
-        parse_optional_category(request.item_category_id.as_deref()),
-        parse_optional_subcategory(request.item_subcategory_id.as_deref()),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "item_category_id or item_subcategory_id is not a ULID",
-        )
-            .into_response();
+    let Ok(item_category_id) = parse_optional_category(request.item_category_id.as_deref()) else {
+        return ulid_refusal(&["item_category_id"]);
+    };
+    let Ok(item_subcategory_id) =
+        parse_optional_subcategory(request.item_subcategory_id.as_deref())
+    else {
+        return ulid_refusal(&["item_subcategory_id"]);
     };
     let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "image_ref is not a ULID").into_response();
+        return ulid_refusal(&["image_ref"]);
     };
     let Some(menu_item_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuItemId::new)
@@ -10654,32 +10496,31 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(menu_item_id), Ok(tenant_id), Ok(tax_class_id)) = (
-        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.tax_class_id.parse::<Ulid>().map(TaxClassId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the item id, tenant_id or tax_class_id is not a ULID",
-        )
-            .into_response();
+    let (menu_item_id, tenant_id, tax_class_id) = match parse_ulid_fields([
+        ("menu_item_id", &menu_item_id),
+        ("tenant_id", &request.tenant_id),
+        ("tax_class_id", &request.tax_class_id),
+    ]) {
+        Ok([menu_item_id, tenant_id, tax_class_id]) => (
+            MenuItemId::new(menu_item_id),
+            TenantId::new(tenant_id),
+            TaxClassId::new(tax_class_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
     };
-    let (Ok(item_category_id), Ok(item_subcategory_id)) = (
-        parse_optional_category(request.item_category_id.as_deref()),
-        parse_optional_subcategory(request.item_subcategory_id.as_deref()),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "item_category_id or item_subcategory_id is not a ULID",
-        )
-            .into_response();
+    let Ok(item_category_id) = parse_optional_category(request.item_category_id.as_deref()) else {
+        return ulid_refusal(&["item_category_id"]);
+    };
+    let Ok(item_subcategory_id) =
+        parse_optional_subcategory(request.item_subcategory_id.as_deref())
+    else {
+        return ulid_refusal(&["item_subcategory_id"]);
     };
     let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "image_ref is not a ULID").into_response();
+        return ulid_refusal(&["image_ref"]);
     };
     let record = CatalogItem {
         menu_item_id,
@@ -10734,8 +10575,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_tax_classes(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<TaxClass>>(rows)).into_response(),
@@ -10765,8 +10607,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(tax_class_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(TaxClassId::new)
@@ -10822,15 +10665,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tax_class_id), Ok(tenant_id)) = (
-        tax_class_id.parse::<Ulid>().map(TaxClassId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the tax class id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (tax_class_id, tenant_id) = match parse_ulid_fields([
+        ("tax_class_id", &tax_class_id),
+        ("tenant_id", &request.tenant_id),
+    ]) {
+        Ok([tax_class_id, tenant_id]) => (TaxClassId::new(tax_class_id), TenantId::new(tenant_id)),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -10883,8 +10723,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_item_categories(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<ItemCategory>>(rows)).into_response(),
@@ -10914,8 +10755,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(item_category_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ItemCategoryId::new)
@@ -10971,15 +10813,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(item_category_id), Ok(tenant_id)) = (
-        item_category_id.parse::<Ulid>().map(ItemCategoryId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the category id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (item_category_id, tenant_id) = match parse_ulid_fields([
+        ("item_category_id", &item_category_id),
+        ("tenant_id", &request.tenant_id),
+    ]) {
+        Ok([item_category_id, tenant_id]) => (
+            ItemCategoryId::new(item_category_id),
+            TenantId::new(tenant_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -11032,8 +10874,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_item_subcategories(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<ItemSubcategory>>(rows)).into_response(),
@@ -11063,18 +10906,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(item_category_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request
-            .item_category_id
-            .parse::<Ulid>()
-            .map(ItemCategoryId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or item_category_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, item_category_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("item_category_id", &request.item_category_id),
+    ]) {
+        Ok([tenant_id, item_category_id]) => (
+            TenantId::new(tenant_id),
+            ItemCategoryId::new(item_category_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(item_subcategory_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ItemSubcategoryId::new)
@@ -11131,21 +10971,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(item_subcategory_id), Ok(tenant_id), Ok(item_category_id)) = (
-        item_subcategory_id
-            .parse::<Ulid>()
-            .map(ItemSubcategoryId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request
-            .item_category_id
-            .parse::<Ulid>()
-            .map(ItemCategoryId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the sub-category id, tenant_id or item_category_id is not a ULID",
-        )
-            .into_response();
+    let (item_subcategory_id, tenant_id, item_category_id) = match parse_ulid_fields([
+        ("item_subcategory_id", &item_subcategory_id),
+        ("tenant_id", &request.tenant_id),
+        ("item_category_id", &request.item_category_id),
+    ]) {
+        Ok([item_subcategory_id, tenant_id, item_category_id]) => (
+            ItemSubcategoryId::new(item_subcategory_id),
+            TenantId::new(tenant_id),
+            ItemCategoryId::new(item_category_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -11199,8 +11035,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_display_categories(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<DisplayCategory>>(rows)).into_response(),
@@ -11230,8 +11067,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Some(display_category_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DisplayCategoryId::new)
@@ -11287,17 +11125,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(display_category_id), Ok(tenant_id)) = (
-        display_category_id
-            .parse::<Ulid>()
-            .map(DisplayCategoryId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the display category id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (display_category_id, tenant_id) = match parse_ulid_fields([
+        ("display_category_id", &display_category_id),
+        ("tenant_id", &request.tenant_id),
+    ]) {
+        Ok([display_category_id, tenant_id]) => (
+            DisplayCategoryId::new(display_category_id),
+            TenantId::new(tenant_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -11350,8 +11186,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_display_subcategories(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<DisplaySubcategory>>(rows)).into_response(),
@@ -11381,18 +11218,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(display_category_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request
-            .display_category_id
-            .parse::<Ulid>()
-            .map(DisplayCategoryId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or display_category_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, display_category_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("display_category_id", &request.display_category_id),
+    ]) {
+        Ok([tenant_id, display_category_id]) => (
+            TenantId::new(tenant_id),
+            DisplayCategoryId::new(display_category_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(display_subcategory_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DisplaySubcategoryId::new)
@@ -11449,21 +11283,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(display_subcategory_id), Ok(tenant_id), Ok(display_category_id)) = (
-        display_subcategory_id
-            .parse::<Ulid>()
-            .map(DisplaySubcategoryId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request
-            .display_category_id
-            .parse::<Ulid>()
-            .map(DisplayCategoryId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the sub-category id, tenant_id or display_category_id is not a ULID",
-        )
-            .into_response();
+    let (display_subcategory_id, tenant_id, display_category_id) = match parse_ulid_fields([
+        ("display_subcategory_id", &display_subcategory_id),
+        ("tenant_id", &request.tenant_id),
+        ("display_category_id", &request.display_category_id),
+    ]) {
+        Ok([display_subcategory_id, tenant_id, display_category_id]) => (
+            DisplaySubcategoryId::new(display_subcategory_id),
+            TenantId::new(tenant_id),
+            DisplayCategoryId::new(display_category_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -11517,8 +11347,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_layout_buttons(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<LayoutButton>>(rows)).into_response(),
@@ -11550,28 +11381,22 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_item_id), Ok(display_category_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
-        request
-            .display_category_id
-            .parse::<Ulid>()
-            .map(DisplayCategoryId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, the item id or display_category_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, menu_item_id, display_category_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("menu_item_id", &menu_item_id),
+        ("display_category_id", &request.display_category_id),
+    ]) {
+        Ok([tenant_id, menu_item_id, display_category_id]) => (
+            TenantId::new(tenant_id),
+            MenuItemId::new(menu_item_id),
+            DisplayCategoryId::new(display_category_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Ok(display_subcategory_id) =
         parse_optional_display_subcategory(request.display_subcategory_id.as_deref())
     else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "display_subcategory_id is not a ULID",
-        )
-            .into_response();
+        return ulid_refusal(&["display_subcategory_id"]);
     };
     // A grid slot exists only when both column and row are given; otherwise the button flows by order.
     let position = match (request.grid_column, request.grid_row) {
@@ -11633,15 +11458,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_item_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the item id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, menu_item_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("menu_item_id", &menu_item_id),
+    ]) {
+        Ok([tenant_id, menu_item_id]) => (TenantId::new(tenant_id), MenuItemId::new(menu_item_id)),
+        Err(refusal) => return refusal,
     };
     match state
         .catalog
@@ -11693,8 +11515,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_modifier_groups(tenant_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<ModifierGroup>>(rows)).into_response(),
@@ -11724,18 +11547,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
-    let (Ok(member_item_ids), Ok(attached_item_ids)) = (
-        parse_item_id_list(&request.member_item_ids),
-        parse_item_id_list(&request.attached_item_ids),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "a member or attached item id is not a ULID",
-        )
-            .into_response();
+    let Ok(member_item_ids) = parse_item_id_list(&request.member_item_ids) else {
+        return ulid_refusal(&["member_item_ids"]);
+    };
+    let Ok(attached_item_ids) = parse_item_id_list(&request.attached_item_ids) else {
+        return ulid_refusal(&["attached_item_ids"]);
     };
     let Some(modifier_group_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(ModifierGroupId::new)
@@ -11795,25 +11615,21 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(modifier_group_id), Ok(tenant_id)) = (
-        modifier_group_id.parse::<Ulid>().map(ModifierGroupId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the modifier group id or tenant_id is not a ULID",
-        )
-            .into_response();
+    let (modifier_group_id, tenant_id) = match parse_ulid_fields([
+        ("modifier_group_id", &modifier_group_id),
+        ("tenant_id", &request.tenant_id),
+    ]) {
+        Ok([modifier_group_id, tenant_id]) => (
+            ModifierGroupId::new(modifier_group_id),
+            TenantId::new(tenant_id),
+        ),
+        Err(refusal) => return refusal,
     };
-    let (Ok(member_item_ids), Ok(attached_item_ids)) = (
-        parse_item_id_list(&request.member_item_ids),
-        parse_item_id_list(&request.attached_item_ids),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "a member or attached item id is not a ULID",
-        )
-            .into_response();
+    let Ok(member_item_ids) = parse_item_id_list(&request.member_item_ids) else {
+        return ulid_refusal(&["member_item_ids"]);
+    };
+    let Ok(attached_item_ids) = parse_item_id_list(&request.attached_item_ids) else {
+        return ulid_refusal(&["attached_item_ids"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -11870,8 +11686,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.catalog.list_menus(tenant_id).await {
         Ok(menus) => (StatusCode::OK, Json::<Vec<Menu>>(menus)).into_response(),
@@ -11901,11 +11718,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "parent_menu_id is not a ULID").into_response();
+        return ulid_refusal(&["parent_menu_id"]);
     };
     let Some(menu_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuId::new)
     else {
@@ -11961,18 +11779,13 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(menu_id), Ok(tenant_id)) = (
-        menu_id.parse::<Ulid>().map(MenuId::new),
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the menu id or tenant_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (menu_id, tenant_id) =
+        match parse_ulid_fields([("menu_id", &menu_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([menu_id, tenant_id]) => (MenuId::new(menu_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
     let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
-        return (StatusCode::BAD_REQUEST, "parent_menu_id is not a ULID").into_response();
+        return ulid_refusal(&["parent_menu_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -12027,16 +11840,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(menu_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the menu id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, menu_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("menu_id", &menu_id)]) {
+            Ok([tenant_id, menu_id]) => (TenantId::new(tenant_id), MenuId::new(menu_id)),
+            Err(refusal) => return refusal,
+        };
     match state.catalog.list_menu_sections(tenant_id, menu_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<MenuSection>>(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
@@ -12066,16 +11874,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the menu id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, menu_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("menu_id", &menu_id)]) {
+            Ok([tenant_id, menu_id]) => (TenantId::new(tenant_id), MenuId::new(menu_id)),
+            Err(refusal) => return refusal,
+        };
     let Some(menu_section_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuSectionId::new)
     else {
@@ -12132,16 +11935,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_id), Ok(menu_section_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-        menu_section_id.parse::<Ulid>().map(MenuSectionId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, the menu id or the section id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, menu_id, menu_section_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("menu_id", &menu_id),
+        ("menu_section_id", &menu_section_id),
+    ]) {
+        Ok([tenant_id, menu_id, menu_section_id]) => (
+            TenantId::new(tenant_id),
+            MenuId::new(menu_id),
+            MenuSectionId::new(menu_section_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(status) = parse_entity_status(&request.status) else {
         return (StatusCode::BAD_REQUEST, "status must be active or archived").into_response();
@@ -12197,16 +12001,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(menu_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the menu id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, menu_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("menu_id", &menu_id)]) {
+            Ok([tenant_id, menu_id]) => (TenantId::new(tenant_id), MenuId::new(menu_id)),
+            Err(refusal) => return refusal,
+        };
     match state.catalog.list_placements(tenant_id, menu_id).await {
         Ok(rows) => (StatusCode::OK, Json::<Vec<MenuPlacement>>(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
@@ -12236,20 +12035,21 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, the menu id or the item id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, menu_id, menu_item_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("menu_id", &menu_id),
+        ("menu_item_id", &menu_item_id),
+    ]) {
+        Ok([tenant_id, menu_id, menu_item_id]) => (
+            TenantId::new(tenant_id),
+            MenuId::new(menu_id),
+            MenuItemId::new(menu_item_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Ok(menu_section_id) = parse_optional_menu_section(request.menu_section_id.as_deref())
     else {
-        return (StatusCode::BAD_REQUEST, "menu_section_id is not a ULID").into_response();
+        return ulid_refusal(&["menu_section_id"]);
     };
     let record = MenuPlacement {
         tenant_id,
@@ -12305,16 +12105,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(menu_id), Ok(menu_item_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        menu_id.parse::<Ulid>().map(MenuId::new),
-        menu_item_id.parse::<Ulid>().map(MenuItemId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, the menu id or the item id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, menu_id, menu_item_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("menu_id", &menu_id),
+        ("menu_item_id", &menu_item_id),
+    ]) {
+        Ok([tenant_id, menu_id, menu_item_id]) => (
+            TenantId::new(tenant_id),
+            MenuId::new(menu_id),
+            MenuItemId::new(menu_item_id),
+        ),
+        Err(refusal) => return refusal,
     };
     match state
         .catalog
@@ -12436,16 +12237,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id), Ok(menu_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request.menu_id.parse::<Ulid>().map(MenuId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id or menu_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, menu_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("menu_id", &request.menu_id),
+    ]) {
+        Ok([tenant_id, store_id, menu_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            MenuId::new(menu_id),
+        ),
+        Err(refusal) => return refusal,
     };
 
     // Load the tenant's authoring model. Placements are gathered across every menu; the compiler
@@ -12669,15 +12471,12 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
 
     // Load the domain the compiler needs. `list` is on two of P's traits, so the calls are
@@ -12914,16 +12713,17 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request.device_id.parse::<Ulid>().map(DeviceId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, and device_id must be ULIDs",
-        )
-            .into_response();
+    let (tenant_id, store_id, device_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("device_id", &request.device_id),
+    ]) {
+        Ok([tenant_id, store_id, device_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            DeviceId::new(device_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(code) = mint_activation_code() else {
         tracing::error!("could not read OS entropy to mint an activation code");
@@ -12970,16 +12770,17 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id), Ok(device_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-        request.device_id.parse::<Ulid>().map(DeviceId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, and device_id must be ULIDs",
-        )
-            .into_response();
+    let (tenant_id, store_id, device_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("device_id", &request.device_id),
+    ]) {
+        Ok([tenant_id, store_id, device_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            DeviceId::new(device_id),
+        ),
+        Err(refusal) => return refusal,
     };
     match state
         .activations
@@ -13167,8 +12968,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match state.translations.load(tenant_id).await {
         // A tenant with no grid yet is an empty grid to edit, not a 404.
@@ -13201,8 +13003,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let missing = grid.keys_missing_fallback();
     if !missing.is_empty() {
@@ -13262,8 +13065,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let grid = match state.translations.load(tenant_id).await {
         Ok(grid) => grid.unwrap_or_default(),
@@ -13316,8 +13120,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let existing = match state.translations.load(tenant_id).await {
         Ok(grid) => grid.unwrap_or_default(),
@@ -13356,8 +13161,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     let existing = match state.translations.load(tenant_id).await {
         Ok(grid) => grid.unwrap_or_default(),
@@ -13476,15 +13282,9 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ReadRollups) {
         return forbidden.into_response();
     }
-    let store_id = match store_id.parse::<Ulid>() {
-        Ok(ulid) => StoreId::new(ulid),
-        Err(_) => {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "the store id is not a ULID",
-                &[("store_id", "NOT_A_ULID")],
-            );
-        }
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
     let window = match window.into_window() {
         Ok(window) => window,
@@ -13569,24 +13369,15 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
         return forbidden.into_response();
     }
-    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the store id is not a ULID",
-            &[("store_id", "NOT_A_ULID")],
-        );
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
     let held = match query.held_version {
         None => None,
-        Some(ref raw) => match raw.parse::<Ulid>().map(ConfigVersionId::new) {
-            Ok(version) => Some(version),
-            Err(_) => {
-                return api_error_with_details(
-                    ErrorStatus::InvalidArgument,
-                    "held_version is not a ULID",
-                    &[("held_version", "NOT_A_ULID")],
-                );
-            }
+        Some(ref raw) => match parse_ulid_fields([("held_version", raw)]) {
+            Ok([version]) => Some(ConfigVersionId::new(version)),
+            Err(refusal) => return refusal,
         },
     };
     // Record the store's contact and the version it reported holding, for the fleet view
@@ -13646,12 +13437,9 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
         return forbidden.into_response();
     }
-    let Ok(store_id) = store_id.parse::<Ulid>().map(StoreId::new) else {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the store id is not a ULID",
-            &[("store_id", "NOT_A_ULID")],
-        );
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
     };
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app
@@ -14135,7 +13923,7 @@ where
         Some(text) => match text.parse::<Ulid>().map(TenantId::new) {
             Ok(tenant) => Some(tenant),
             Err(_ignored) => {
-                return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+                return ulid_refusal(&["tenant_id"]);
             }
         },
         None => None,
@@ -14284,8 +14072,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(tenant_id) = request.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     // Strict: an unknown scope name is a `400`, not a silent drop — the admin is granting explicitly,
     // so a typo must not quietly issue a key that authorises nothing.
@@ -14370,8 +14159,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match app.keys.list_for_tenant(tenant_id).await {
         Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
@@ -14413,8 +14203,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Ok(id) = id.parse::<Ulid>().map(ApiKeyId::new) else {
-        return (StatusCode::BAD_REQUEST, "the key id is not a ULID").into_response();
+    let id = match parse_ulid_fields([("id", &id)]) {
+        Ok([id]) => ApiKeyId::new(id),
+        Err(refusal) => return refusal,
     };
     match app.keys.revoke(id).await {
         Ok(found) => {
@@ -15436,16 +15227,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let Some(level) = parse_config_level(&level) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -15538,16 +15324,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     match app.config_trees.load(tenant_id, store_id).await {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
@@ -15610,16 +15391,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     match app.config_trees.load(tenant_id, store_id).await {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
@@ -15667,16 +15443,17 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id), Ok(version_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-        version_id.parse::<Ulid>().map(ConfigVersionId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, or the version id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, version_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &store_id),
+        ("version_id", &version_id),
+    ]) {
+        Ok([tenant_id, store_id, version_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            ConfigVersionId::new(version_id),
+        ),
+        Err(refusal) => return refusal,
     };
     match app.config_trees.load(tenant_id, store_id).await {
         Ok(Some(state)) => {
@@ -15727,16 +15504,17 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id), Ok(version_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-        request.version_id.parse::<Ulid>().map(ConfigVersionId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id, store_id, or the version id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id, version_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &store_id),
+        ("version_id", &request.version_id),
+    ]) {
+        Ok([tenant_id, store_id, version_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            ConfigVersionId::new(version_id),
+        ),
+        Err(refusal) => return refusal,
     };
     let Some(state) = (match app.config_trees.load(tenant_id, store_id).await {
         Ok(state) => state,
@@ -15818,16 +15596,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -15883,16 +15656,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -15931,16 +15699,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     match xz_report(&app.rollups, tenant_id, store_id, query.business_date).await {
         Ok(report) => (StatusCode::OK, Json(report)).into_response(),
         Err(error) => rollup_error_response(&error),
@@ -15979,16 +15742,11 @@ where
             Ok(context) => context,
             Err(denied) => return denied,
         };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -16043,16 +15801,11 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -16109,16 +15862,11 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
     match app
         .rollups
         .save(tenant_id, store_id, &StoredRollups::default())
@@ -16195,15 +15943,12 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(store_id)) = (
-        request.tenant_id.parse::<Ulid>().map(TenantId::new),
-        request.store_id.parse::<Ulid>().map(StoreId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or store_id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
     };
 
     // Vet the destination before it is ever stored. `vet` resolves the host with a real
@@ -16291,8 +16036,9 @@ where
     {
         return denied;
     }
-    let Ok(tenant_id) = query.tenant_id.parse::<Ulid>().map(TenantId::new) else {
-        return (StatusCode::BAD_REQUEST, "tenant_id is not a ULID").into_response();
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
     };
     match app.webhooks.list_for_tenant(tenant_id).await {
         Ok(summaries) => (StatusCode::OK, Json::<Vec<WebhookSummary>>(summaries)).into_response(),
@@ -16335,15 +16081,9 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        id.parse::<Ulid>().map(WebhookEndpointId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the endpoint id is not a ULID",
-        )
-            .into_response();
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &query.tenant_id), ("id", &id)]) {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), WebhookEndpointId::new(id)),
+        Err(refusal) => return refusal,
     };
     match app.webhooks.delete(tenant_id, id).await {
         Ok(_removed) => StatusCode::NO_CONTENT.into_response(),
@@ -16392,16 +16132,14 @@ where
     {
         return denied;
     }
-    let (Ok(tenant_id), Ok(endpoint_id)) = (
-        query.tenant_id.parse::<Ulid>().map(TenantId::new),
-        id.parse::<Ulid>().map(WebhookEndpointId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "tenant_id or the endpoint id is not a ULID",
-        )
-            .into_response();
-    };
+    let (tenant_id, endpoint_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("id", &id)]) {
+            Ok([tenant_id, endpoint_id]) => (
+                TenantId::new(tenant_id),
+                WebhookEndpointId::new(endpoint_id),
+            ),
+            Err(refusal) => return refusal,
+        };
     // Confirm the endpoint is this tenant's before clearing its flag: `set_disabled` is not itself
     // tenant-scoped, so the scope is enforced here against the tenant's own listing.
     match app.webhooks.list_for_tenant(tenant_id).await {
@@ -16581,6 +16319,63 @@ pub(crate) fn api_error_with_details(
         |body, (field, reason)| body.with_detail(*field, *reason),
     );
     (http_status(status), Json(body)).into_response()
+}
+
+/// Parses `N` named ULID fields at once, refusing with a detail per field that **actually** failed.
+///
+/// Half of this file's refusals were this one sentence written by hand, and writing it by hand let
+/// it drift three ways at once: 63 different phrasings of "not a ULID"; no `details` array, so a
+/// console could not mark the offending input; and — the one that misinforms a caller — a tuple
+/// parse whose message named *every* field it had looked at (`"tenant_id or store_id is not a
+/// ULID"`) instead of the one that was wrong. About 120 sites did that. A caller reading it has to
+/// guess which half of its request to fix.
+///
+/// Taking the fields as an argument is what makes that ambiguity *unwriteable* rather than merely
+/// fixed here: there is no signature in this module that accepts a message about fields it did not
+/// check, so the next id parse cannot reintroduce the shape.
+///
+/// Returning an array rather than a slice is what keeps the ids typed at the call site — a caller
+/// destructures positionally, `Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store))`,
+/// so nothing is indexed and the newtype stays where it belongs, in the handler.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+pub(crate) fn parse_ulid_fields<const N: usize>(
+    fields: [(&str, &str); N],
+) -> Result<[Ulid; N], Response> {
+    let mut bad: Vec<&str> = Vec::new();
+    // The placeholder for a field that did not parse never escapes: `bad` is non-empty in exactly
+    // that case, and a non-empty `bad` returns the refusal instead of the array.
+    let parsed = fields.map(|(field, raw)| match raw.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_ignored) => {
+            bad.push(field);
+            Ulid::NIL
+        }
+    });
+    if bad.is_empty() {
+        Ok(parsed)
+    } else {
+        Err(ulid_refusal(&bad))
+    }
+}
+
+/// The refusal [`parse_ulid_fields`] returns: `INVALID_ARGUMENT`, a `NOT_A_ULID` detail per failed
+/// field, and prose naming those fields in the order the caller listed them.
+///
+/// A single bad field reads `"tenant_id is not a ULID"` — the wording 51 of these sites already
+/// used — so for the common case only the `details` array is new, and no client that was reading
+/// the message sees it change.
+fn ulid_refusal(bad: &[&str]) -> Response {
+    let details: Vec<(&str, &str)> = bad.iter().map(|field| (*field, "NOT_A_ULID")).collect();
+    let message = match bad {
+        [field] => format!("{field} is not a ULID"),
+        [head @ .., last] => format!("{} and {last} are not ULIDs", head.join(", ")),
+        // Unreachable: the only caller refuses to build a refusal with nothing to refuse.
+        [] => "a field is not a ULID".to_owned(),
+    };
+    api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
 }
 
 /// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.

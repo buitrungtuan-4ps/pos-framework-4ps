@@ -10657,3 +10657,105 @@ async fn subject_lookup_404s_for_an_unknown_id_and_needs_a_session() {
     let no_session = router.oneshot(get(&uri, None)).await.expect("route");
     assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
 }
+
+// --- Per-field ULID refusals on `/admin` (Q3b slice 3) ------------------------------------------
+//
+// Half of the cloud's refusals — 177 sites — were a ULID that would not parse, and every one of
+// them was hand-written: 63 phrasings of one sentence, no `details` array for a console to mark the
+// offending input with, and about 120 that named *every* field the handler had looked at rather
+// than the one that was wrong. `parse_ulid_fields` owns all of them now. These three tests are the
+// coverage those refusals never had: the full suite passed both before and after every one of the
+// 177 bodies changed shape, which is exactly how they drifted in the first place.
+
+/// A `/admin` request with **one** bad id names that field, with the stable reason beside it.
+#[tokio::test]
+async fn an_admin_refusal_about_one_id_names_the_field_and_a_stable_reason() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(get_with_cookie(
+            "/admin/stores?tenant_id=not-a-ulid",
+            &cookie,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["message"], "tenant_id is not a ULID");
+    assert_eq!(body["error"]["details"][0]["field"], "tenant_id");
+    assert_eq!(body["error"]["details"][0]["reason"], "NOT_A_ULID");
+}
+
+/// A request carrying **two** ids, one of them wrong, names only the wrong one.
+///
+/// This is the defect the helper exists to make unwriteable. `PATCH /admin/stores/{store_id}` parses
+/// the path's store id and the body's `tenant_id` together, and used to refuse with
+/// `"the store id or tenant_id is not a ULID"` whichever one had failed — so an operator whose
+/// tenant id was fine was told to go and check it. The console cannot mark a field from a message
+/// like that either.
+#[tokio::test]
+async fn an_admin_refusal_about_two_ids_names_only_the_one_that_was_wrong() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+    let good_tenant = TenantId::new(
+        "01J0000000000000000000TEN0"
+            .parse()
+            .expect("a valid test ULID"),
+    );
+
+    // A real tenant id in the body, a broken store id in the path.
+    let refused = router
+        .oneshot(patch_with_cookie(
+            "/admin/stores/not-a-ulid",
+            &serde_json::json!({
+                "tenant_id": good_tenant.as_ulid().to_string(),
+                "name": "Bến Thành",
+                "status": "active",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["message"], "store_id is not a ULID");
+    assert_eq!(body["error"]["details"][0]["field"], "store_id");
+    assert!(
+        body["error"]["details"][1].is_null(),
+        "the tenant_id in the body parsed, so it is not named: {body}"
+    );
+}
+
+/// Both ids wrong names both, and the prose says so in the plural.
+#[tokio::test]
+async fn an_admin_refusal_about_two_bad_ids_names_both_of_them() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(patch_with_cookie(
+            "/admin/stores/still-not-a-ulid",
+            &serde_json::json!({
+                "tenant_id": "also-not-a-ulid",
+                "name": "Bến Thành",
+                "status": "active",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["message"], "store_id and tenant_id are not ULIDs",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["field"], "store_id");
+    assert_eq!(body["error"]["details"][1]["field"], "tenant_id");
+    assert!(
+        body["error"]["details"][2].is_null(),
+        "one detail per failed field, no more: {body}"
+    );
+}

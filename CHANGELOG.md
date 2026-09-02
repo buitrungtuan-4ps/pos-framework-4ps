@@ -17,6 +17,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **Every ULID a caller sends is now parsed in one place, and a refusal names the field that was
+  actually wrong** — 177 refusal sites, half of everything the cloud can refuse (#133). Q3b slice 3.
+
+  A `?tenant_id=` or a `{store_id}` that is not a ULID was refused by hand at every route. Written
+  177 times it drifted three ways at once: **63 different phrasings** of the same sentence; **no
+  `details` array**, so the console had nothing to mark the offending input with; and — the one that
+  actually misinforms a caller — about **120 sites whose message named every field the handler had
+  looked at** rather than the one that failed. `PATCH /admin/stores/{store_id}` answered "the store
+  id or tenant_id is not a ULID" whichever of the two was broken, so an operator whose tenant id was
+  fine was sent to check it.
+
+  `parse_ulid_fields` now owns all of them. It takes the fields, so it can name exactly the ones
+  that failed — which is what makes the ambiguous shape *unwriteable* rather than merely fixed here:
+  no signature in the module accepts a message about fields it did not check. One bad field still
+  reads `"tenant_id is not a ULID"`, the wording 51 of these sites already used, so the common case's
+  prose is unchanged and only its `details` array is new. Two bad fields read `"store_id and
+  tenant_id are not ULIDs"` and carry one `NOT_A_ULID` detail each.
+
+  Three of these were already on the envelope from slices 1 and 2 and were **wrong**: the order
+  relay's ack, its pull, and `/internal/reconcile` each named *both* of their id fields as
+  `NOT_A_ULID` when only one could be. Those are the shipped instances of the defect this slice
+  removes, and they are fixed here.
+
 - **The store-facing surface answers in the AIP-193 envelope too** — `/sync`, `/internal`,
   `/activate`, the order relay and the QR guest pages (#132). Q3b slice 2, after slice 1 did `/v1`.
 
