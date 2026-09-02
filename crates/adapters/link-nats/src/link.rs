@@ -47,11 +47,20 @@ impl NatsLink {
     /// Connects to NATS at `url` and prepares a link for `config`. No stream is created until the
     /// handshake.
     ///
+    /// Credentials in `url` are presented at connect time: `async-nats` reads them from its options
+    /// and never from the address, so [`crate::endpoint::split`] lifts them across
+    /// ([ADR-0089](../../../../docs/adr/0089-edge-event-bus-transport.md)). Without that a token in
+    /// `POS_EDGE_NATS_URL` is silently discarded and a broker with an `authorization` block refuses
+    /// the connection.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if NATS cannot be reached.
     pub async fn connect(url: &str, config: NatsConfig) -> Result<Self, PortError> {
-        let client = async_nats::connect(url).await.map_err(unavailable)?;
+        let endpoint = crate::endpoint::split(url);
+        let client = async_nats::connect_with_options(endpoint.address(), endpoint.options())
+            .await
+            .map_err(unavailable)?;
         Ok(Self::from_client(client, config))
     }
 

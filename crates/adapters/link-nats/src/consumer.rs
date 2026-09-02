@@ -62,13 +62,21 @@ pub struct NatsConsumer {
 impl NatsConsumer {
     /// Connects to NATS at `url` and binds the durable cursor described by `config`.
     ///
+    /// Credentials in `url` are presented at connect time via [`crate::endpoint::split`], because
+    /// `async-nats` reads them from its options and never from the address. `bootstrap.sh` documents
+    /// arming this cursor with `url = "nats://:THE_NATS_TOKEN@nats:4222"`, and until that lift
+    /// existed the token was dropped and the generated broker config refused the connection.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if NATS cannot be reached or the stream does not yet exist — the
     /// stream is created by the edge's handshake, so a cloud that starts first retries until a store
     /// has connected.
     pub async fn connect(url: &str, config: ConsumerConfig) -> Result<Self, PortError> {
-        let client = async_nats::connect(url).await.map_err(unavailable)?;
+        let endpoint = crate::endpoint::split(url);
+        let client = async_nats::connect_with_options(endpoint.address(), endpoint.options())
+            .await
+            .map_err(unavailable)?;
         Self::from_client(client, config).await
     }
 

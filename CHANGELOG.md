@@ -16,6 +16,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **A NATS token written into the broker URL was silently discarded, so the documented way to arm
+  the cloud's ingest cursor could not work** — and the event bus of
+  [ADR-0089](docs/adr/0089-edge-event-bus-transport.md) would not have authenticated either.
+
+  `async-nats` 0.50 builds its `CONNECT` frame from `ConnectOptions::auth` alone.
+  `ServerAddr::username`, `password` and `has_user_pass` are public accessors with **no caller
+  inside the crate**, so `nats://:TOKEN@host:4222` presents no credential at all — while
+  `bootstrap.sh` generates a `nats.conf` with `authorization { token: … }` enforced, which then
+  refuses the connection. That URL form is exactly what `bootstrap.sh` writes into `cloud.toml` as
+  the instruction for turning the feed on, what the new-store wizard emits as `POS_EDGE_NATS_URL`,
+  and what ADR-0089 rested on when it said the adapter needed no change.
+
+  `link-nats` now lifts credentials out of the URL and presents them through `ConnectOptions`
+  (`src/endpoint.rs`). Three details are load-bearing: a **schemeless** address like
+  `127.0.0.1:4222` or `nats:4222` — what the tests and `compose.yml` use — is passed through
+  untouched, because `Url::parse` would read its host as a *scheme*; the credentials are **removed
+  from the address**, so a token cannot ride into a connection error or `Debug` output; and
+  percent-escapes are **decoded**, since a userinfo field must encode `@`, `:` and `/` to parse at
+  all and the raw field would present a mangled secret. Both spellings work — `nats://TOKEN@host`
+  and `nats://:TOKEN@host` — as does `nats://user:pass@host`.
+
+  **Why no test caught it:** the integration suite runs NATS with *no authorization at all* and
+  connects with a bare address, so it exercised the one posture no deployment uses. CI now starts a
+  **second, token-enforcing** broker, and the new `tests/auth.rs` proves the token in the URL
+  authenticates *and* that the same broker refuses the address without it — the second case exists
+  so a green first case cannot be a server that would have accepted anything.
+
+  Same shape as the rest of this release's findings: code that was written, tested and could not
+  work in production, with a document telling operators to use the broken form. ADR-0089 carries a
+  correction recording that its "no code change in `link-nats`" consequence was wrong, and why.
+
 ### Security
 - **The `/admin/login` rate limit was bypassable, and is now keyed on an address the client cannot
   choose.** `client_ip` read the **leftmost** hop of `X-Forwarded-For` and that value fed the sliding

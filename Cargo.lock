@@ -1201,11 +1201,13 @@ version = "0.1.0"
 dependencies = [
  "async-nats",
  "futures-util",
+ "percent-encoding",
  "pos-contract-tests",
  "pos-ports",
  "pos-proto",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

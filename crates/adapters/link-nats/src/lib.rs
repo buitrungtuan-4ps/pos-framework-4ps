@@ -30,6 +30,7 @@
 #![forbid(unsafe_code)]
 
 mod consumer;
+mod endpoint;
 mod link;
 
 pub use consumer::{ConsumedBatch, ConsumerConfig, NatsConsumer};

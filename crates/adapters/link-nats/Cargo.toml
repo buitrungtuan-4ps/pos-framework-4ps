@@ -26,6 +26,12 @@ async-nats = "0.50"
 # The consumer iterates a JetStream batch, which async-nats delivers as a `Stream`; `StreamExt::next`
 # drives it. Already in the tree via the async stack; no new version.
 futures-util = "0.3"
+# Reading credentials out of a NATS URL, which async-nats parses but never presents (see
+# src/endpoint.rs). Neither crate is new to the tree: `url` is already a direct dependency of five
+# crates and both are already compiled here as transitives of async-nats itself, so this adds a
+# dependency *edge*, not a dependency.
+url = "2"
+percent-encoding = "2"
 
 [dev-dependencies]
 pos-contract-tests = { path = "../../pos-contract-tests" }

@@ -3,6 +3,23 @@
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-02
 **Relates to** [ADR-0001](0001-offline-first-store-autonomy.md) (the store is outbound-only) · [ADR-0031](0031-cloud-adapter-transports.md) (hand-rolled transports, no SDKs) · [ADR-0044](0044-fork-and-deploy.md) (what runs on the VPS) · [ADR-0087](0087-edge-relay-and-event-publish.md) (the outbox publish this transports) · `docs/roadmap-v3.md` (slice E7, debates D23/D25)
 
+> **Correction, found while implementing (2026-09-02): the URL does not carry the token.** This
+> record says `POS_EDGE_NATS_URL` "already carries it", and that `link-nats` therefore needs no
+> change. Both are wrong. `async-nats` 0.50 — the pinned version — builds its `CONNECT` frame from
+> `ConnectOptions::auth` only; `ServerAddr::username`, `password` and `has_user_pass` are public
+> accessors with **no caller inside the crate**. A token in the URL is silently discarded, and the
+> `authorization { token: … }` block `bootstrap.sh` generates then refuses the connection. The same
+> mistake is in `bootstrap.sh`'s own instructions for arming the cloud's ingest cursor, so the
+> documented way to turn that feed on could not work either.
+>
+> It survived because the integration suite runs NATS with **no authorization at all** and connects
+> with a bare `127.0.0.1:4222` — the one posture no deployment uses. The fix is
+> `link-nats`'s `endpoint::split`, which lifts the credentials out of the URL and presents them
+> through `ConnectOptions`; the URL keeps its documented shape, and the secret stays in the one
+> mode-0600 file, which is the reason this record gave for putting it there. So the consequence
+> below should read: **no change in `pos-edge` or `pos-cloud`, and one contained change in
+> `link-nats`.** The transport decision itself is unaffected.
+
 **Context.** E3 built the edge's outbox publish and wired it into `serve()`: `EventPublisher` drains
 the store's committed events over `MessageLink`, `link-nats` implements that link over JetStream, and
 `POS_EDGE_NATS_URL` names the broker. Every part of it is live code on a live path.
@@ -38,9 +55,10 @@ decide this.
   host firewall to the addresses stores actually dial from where that is knowable.
 
 - **Token authentication first; mTLS is a later slice.** `bootstrap.sh` already generates a 32-byte
-  token into `nats.conf`, and the URL already carries it (which is precisely why
-  `POS_EDGE_NATS_URL` lives in the environment file and not in `config.toml`). That gets the first
-  store publishing. Per-store client certificates follow as their own slice, because they change
+  token into `nats.conf`, and the URL carries it — through `link-nats`, which has to lift it into
+  the connect options itself (see the correction above; `async-nats` reads credentials only from
+  those). Carrying it in the URL is precisely why `POS_EDGE_NATS_URL` lives in the environment file
+  and not in `config.toml`. That gets the first store publishing. Per-store client certificates follow as their own slice, because they change
   provisioning — every store needs a certificate issued at activation — and that is a bigger change
   than making the bus reachable.
 
@@ -140,8 +158,10 @@ true:
   have all been reading empty. It is the fifth "written but never wired" gap this program has closed.
 - **The VPS gains one internet-facing port**, protected by TLS and a token and nothing else. That is
   the honest cost of this choice and the reason TLS is not optional here.
-- **No code change in `link-nats`, `pos-edge`, or `pos-cloud`.** This is a deployment and
-  configuration slice: `compose.yml`, `nats.conf`, `bootstrap.sh`, and the runbooks.
+- **No code change in `pos-edge` or `pos-cloud`**, and one contained change in `link-nats` — the
+  credential lift the correction above describes, which this record originally said was unnecessary.
+  The rest is deployment and configuration: `compose.yml`, `nats.conf`, `bootstrap.sh`, and the
+  runbooks.
 - **No wire, protocol, or `pos-proto` change**, and no migration.
 - **An operator gains one provisioning value**: `POS_EDGE_NATS_URL` in the store's environment file,
   which the new-store wizard already emits as a commented line ready to fill in.
