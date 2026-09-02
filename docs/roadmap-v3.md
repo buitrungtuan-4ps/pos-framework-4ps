@@ -153,6 +153,25 @@ first real store.
 would have caught every one of the seven above — seven times this program has merged code that was written,
 tested and unreachable. Q1 runs immediately after A·P1x, before any new A·P2 or Program B slice.
 
+**Two more of the same, found after that was written.** The eighth: `cloud-sync-http`'s `fetch_update`
+POSTs to `POST /internal/ota/artifact`, and `pos-cloud` serves `/internal/ota/report` and **no artifact
+route at all** — so R5 would wire the fleet to a loop that reliably 404s. R5 therefore sits behind R2's
+artifact-storage slice, and R5's own scoping turned up three further gaps: `UpdatePlan.signature` has no
+production producer (`CloudSync` exposes no way to fetch the `.minisig`, so closing it is a **port change
+and needs an ADR first**), `DeviceState.last_self_test` is never persisted although an install
+deliberately reboots the box (so the highest-precedence safety rule in `decide_rollout` depends on the one
+fact a restart loses), and `trusted_keys` has no source anywhere — it must be baked in at build time, never
+read from the cloud-published config tree, or a compromised cloud could introduce a signing key.
+
+**The ninth — a takeaway order cannot be paid for. Found by writing Q1.** `EdgeOrderIn` accepts a relayed
+order, reprices it from the store's own menu, stores it transactionally and issues a queue number. Then it
+stops: `Edge::open_bill` is the only path to a bill, it takes a `TableId`, it gates on that table being
+`Occupied`, and it resolves the order with `order_for_table`. A takeaway order is tableless by design
+(PR-1b), so no bill can ever be opened on one, no HTTP route opens a bill without a table, and the edge UI
+has no takeaway screen at all. **Takeaway revenue is uncollectable at the counter.** Closing it means a
+bill keyed on an order rather than a table — a domain change, so it is its own slice with an ADR, not a
+patch to the acceptance suite. Q1 asserts the reachable truth and records the gap in the test's own doc.
+
 ### A·P2 — Publish from the cloud
 - **R2** — OTA artifact server + Garage store + promote-release; the cloud stays a dumb host, the edge verifies the signature ([ADR-0088](adr/0088-ota-artifact-hosting.md)). **The release registry landed (`pos_cloud::ota`, migration 0038); nothing reads it yet.** Remaining, in order: artifact storage over `BlobStore` (adds `blob-garage` to `pos-cloud` plus S3 credentials the deployment does not provision — ADR-0088 Correction 1), the `POST /internal/ota/artifact` route with the additive `arch` field the pinned request lacks (Correction 2), the adapter's bearer, then `/admin` upload + promote-release with audit and the runbook step.
 - **R3** — Per-store installer on the Handoff screen; one-file `pos-edge install --store <id>` self-installer; zip is the fallback. **Depends on E6** — an installer that writes a `config.toml` without `cloud_url` reproduces the same break at scale.
@@ -161,7 +180,14 @@ tested and unreachable. Q1 runs immediately after A·P1x, before any new A·P2 o
 - **R4** — Real `UpdateInstaller` for Linux (systemd swap → self-test → rollback); Windows follows E4. **Ships with R5** — an installer with no caller is the same gap again.
 
 ### A·P3 — Prove
-- **Q1** — In-process end-to-end acceptance suite (dine-in + takeaway), the v1.0 gate.
+- **Q1** — In-process end-to-end acceptance suite (dine-in + takeaway), the v1.0 gate. **Done.**
+  `pos_edge::compose` is `serve` minus the socket, and `crates/pos-edge/tests/acceptance.rs` drives it:
+  the dine-in flow end to end (pair → sign in → seat → order → fire → bump → check → bill → settle →
+  clean), the cash shift, relayed takeaway intake, and both auth gates asserted *on the composed
+  router*. The sensitivity is measured rather than claimed: deleting the domain-router merge from
+  `serve` fails four of the seven cases while the hand-built `domain_flow.rs` suite still passes — which
+  is precisely the blind spot that let seven slices ship unreachable. Writing it also found the ninth:
+  **a relayed takeaway order cannot be paid for** (see below).
 - **Q2** — i18n-parity gate + dashboard code-split.
 - **Q3** — AIP-193 envelope on `/v1` **and** `/admin` (both return plain text today) + ETag/If-Match.
 - **Q4** — Store hub + URL context `/t/:tenant/s/:store`.
