@@ -13525,16 +13525,46 @@ where
     }
 }
 
-/// The client IP for an admin request, read from the reverse proxy's forwarding headers. Prefers the
-/// first hop of `X-Forwarded-For` (the original client, before the proxy chain), then `X-Real-IP`;
-/// `None` if neither is present. Behind the P8 Caddy proxy these are set by the proxy, so they name
-/// the real client rather than the proxy's own address; the value is only ever shown back to the
-/// admin whose session it is, never trusted for authorization.
+/// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`.
+///
+/// One: the Caddy that terminates TLS ([ADR-0044](../../../docs/adr/0044-fork-and-deploy.md)). A
+/// deployment that terminates TLS further upstream — its own load balancer or ingress — has more
+/// hops and must raise this, which is why debate D24's `TLS_MODE` work owns making it configurable
+/// rather than a constant. Until then a fork that fronts this with a second proxy under-counts and
+/// throttles by the wrong address, which is the safe direction to be wrong in.
+const TRUSTED_PROXY_HOPS: usize = 1;
+
+/// The client IP for an admin request, taken from the **trusted** tail of `X-Forwarded-For`.
+///
+/// # Why the tail, and not the head
+///
+/// `X-Forwarded-For` is an append-only chain, and Caddy's `reverse_proxy` appends rather than
+/// replaces. So a request that arrives carrying its own `X-Forwarded-For: 203.0.113.9` reaches this
+/// process as `203.0.113.9, <the address Caddy actually saw>`. Everything to the left of the hops we
+/// put there ourselves is **attacker-supplied text**, not an address.
+///
+/// This function used to return the *first* hop, and its own documentation said the value was "never
+/// trusted for authorization" — true when it was written, because it only decorated the session list.
+/// It stopped being true when [`admin_login`] began using it as the sole sliding-window rate-limit
+/// key: a guesser could then send a fresh fake header per attempt, land in a fresh bucket every time,
+/// and never meet the throttle at all. Counting from the right fixes that, because the rightmost
+/// [`TRUSTED_PROXY_HOPS`] entries are the only ones this deployment wrote.
+///
+/// `None` when the header is absent, which is what a request that did not come through the proxy
+/// looks like. Callers key that as one shared bucket — over-throttling a direct caller rather than
+/// exempting it, so an absent header cannot be a way through either.
+///
+/// `X-Real-IP` is deliberately **not** consulted as a fallback: it is a single client-settable value
+/// with no chain to count back along, so honouring it would reopen exactly the hole this closes.
 fn client_ip(headers: &HeaderMap) -> Option<&str> {
-    header_str(headers, "x-forwarded-for")
-        .map(|value| value.split(',').next().unwrap_or(value).trim())
+    let chain = header_str(headers, "x-forwarded-for")?;
+    let hops: Vec<&str> = chain.split(',').map(str::trim).collect();
+    // Take the leftmost hop this deployment is responsible for: with one trusted proxy that is the
+    // last entry, the address Caddy itself observed. `saturating_sub` keeps a short chain (a proxy
+    // that sent no chain, or a misconfigured hop count) at the first entry rather than panicking.
+    hops.get(hops.len().saturating_sub(TRUSTED_PROXY_HOPS))
+        .copied()
         .filter(|ip| !ip.is_empty())
-        .or_else(|| header_str(headers, "x-real-ip"))
 }
 
 /// A header's value as a trimmed `&str`, or `None` when it is absent or not valid UTF-8.
@@ -16317,6 +16347,81 @@ fn rollup_error_response(error: &RollupError) -> Response {
         "the dashboard is temporarily unavailable",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod client_ip_tests {
+    //! The trusted-hop rule behind [`client_ip`]. Worth pinning directly because the value feeds the
+    //! `/admin/login` sliding-window rate limit, and the first version of this function read the
+    //! *leftmost* `X-Forwarded-For` hop — a value the client writes — so a guesser could mint a fresh
+    //! bucket per attempt and never meet the throttle. These are the tests that would have caught it.
+    use super::client_ip;
+    use axum::http::{HeaderMap, HeaderName};
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                name.parse::<HeaderName>()
+                    .expect("a valid test header name"),
+                value.parse().expect("a valid test header value"),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn one_proxy_hop_is_the_address_the_proxy_saw() {
+        let map = headers(&[("x-forwarded-for", "203.0.113.9")]);
+        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn a_client_supplied_leading_hop_is_ignored() {
+        // The attack the old behaviour allowed: Caddy appends rather than replaces, so anything the
+        // client puts in the header arrives to the LEFT of the address Caddy actually observed.
+        // Trusting the left end let a password guesser rotate buckets at will.
+        let map = headers(&[("x-forwarded-for", "1.1.1.1, 203.0.113.9")]);
+        assert_eq!(
+            client_ip(&map),
+            Some("203.0.113.9"),
+            "the trusted hop is the one this deployment appended, not the one the caller claimed"
+        );
+    }
+
+    #[test]
+    fn a_long_forged_chain_still_resolves_to_the_real_peer() {
+        let map = headers(&[("x-forwarded-for", "9.9.9.9, 8.8.8.8, 7.7.7.7, 203.0.113.9")]);
+        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn surrounding_whitespace_does_not_change_the_hop() {
+        let map = headers(&[("x-forwarded-for", "1.1.1.1 ,  203.0.113.9  ")]);
+        assert_eq!(client_ip(&map), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn no_forwarding_header_is_none_rather_than_a_guess() {
+        // A request that did not come through the proxy. Callers key this as one shared bucket, which
+        // over-throttles a direct caller instead of exempting it — an absent header must not be a way
+        // through either.
+        assert_eq!(client_ip(&headers(&[])), None);
+    }
+
+    #[test]
+    fn x_real_ip_is_deliberately_not_a_fallback() {
+        // Single-valued and client-settable, with no chain to count back along: honouring it would
+        // reopen the hole this function closes.
+        let map = headers(&[("x-real-ip", "1.1.1.1")]);
+        assert_eq!(client_ip(&map), None);
+    }
+
+    #[test]
+    fn an_empty_header_is_none() {
+        let map = headers(&[("x-forwarded-for", "")]);
+        assert_eq!(client_ip(&map), None);
+    }
 }
 
 #[cfg(test)]

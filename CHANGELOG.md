@@ -16,6 +16,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+- **The `/admin/login` rate limit was bypassable, and is now keyed on an address the client cannot
+  choose.** `client_ip` read the **leftmost** hop of `X-Forwarded-For` and that value fed the sliding
+  window as its only key (`ip:…`), so an online password guesser could send a fresh fake
+  `X-Forwarded-For` per attempt, land in a fresh bucket every time, and never meet the throttle at
+  all — the defence read as working and was not.
+
+  Caddy's `reverse_proxy` **appends** to the chain rather than replacing it, so a request arriving with
+  `X-Forwarded-For: 1.1.1.1` reaches the app as `1.1.1.1, <the address Caddy observed>`. Everything
+  left of the hops we appended ourselves is attacker-supplied text, not an address. `client_ip` now
+  counts back from the right by `TRUSTED_PROXY_HOPS` (one: the TLS-terminating Caddy of ADR-0044), and
+  the `X-Real-IP` fallback is removed — single-valued and client-settable, it had no chain to count
+  back along, so honouring it reopened the same hole.
+
+  Same shape of defect as this release's `cloud_url` bug, for the third time in one pass: **the
+  function's own doc comment asserted the value was "never trusted for authorization"**, which was
+  true when it only decorated the session list and stopped being true when G1 slice 5 made it the
+  rate-limit key. Nobody revisited the comment. Seven new unit tests pin the rule directly, including
+  the forged-leading-hop case that would have caught this.
+
+  Two consequences worth knowing: an absent header is now `None`, which callers key as one shared
+  bucket — over-throttling a direct caller rather than exempting it, so a missing header is not a way
+  through either. And the session list stops being able to display an attacker-chosen address.
+
+  **Note for a fork that puts its own load balancer in front of Caddy**: it has more than one trusted
+  hop and must raise `TRUSTED_PROXY_HOPS`, which debate D24's `TLS_MODE` work makes configurable.
+  Until then such a deployment under-counts and throttles by the wrong address — the safe direction to
+  be wrong in, but wrong.
+
 ### Added
 - **ADR-0089 — the edge reaches the event bus directly, over TLS on its own port**
   ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md), roadmap v3 slice **E7**, debate D23). The
