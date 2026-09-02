@@ -50,8 +50,9 @@ Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ 
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
 materially. **≈82 PR total** plus the gated W10 — up from the original ≈70 by A·P1x's seven closing slices
 (E7a split out of E7 once ADR-0089 found it needed a certificate path) and the two posture ADRs
-(D23/D24). **21 merged** as of 2026-09-02 (#71–#74, #90–#107): all of A·P1's code, B9.1, R2's ADR and
-its release registry, E5, E6, the two posture ADRs, and the `X-Forwarded-For` rate-limit fix.
+(D23/D24). **24 merged** as of 2026-09-02 (#71–#74, #90–#110): all of A·P1's code, B9.1, R2's ADR and
+its release registry, E5, E6, E7a, E7, the two posture ADRs, the `X-Forwarded-For` rate-limit fix,
+and the NATS credential fix.
 
 ## Program A — Ship the Edge
 
@@ -98,7 +99,13 @@ first real store.
   on an `internal: true` Docker network with no published port and no proxy route, so
   `POS_EDGE_NATS_URL` has nowhere valid to point and the outbox publishes nowhere. The store keeps
   trading and the events stay durable, so the failure is silent: the cloud simply never receives
-  anything, and rollups, reports and reconciliation all read empty. **Follows E7a** for the certificate.
+  anything, and rollups, reports and reconciliation all read empty. **Follows E7a** for the
+  certificate. **Done**: `nats` publishes `4222` with TLS from `secrets/tls/`, and the port opens
+  only when a certificate is there — a first ACME deploy leaves it closed on purpose. Two corrections
+  came out of it: the URL never carried its token (`async-nats` reads credentials only from its
+  connect options, so `link-nats` now lifts them) and the integration suite had been running against
+  a broker with no authorization at all. Reachability of a published port on an `internal: true`
+  network stays **unverified** — a real box has to say, and the fallback is recorded.
 - **R5** — Wire `OtaUpdater` into the running edge. It has **zero production callers** — the only
   construction in the tree is `crates/pos-edge/tests/ota.rs`. Four merged slices (P9a/P9b/P9e-4, ADR-0047/
   0048/0055) built update decision, signature verification, self-test and rollback, and none of it runs.

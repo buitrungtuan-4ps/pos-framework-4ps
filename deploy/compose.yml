@@ -151,14 +151,29 @@ services:
     mem_limit: 256m
     cpus: 0.5
     pids_limit: 128
-    # Loads the generated config: JetStream on, a token enforced for client connections,
-    # monitoring on :8222 for the healthcheck (open, no token). The -alpine tag carries a
-    # shell + busybox wget the check needs.
+    # Loads the generated config: JetStream on, a token enforced for client connections, TLS on the
+    # client port once a certificate exists, monitoring on :8222 for the healthcheck (internal, no
+    # token). The -alpine tag carries a shell + busybox wget the check needs.
     command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      # The store→cloud event bus (ADR-0089). bootstrap.sh sets this to `0.0.0.0:4222` **only** when
+      # secrets/tls holds a certificate, and to loopback otherwise — the port never opens without
+      # TLS, because publishing it makes the broker internet-facing with nothing but its TLS and its
+      # token in front of it. The default here is the closed one, so a tree with no ./.env cannot
+      # accidentally expose it. Restrict it further at the host firewall where the stores' addresses
+      # are knowable; see docs/deploy-runbook.md.
+      - "${NATS_PUBLISH:-127.0.0.1:4222}:4222"
     volumes:
       - ./secrets/nats.conf:/etc/nats/nats.conf:ro
+      # The certificate path ADR-0090 established. Read-only, and the same files Caddy serves under
+      # TLS_MODE=byo-cert — one certificate, one place, refreshed by deploy/tls-export.sh.
+      - ./secrets/tls:/etc/nats/tls:ro
       - natsdata:/data
     networks:
+      # Still `backend` only. A published port is host→container DNAT, which an `internal` network
+      # should not affect — but "should" is not verified and cannot be from a repository (ADR-0089).
+      # If a store cannot reach 4222 on a real box, the recorded fallback is to add `- frontend`
+      # here, at the cost of giving the broker egress it does not need. The runbook says how to check.
       - backend
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1 || exit 1"]

@@ -16,11 +16,12 @@ Five containers, defined in [`compose.yml`](compose.yml):
 | `caddy` | the stock `caddy:2.8.4`, or built from [`caddy.Dockerfile`](caddy.Dockerfile) on `TLS_MODE=acme-dns01` | TLS ingress; terminates HTTPS and reverse-proxies to `pos_cloud` |
 | `pos_cloud` | built from [`Dockerfile`](Dockerfile) | the cloud binary — ingest → rollups, `/v1` API, `/admin`, webhooks |
 | `postgres` | `postgres:16.4-bookworm` | the event log, rollups, config tree, subjects ([ADR-0016](../docs/adr/0016-postgres-access.md)) |
-| `nats` | `nats:2.10.20-alpine` | JetStream ingest feed ([ADR-0031](../docs/adr/0031-cloud-adapter-transports.md)) |
+| `nats` | `nats:2.10.20-alpine` | JetStream ingest feed ([ADR-0031](../docs/adr/0031-cloud-adapter-transports.md)); publishes `4222` with TLS **only** when `secrets/tls/` holds a certificate ([ADR-0089](../docs/adr/0089-edge-event-bus-transport.md)) |
 | `garage` | `dxflrs/garage:v1.0.1` | object storage for menu images ([ADR-0031](../docs/adr/0031-cloud-adapter-transports.md)) |
 
-Only `caddy` faces the internet (ports 80/443 — HTTP only, with `443` bound to loopback, under
-`TLS_MODE=external`); the four backends sit on an `internal`
+Caddy faces the internet on 80/443 (HTTP only, with `443` bound to loopback, under
+`TLS_MODE=external`), and `nats` faces it on `4222` once a certificate exists — the store→cloud
+event bus, whose port never opens without TLS. The four backends sit on an `internal`
 Docker network with no egress except `pos_cloud`'s webhook deliveries. Each container caps
 its log size and its memory/CPU/pids so one runaway service cannot starve the box — the four
 backends fit ~1.4 GB, sized for a small VPS.
@@ -34,7 +35,7 @@ server** by `bootstrap.sh` (P8b), never checked in and never returned to GitHub:
 |---|---|
 | `secrets/pos.env` | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` |
 | `secrets/cloud.toml` | `pos_cloud` config: `bind = "0.0.0.0:8080"`, `database_url` (with the postgres password, `host = "postgres"`), the one-time `admin_setup_token` (ADR-0045), optional `[nats]` |
-| `secrets/nats.conf` | NATS JetStream + a token enforced on the internal network |
+| `secrets/nats.conf` | NATS JetStream + a token, plus TLS on the client port once `secrets/tls/` holds a certificate. Rewritten each run with the existing token carried across; a run that cannot read the token refuses rather than rotating it |
 | `secrets/garage.toml` | Garage server config (`rpc_secret`, data/meta paths) |
 | `secrets/caddy.env` | `TLS_MODE` / `DOMAIN` / `ACME_EMAIL` / `CF_DNS_API_TOKEN` / `TLS_RELOAD_SERVICES` — the TLS posture and hostname ([ADR-0090](../docs/adr/0090-tls-postures.md)) |
 | `secrets/Caddyfile` | the generated Caddyfile for that posture, copied from [`Caddyfile.d/`](Caddyfile.d) |
