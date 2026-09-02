@@ -36,6 +36,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   one key and adding one stray key each fail with the offending key named.
 
 ### Changed
+- **Cloud failures answer one machine-readable error shape, starting with every shared error
+  responder** (roadmap v3 slice **Q3a**). A refusal now carries the AIP-193 envelope
+  `pos-proto` has always defined — `{"error":{"code":503,"status":"UNAVAILABLE","message":"…"}}` —
+  instead of a bare line of text. `api_error` is the only way `pos-cloud` builds one and it derives
+  the HTTP status from the body's own `ErrorStatus` through `ErrorStatus::http_code`, so the status
+  line and the body cannot disagree.
+
+  **This slice converted the shared responders, which is where the leverage is**: the thirty
+  per-domain helpers (`catalog_error_response`, `config_store_error_response`,
+  `admin_service_unavailable`, each `*_entropy_unavailable`, `activation_refused`,
+  `too_many_login_attempts`, …) carry **258 call sites** between them, so thirty one-line edits moved
+  258 response paths. The inline validation refusals written at each handler are the next slice, and
+  they are separate because they are the ones that will carry field-level `details`.
+
+  **Mid-conversion the surface is mixed, and that is safe by construction, not by luck.** Nothing
+  consumes the shape: `cloud-sync-http` maps cloud failures on HTTP status alone and never parses a
+  response body, and the console's `failure()` now reads the envelope, the config publish's
+  `{"violations":[…]}` and raw text alike. `ApiError` gained `canonical` (the status token) and
+  `details`, so a caller can branch on `ALREADY_EXISTS` versus `FAILED_PRECONDITION` — two
+  conditions that share `409` and cannot be told apart from the number.
+
+  **Upgrade note** The `/v1` and `/sync` error *bodies* change shape and their `content-type`
+  becomes `application/json`; status codes are unchanged. There is no version negotiation because
+  there is no external consumer to negotiate with, and `PROTOCOL_VERSION` is untouched — the wire
+  format for events and config is not involved. A fork that had been reading `/v1` error text should
+  read `error.message`, and can branch on `error.status` instead of the HTTP number.
+
 - **The console's login page no longer downloads the whole console** (roadmap v3 slice **Q2**, #119).
   Every screen behind the auth guard is now a `lazy()` route chunk; the three public screens
   (`Login`, `Setup`, `AcceptInvite`) stay in the initial bundle because they are all an
@@ -52,6 +79,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   initial chunk and quietly gives back part of this.
 
 ### Fixed
+- **A `PortError` that was the caller's fault would have been reported as the server's** (roadmap v3
+  slice **Q3a**). `error_response` mapped four statuses — `NOT_FOUND`, `ALREADY_EXISTS`,
+  `PERMISSION_DENIED`, `UNAUTHENTICATED` — through a catch-all arm to `500`, telling a client the
+  cloud had broken when its own request was at fault and inviting a retry that could never succeed.
+
+  **Latent rather than live, and recorded that way on purpose.** The function has exactly one caller
+  today (`/internal/ingest`), and none of those four statuses is reachable from it, so no response
+  was actually wrong. The fix is to derive the code from `ErrorStatus::http_code` and delete the
+  hand-written match, so the *next* caller cannot inherit the trap; a test walks every canonical
+  status through `error_response` and fails if the match ever returns.
+
 - **`i18n-lint.mjs` was a duplicated file that nothing kept in step** (#119). It is copied verbatim
   into `ui/scripts/` and `dashboard/scripts/`, but unlike `wcag-contrast.mjs` it was never listed in
   the `mirrored-files` gate — so the two copies were byte-identical only by luck, which is the exact

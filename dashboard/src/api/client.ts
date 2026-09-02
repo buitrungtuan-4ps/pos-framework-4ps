@@ -89,13 +89,39 @@ import type {
 } from "./types";
 import { setActingAdmin, setAuthed } from "../state/session";
 
+/** One field-level reason from an AIP-193 error body: the offending field, and a stable reason for it. */
+export interface ApiErrorDetail {
+  readonly field: string;
+  readonly reason: string;
+}
+
 export class ApiError extends Error {
   readonly status: number;
 
-  constructor(status: number, message: string) {
+  /**
+   * The AIP-193 canonical status token (`FAILED_PRECONDITION`, `NOT_FOUND`, …) when the server sent
+   * an error envelope; `null` when it answered in plain text.
+   *
+   * Deliberately separate from `status`, which is the HTTP number. The token is the stable thing to
+   * branch on: `409` carries both `ALREADY_EXISTS` and `FAILED_PRECONDITION`, and a caller that has
+   * to tell a duplicate apart from a wrong-state refusal cannot do it from the number alone.
+   */
+  readonly canonical: string | null;
+
+  /** Field-level detail, when the server named the offending fields. Empty otherwise. */
+  readonly details: readonly ApiErrorDetail[];
+
+  constructor(
+    status: number,
+    message: string,
+    canonical: string | null = null,
+    details: readonly ApiErrorDetail[] = [],
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.canonical = canonical;
+    this.details = details;
   }
 
   /** No session, or it expired — the shell sends the operator back to the login screen. */
@@ -119,18 +145,53 @@ async function failure(response: Response): Promise<ApiError> {
   }
   const text = await response.text().catch(() => "");
   const trimmed = text.trim();
-  // A rejected config publish answers `422 {"violations": [...]}`; join them into one message.
+  // Three body shapes reach here, and all three have to be readable.
+  //
+  // The cloud is being migrated onto the AIP-193 envelope — `{"error":{code,status,message,details}}`
+  // — one group of handlers at a time (roadmap v3 Q3), so at any point in that migration some
+  // handlers answer the envelope and the rest answer plain text. A rejected config publish is a
+  // third shape again: `422 {"violations":[...]}`. Reading all three is what lets the conversion
+  // land in reviewable slices instead of one 619-site commit: no intermediate state can strand the
+  // console on a body it cannot parse.
   if (trimmed.startsWith("{")) {
     try {
-      const body = JSON.parse(trimmed) as { violations?: string[] };
+      const body = JSON.parse(trimmed) as {
+        violations?: string[];
+        error?: { status?: unknown; message?: unknown; details?: unknown };
+      };
+      const envelope = body.error;
+      if (envelope && typeof envelope.message === "string" && envelope.message !== "") {
+        return new ApiError(
+          response.status,
+          envelope.message,
+          typeof envelope.status === "string" ? envelope.status : null,
+          errorDetails(envelope.details),
+        );
+      }
       if (Array.isArray(body.violations) && body.violations.length > 0) {
         return new ApiError(response.status, body.violations.join("; "));
       }
     } catch {
-      // Not the violations shape; fall through to the raw text.
+      // Neither known JSON shape; fall through to the raw text.
     }
   }
   return new ApiError(response.status, trimmed || response.statusText);
+}
+
+// Reads the envelope's `details` array, keeping only entries that carry both halves. Tolerant by
+// design: this is an *error* path, and losing a server's message to a strict parse of a field we do
+// not even need would replace useful information with none, at the worst possible moment.
+function errorDetails(raw: unknown): ApiErrorDetail[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((entry) => {
+    if (entry === null || typeof entry !== "object") {
+      return [];
+    }
+    const { field, reason } = entry as Partial<ApiErrorDetail>;
+    return typeof field === "string" && typeof reason === "string" ? [{ field, reason }] : [];
+  });
 }
 
 async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {

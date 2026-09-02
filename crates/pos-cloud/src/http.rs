@@ -38,6 +38,24 @@
 //!    replace a tenant's localized strings, `en`-validated. Not part of the public contract, so —
 //!    like `/internal` — it is absent from the OpenAPI document.
 //!
+//! # One error shape, arriving in slices
+//!
+//! Every failure should answer the AIP-193 envelope `pos-proto` defines — `{"error":{code,status,
+//! message,details}}` — and [`api_error`] is the only way this module builds one, so the status
+//! line and the body cannot disagree. ADR-0026 §27 chose that shape when this surface was small;
+//! the surface then grew to roughly six hundred error paths writing plain text, which is what
+//! roadmap v3 Q3 is converting.
+//!
+//! It converts in reviewable groups rather than one commit, so **for the duration some handlers
+//! answer the envelope and the rest answer plain text**. That is a known intermediate state, not a
+//! disagreement about the target, and it is safe because no consumer depends on the shape: the
+//! console's `failure()` reads the envelope, the config publish's `{"violations":[…]}` and raw text
+//! alike, and `cloud-sync-http` maps cloud failures on HTTP status alone and never parses a body.
+//! Converted so far: every per-domain error helper (`*_error_response`, `*_entropy_unavailable`,
+//! [`activation_refused`], [`too_many_login_attempts`], [`admin_service_unavailable`]) and
+//! [`error_response`]. Remaining: the inline validation refusals written at each handler — also the
+//! ones that will carry field-level `details`, which is why they are their own slice.
+//!
 //! The router is generic over its collaborators — the [`EventStore`], the [`RollupStore`], the
 //! [`ApiKeyStore`], the [`AdminStore`], the [`ConfigTreeStore`], the [`WebhookEndpointStore`], and the
 //! [`ClockSource`] — bundled in [`CloudApp`]. Tests drive it against `pos-fakes` and the binary serves
@@ -64,7 +82,6 @@ use serde::Deserialize;
 use pos_ports::PortError;
 use pos_ports::config_store::ConfigUpdate;
 use pos_ports::event_store::EventStore;
-use pos_proto::ErrorStatus;
 use pos_proto::campaign::{
     PublishedAction, PublishedCampaign, PublishedCampaignKind, PublishedConditions,
 };
@@ -88,6 +105,7 @@ use pos_proto::money::CurrencyCode;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
+use pos_proto::{ErrorResponse, ErrorStatus};
 
 use pos_country::CountryRegistry;
 
@@ -1195,11 +1213,10 @@ where
 /// Maps a device-proposal store failure to a retryable `503`, logging the detail rather than leaking it.
 fn device_error_response(error: &crate::devices::DeviceProposalError) -> Response {
     tracing::error!(%error, "a device-proposal store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the device service is unavailable",
     )
-        .into_response()
 }
 
 // --- Org registry (`/admin/tenants|brands|stores`, ADR-0065) ------------------------------------
@@ -1383,22 +1400,20 @@ fn hash_pin(pin: &str) -> Option<String> {
 /// Maps any people-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn people_error_response(error: &impl std::fmt::Display) -> Response {
     tracing::error!(%error, "a people & access store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the people service is unavailable",
     )
-        .into_response()
 }
 
 /// `503` when OS entropy is unavailable to mint an id or hash a PIN — the request cannot proceed
 /// safely, and it is transient.
 fn people_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy for a people & access write");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the people service is unavailable",
     )
-        .into_response()
 }
 
 /// Builds the people & access sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
@@ -3229,11 +3244,10 @@ where
 /// The `503` for the impossible case that a channels/tender node fails to serialise.
 fn channels_serialize_unavailable() -> Response {
     tracing::error!("could not serialise a channels/tender node");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the configuration service is unavailable",
     )
-        .into_response()
 }
 
 /// A `qr.business_hours` window in a `PUT /admin/config/qr` body.
@@ -3592,21 +3606,13 @@ fn grid_position(column: Option<u16>, row: Option<u16>) -> Option<GridPosition> 
 /// Maps any floor-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn floor_error_response(error: &impl std::fmt::Display) -> Response {
     tracing::error!(%error, "a floor & kitchen store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the floor service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the floor service is unavailable")
 }
 
 /// `503` when OS entropy is unavailable to mint a floor/kitchen id.
 fn floor_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy for a floor & kitchen write");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the floor service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the floor service is unavailable")
 }
 
 /// Parses an optional id field: `None`/empty → `Ok(None)`; a present value must be a ULID.
@@ -4957,11 +4963,7 @@ where
 /// Maps a fleet read failure to a retryable `503`, logging the detail rather than leaking it.
 fn fleet_error_response(error: &FleetStoreError) -> Response {
     tracing::error!(%error, "a fleet read failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the fleet service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the fleet service is unavailable")
 }
 
 /// A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.
@@ -5134,11 +5136,7 @@ where
 /// Maps an alert-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn alert_error_response(error: &AlertStoreError) -> Response {
     tracing::error!(%error, "an alert store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the alert service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the alert service is unavailable")
 }
 
 /// A super-admin (any console role) lists the fleet's alerts: the active set by default, or recent
@@ -5372,11 +5370,10 @@ where
 /// Maps a task-health read failure to a retryable `503`, logging the detail rather than leaking it.
 fn health_error_response(error: &TaskHealthError) -> Response {
     tracing::error!(%error, "a task-health read failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the health service is unavailable",
     )
-        .into_response()
 }
 
 /// Reports every background loop's health: each expected loop (whether or not it has ticked) plus any
@@ -5494,21 +5491,19 @@ struct UpdateDeviceRequest {
 /// Maps a registry store failure to a retryable `503`, logging the detail rather than leaking it.
 fn registry_error_response(error: &RegistryStoreError) -> Response {
     tracing::error!(%error, "a registry store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the registry service is unavailable",
     )
-        .into_response()
 }
 
 /// The `503` returned when OS entropy is unavailable to mint an id.
 fn registry_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a registry id");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the registry service is unavailable",
     )
-        .into_response()
 }
 
 /// Parses a status word from a request body; `None` (a `400`) for anything but the two known values.
@@ -6504,21 +6499,19 @@ struct SetPlacementRequest {
 /// Maps a catalog store failure to a retryable `503`, logging the detail rather than leaking it.
 fn catalog_error_response(error: &CatalogStoreError) -> Response {
     tracing::error!(%error, "a catalog store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the catalog service is unavailable",
     )
-        .into_response()
 }
 
 /// The `503` returned when OS entropy is unavailable to mint a catalog id.
 fn catalog_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a catalog id");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the catalog service is unavailable",
     )
-        .into_response()
 }
 
 // --- Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies ----------
@@ -6731,11 +6724,10 @@ where
 /// Maps a tax-rate store failure to a retryable `503`, logging the detail rather than leaking it.
 fn tax_rate_error_response(error: &TaxRateStoreError) -> Response {
     tracing::error!(%error, "a tax-rate store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the tax-rate service is unavailable",
     )
-        .into_response()
 }
 
 // --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----
@@ -7125,21 +7117,19 @@ where
 /// may succeed.
 fn campaign_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a campaign id");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the campaign service is unavailable",
     )
-        .into_response()
 }
 
 /// Maps a campaign store failure to a retryable `503`, logging the detail rather than leaking it.
 fn campaign_error_response(error: &CampaignStoreError) -> Response {
     tracing::error!(%error, "a campaign store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the campaign service is unavailable",
     )
-        .into_response()
 }
 
 // --- Inventory authoring (`/admin/inventory/*`, ADR-0079, Track M6) ----------------------------
@@ -8070,21 +8060,19 @@ where
 /// The `503` for when the OS entropy needed to mint an inventory id is unavailable.
 fn inventory_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint an inventory id");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the inventory service is unavailable",
     )
-        .into_response()
 }
 
 /// Maps an inventory store failure to a retryable `503`, logging the detail rather than leaking it.
 fn inventory_error_response(error: &InventoryStoreError) -> Response {
     tracing::error!(%error, "an inventory store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the inventory service is unavailable",
     )
-        .into_response()
 }
 
 // --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
@@ -9154,11 +9142,10 @@ where
 /// Maps a voucher store failure to a retryable `503`, logging the detail rather than leaking it.
 fn voucher_error_response(error: &VoucherStoreError) -> Response {
     tracing::error!(%error, "a voucher store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the voucher service is unavailable",
     )
-        .into_response()
 }
 
 // --- Scheduled publishes (ADR-0077, Track M3): the effective-dated / Tết-menu mechanism -----------
@@ -9440,11 +9427,10 @@ where
 /// Maps a scheduled-publish store failure to a retryable `503`, logging the detail rather than leaking it.
 fn scheduled_error_response(error: &ScheduledPublishError) -> Response {
     tracing::error!(%error, "a scheduled-publish store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the scheduling service is unavailable",
     )
-        .into_response()
 }
 
 // --- Media (ADR-0075, Track M5): upload, serve, list, and delete image renditions -----------------
@@ -9790,21 +9776,13 @@ where
 /// The `503` a media-store failure becomes.
 fn media_error_response(error: &MediaStoreError) -> Response {
     tracing::error!(%error, "a media store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the media service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the media service is unavailable")
 }
 
 /// The `503` a failure to mint a media id becomes (OS entropy unavailable).
 fn media_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a media id");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the media service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the media service is unavailable")
 }
 
 // --- Subject-request tooling (PDPD/GDPR, ADR-0076, Track M5) ---------------------------------------
@@ -10081,11 +10059,10 @@ where
 /// Maps a subject-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn subject_error_response(error: &RetentionError) -> Response {
     tracing::error!(%error, "a subject-store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the subject service is unavailable",
     )
-        .into_response()
 }
 
 // --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
@@ -12885,17 +12862,16 @@ where
 /// The one generic activation refusal. A spent, revoked, unknown, or raced code all collapse to this,
 /// so a prober cannot tell them apart ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 fn activation_refused() -> Response {
-    (StatusCode::FORBIDDEN, "activation refused").into_response()
+    api_error(ErrorStatus::PermissionDenied, "activation refused")
 }
 
 /// Maps an activation-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn activation_error_response(error: &crate::activation::ActivationStoreError) -> Response {
     tracing::error!(%error, "an activation store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the activation service is unavailable",
     )
-        .into_response()
 }
 
 /// Mints a fresh activation code from OS entropy, or `None` if the entropy source is unavailable — in
@@ -13222,11 +13198,10 @@ where
 /// Maps a translation-store failure to a retryable `503`, logging the detail rather than leaking it.
 fn translation_error_response(error: &crate::translations::TranslationStoreError) -> Response {
     tracing::error!(%error, "a translation store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the translation service is unavailable",
     )
-        .into_response()
 }
 
 /// The generated OpenAPI document for the public `/v1` surface.
@@ -13616,11 +13591,10 @@ fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
 /// nothing about whether the credential was right, and the throttle runs before the credential check,
 /// so it cannot become an oracle.
 fn too_many_login_attempts(retry_after_secs: u64) -> Response {
-    let mut response = (
-        StatusCode::TOO_MANY_REQUESTS,
+    let mut response = api_error(
+        ErrorStatus::ResourceExhausted,
         "too many sign-in attempts; try again later",
-    )
-        .into_response();
+    );
     if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
         response.headers_mut().insert(RETRY_AFTER, value);
     }
@@ -14650,11 +14624,7 @@ fn mint_recovery_code() -> Option<String> {
 /// A `503` when the admin store is unreachable — the transient, retryable failure for the admin
 /// surface, with the detail kept to the server's log rather than the client.
 fn admin_service_unavailable() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "the admin service is unavailable",
-    )
-        .into_response()
+    api_error(ErrorStatus::Unavailable, "the admin service is unavailable")
 }
 
 /// Refuses a change that would remove the **last active owner** — a demotion or a suspension of the
@@ -16265,11 +16235,10 @@ fn mint_webhook_id(now_ms: i64) -> Option<WebhookEndpointId> {
 /// Maps a config-tree store failure to a retryable `503`, logging the detail rather than leaking it.
 fn config_store_error_response(error: &crate::config_tree::ConfigStoreError) -> Response {
     tracing::error!(%error, "a config-tree store operation failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the configuration service is unavailable",
     )
-        .into_response()
 }
 
 /// Parses a config-tree level from its path segment, or `None` for an unknown one.
@@ -16359,17 +16328,46 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
     Some((secret, phc))
 }
 
-/// Maps a [`PortError`] to an HTTP response, translating the AIP-193 status to a status code so a
-/// caller retries the retryable ones (`503`, `429`) and not the terminal ones.
+/// Every error this surface sends, in the one AIP-193 shape
+/// [`pos_proto::error`](../../../pos-proto/src/error.rs) defines
+/// ([ADR-0026](../../../docs/adr/0026-cloud-http-surface.md) §27, `docs/naming-and-api.md` §4).
+///
+/// The HTTP status is **not** a parameter: it is derived from `status` through
+/// [`ErrorStatus::http_code`], which is where the mapping is stated once. A caller that could pick
+/// its own code could pick one that disagrees with the body it is sending, and a client branching on
+/// either would then be reading a different error from the one the server meant.
+///
+/// Field-level detail has no caller yet — the inline validation sites that will carry it are the
+/// next slice — so it is not a parameter either. When it arrives, `ErrorResponse::with_detail` is
+/// already fluent and the door is a second constructor, not a widened signature.
+fn api_error(status: ErrorStatus, message: impl Into<String>) -> Response {
+    (
+        http_status(status),
+        Json(ErrorResponse::new(status, message)),
+    )
+        .into_response()
+}
+
+/// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.
+///
+/// The fallback is unreachable — every code [`ErrorStatus::http_code`] returns is a valid status,
+/// and `every_status_maps_to_a_valid_code` holds it to that — but an unmappable code would be a
+/// server-side fault by elimination, which is what `500` says.
+fn http_status(status: ErrorStatus) -> StatusCode {
+    StatusCode::from_u16(status.http_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Maps a [`PortError`] to an HTTP response, so a caller retries the retryable statuses (`503`,
+/// `429`) and not the terminal ones.
+///
+/// The status comes from [`ErrorStatus::http_code`] rather than a match written here. The match this
+/// replaced sent four caller-fault statuses — `NotFound`, `AlreadyExists`, `PermissionDenied`,
+/// `Unauthenticated` — to `500`, which would have told a client its own bad request was the
+/// server's fault and invited a retry that could never succeed. Only one handler reaches this today
+/// (`ingest`) and none of those four is reachable from it, so nothing was actually mis-answering;
+/// the point of deriving the code is that the next caller cannot inherit the trap.
 fn error_response(error: &PortError) -> Response {
-    let status = match error.status() {
-        ErrorStatus::InvalidArgument => StatusCode::BAD_REQUEST,
-        ErrorStatus::FailedPrecondition => StatusCode::CONFLICT,
-        ErrorStatus::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
-        ErrorStatus::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, error.to_string()).into_response()
+    api_error(error.status(), error.to_string())
 }
 
 /// Maps a rollup-read failure to a `503`, logging the detail rather than returning it — a dashboard
@@ -16377,11 +16375,10 @@ fn error_response(error: &PortError) -> Response {
 /// retry, and the internal reason is not the client's business.
 fn rollup_error_response(error: &RollupError) -> Response {
     tracing::error!(%error, "a dashboard rollup read failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
+    api_error(
+        ErrorStatus::Unavailable,
         "the dashboard is temporarily unavailable",
     )
-        .into_response()
 }
 
 #[cfg(test)]
@@ -16611,5 +16608,109 @@ mod preview_diff_tests {
                 .any(|v| v.contains("pay_first_enabled") && v.contains("tables_enabled")),
             "the preview surfaces the real conflict: {violations:?}",
         );
+    }
+}
+
+#[cfg(test)]
+mod error_envelope_tests {
+    //! The one error shape, and the two properties that keep it honest.
+    //!
+    //! Both are about *disagreement*, which is the failure mode an error path has that a success
+    //! path does not: a body that says one thing while the status line says another. A client reads
+    //! whichever it trusts, and is then acting on an error the server did not send.
+
+    use super::{api_error, error_response, http_status};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+    use pos_ports::{PortError, PortName};
+    use pos_proto::error::ErrorBody;
+    use pos_proto::wire_enum::WireEnum as _;
+    use pos_proto::{ErrorResponse, ErrorStatus};
+
+    /// Every canonical status, `Unspecified` included — a server never emits it, but if one ever
+    /// leaked through `http_status` it must still produce a valid code rather than panic.
+    fn every_status() -> impl Iterator<Item = ErrorStatus> {
+        ErrorStatus::ALL.iter().copied()
+    }
+
+    /// Reads a response's status line and its parsed body together, because the point of every test
+    /// here is that the two agree.
+    async fn read(response: Response) -> (StatusCode, ErrorBody) {
+        let status = response.status();
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+            "an error body is JSON, or a client parsing the envelope reads plain text instead"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("collect the error body");
+        let parsed: ErrorResponse = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "the body is not the AIP-193 envelope ({error}): {}",
+                String::from_utf8_lossy(&bytes)
+            )
+        });
+        (status, parsed.error)
+    }
+
+    #[test]
+    fn every_status_maps_to_a_valid_code() {
+        // `http_status` falls back to 500 on an unmappable code. This is the test that makes that
+        // fallback dead rather than a silent reinterpretation of somebody's 4xx.
+        for status in every_status() {
+            let code = status.http_code();
+            assert_eq!(
+                StatusCode::from_u16(code)
+                    .ok()
+                    .map(|mapped| mapped.as_u16()),
+                Some(code),
+                "{status} maps to {code}, which is not a valid HTTP status code"
+            );
+            assert_eq!(http_status(status).as_u16(), code, "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_status_line_and_the_body_cannot_disagree() {
+        for status in every_status() {
+            let (line, body) = read(api_error(status, "a message")).await;
+            assert_eq!(
+                line.as_u16(),
+                status.http_code(),
+                "{status}: the status line"
+            );
+            assert_eq!(body.code, status.http_code(), "{status}: the body's code");
+            assert_eq!(
+                body.status.as_wire(),
+                status.as_wire(),
+                "{status}: the token"
+            );
+            assert_eq!(body.message, "a message", "{status}: the message");
+            assert!(body.details.is_empty(), "{status}: no detail was asked for");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_port_error_answers_with_its_own_status_rather_than_five_hundred() {
+        // The match this replaced sent NotFound, AlreadyExists, PermissionDenied and Unauthenticated
+        // to 500 — telling a client the server had broken when the client's own request was at
+        // fault, and inviting a retry that could never succeed. Only `ingest` reaches this today and
+        // none of those four is reachable from it, so nothing was mis-answering; deriving the code
+        // is what stops the *next* caller inheriting the trap. This test is that guarantee: it fails
+        // if the match ever comes back.
+        for status in every_status() {
+            let error = PortError::new(PortName::EventStore, status, "the port refused");
+            let (line, body) = read(error_response(&error)).await;
+            assert_eq!(
+                line.as_u16(),
+                status.http_code(),
+                "{status} answered {line}, not the code its own status implies"
+            );
+            assert_eq!(body.status.as_wire(), status.as_wire(), "{status}");
+        }
     }
 }
