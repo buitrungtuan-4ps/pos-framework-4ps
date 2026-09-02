@@ -36,6 +36,11 @@ mod config_store {
     pos_contract_tests::config_store_suite!(StoreHarness, run_ready);
 }
 
+mod intake_ledger {
+    use super::{StoreHarness, run_ready};
+    pos_contract_tests::intake_ledger_suite!(StoreHarness, run_ready);
+}
+
 mod message_link {
     use super::{LinkHarness, run_ready};
     pos_contract_tests::message_link_suite!(LinkHarness, run_ready);
@@ -142,6 +147,7 @@ fn every_suite_is_invoked_here() {
         "order_in",
         "cloud_sync",
         "device_registry",
+        "intake_ledger",
     ];
     assert_eq!(invoked.len(), pos_contract_tests::SUITES.len());
     for (port, _) in pos_contract_tests::SUITES {

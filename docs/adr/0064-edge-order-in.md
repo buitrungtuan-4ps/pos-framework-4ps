@@ -1,6 +1,6 @@
 # ADR-0064 — The edge implements `OrderIn` over its own application layer, repricing from the synced menu catalog
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-24
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-02
 **Relates to** [ADR-0026](0026-port-shapes.md) · [ADR-0063](0063-store-menu-catalog.md) · [ADR-0056](0056-public-order-intake.md) · [ADR-0061](0061-order-relay.md) · [ADR-0057](0057-qr-ordering.md) · [ADR-0001](0001-offline-first-store-autonomy.md)
 
 **Context.** [ADR-0026](0026-port-shapes.md) §5 makes the store’s edge the real `OrderIn` implementor — it
@@ -94,3 +94,35 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
   crash-safety without touching the wire protocol, and mirrors how the cloud relay already dedupes.
 - **Reuse `seat_table` / the table-service path.** A delivery or public-API order has no table; forcing
   one would invent floor state that isn’t real and couple intake to the dine-in flow.
+
+---
+
+## Amendment — `IntakeLedger` is registered as a port (2026-09-02)
+
+This record called `IntakeLedger` a port when it landed, and it was built like one — a trait in
+`pos-ports`, a `store-sqlite` implementation, an in-memory fake. But it was never given a
+`PortName` variant, and everything downstream of that registry quietly skipped it:
+
+- `pos-contract-tests`' `SUITES` had no entry, so there was **no shared contract suite** — the two
+  implementations were never checked against each other, only against their own crates' tests.
+- `docs/architecture.md` §5 had **no row**, so the authoritative port list was wrong by one.
+- Its failures were reported under `PortName::OrderIn`, merging two seams into one metric label.
+- The `every_port_has_a_suite` guard **could not see it at all**, because that guard iterates
+  `PortName::ALL`. A trait added to `pos-ports` without a variant is invisible to it.
+
+**What changed.** `PortName::IntakeLedger` exists (the nineteenth), with the `ALL` entry and the
+`intake_ledger` label. There is a six-case suite in `pos_contract_tests::intake_ledger`, and both
+`pos-fakes` and `store-sqlite` run it and pass — so "the ledger's two implementations agree" is now
+checked rather than assumed. `docs/architecture.md` §5 has the row and reads nineteen. The ledger's
+own errors carry `PortName::IntakeLedger`; the queue-number allocator keeps `PortName::OrderIn`,
+which is the seam it belongs to.
+
+**Nothing about the design changed.** The port is still `Transactional` sharing `EventStore`'s `Tx`,
+the key is still a plain insert whose duplicate loses at commit, and no migration was needed. This
+amendment is bookkeeping catching up with a decision this record already made.
+
+**The lesson worth keeping.** A guard that enumerates a registry can only check what was registered;
+it can never be what catches an unregistered thing. The control that should have caught this is the
+rule that a new port needs an ADR first (ADR-0021) plus a reviewer reading it — a process control,
+not a test. That is the one that failed, and the blind spot is now written down in
+`docs/architecture.md` §5, in the guard's own comment, and here.

@@ -16,9 +16,9 @@
 use pos_contract_tests::harness::{
     BlobStoreHarness, ClockSourceHarness, CloudSyncHarness, ConfigStoreHarness,
     DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
-    FiscalizationHarness, HarnessError, IdGeneratorHarness, KeyVaultHarness, MessageLinkHarness,
-    MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness, PrinterDriverHarness, Setup,
-    ShippingDispatchHarness, SignerHarness,
+    FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyVaultHarness,
+    MessageLinkHarness, MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness,
+    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -81,6 +81,18 @@ impl ConfigStoreHarness for StoreHarness {
 
     async fn lose_power(&self, store: Self::Store) -> Setup<Self::Store> {
         Ok(store.reopen())
+    }
+
+    fn store_id(&self) -> StoreId {
+        store_id()
+    }
+}
+
+impl IntakeLedgerHarness for StoreHarness {
+    type Ledger = FakeStore;
+
+    async fn fresh(&self) -> Setup<Self::Ledger> {
+        Ok(FakeStore::new())
     }
 
     fn store_id(&self) -> StoreId {

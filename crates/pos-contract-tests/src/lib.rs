@@ -62,6 +62,7 @@ pub mod event_store;
 pub mod fiscalization;
 pub mod fixtures;
 pub mod harness;
+pub mod intake_ledger;
 pub mod key_vault;
 pub mod message_link;
 pub mod metrics_sink;
@@ -95,6 +96,9 @@ pub const __PORT_FISCALIZATION: PortName = PortName::Fiscalization;
 pub const __PORT_MESSAGE_LINK: PortName = PortName::MessageLink;
 #[doc(hidden)]
 pub const __PORT_ID_GENERATOR: PortName = PortName::IdGenerator;
+/// Not public API: the suite macros expand to this.
+#[doc(hidden)]
+pub const __PORT_INTAKE_LEDGER: PortName = PortName::IntakeLedger;
 #[doc(hidden)]
 pub const __PORT_KEY_VAULT: PortName = PortName::KeyVault;
 #[doc(hidden)]
@@ -371,7 +375,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Eighteen entries, matching `PortName::ALL`.
+/// Nineteen entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -391,6 +395,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::OrderIn, "order_in_suite"),
     (PortName::CloudSync, "cloud_sync_suite"),
     (PortName::DeviceRegistry, "device_registry_suite"),
+    (PortName::IntakeLedger, "intake_ledger_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.
@@ -461,9 +466,11 @@ mod tests {
         //
         // Note the limit of this guard, so nobody reads more into it than it says: it iterates
         // `PortName::ALL`, so it can only see ports that were given a `PortName` variant. A trait
-        // added to `pos-ports` without one escapes it entirely — which is how `IntakeLedger`
-        // (ADR-0064) came to be a port with no variant, no suite, and no row in
-        // `docs/architecture.md` §5.
+        // added to `pos-ports` without one escapes it entirely. That is not hypothetical —
+        // `IntakeLedger` (ADR-0064) went two slices as a port with no variant, no suite and no row
+        // in `docs/architecture.md` §5, precisely because nothing here could see it. It is
+        // registered now, so this guard covers it; the blind spot itself remains, and the only
+        // thing closing it is that adding a port needs an ADR (ADR-0021) and a reviewer.
         for port in PortName::ALL {
             assert!(
                 SUITES.iter().any(|(named, _)| named == port),

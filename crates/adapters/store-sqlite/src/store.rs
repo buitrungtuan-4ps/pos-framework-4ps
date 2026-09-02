@@ -513,7 +513,7 @@ impl IntakeLedger for SqliteStore {
         // Serialise here so the writer thread stays free of `pos_ports` types; the row is flushed
         // in the order's own transaction at commit (ADR-0064).
         let record_json = serde_json::to_string(record).map_err(|error| {
-            PortError::internal(PortName::OrderIn, "could not encode the intake record")
+            PortError::internal(PortName::IntakeLedger, "could not encode the intake record")
                 .with_source(error)
         })?;
         tx.intake = Some(IntakeWrite {
@@ -534,7 +534,7 @@ impl IntakeLedger for SqliteStore {
         let (sales_channel, external_reference) =
             (sales_channel.to_owned(), external_reference.to_owned());
         let stored = self
-            .ask(PortName::OrderIn, move |reply| Command::LookUpIntake {
+            .ask(PortName::IntakeLedger, move |reply| Command::LookUpIntake {
                 store_id,
                 sales_channel,
                 external_reference,
@@ -543,8 +543,11 @@ impl IntakeLedger for SqliteStore {
             .await?;
         match stored {
             Some(json) => Ok(Some(serde_json::from_str(&json).map_err(|error| {
-                PortError::internal(PortName::OrderIn, "could not decode a stored intake record")
-                    .with_source(error)
+                PortError::internal(
+                    PortName::IntakeLedger,
+                    "could not decode a stored intake record",
+                )
+                .with_source(error)
             })?)),
             None => Ok(None),
         }
