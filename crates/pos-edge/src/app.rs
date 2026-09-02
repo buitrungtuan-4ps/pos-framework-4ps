@@ -31,6 +31,7 @@ use pos_core::decision::{
 use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockProjection};
 use pos_core::menu::PricedLine;
+use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
@@ -242,6 +243,41 @@ pub struct EdgeSession {
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
     /// edge reads it from the published `qr` node so an operator can disable the hold.
     pub qr_staff_confirmation_required: bool,
+    /// The rollout the cloud has published for the fleet, from the `fleet_update` config node
+    /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
+    /// itself against — target version, lowest eligible ring, canary ramp, signing key, kill switch
+    /// — together with the signing keys revocation has retired
+    /// ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)).
+    ///
+    /// Held as one value rather than as an update beside a key list, because the node validates as
+    /// one: `FleetUpdateConfig::validate` either yields both halves or neither, and splitting them
+    /// here would let a later edit apply a rollout while leaving yesterday's revocations in place.
+    /// Revocation is the half that must travel through configuration rather than being baked in
+    /// beside the trusted keys — a compromised key has to stop being accepted without shipping a
+    /// release that the compromised key itself would sign, and a revoked key is refused even when
+    /// its signature verifies.
+    ///
+    /// `None` in the bootstrap and whenever the node is absent: no rollout is published, so there is
+    /// nothing to install. An unparseable node leaves the previous value, as every other node here
+    /// does; a rollout the console has since stopped is expressed by `halted` inside the node rather
+    /// than by removing it, so halting never depends on a delete arriving.
+    ///
+    /// The cloud has published this node since P9e-3; **nothing on the edge read it until now**,
+    /// which is why the OTA path was dark at the rollout decision as well as at the fetch.
+    pub fleet_update: Option<FleetRollout>,
+    /// Where the cloud has placed *this* device in the rollout, from the `device_ota` config node
+    /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): its ring and its stable canary
+    /// bucket.
+    ///
+    /// `None` means the cloud has not placed this device, and an unplaced device is eligible for
+    /// **no** rollout. That is deliberately an `Option` rather than a field with a default, because
+    /// every plausible default is wrong in the dangerous direction. `Ring::Lab` reads like the
+    /// cautious choice and is the *least* cautious one available: lab is the first ring a rollout
+    /// opens to, and `decide_rollout` exempts it from the canary ramp entirely, so a device
+    /// defaulted to Lab installs at the stage where an update has been proven on nothing.
+    /// `Ring::Fleet` with bucket 0 is barely better — it is the first fleet device in, at any ramp
+    /// above zero. There is no safe placement to invent, so none is invented.
+    pub device_ota: Option<DeviceOtaAssignment>,
 }
 
 impl EdgeSession {
@@ -285,6 +321,10 @@ impl EdgeSession {
             enabled_channels: None,
             accepted_tender: None,
             qr_staff_confirmation_required: true,
+            // No rollout published and no placement: a bootstrap store installs nothing, which is
+            // the only safe answer before the cloud has said anything about updates.
+            fleet_update: None,
+            device_ota: None,
         }
     }
 

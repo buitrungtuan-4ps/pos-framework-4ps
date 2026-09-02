@@ -31,6 +31,7 @@ use pos_core::campaign::campaigns_from_published;
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::channels::{accepted_tender, enabled_channels};
 use pos_core::inventory::from_published as inventory_from_published;
+use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
@@ -97,8 +98,9 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 #[expect(
     clippy::too_many_lines,
     reason = "a flat series of independent, self-contained node branches (menu, permissions, \
-              capabilities, floor, stations, tax, campaigns, inventory, channels, tender, locale); \
-              each is a few lines and reads better inline than behind a helper indirection"
+              capabilities, floor, stations, tax, campaigns, inventory, channels, tender, qr, \
+              locale, fleet_update, device_ota); each is a few lines and reads better inline than \
+              behind a helper indirection"
 )]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
@@ -280,6 +282,56 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         }
         if let Ok(cutoff) = CutoffHour::new(locale.cutoff_hour) {
             session.cutoff = cutoff;
+        }
+    }
+    // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
+    // itself against, and the signing keys revocation has retired. The cloud has published this node
+    // since P9e-3 and nothing here read it, so the rollout decision had no rollout to decide about.
+    //
+    // The parse is two-stage — serde into the wire form, then `validate` into the domain form — and
+    // both stages are recoverable in the same way: an absent, unparseable, or invalid node leaves the
+    // previous rollout untouched. That is the right failure for this node specifically. A device that
+    // keeps yesterday's rollout installs an update it was already eligible for; a device that lost it
+    // would stop being eligible for anything, which turns one bad publish into a fleet that no longer
+    // takes security fixes. Halting a rollout is `halted` inside the node, never a deletion, so
+    // stopping the fleet does not depend on a node vanishing.
+    //
+    // A violation reaching here means the cloud published something its own validator would refuse
+    // (the same `FleetUpdateConfig::validate` runs on both sides), so it is logged rather than
+    // swallowed. Config carries no personal data, so the violations themselves are safe to log.
+    if let Some(config) = document
+        .get("fleet_update")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<FleetUpdateConfig>(&text).ok())
+    {
+        match config.validate() {
+            Ok(rollout) => session.fleet_update = Some(rollout),
+            Err(violations) => tracing::warn!(
+                violations = %violations.join("; "),
+                "the published fleet_update node did not validate; keeping the previous rollout"
+            ),
+        }
+    }
+    // The `device_ota` node (ADR-0048): where the cloud has placed *this* device — its ring and its
+    // stable canary bucket. Stable is the point: the bucket fixes the device's position in the canary
+    // ramp, so a device does not cross the rollout threshold and back again as the percentage moves,
+    // and the cloud owning it is what makes it survive a reboot.
+    //
+    // Same never-blank rule as every node above, and here it is what keeps a device *placed*: losing
+    // the placement would leave it eligible for nothing at all. A device the cloud has never placed
+    // stays `None`, which is the safe end of that trade rather than an accident — see the field's own
+    // doc for why no default ring is invented.
+    if let Some(config) = document
+        .get("device_ota")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<DeviceOtaConfig>(&text).ok())
+    {
+        match config.validate() {
+            Ok(assignment) => session.device_ota = Some(assignment),
+            Err(violations) => tracing::warn!(
+                violations = %violations.join("; "),
+                "the published device_ota node did not validate; keeping the previous placement"
+            ),
         }
     }
     session
@@ -1001,6 +1053,207 @@ mod tests {
                 .display_name
                 .as_str(),
             "Margherita",
+        );
+    }
+
+    /// A `fleet_update` node rolling out 1.4.0 to the fleet ring at 40 %, plus a `device_ota` node
+    /// placing this device in the fleet at bucket 10 — inside the ramp.
+    fn document_with_ota() -> serde_json::Value {
+        serde_json::json!({
+            "fleet_update": {
+                "target_version": "1.4.0",
+                "min_ring": "fleet",
+                "rollout_percent": 40,
+                "signing_key_id": "a1a1a1a1a1a1a1a1",
+                "revoked_key_ids": ["b2b2b2b2b2b2b2b2"],
+            },
+            "device_ota": { "ring": "fleet", "canary_bucket": 10 },
+        })
+    }
+
+    #[test]
+    fn the_ota_nodes_deliver_the_rollout_and_this_devices_placement() {
+        use pos_core::ota::{
+            DeviceState, ReleaseVersion, Ring, RolloutDecision, decide_rollout,
+            parse_signing_key_id,
+        };
+
+        // Before this slice the edge read neither node, so both were dark whatever the cloud published.
+        let base = EdgeSession::bootstrap();
+        assert!(base.fleet_update.is_none(), "no rollout in the bootstrap");
+        assert!(base.device_ota.is_none(), "no placement in the bootstrap");
+
+        let rebuilt = session_from_config(&base, &document_with_ota());
+        let rollout = rebuilt.fleet_update.as_ref().expect("a rollout arrived");
+        assert_eq!(rollout.update.target, ReleaseVersion::new(1, 4, 0));
+        assert_eq!(rollout.update.min_ring, Ring::Fleet);
+        assert_eq!(rollout.update.fleet_rollout_percent, 40);
+        assert!(!rollout.update.halted);
+        assert_eq!(
+            rollout.revoked_keys,
+            vec![parse_signing_key_id("b2b2b2b2b2b2b2b2").expect("a key id")],
+            "the retired key travels with the rollout it constrains"
+        );
+        let placement = rebuilt.device_ota.expect("a placement arrived");
+        assert_eq!(placement.ring, Ring::Fleet);
+        assert_eq!(placement.canary_bucket, 10);
+
+        // The delivered values are the real domain inputs: `decide_rollout` weighs this device against
+        // this rollout and says install — bucket 10 is inside a 40 % ramp — which proves the
+        // wire→session→decision path, not just that two fields deserialize.
+        let device = DeviceState {
+            current: ReleaseVersion::new(1, 3, 0),
+            ring: placement.ring,
+            canary_bucket: placement.canary_bucket,
+            last_self_test: None,
+        };
+        assert_eq!(
+            decide_rollout(&device, &rollout.update, &rollout.revoked_keys),
+            RolloutDecision::Install
+        );
+
+        // And the halt lever the console pulls arrives the same way, outranking eligibility.
+        let mut halted = document_with_ota();
+        halted["fleet_update"]["halted"] = serde_json::json!(true);
+        let paused = session_from_config(&base, &halted);
+        let paused_rollout = paused.fleet_update.as_ref().expect("a rollout arrived");
+        assert_eq!(
+            decide_rollout(
+                &device,
+                &paused_rollout.update,
+                &paused_rollout.revoked_keys
+            ),
+            RolloutDecision::Halt
+        );
+    }
+
+    #[test]
+    fn an_absent_or_invalid_ota_node_leaves_the_rollout_and_placement_untouched() {
+        use pos_core::ota::{ReleaseVersion, Ring};
+
+        let seeded = session_from_config(&EdgeSession::bootstrap(), &document_with_ota());
+
+        // A publish carrying neither node leaves both — a device that lost its rollout or its
+        // placement would stop being eligible for anything, so one bad publish would strand the fleet
+        // off security fixes. Never-blank matters more here than anywhere else in this function.
+        let no_node = session_from_config(&seeded, &serde_json::json!({ "other": true }));
+        assert_eq!(
+            no_node
+                .fleet_update
+                .as_ref()
+                .map(|rollout| rollout.update.target),
+            Some(ReleaseVersion::new(1, 4, 0))
+        );
+        assert_eq!(
+            no_node.device_ota.map(|placement| placement.ring),
+            Some(Ring::Fleet)
+        );
+
+        // Nodes that parse as JSON but fail `validate` (a ring that names no ring, a percent above
+        // 100) are refused at the domain boundary and leave the previous values, not half of them.
+        let invalid = session_from_config(
+            &seeded,
+            &serde_json::json!({
+                "fleet_update": {
+                    "target_version": "1.9.0",
+                    "min_ring": "everyone",
+                    "rollout_percent": 250,
+                    "signing_key_id": "a1a1a1a1a1a1a1a1",
+                },
+                "device_ota": { "ring": "fleet", "canary_bucket": 200 },
+            }),
+        );
+        assert_eq!(
+            invalid
+                .fleet_update
+                .as_ref()
+                .map(|rollout| rollout.update.target),
+            Some(ReleaseVersion::new(1, 4, 0)),
+            "an invalid rollout does not become the rollout"
+        );
+        assert_eq!(
+            invalid.device_ota.map(|placement| placement.canary_bucket),
+            Some(10),
+            "an out-of-range bucket does not become the placement"
+        );
+
+        // Nodes that are not even the right JSON shape are ignored the same way, not fatal.
+        let malformed = session_from_config(
+            &seeded,
+            &serde_json::json!({ "fleet_update": "nope", "device_ota": 7 }),
+        );
+        assert!(malformed.fleet_update.is_some());
+        assert!(malformed.device_ota.is_some());
+    }
+
+    #[test]
+    fn no_placement_is_the_safe_state_because_every_default_ring_is_more_exposed() {
+        use pos_core::ota::{
+            DeviceState, ReleaseVersion, Ring, RolloutDecision, SkipReason, decide_rollout,
+        };
+
+        // A rollout at its first stage: open to the lab ring only, with the fleet ramp still at 0 %.
+        // This is the least-proven moment in any update's life — it has reached the test cohort and
+        // nothing else.
+        let document = serde_json::json!({
+            "fleet_update": {
+                "target_version": "1.4.0",
+                "min_ring": "lab",
+                "rollout_percent": 0,
+                "signing_key_id": "a1a1a1a1a1a1a1a1",
+            },
+        });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        let rollout = session.fleet_update.as_ref().expect("a rollout arrived");
+        assert!(
+            session.device_ota.is_none(),
+            "a document that places no device leaves the placement unset"
+        );
+
+        let placed = |ring, canary_bucket| DeviceState {
+            current: ReleaseVersion::new(1, 3, 0),
+            ring,
+            canary_bucket,
+            last_self_test: None,
+        };
+
+        // This is why `device_ota` is an `Option` and not a field with a default. `Ring::Lab` reads
+        // like the cautious choice and is the least cautious one available: lab is the first ring a
+        // rollout opens to and it is exempt from the canary ramp entirely, so a device defaulted to
+        // Lab installs at the stage where an update has been proven on nothing. It would be first in
+        // line, not last.
+        assert_eq!(
+            decide_rollout(
+                &placed(Ring::Lab, 0),
+                &rollout.update,
+                &rollout.revoked_keys
+            ),
+            RolloutDecision::Install,
+            "a Lab default would take a lab-only, unramped update immediately"
+        );
+        // A real fleet placement waits for the ramp to reach its bucket. Waiting is the whole
+        // behaviour a rollout exists to produce, and it is only available to a device the cloud has
+        // actually placed — `min_ring` is a floor, so this same lab-stage rollout is already visible
+        // to every ring and the ramp is the only thing holding the fleet back.
+        assert_eq!(
+            decide_rollout(
+                &placed(Ring::Fleet, 0),
+                &rollout.update,
+                &rollout.revoked_keys
+            ),
+            RolloutDecision::Skip(SkipReason::NotInCanaryYet),
+            "a placed fleet device waits for its bucket"
+        );
+        // Which is why bucket 0 is not a safe default either: it is the first fleet device in, at the
+        // very first point of the ramp. There is no placement that means "wait for a real one".
+        let ramping = pos_core::ota::PublishedUpdate {
+            fleet_rollout_percent: 1,
+            ..rollout.update
+        };
+        assert_eq!(
+            decide_rollout(&placed(Ring::Fleet, 0), &ramping, &rollout.revoked_keys),
+            RolloutDecision::Install,
+            "a bucket-0 default installs the moment the ramp leaves zero"
         );
     }
 

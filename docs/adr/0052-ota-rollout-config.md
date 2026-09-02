@@ -1,6 +1,6 @@
 # ADR-0052 — The OTA rollout is published as configuration, validated by shared rules
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-21
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-02
 **Relates to** [ADR-0004](0004-cloud-owned-configuration.md) · [ADR-0033](0033-config-tree.md) · [ADR-0047](0047-minisign-verification.md) · [ADR-0048](0048-ota-rollout-model.md) · `docs/roadmap.md` P9
 
 **Context.** [ADR-0048](0048-ota-rollout-model.md) made the rollout *decision* pure:
@@ -62,3 +62,56 @@ are where the rollout data lives, who validates it, and whether it warrants a ne
   `.pre-update` database copy, self-tests, and rolls back. Fetching the update *artifact bytes* is
   distinct from this rollout config and rides the edge→cloud request/response transport that is still
   to be decided.
+
+**Corrections, made while wiring the two keys end to end.** Two claims above did not survive contact
+with the tree and are corrected here rather than quietly worked around.
+
+1. **"Set at the device level" promises a granularity the delivery mechanism does not have.** A
+   `ConfigTree` is keyed by `StoreId` ([ADR-0033](0033-config-tree.md)) and its Device layer is *one*
+   document the store's terminals share — there is no per-terminal tree, and the config pull is not
+   terminal-scoped. So `device_ota` on the Device layer places every device in the store in the same
+   ring at the same bucket, however many terminals the store runs.
+
+   The wording is corrected rather than the mechanism, because per-store is the granularity a shop
+   actually wants: a counter running two releases at once is a worse failure than a counter a week
+   behind, and the canary ramp does its job at store granularity — a 10 % ramp reaches a tenth of the
+   *stores*, which is the unit an operator watches and rolls back. Making the tree per-terminal would
+   be a large change to ADR-0033 for a property nobody asked for. `PUT /admin/config/ota/placement`
+   therefore authors one placement per store, and the domain's per-device `DeviceState` is filled
+   from it — every terminal in the store reading the same ring and bucket.
+
+   Similarly, `fleet_update` is described above as "set at the tenant or brand level" and the lever
+   writes it to the **Store** layer. That is not a divergence with any effect: a tree is per store, so
+   its Tenant layer is no more fleet-wide than its Store layer — "fleet-wide" describes the operator's
+   intent, not one document reaching many stores. Publishing a rollout to N stores is N publishes
+   either way.
+
+2. **"The edge runs them before trusting a pulled version" was true of the rules and false of the
+   edge.** `FleetUpdateConfig` and `DeviceOtaConfig` were written, tested, and run by the cloud
+   validator on publish, and the edge never read either key: `session_from_config` had no branch for
+   them, so `EdgeSession` carried no rollout and no placement, and `decide_rollout` — pure, total, and
+   fully tested — had no production caller with anything to decide about. The shared-rules discipline
+   this ADR is built on was only ever exercised on one side.
+
+   The edge now reads both nodes into `EdgeSession::fleet_update` and `EdgeSession::device_ota`
+   through those same `validate` methods. Two consequences of the never-blank rule are worth stating,
+   because they cut the opposite way from the other config nodes:
+
+   - **An absent or invalid node leaves the previous value**, as everywhere else in
+     `session_from_config` — and here that is load-bearing in a way it is not for a menu. A store that
+     *lost* its rollout or its placement would become eligible for nothing, so one bad publish would
+     strand a fleet off security fixes. Halting a rollout is `halted` inside the node, never a
+     deletion, so stopping the fleet never depends on a delete arriving.
+   - **`device_ota` is an `Option` with no default ring**, because every default is wrong in the
+     dangerous direction. `Ring::Lab` reads like the cautious choice and is the least cautious one
+     available: lab is the first ring a rollout opens to and `decide_rollout` exempts it from the
+     canary ramp entirely, so a Lab default installs at the stage where an update has been proven on
+     nothing. `Ring::Fleet` at bucket 0 is the first fleet device in, at any ramp above zero. An
+     unplaced store installing nothing is the safe end of that trade, and the console says so rather
+     than leaving the operator to notice a store that never updates.
+
+   What is still missing is named in `docs/roadmap-v3.md` rather than closed here:
+   `DeviceState.last_self_test` has no durable home across the reboot an install performs, so the
+   rollback arm of `decide_rollout` cannot yet fire from real state, and `POST /internal/ota/artifact`
+   does not exist ([ADR-0088](0088-ota-artifact-hosting.md)). This correction closes the *decision*
+   inputs, not the install path.

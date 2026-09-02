@@ -17,6 +17,64 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The OTA rollout decision now has its inputs: the edge reads both config nodes, and the console can
+  place a store in the rollout** ([ADR-0052](docs/adr/0052-ota-rollout-config.md) Corrections 1–2,
+  [ADR-0048](docs/adr/0048-ota-rollout-model.md), roadmap v3 slice R5).
+
+  `pos_core::ota::decide_rollout` is pure, total, and fully tested, and it had no production caller
+  with anything to decide about. It needs three inputs, and none of them reached the running edge:
+
+  - **`fleet_update`** — the rollout itself — has been published by the cloud since P9e-3, and
+    `session_from_config` had no branch for it. Published, delivered, never read.
+  - **`device_ota`** — where this store sits in the rollout — was validated by the cloud on publish
+    and had no authoring route and no reader. Neither written nor read.
+  - **`DeviceState.last_self_test`** still has no durable home; the rollback arm therefore cannot yet
+    fire from real state. Named, not closed — see below.
+
+  What lands here:
+
+  - `EdgeSession` gains **`fleet_update: Option<FleetRollout>`** (the update plus the signing keys
+    revocation has retired) and **`device_ota: Option<DeviceOtaAssignment>`** (this store's ring and
+    canary bucket), read from the two nodes through the same `pos-core` `validate` methods the cloud
+    runs before publishing — which is the shared-rules discipline ADR-0052 was built on, exercised on
+    both sides for the first time.
+  - **`PUT`/`GET /admin/config/ota/placement`** author and read the `device_ota` node on a store's
+    Device config layer, beside the existing rollout levers: behind `console.ota.publish` for the
+    write and `console.data.read` for the read, audited as `config.ota.placement`, and refused with
+    every violation at once (`422`) when the ring names no ring or the bucket is past 99.
+  - The **OTA console screen** gains a placement pane: it shows the published ring and bucket, or
+    says plainly that an unplaced store installs nothing, and saves a new placement behind a
+    confirmation. Typed client + `en`/`vi` strings included.
+
+  Two design points worth stating, because both cut the opposite way from the other config nodes:
+
+  - **An absent or invalid node leaves the previous value.** That is the never-blank rule every node
+    in `session_from_config` follows, and here it is load-bearing rather than merely tidy: a store
+    that *lost* its rollout or its placement would become eligible for nothing, so one bad publish
+    would strand a fleet off security fixes. Halting a rollout is `halted` inside the node, never a
+    deletion, so stopping the fleet never depends on a delete arriving.
+  - **A placement has no default, and that is the safe choice, not a missing one.** `Ring::Lab` reads
+    like the cautious placement and is the least cautious one available: lab is the first ring a
+    rollout opens to, and `decide_rollout` exempts it from the canary ramp entirely, so a Lab default
+    would install at the stage where an update has been proven on nothing. `Ring::Fleet` at bucket 0
+    is the first fleet device in, at any ramp above zero. An unplaced store installing nothing is the
+    safe end of that trade, and the console now says so instead of leaving an operator to notice a
+    store that never updates.
+
+  **Corrected in ADR-0052 rather than worked around:** "set at the device level" promised a
+  granularity the delivery mechanism does not have. A config tree is keyed by `StoreId` and its Device
+  layer is one document a store's terminals share, so a placement is **per store**, not per terminal.
+  The wording is corrected rather than the mechanism, because per-store is the granularity a shop
+  wants — a counter running two releases at once is a worse failure than a counter a week behind — and
+  the ramp does its job at store granularity, which is the unit an operator watches and rolls back.
+
+  **Still open, and deliberately not claimed closed here:** `DeviceState.last_self_test` needs a
+  durable home across the reboot an install performs, and `POST /internal/ota/artifact` does not exist
+  ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md), gated on object-storage credentials). This slice
+  closes the rollout *decision*'s inputs, not the install path.
+
+  No `PROTOCOL_VERSION` bump: both config keys already existed on the wire and the added routes are
+  `/admin`, which is unversioned.
 - **ADR-0092 — the artifact trust chain, ahead of roadmap v3 slice R5**
   ([ADR-0092](docs/adr/0092-artifact-trust-chain.md)). No behaviour change in this entry: the record
   lands first because closing the gap changes a **port** — `CloudSync::fetch_update`'s return type —

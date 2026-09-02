@@ -106,6 +106,16 @@ pub struct ConfigTreeState {
     pub k: usize,
 }
 
+impl ConfigTreeState {
+    /// The authored layer at `level`, so a caller reads a node from the layer that owns it without
+    /// hard-coding an index — `ConfigLevel` already knows which slot it is, and a `[2]` written by
+    /// hand at a call site is how a Device-level key ends up read from the Store layer.
+    #[must_use]
+    pub fn layer(&self, level: ConfigLevel) -> &Value {
+        &self.layers[level.index()]
+    }
+}
+
 /// A store's configuration authority: its four layers, its published history, and its validator.
 #[derive(Debug)]
 pub struct ConfigTree<V> {
