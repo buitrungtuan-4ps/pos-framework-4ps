@@ -139,6 +139,56 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   `deploy/secrets/tls/`, then `docker compose -f deploy/compose.yml kill -s HUP caddy`. Nothing
   automates this — the source of those files is outside this deployment by definition.
 
+## 6. The store event bus
+
+Stores publish their committed events to NATS JetStream, and the cloud's rollups, revenue reports,
+X/Z aggregation and reconciliation all read what arrives there
+([ADR-0089](adr/0089-edge-event-bus-transport.md)). The broker's client port is **published only
+when a certificate exists** — `bootstrap.sh` decides that, not a runbook step:
+
+- **certificate in `deploy/secrets/tls/`** → `4222` published on `0.0.0.0`, TLS on.
+- **no certificate** → `4222` bound to loopback, TLS off, and the bootstrap log says why.
+
+On the two ACME modes that means a **first deploy leaves the bus closed** — Caddy has not issued yet
+when bootstrap runs. Add the `tls-export.sh` cron line above, then redeploy (or wait for cron and
+re-run the deploy): the second bootstrap finds the certificate and opens the port. Under
+`TLS_MODE=external` nothing on the box issues a certificate, so the bus needs one placed in
+`secrets/tls/` before it can open at all.
+
+**Verify reachability before you trust it.** `nats` sits on the `internal: true` Docker network. A
+published port is host→container DNAT, which *should* be unaffected by that flag, but this has not
+been proven on a real box (ADR-0089 records it as unverified). From a machine outside the VPS:
+
+```
+nc -zv <your DOMAIN> 4222
+```
+
+If that fails while the bootstrap log says the port is published, the recorded fallback is to add
+`- frontend` to the `nats` service's `networks` list in `deploy/compose.yml` and redeploy — at the
+cost of giving the broker egress it does not need. Report which one your deployment needed.
+
+**Restrict it at the host firewall** wherever the stores' addresses are knowable. Publishing `4222`
+makes the broker internet-facing: no proxy, no Cloudflare, nothing in front of it but its TLS and
+its token. Stores on residential or mobile connections have no stable address, so this is a
+per-deployment judgement rather than something the compose file can decide.
+
+**Then give each store its URL.** `POS_EDGE_NATS_URL` goes in the store's mode-0600 `env` file (the
+new-store wizard emits it as a commented line), and it carries the token from
+`deploy/secrets/nats.conf`:
+
+```
+POS_EDGE_NATS_URL=tls://:<the token from secrets/nats.conf>@<your DOMAIN>:4222
+```
+
+The `tls://` scheme is what makes the client require TLS — `nats://` would connect in plaintext and
+the broker would reject it. The token belongs in the userinfo exactly as shown; `link-nats` lifts it
+into the connect options, because the client library reads credentials only from there.
+
+Recover the token with `sudo sed -n 's/  token: //p' deploy/secrets/nats.conf`. It is **not**
+rotated by a redeploy: `bootstrap.sh` rewrites `nats.conf` on every run but carries the existing
+token across, and refuses the run outright if it cannot read it — a rotated token would silently
+break every store's publish and the cloud's own cursor at once.
+
 ## Kubernetes (optional)
 
 Operators who already run a cluster can use the [`k8s/`](../k8s/README.md) lane instead of Compose. It

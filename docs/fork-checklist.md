@@ -71,7 +71,7 @@ every one of them, and in a fork it would travel with the repository.
 | Value | Where it actually lives | Why not GitHub |
 |---|---|---|
 | `POS_EDGE_SYNC_KEY` | the store box: OS keyring (`SecretName::SyncKey`), or `/etc/pos-edge/env` mode-0600 root-owned | It is one key **per store**. A hundred stores means a hundred different values; a repository secret is a single value |
-| `POS_EDGE_NATS_URL` | the same env file | Carries the broker token, and the endpoint differs per deployment |
+| `POS_EDGE_NATS_URL` | the same env file | Carries the broker token, and the endpoint differs per deployment. Shape: `tls://:<token>@<your DOMAIN>:4222` — the `tls://` scheme is what makes the client require TLS, and the token comes from `deploy/secrets/nats.conf` on the box ([ADR-0089](adr/0089-edge-event-bus-transport.md)) |
 | `table_token_secret`, the NATS token, `retention_days`, the database password | `deploy/secrets/cloud.toml` on the box | The box mints or holds these; they never leave it. `bootstrap.sh` generates most of them |
 | Garage S3 access keys | minted on the box with `garage key create` | Garage generates them at runtime; they cannot be pre-created |
 | `RCLONE_REMOTE` | the box's environment, read by `deploy/backup.sh` | **No workflow reads it.** It was previously listed as a GitHub secret; setting it there does nothing and leaves off-box backups silently disabled |
@@ -132,3 +132,23 @@ the two ACME modes, `deploy/tls-export.sh` republishes Caddy's certificate there
 from the [deploy runbook](deploy-runbook.md) so a renewal reaches the exported copy. Nothing alerts
 on a stale export yet — a flagged follow-up in ADR-0090 — so an exporter that quietly stops shows up
 only when the old certificate expires.
+
+## 5. The store event bus
+
+Stores publish their events to NATS, and everything the cloud reports is downstream of that
+([ADR-0089](adr/0089-edge-event-bus-transport.md)). Two things a fork needs to know:
+
+- **The port opens only with a certificate.** `bootstrap.sh` publishes `4222` on `0.0.0.0` with TLS
+  when `deploy/secrets/tls/` holds one, and binds it to loopback otherwise. On the ACME modes a
+  **first deploy leaves it closed** — Caddy has not issued yet — so add the `tls-export.sh` cron line
+  and redeploy. Under `TLS_MODE=external` nothing here issues a certificate, so one has to be
+  brought before the bus can open.
+- **Publishing it makes the broker internet-facing.** No proxy, no Cloudflare: its TLS and its token
+  are the only things in front of the fleet's event stream. Restrict `4222` at the host firewall
+  wherever the stores' addresses are knowable, and verify reachability from outside before trusting
+  it — the interaction between Docker's `internal` network flag and a published port is recorded in
+  ADR-0089 as **unverified**, with a one-line fallback in the runbook.
+
+The token is never rotated by a redeploy, and a bootstrap that cannot read the existing one refuses
+rather than minting a replacement — rotating it would break every store's publish and the cloud's
+ingest cursor in the same instant.

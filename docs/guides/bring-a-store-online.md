@@ -48,8 +48,12 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 3. **Handoff** — the wizard produces **two** files. Set the listen port here if this machine cannot
    use the default `8787`, then download both:
    - **`config.toml`** — `store_id`, `cloud_url`, and `bind` if you changed the port.
-   - **`env`** — the sync key, plus a commented `POS_EDGE_NATS_URL` for when the event bus is
-     reachable.
+   - **`env`** — the sync key, plus a commented `POS_EDGE_NATS_URL`. Fill that line in when the
+     cloud's event bus is open: `tls://:<token>@<your cloud host>:4222`, with the token from
+     `deploy/secrets/nats.conf` on the VPS ([ADR-0089](../adr/0089-edge-event-bus-transport.md), and
+     the *store event bus* section of the [deploy runbook](../deploy-runbook.md)). Without it the
+     store still sells and still keeps every event durably in its outbox — but the cloud receives
+     nothing, so rollups and reports read empty.
 
 > `config.toml` carries no secret, so it can sit beside the binary with ordinary permissions. `env`
 > carries the one secret and must be installed root-owned and mode 0600. Do not merge them, and do not

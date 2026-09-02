@@ -16,6 +16,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **E7 — the store event bus is reachable: `nats` publishes `4222` with TLS**
+  ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md), roadmap v3 slice **E7**). The outbox
+  publish E3 wired into `serve()` finally has somewhere to go. Until now `nats` sat on an
+  `internal: true` network with no published port and no proxy route, so `POS_EDGE_NATS_URL` had no
+  valid value at all — and the failure was silent by design, because an unreachable broker is
+  non-fatal so the store keeps trading. A fleet in that state looked healthy from the till and empty
+  from the cloud: rollups, revenue and product-mix reporting, X/Z aggregation and reconciliation were
+  all reading nothing.
+
+  **The port never opens without TLS, and that is now mechanical rather than a runbook promise.**
+  `bootstrap.sh` publishes `4222` on `0.0.0.0` with a `tls` block **only** when
+  `deploy/secrets/tls/` holds a certificate — the path ADR-0090 established — and binds it to
+  loopback otherwise, saying which case applies and why. On the ACME modes a first deploy therefore
+  leaves the bus closed, because Caddy has not issued yet; the next bootstrap opens it. Publishing
+  the port makes the broker internet-facing with nothing in front of it but its TLS and its token,
+  which is the honest cost of terminating TLS *at* NATS — the property that makes per-store client
+  certificates possible later.
+
+  `secrets/nats.conf` is now **rewritten on every run with the existing token carried across**,
+  because whether the port is TLS-wrapped follows from the posture and can change on a redeploy. A
+  run that cannot read the existing token **refuses** rather than minting a new one: rotating it
+  would break every store's publish and the cloud's own ingest cursor in the same instant.
+  `TLS_RELOAD_SERVICES` now defaults to `nats`, so `tls-export.sh` SIGHUPs the broker on a renewal
+  and it re-reads its certificates — without that hook a consumer serves a stale certificate until
+  expiry and then goes dark silently, weeks later.
+
+  **Still unverified, and said so rather than claimed:** whether a published port works on a service
+  attached only to an `internal: true` network. It is host→container DNAT, which *should* be
+  unaffected, and that cannot be proven from a repository. The runbook has the one-command check
+  (`nc -zv <host> 4222`) and the recorded fallback (attach `nats` to `frontend`, at the cost of
+  egress it does not need). Per-store mTLS remains its own slice; when it lands the `tls` block gains
+  `verify_and_map` and a **private** client CA, never a public one (debate D25).
+
+  **Upgrade note.** Set `POS_EDGE_NATS_URL=tls://:<token>@<your DOMAIN>:4222` in each store's
+  mode-0600 `env` file, with the token from `deploy/secrets/nats.conf`; the `tls://` scheme is what
+  makes the client require TLS. Add the `tls-export.sh` cron line first if you have not, or the port
+  will not open. Restrict `4222` at the host firewall where your stores' addresses are knowable.
+
 ### Fixed
 - **A NATS token written into the broker URL was silently discarded, so the documented way to arm
   the cloud's ingest cursor could not work** — and the event bus of
