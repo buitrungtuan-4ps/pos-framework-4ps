@@ -189,6 +189,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   carry an application-layer secret remains open.
 
 ### Changed
+- **The last thirteen plain-text `400`s join the envelope, and two refusals that knew which field
+  was wrong stop throwing it away** (#151). The second half of the migration ADR-0096 deferred; with
+  it, every refusal the cloud emits is on the AIP-193 envelope.
+
+  These thirteen were held back from #150 because they need their **producer** changed, not just
+  their response. Four request-to-record builders (`build_campaign`, `build_ingredient`,
+  `build_recipe`, `build_supplier`) returned a bare `&'static str`, and their doc comments said why:
+  a `Result<_, Response>` trips `clippy::result_large_err`. That constraint is real and is respected
+  — the new `FieldRefusal` is three `&'static str`s, 48 bytes, well under the 128-byte threshold —
+  while fixing what the bare string cost, which is that a refusal naming no field is one no console
+  can mark.
+
+  **Two of them discarded what they knew.** `build_campaign` checked both schedule bounds in a single
+  `if` that OR'd them and named neither, so a caller who sent both minutes could not tell which was
+  refused. `RollupWindow::new` did the same in a loop over `[from, to]`: it knew which bound failed
+  and threw that away one line before the caller needed it. Both are split, and `RollupWindow::new`
+  now returns a `WindowError` enum rather than a message — the domain module knows *what* is wrong,
+  and only the route knows the wire names, so the field naming stays at the route.
+
+  Nested values carry their **full path**: `action.rate`, `action.amount`,
+  `conditions.schedule.start_minute`, `conditions.schedule.end_minute`, `conditions.channels`. A
+  console marking `details.field` can address the input a reader actually sees, rather than being
+  handed a leaf name it must guess the parent of.
+
+  `parse_known_tokens` now answers `enum_refusal` — the same shape the 27 sites of Q3b slice 4a use —
+  so an unrecognised sales channel or payment method names the field (`enabled`, `accepted`) and
+  lists what is accepted, where before it said `"{token} is not a recognised value"`: neither the
+  field nor the set. `UNSPECIFIED` is deliberately excluded from that list, and tested: it exists so
+  an older client can read a newer server's value, is refused by the same parser, and listing it
+  would invite a caller to send a token that earns this refusal again.
+
+  **One refusal deliberately names no field.** `from` after `to` is a refusal in which neither bound
+  is wrong on its own; attributing it to `from` would send half of callers to the input they typed
+  correctly. The message names both, and `details` stays empty — the standing rule being to name
+  only the field that actually was at fault.
+
+  **Upgrade note.** A client reading these thirteen refusals was reading `text/plain`; it now reads
+  the same envelope every other refusal in the cloud uses, and the console has parsed both shapes
+  since Q3a. No protocol-version bump: nothing is renamed or removed.
+
 - **Nine of the cloud's last plain-text `400`s join the envelope, and five that were already on it
   named a field the caller never sent** (#150). The first half of the migration ADR-0096 deferred.
 

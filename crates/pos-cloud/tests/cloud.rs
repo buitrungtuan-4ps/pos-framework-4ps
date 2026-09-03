@@ -12387,6 +12387,73 @@ async fn a_range_refusal_about_two_fields_names_only_the_one_out_of_range() {
     );
 }
 
+/// The two `parse_known_tokens` call sites name the field the request actually carries.
+///
+/// `http.rs`'s unit tests pin that the helper reports whatever field it is handed and lists the
+/// accepted set. They cannot pin that the *call sites* hand it the right name — and that is exactly
+/// the failure #150 found five of, where a `details` entry named `tax_rates` on a request whose
+/// field is `rates`. A console marking `details.field` would mark an input the caller never sent,
+/// which is worse than no detail at all because it is confidently wrong. So the two names go
+/// through the real routes.
+#[tokio::test]
+async fn an_unknown_token_names_the_request_field_it_arrived_in() {
+    let admin = provisioned_admin();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        FakeConfigTrees::default(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+
+    // `PublishChannelsRequest` carries `enabled`; `PublishTenderRequest` carries `accepted`.
+    for (uri, field) in [
+        ("/admin/config/channels", "enabled"),
+        ("/admin/config/tender", "accepted"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie(
+                uri,
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "store_id": store_id().as_ulid().to_string(),
+                    field: ["NOT_A_REAL_TOKEN"],
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the publish");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "{uri} must name the field the body carries: {body}"
+        );
+        assert_eq!(
+            body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE",
+            "{uri}: {body}"
+        );
+        // And the prose lists the set, so a caller learns what to send instead of guessing.
+        let message = body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            !message.contains("UNSPECIFIED"),
+            "{uri} must not offer the token its own parser refuses: {message}"
+        );
+    }
+}
+
 /// An absence answers in the envelope, and carries **no** `details` array.
 ///
 /// 103 refusals about an absent entity or a down dependency moved onto `not_found` and
