@@ -129,6 +129,10 @@ const MIGRATION_0038: &str = include_str!("../migrations/0038_ota_releases.sql")
 /// A version row per tenant for the tax-rate table ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md), Q3c slice 5b).
 const MIGRATION_0039: &str = include_str!("../migrations/0039_tax_rate_versions.sql");
 
+/// An index serving the voucher list's own sort order, so a page of it is cheap
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 1).
+const MIGRATION_0040: &str = include_str!("../migrations/0040_voucher_page_index.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -343,6 +347,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0039)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0040)
             .await
             .map_err(unavailable)
     }

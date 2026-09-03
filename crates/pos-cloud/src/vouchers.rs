@@ -19,6 +19,8 @@ use core::future::Future;
 
 use pos_proto::ids::{CampaignId, TenantId, VoucherId};
 
+use crate::paging::{Page, PageRequest};
+
 /// A voucher's lifecycle status. Minting creates it [`Active`](VoucherStatus::Active); the engine's
 /// online redemption (a later, runtime concern) moves it to [`Redeemed`](VoucherStatus::Redeemed), and
 /// an operator may [`Void`](VoucherStatus::Void) one.
@@ -96,11 +98,37 @@ pub trait VoucherStore {
     ) -> impl Future<Output = Result<(), VoucherStoreError>> + Send;
 
     /// Lists a campaign's voucher instances, newest first.
+    ///
+    /// Every code, unpaged. Kept as it is and not deprecated
+    /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+    ///
+    /// Unlike the other lists ADR-0098 pages, this one has no in-process reader to protect — the
+    /// route is its only caller. What it serves is the wire read: an operator distributing a
+    /// promotion needs every code in the batch to print or mail, and "page four of the flyer run"
+    /// is not a thing they can ask for. So the unpaged form stays reachable by omitting `?limit=`,
+    /// and the console's *table* is what pages.
     fn list_by_campaign(
         &self,
         tenant_id: TenantId,
         campaign_id: CampaignId,
     ) -> impl Future<Output = Result<Vec<VoucherRecord>, VoucherStoreError>> + Send;
+
+    /// One page of a campaign's voucher instances, newest first, with the size of the whole set.
+    ///
+    /// Beside [`list_by_campaign`](Self::list_by_campaign) rather than replacing it, which is the
+    /// shape ADR-0098 chose for every paged list: a caller that wants all the codes and a caller
+    /// that wants twenty-five of them are asking different questions, and the second one arriving
+    /// must not change the answer to the first.
+    ///
+    /// This is the seam's acute case. `MAX_VOUCHER_BATCH` is 10 000 codes per mint and batches
+    /// accumulate against a campaign, so a promotion with three drops holds 30 000 rows that the
+    /// console fetches and renders in one go.
+    fn list_by_campaign_page(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<VoucherRecord>, VoucherStoreError>> + Send;
 }
 
 /// The alphabet voucher codes draw from: Crockford base32 — digits and upper-case letters with the
@@ -149,8 +177,8 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{
-        CODE_ALPHABET, CODE_LENGTH, NewVoucher, VoucherRecord, VoucherStatus, VoucherStore,
-        VoucherStoreError, generate_code,
+        CODE_ALPHABET, CODE_LENGTH, NewVoucher, Page, PageRequest, VoucherRecord, VoucherStatus,
+        VoucherStore, VoucherStoreError, generate_code,
     };
 
     #[derive(Default)]
@@ -191,15 +219,44 @@ mod tests {
             tenant_id: TenantId,
             campaign_id: CampaignId,
         ) -> Result<Vec<VoucherRecord>, VoucherStoreError> {
+            Ok(self.matching(tenant_id, campaign_id))
+        }
+
+        async fn list_by_campaign_page(
+            &self,
+            tenant_id: TenantId,
+            campaign_id: CampaignId,
+            page: PageRequest,
+        ) -> Result<Page<VoucherRecord>, VoucherStoreError> {
+            // The whole matching set, then the window — which is what a fake is for. The
+            // store-postgres impl does the same thing in one statement (`LIMIT`/`OFFSET` beside a
+            // `COUNT(*) OVER()`), and the point of both is that `total` counts the *set* while
+            // `items` carries the *page*, so a caller cannot read one for the other.
+            let matching = self.matching(tenant_id, campaign_id);
+            let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+            let items = matching
+                .into_iter()
+                .skip(page.offset() as usize)
+                .take(page.limit() as usize)
+                .collect();
+            Ok(Page::new(items, total))
+        }
+    }
+
+    impl FakeVouchers {
+        /// The tenant's vouchers for one campaign, in insertion order.
+        ///
+        /// Shared by both reads so the paged one cannot drift from the unpaged one: a page that
+        /// filtered differently would be a bug no test comparing only lengths would catch.
+        fn matching(&self, tenant_id: TenantId, campaign_id: CampaignId) -> Vec<VoucherRecord> {
             let campaign = campaign_id.to_string();
-            Ok(self
-                .rows
+            self.rows
                 .lock()
                 .expect("lock")
                 .iter()
                 .filter(|(owner, record)| *owner == tenant_id && record.campaign_id == campaign)
                 .map(|(_owner, record)| record.clone())
-                .collect())
+                .collect()
         }
     }
 
@@ -260,5 +317,109 @@ mod tests {
             )
             .await;
         assert!(collision.is_err(), "a duplicate code is rejected");
+    }
+
+    /// Mints `count` codes for one campaign, so the paging tests are about paging.
+    async fn minted(store: &FakeVouchers, tenant: TenantId, campaign: CampaignId, count: u32) {
+        let batch: Vec<NewVoucher> = (0..count)
+            .map(|n| NewVoucher {
+                voucher_id: VoucherId::new(Ulid::from_u128(u128::from(1000 + n))),
+                campaign_id: campaign,
+                code: format!("CODE{n:04}"),
+            })
+            .collect();
+        store.insert_batch(tenant, &batch).await.expect("mint");
+    }
+
+    #[tokio::test]
+    async fn a_page_carries_its_own_rows_and_the_size_of_the_whole_set() {
+        // The property the pager renders, and the one a page is for: `items` is the window,
+        // `total` is the set. Reporting the page's own length as `total` would make every pager
+        // read "1–10 of 10" and hide the other fifteen codes with no error anywhere.
+        let store = FakeVouchers::default();
+        let tenant = TenantId::new(Ulid::from_u128(1));
+        let campaign = CampaignId::new(Ulid::from_u128(10));
+        minted(&store, tenant, campaign, 25).await;
+
+        let page = store
+            .list_by_campaign_page(tenant, campaign, PageRequest::new(10, 0).expect("in range"))
+            .await
+            .expect("page");
+        assert_eq!(page.items.len(), 10, "the window is the limit");
+        assert_eq!(page.total, 25, "the total is the set, not the window");
+    }
+
+    #[tokio::test]
+    async fn consecutive_pages_partition_the_set_without_overlap_or_gaps() {
+        let store = FakeVouchers::default();
+        let tenant = TenantId::new(Ulid::from_u128(1));
+        let campaign = CampaignId::new(Ulid::from_u128(10));
+        minted(&store, tenant, campaign, 25).await;
+
+        let mut seen = Vec::new();
+        for offset in [0, 10, 20] {
+            let page = store
+                .list_by_campaign_page(
+                    tenant,
+                    campaign,
+                    PageRequest::new(10, offset).expect("in range"),
+                )
+                .await
+                .expect("page");
+            assert_eq!(page.total, 25, "the total does not change as pages advance");
+            seen.extend(page.items.into_iter().map(|record| record.code));
+        }
+        assert_eq!(seen.len(), 25, "three pages of ten cover twenty-five rows");
+        let mut unique = seen.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), 25, "no code appears on two pages");
+    }
+
+    #[tokio::test]
+    async fn a_page_past_the_end_is_empty_and_not_an_error() {
+        // An operator on page four of a batch that just shrank gets an empty page, not a `500`.
+        let store = FakeVouchers::default();
+        let tenant = TenantId::new(Ulid::from_u128(1));
+        let campaign = CampaignId::new(Ulid::from_u128(10));
+        minted(&store, tenant, campaign, 5).await;
+
+        let page = store
+            .list_by_campaign_page(
+                tenant,
+                campaign,
+                PageRequest::new(10, 100).expect("in range"),
+            )
+            .await
+            .expect("a page past the end still reads");
+        assert!(page.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_paged_read_is_tenant_scoped_exactly_like_the_unpaged_one() {
+        // The filter has to be identical on both reads. A page that leaked a neighbour's codes
+        // would be the worst possible bug on this particular table.
+        let store = FakeVouchers::default();
+        let tenant = TenantId::new(Ulid::from_u128(1));
+        let neighbour = TenantId::new(Ulid::from_u128(2));
+        let campaign = CampaignId::new(Ulid::from_u128(10));
+        minted(&store, tenant, campaign, 3).await;
+        minted(&store, neighbour, campaign, 7).await;
+
+        let page = store
+            .list_by_campaign_page(
+                tenant,
+                campaign,
+                PageRequest::new(100, 0).expect("in range"),
+            )
+            .await
+            .expect("page");
+        assert_eq!(page.total, 3, "only this tenant's codes are counted");
+        assert_eq!(page.items.len(), 3);
+        let unpaged = store
+            .list_by_campaign(tenant, campaign)
+            .await
+            .expect("list");
+        assert_eq!(unpaged.len(), 3, "and the unpaged read agrees");
     }
 }

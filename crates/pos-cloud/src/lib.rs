@@ -81,6 +81,7 @@ pub mod metrics;
 mod openapi;
 pub mod orders;
 pub mod ota;
+pub mod paging;
 pub mod people;
 pub mod people_compiler;
 mod persistence;

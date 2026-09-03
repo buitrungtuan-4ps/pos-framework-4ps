@@ -35,7 +35,7 @@ use store_postgres::{
     PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
     PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
     ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow,
-    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
 
 use pos_ports::PortError;
@@ -94,6 +94,7 @@ use crate::orders::StoreDirectory;
 use crate::ota::{
     RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple, admit_artifact,
 };
+use crate::paging::{Page, PageRequest};
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
     EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
@@ -2128,16 +2129,46 @@ impl VoucherStore for PostgresVouchers {
             .list_by_campaign(&tenant_id.to_string(), &campaign_id.to_string())
             .await
             .map_err(|error| VoucherStoreError::new(error.to_string()))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| VoucherRecord {
-                voucher_id: row.voucher_id,
-                campaign_id: row.campaign_id,
-                code: row.code,
-                status: VoucherStatus::from_wire(&row.status),
-                created_at_ms: row.created_at_ms,
-            })
-            .collect())
+        Ok(rows.into_iter().map(voucher_record).collect())
+    }
+
+    async fn list_by_campaign_page(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        page: PageRequest,
+    ) -> Result<Page<VoucherRecord>, VoucherStoreError> {
+        // `PageRequest` guarantees the values are in range (`1..=MAX_PAGE_LIMIT`, offset within
+        // `MAX_PAGE_OFFSET`), so widening `u32` into the `i64` the SQL binds cannot lose or
+        // sign-flip anything. That guarantee is why the adapter takes bare integers and does not
+        // re-check them.
+        let (rows, total) = self
+            .list_by_campaign_page(
+                &tenant_id.to_string(),
+                &campaign_id.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| VoucherStoreError::new(error.to_string()))?;
+        Ok(Page::new(
+            rows.into_iter().map(voucher_record).collect(),
+            u32::try_from(total).unwrap_or(u32::MAX),
+        ))
+    }
+}
+
+/// Rehydrates one stored voucher row into the seam's record.
+///
+/// Shared by the paged and unpaged reads: a `status` token that decoded differently on one of them
+/// would show an operator a live code as void on page two and active on the flyer run.
+fn voucher_record(row: VoucherRow) -> VoucherRecord {
+    VoucherRecord {
+        voucher_id: row.voucher_id,
+        campaign_id: row.campaign_id,
+        code: row.code,
+        status: VoucherStatus::from_wire(&row.status),
+        created_at_ms: row.created_at_ms,
     }
 }
 
