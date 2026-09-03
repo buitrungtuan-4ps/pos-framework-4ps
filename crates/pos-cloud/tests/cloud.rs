@@ -1964,6 +1964,10 @@ async fn provisioning_with_an_unknown_scope_is_rejected() {
         StatusCode::BAD_REQUEST,
         "an unknown scope name is a 400, never a silent no-op grant"
     );
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["details"][0]["field"], "scopes");
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
 }
 
 // --- Config-tree admin authoring (`/admin/stores/{id}/config`, behind the session guard) --------
@@ -3912,6 +3916,19 @@ async fn webhook_register_requires_a_session_and_refuses_ssrf() {
     assert!(
         !body.contains("127.0.0.1") && !body.contains("loopback"),
         "the refusal must not report what the address was: {body}"
+    );
+    // And it is the envelope now, naming the field without re-opening the oracle the message
+    // closed: a resolution refusal and a not-resolved refusal share one reason.
+    let envelope: serde_json::Value =
+        serde_json::from_str(&body).expect("the refusal is an envelope");
+    assert_eq!(
+        envelope["error"]["status"], "INVALID_ARGUMENT",
+        "got {envelope}"
+    );
+    assert_eq!(envelope["error"]["details"][0]["field"], "url");
+    assert_eq!(
+        envelope["error"]["details"][0]["reason"], "FORBIDDEN_DESTINATION",
+        "not INVALID_FORMAT — the URL's shape is fine, its destination is not: {envelope}"
     );
 
     // Plaintext http is refused even to a public address.
@@ -11502,6 +11519,15 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
         .await
         .expect("route bad role");
     assert_eq!(bad_role.status(), StatusCode::BAD_REQUEST);
+    let refusal = json_body(bad_role).await;
+    assert_eq!(
+        refusal["error"]["details"][0]["field"], "permissions",
+        "the field named is the one the caller sent, not a paraphrase: {refusal}"
+    );
+    assert_eq!(
+        refusal["error"]["details"][0]["reason"],
+        "INVALID_ENUM_VALUE"
+    );
 
     // A valid role.
     let role = router

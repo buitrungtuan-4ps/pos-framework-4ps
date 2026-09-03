@@ -91,6 +91,27 @@ impl SsrfRejection {
             }
         }
     }
+
+    /// The `details` reason that goes with [`caller_message`](Self::caller_message).
+    ///
+    /// Deliberately next to the message, because the two must not disagree: the whole point of
+    /// collapsing `Unresolved` and `ForbiddenAddress` into one sentence is that a caller cannot tell
+    /// them apart, and giving them distinct reasons would re-open the oracle the message just
+    /// closed. They share `FORBIDDEN_DESTINATION`.
+    ///
+    /// `INVALID_FORMAT` for the other four: those really are about the shape of the string the
+    /// caller sent. `FORBIDDEN_DESTINATION` is not — the URL is well formed and the destination is
+    /// refused — so reusing `INVALID_FORMAT` there would tell a client to go and fix a syntax that
+    /// is fine.
+    #[must_use]
+    pub const fn caller_reason(&self) -> &'static str {
+        match self {
+            Self::BadUrl | Self::SchemeNotHttps | Self::CredentialsInUrl | Self::MissingHost => {
+                "INVALID_FORMAT"
+            }
+            Self::Unresolved | Self::ForbiddenAddress(_, _) => "FORBIDDEN_DESTINATION",
+        }
+    }
 }
 
 /// Which class of never-reachable address a destination hit.
@@ -309,6 +330,21 @@ mod tests {
         let forbidden =
             SsrfRejection::ForbiddenAddress(ip("169.254.169.254"), ForbiddenReason::LinkLocal);
         assert_eq!(unresolved.caller_message(), forbidden.caller_message());
+    }
+
+    #[test]
+    fn the_reason_does_not_reopen_what_the_message_closed() {
+        // Collapsing the two resolver-decided variants into one sentence buys nothing if the
+        // machine-readable half tells them apart again.
+        let unresolved = SsrfRejection::Unresolved;
+        let forbidden = SsrfRejection::ForbiddenAddress(ip("10.0.0.1"), ForbiddenReason::Private);
+        assert_eq!(unresolved.caller_reason(), forbidden.caller_reason());
+        assert_eq!(unresolved.caller_reason(), "FORBIDDEN_DESTINATION");
+        // And the four caller-string variants keep a reason that means what it says.
+        assert_eq!(
+            SsrfRejection::SchemeNotHttps.caller_reason(),
+            "INVALID_FORMAT"
+        );
     }
 
     #[test]

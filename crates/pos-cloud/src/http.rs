@@ -1974,11 +1974,11 @@ where
         );
     }
     if let Some(unknown) = first_unknown_permission(&request.permissions) {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             format!("unknown permission id: {unknown}"),
-        )
-            .into_response();
+            &[("permissions", "INVALID_ENUM_VALUE")],
+        );
     }
     let Some(role_template_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoleTemplateId::new)
@@ -2062,11 +2062,11 @@ where
         );
     }
     if let Some(unknown) = first_unknown_permission(&request.permissions) {
-        return (
-            StatusCode::BAD_REQUEST,
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
             format!("unknown permission id: {unknown}"),
-        )
-            .into_response();
+            &[("permissions", "INVALID_ENUM_VALUE")],
+        );
     }
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
@@ -2529,11 +2529,11 @@ where
             .iter()
             .any(|capability| capability.meta().key == key)
         {
-            return (
-                StatusCode::BAD_REQUEST,
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
                 format!("unknown capability flag: {key}"),
-            )
-                .into_response();
+                &[("flags", "INVALID_ENUM_VALUE")],
+            );
         }
     }
 
@@ -3445,7 +3445,7 @@ where
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
             "a vendor policy names an unknown availability (open/busy/closed)",
-            &[("vendor_policies", "INVALID_ENUM_VALUE")],
+            &[("policies", "INVALID_ENUM_VALUE")],
         );
     }
     let Ok(value) = serde_json::to_value(PublishedVendorPolicies::new(request.policies)) else {
@@ -6667,28 +6667,28 @@ where
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 "a tax rate names an unknown tax class",
-                &[("tax_rates", "UNKNOWN_REFERENCE")],
+                &[("rates", "UNKNOWN_REFERENCE")],
             );
         }
         let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 "a tax rate names an unknown sales channel",
-                &[("tax_rates", "INVALID_ENUM_VALUE")],
+                &[("rates", "INVALID_ENUM_VALUE")],
             );
         };
         if row.rate_bps > MAX_TAX_RATE_BPS {
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 "a tax rate exceeds 100%",
-                &[("tax_rates", "OUT_OF_RANGE")],
+                &[("rates", "OUT_OF_RANGE")],
             );
         }
         if !seen.insert((tax_class_id, sales_channel)) {
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 "a (tax class, channel) pair is repeated",
-                &[("tax_rates", "DUPLICATE")],
+                &[("rates", "DUPLICATE")],
             );
         }
         entries.push(TaxRateEntry {
@@ -13370,7 +13370,10 @@ where
     };
     match import::parse_translations_csv(&body, &existing) {
         Ok((_, report)) => (StatusCode::OK, Json(report)).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        // No `details`: the parser addresses a row and byte offset in an opaque uploaded body, and
+        // the only named input this request has is the `tenant_id` query, which is not what failed.
+        // Inventing a field here would send a client looking for a JSON member it never sent.
+        Err(error) => api_error(ErrorStatus::InvalidArgument, error.to_string()),
     }
 }
 
@@ -13425,7 +13428,7 @@ where
         // updates relative to the winner's grid rather than to one that no longer exists.
         let (merged, report) = match import::parse_translations_csv(&body, &existing) {
             Ok(parsed) => parsed,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+            Err(error) => return api_error(ErrorStatus::InvalidArgument, error.to_string()),
         };
         match state
             .translations
@@ -14392,7 +14395,11 @@ where
     let scopes = match parse_scopes(&request.scopes) {
         Ok(scopes) => scopes,
         Err(unknown) => {
-            return (StatusCode::BAD_REQUEST, format!("unknown scope: {unknown}")).into_response();
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("unknown scope: {unknown}"),
+                &[("scopes", "INVALID_ENUM_VALUE")],
+            );
         }
     };
     let now_ms = app.clock.now().as_milliseconds_since_epoch();
@@ -16261,7 +16268,11 @@ where
             // The submitted URL is deliberately absent from the log line: a webhook URL routinely
             // carries its own bearer token in the path or query, and this is a log.
             tracing::warn!(reason = %rejection, "refused to register a webhook URL");
-            return (StatusCode::BAD_REQUEST, rejection.caller_message()).into_response();
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                rejection.caller_message(),
+                &[("url", rejection.caller_reason())],
+            );
         }
         Err(join_error) => {
             tracing::error!(%join_error, "the SSRF vetting task failed to join");
