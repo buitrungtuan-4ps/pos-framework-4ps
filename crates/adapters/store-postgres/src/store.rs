@@ -126,6 +126,9 @@ const MIGRATION_0037: &str = include_str!("../migrations/0037_inventory.sql");
 /// The OTA release registry ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
 const MIGRATION_0038: &str = include_str!("../migrations/0038_ota_releases.sql");
 
+/// A version row per tenant for the tax-rate table ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md), Q3c slice 5b).
+const MIGRATION_0039: &str = include_str!("../migrations/0039_tax_rate_versions.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -336,6 +339,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0038)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0039)
             .await
             .map_err(unavailable)
     }

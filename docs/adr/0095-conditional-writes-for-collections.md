@@ -96,6 +96,9 @@ reinserts them; it is a version row keyed by tenant, bumped in the same transact
 That is one small additive migration, and ADR-0094's "no migration needed" property does not survive
 into this shape — which is a cost worth naming rather than eliding.
 
+> **Amended.** One migration, not two, and there is a third write in this shape that neither refuses
+> nor needs one. See *Correction, on implementation: shape C* below, written after building it.
+
 **3. Shape B — not decided here.**
 
 Six keyed upserts cannot be made conditional by `If-Match` alone. At a first write there is no prior
@@ -172,10 +175,47 @@ compares `ConfigVersionId`, because an operator can read it. What it adds is the
 underneath, at the store, on **every** save — and that is the one that prevents the interleave. A
 check against your own stale read is not a check; it only reports what the handler already saw.
 
+**Correction, on implementation: shape C is one migration and three writes, not two of each.**
+
+Written after the slice was built. Measuring the two seams against the schema they actually sit on
+changed two things this record had asserted.
+
+**The translation grid needs no migration.** This ADR said shape C "brings the first migration in
+this line of work: a per-tenant version row for tax rates **and** for translations". That is right
+for one of them. `catalog_tax_rates` (0028) is many rows per tenant and a save *replaces* them —
+`DELETE` then `INSERT` — so every row's `xmin` is destroyed and there is nothing left that a later
+caller's token could be compared against. It needs migration 0039: a version row whose own `xmin` is
+the token, claimed first inside the same transaction as the replace.
+
+`translations` (0008) is **one `jsonb` row per tenant**, keyed by `tenant_id`. A save updates that
+row in place, so its own `xmin` moves and versions the grid for free. Structurally it is the config
+tree of shape A, not a collection at all — what makes it *read* like a collection is the console
+screen, not the storage. The reasoning that put it in shape C was about the read-modify-write
+spanning a browser, which is still right and is why it takes `If-Match`; the inference that it
+therefore needed a version table was not.
+
+The general form, worth keeping: **whether a version needs a home of its own is a question about the
+write, not about the entity.** A write that updates rows in place can use their `xmin`. A write that
+deletes and reinserts cannot, whatever the thing above it is called.
+
+**There is a third write in this shape, and it retries.** This record counted two: `set_tax_rates`
+and `TranslationStore::save`. `save` has two callers. `PUT /admin/translations` replaces a grid an
+operator typed cell by cell, and takes `If-Match` as decided. `POST /admin/translations/import/apply`
+does not: it parses a CSV, **merges** those keys into whatever grid is stored, and leaves every other
+key alone. That is a delta, and it is the same shape as the config node publishes — the rows to apply
+are in the request, so losing a race is a stale read rather than a lost update, and the fix is to
+re-read and re-apply rather than to refuse. It retries: three attempts, then `412`.
+
+So shape C is **two refusals and one retry**, over one migration. The rule that separates refusing
+from retrying is the one the shape-A correction states — a write that *replaces a document a human
+composed* refuses; a write that *applies its own keys* retries — and it cuts across the three shapes
+rather than along them.
+
 **Scope.**
 
-In: the 12 config-tree saves (shape A) and the 2 collection replaces (shape C). Shape A landed as
-10 retried node publishes + 2 `If-Match` authored writes, per the correction above.
+In: the 12 config-tree saves (shape A) and the collection replaces (shape C). Shape A landed as 10
+retried node publishes + 2 `If-Match` authored writes, and shape C as 2 `If-Match` replaces + 1
+retried CSV merge, per the corrections above.
 
 Out, with reasons:
 
@@ -209,9 +249,10 @@ Out, with reasons:
   console reloads and shows the operator what changed, as it does for every other conditional write
   in this work. The ten node publishes keep their existing contract: they retry and succeed, and only
   a caller that loses three races in a row sees a refusal.
-- Shape C brings the first migration in this line of work: a per-tenant version row for tax rates and
-  for translations. ADR-0094's headline property — that `xmin` needs no schema change — holds for
-  records and does not extend to collections.
+- Shape C brings the first migration in this line of work: a per-tenant version row for tax rates
+  (0039). ADR-0094's headline property — that `xmin` needs no schema change — holds wherever a write
+  updates rows in place, which turned out to include the translation grid and to exclude only the
+  table whose save deletes and reinserts every row.
 - The config tree gains a second reason to hold `ConfigVersionId` accurately. It was already the
   edge's sync token; it becomes the console's write precondition too. A bug that reuses or reorders
   those ids now costs a wrong refusal or a wrong success, not just a confusing history.
@@ -226,3 +267,12 @@ the version it was read at; `store-postgres` compares `xmin` and distinguishes a
 stale one; the ten node publishes go through one retrying helper rather than twelve hand-rolled
 load→publish→save cycles; the two authored writes and the scheduled activator take the precondition
 directly. The correction above is the reason the shape differs from what this ADR first decided.
+
+Shape C is delivered. `TaxRateStore::list_tax_rates` returns the grid and its version and
+`set_tax_rates` takes the version it was read at, over migration 0039; `TranslationStore::load`
+returns a `Versioned<TranslationGrid>` over the row's own `xmin`, with no migration. The version
+rides on the read's `ETag` and comes back as `If-Match`, because a tax-rate body is a JSON array with
+nowhere to carry a field. `If-Match: *` asserts "nothing saved here yet" and is refused once a
+version exists. The CSV import retries.
+
+Shape B remains blocked on the owner's choice of (i) or (ii).

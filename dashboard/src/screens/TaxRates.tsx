@@ -60,8 +60,20 @@ export function TaxRates() {
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  // The version the grid was read at, or `null` for a tenant that has never saved rates (ADR-0095).
+  const [version, setVersion] = createSignal<string | null>(null);
 
-  const fail = (caught: unknown) => {
+  // A `412` means somebody else saved the grid while this one was open. The screen reloads rather
+  // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
+  // the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("taxRates.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -76,14 +88,15 @@ export function TaxRates() {
         api.listTaxRates(tenantId()),
       ]);
       setClasses(taxClasses.filter((row) => row.status === "active"));
+      setVersion(rates.etag);
       const grid: Record<string, string> = {};
-      for (const rate of rates) {
+      for (const rate of rates.value) {
         grid[cellKey(rate.tax_class_id, rate.sales_channel)] = bpsToPercent(rate.rate_bps);
       }
       setCells(grid);
       setLoaded(true);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -118,10 +131,13 @@ export function TaxRates() {
     setError("");
     setBusy(true);
     try {
-      await api.setTaxRates(tenantId(), rows());
+      await api.setTaxRates(tenantId(), rows(), version());
+      // Re-read rather than trusting the save's own `ETag`: the next edit has to be made against
+      // what is stored, and the reload is one request either way.
+      await load();
       toast.ok(t("taxRates.saved"));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -134,7 +150,7 @@ export function TaxRates() {
       await api.publishTax(tenantId(), storeId());
       toast.ok(t("taxRates.published", { store: storeName() }));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }

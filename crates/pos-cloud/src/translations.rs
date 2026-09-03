@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 
 use pos_proto::ids::TenantId;
 
+use crate::version::{UpdateOutcome, Version, Versioned};
+
 /// The locale every key must carry — the always-present fallback ([ADR-0020](../../../docs/adr/0020-i18n-runtime.md)).
 pub const FALLBACK_LOCALE: &str = "en";
 
@@ -75,7 +77,7 @@ impl TranslationStoreError {
 
 /// Persists and reads a tenant's translation grid.
 pub trait TranslationStore {
-    /// Loads a tenant's grid, or `None` if it has authored none yet.
+    /// Loads a tenant's grid and the version it was read at, or `None` if it has authored none yet.
     ///
     /// # Errors
     ///
@@ -83,9 +85,18 @@ pub trait TranslationStore {
     fn load(
         &self,
         tenant: TenantId,
-    ) -> impl Future<Output = Result<Option<TranslationGrid>, TranslationStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<TranslationGrid>>, TranslationStoreError>> + Send;
 
-    /// Replaces a tenant's grid wholesale. The caller validates the fallback rule first.
+    /// Replaces a tenant's grid wholesale, **only if it is still at `expected`** — `None` asserting
+    /// the tenant has authored no grid yet
+    /// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)). The caller
+    /// validates the fallback rule first.
+    ///
+    /// The console loads the whole grid, an operator edits one cell, and the screen `PUT`s the whole
+    /// grid back — a read-modify-write with a human thinking in the middle, so without a precondition
+    /// two operators editing different keys lose one of the edits entirely. The check has to be here
+    /// rather than in the caller: a caller can only compare against the read it already holds, and
+    /// by then the interleave has happened.
     ///
     /// # Errors
     ///
@@ -94,7 +105,8 @@ pub trait TranslationStore {
         &self,
         tenant: TenantId,
         grid: &TranslationGrid,
-    ) -> impl Future<Output = Result<(), TranslationStoreError>> + Send;
+        expected: Option<&Version>,
+    ) -> impl Future<Output = Result<UpdateOutcome, TranslationStoreError>> + Send;
 }
 
 #[cfg(test)]
