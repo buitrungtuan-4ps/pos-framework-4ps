@@ -839,6 +839,13 @@ export interface AuditFilter {
   readonly entityId?: string;
   readonly action?: string;
   readonly actorAdminId?: string;
+  /**
+   * The most recent this many entries — a *window*, not a page size (ADR-0069).
+   *
+   * The server defaults it to 200 and clamps it at 500. `listAuditPage` reuses the same field as
+   * the page size, which is why the paged form on this route is asked for by naming an offset:
+   * `?limit=` was already spoken for here before paging existed (ADR-0098).
+   */
   readonly limit?: number;
 }
 

@@ -3225,6 +3225,205 @@ mod audit_log {
             );
         });
     }
+
+    /// Appends `count` entries for one tenant, one per millisecond so the order is unambiguous
+    /// before the `id` tiebreaker is even consulted.
+    ///
+    /// The id carries the tenant because `audit_log.id` is the primary key across every tenant: two
+    /// calls with the same index range would collide, not partition.
+    async fn trail(audit: &store_postgres::PostgresAudit, tenant: &str, count: i64) {
+        for index in 0..count {
+            audit
+                .insert(
+                    &format!("{tenant}-page-{index:04}"),
+                    Some(tenant),
+                    "01ADMIN0000000000000000OPS",
+                    "ops@pizza4ps.test",
+                    "ops",
+                    "store.update",
+                    "store",
+                    "store-1",
+                    None,
+                    None,
+                    None,
+                    1_000 + index,
+                )
+                .await
+                .expect("append an entry");
+        }
+    }
+
+    /// A page of the trail carries its own window and the size of the *matching* set, and
+    /// consecutive pages partition that set (ADR-0098 slice B3-2).
+    ///
+    /// `total` counting the filtered match rather than the whole log is the property that matters
+    /// here: a pager over a filtered view whose total came from the unfiltered table would offer
+    /// pages that are empty.
+    #[test]
+    fn a_page_of_the_trail_carries_the_window_and_the_matching_total() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 25).await;
+            // A neighbour's entries, and one tenant-global row, must reach neither the page nor the
+            // count when a tenant is named.
+            trail(&audit, "tenant-b", 7).await;
+
+            let (first, total) = audit
+                .search_page(Some("tenant-a"), None, None, None, None, None, None, 10, 0)
+                .await
+                .expect("first page");
+            assert_eq!(first.len(), 10, "the window is the limit");
+            assert_eq!(total, 25, "the total is the matching set, not the window");
+
+            let mut seen: Vec<String> = first.into_iter().map(|row| row.id).collect();
+            for offset in [10, 20] {
+                let (page, page_total) = audit
+                    .search_page(
+                        Some("tenant-a"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        10,
+                        offset,
+                    )
+                    .await
+                    .expect("later page");
+                assert_eq!(page_total, 25, "the total does not change as pages advance");
+                seen.extend(page.into_iter().map(|row| row.id));
+            }
+            assert_eq!(
+                seen.len(),
+                25,
+                "three pages of ten cover twenty-five entries"
+            );
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no entry appears on two pages");
+
+            // A narrower filter narrows the total too, not just the rows.
+            let (rows, filtered_total) = audit
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1_005),
+                    Some(1_009),
+                    10,
+                    0,
+                )
+                .await
+                .expect("filtered page");
+            assert_eq!(filtered_total, 5, "five entries fall inside the window");
+            assert_eq!(rows.len(), 5);
+        });
+    }
+
+    /// The paged read matches the same rows in the same order as the windowed one, and a page past
+    /// the end is empty rather than an error.
+    #[test]
+    fn the_paged_trail_agrees_with_the_windowed_read_on_order_and_scope() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 6).await;
+            trail(&audit, "tenant-b", 4).await;
+
+            let windowed: Vec<String> = audit
+                .search(Some("tenant-a"), None, None, None, None, None, None, 6)
+                .await
+                .expect("windowed")
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
+            assert_eq!(windowed.len(), 6, "only this tenant's entries");
+
+            let (paged, total) = audit
+                .search_page(Some("tenant-a"), None, None, None, None, None, None, 6, 0)
+                .await
+                .expect("paged");
+            assert_eq!(total, 6, "the count is tenant-scoped too");
+            let paged: Vec<String> = paged.into_iter().map(|row| row.id).collect();
+            assert_eq!(
+                paged, windowed,
+                "a full-width page is the windowed read, in the same order"
+            );
+
+            let (beyond, beyond_total) = audit
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    10,
+                    100,
+                )
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// Migration 0042's index carries the trail's whole order, tiebreaker included, so a page needs
+    /// no sort step above the scan.
+    ///
+    /// `audit_log`'s read was already ordered totally (`at DESC, id DESC`) — this is the one paged
+    /// table where nothing about the query changed. What was missing was the `id` column in the
+    /// index, without which the plan finishes the order with a `Sort` and `LIMIT` truncates a
+    /// completed sort. That is also what makes the `count(*) OVER()` walk index-only.
+    #[test]
+    fn the_paged_trail_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 40).await;
+            admin
+                .batch_execute("ANALYZE audit_log")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT id FROM audit_log WHERE tenant_id = $1 \
+                         ORDER BY at DESC, id DESC LIMIT $2 OFFSET $3",
+                        &[&"tenant-a", &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("audit_log_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
+            );
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

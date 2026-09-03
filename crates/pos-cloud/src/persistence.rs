@@ -2461,22 +2461,53 @@ impl AuditStore for PostgresAudit {
         rows.into_iter().map(audit_entry).collect()
     }
 
-    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
-        let tenant = query.tenant.map(|tenant| tenant.to_string());
+    async fn query(
+        &self,
+        filter: &AuditQuery,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let tenant = filter.tenant.map(|tenant| tenant.to_string());
         let rows = self
             .search(
                 tenant.as_deref(),
-                query.entity_type.as_deref(),
-                query.entity_id.as_deref(),
-                query.action.as_deref(),
-                query.actor_admin_id.as_deref(),
-                query.since_ms,
-                query.until_ms,
-                i64::from(query.limit),
+                filter.entity_type.as_deref(),
+                filter.entity_id.as_deref(),
+                filter.action.as_deref(),
+                filter.actor_admin_id.as_deref(),
+                filter.since_ms,
+                filter.until_ms,
+                i64::from(limit),
             )
             .await
             .map_err(|error| AuditStoreError::new(error.to_string()))?;
         rows.into_iter().map(audit_entry).collect()
+    }
+
+    async fn query_page(
+        &self,
+        filter: &AuditQuery,
+        page: PageRequest,
+    ) -> Result<Page<AuditEntry>, AuditStoreError> {
+        let tenant = filter.tenant.map(|tenant| tenant.to_string());
+        let (rows, total) = self
+            .search_page(
+                tenant.as_deref(),
+                filter.entity_type.as_deref(),
+                filter.entity_id.as_deref(),
+                filter.action.as_deref(),
+                filter.actor_admin_id.as_deref(),
+                filter.since_ms,
+                filter.until_ms,
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| AuditStoreError::new(error.to_string()))?;
+        let entries: Vec<AuditEntry> = rows
+            .into_iter()
+            .map(audit_entry)
+            .collect::<Result<_, _>>()?;
+        Ok(Page::new(entries, u32::try_from(total).unwrap_or(u32::MAX)))
     }
 }
 

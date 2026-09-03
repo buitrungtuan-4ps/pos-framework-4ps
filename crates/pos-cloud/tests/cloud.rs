@@ -5586,52 +5586,83 @@ impl AuditStore for FakeAudit {
         Ok(rows)
     }
 
-    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+    async fn query(
+        &self,
+        filter: &AuditQuery,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows = self.matching(filter);
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
+    async fn query_page(
+        &self,
+        filter: &AuditQuery,
+        page: PageRequest,
+    ) -> Result<Page<AuditEntry>, AuditStoreError> {
+        let matching = self.matching(filter);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
+    }
+}
+
+impl FakeAudit {
+    /// Every entry matching `filter`, newest-first and unbounded.
+    ///
+    /// Shared by both filtered reads so the page cannot match a different set than its own total
+    /// counts — the divergence the store-postgres impl avoids by having both queries read one
+    /// `AUDIT_FILTERS` string.
+    fn matching(&self, filter: &AuditQuery) -> Vec<AuditEntry> {
         let mut rows: Vec<AuditEntry> = self
             .entries
             .lock()
             .expect("lock")
             .iter()
-            .filter(|entry| query.tenant.is_none() || entry.tenant_id == query.tenant)
+            .filter(|entry| filter.tenant.is_none() || entry.tenant_id == filter.tenant)
             .filter(|entry| {
-                query
+                filter
                     .entity_type
                     .as_ref()
                     .is_none_or(|value| &entry.entity_type == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .entity_id
                     .as_ref()
                     .is_none_or(|value| &entry.entity_id == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .action
                     .as_ref()
                     .is_none_or(|value| &entry.action == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .actor_admin_id
                     .as_ref()
                     .is_none_or(|value| &entry.actor.admin_id == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .since_ms
                     .is_none_or(|since| entry.at.as_milliseconds_since_epoch() >= since)
             })
             .filter(|entry| {
-                query
+                filter
                     .until_ms
                     .is_none_or(|until| entry.at.as_milliseconds_since_epoch() <= until)
             })
             .cloned()
             .collect();
         rows.reverse(); // stored oldest-first; the read is newest-first.
-        rows.truncate(query.limit as usize);
-        Ok(rows)
+        rows
     }
 }
 
@@ -5759,8 +5790,11 @@ async fn registry_writes_record_to_the_audit_trail() {
     );
 }
 
-#[tokio::test]
-async fn the_audit_read_filters_and_needs_a_session() {
+/// A router over a trail of three entries: two `store` rows and one `tenant` row, oldest first.
+///
+/// Shared by the filter test and the paging test so both read the same trail — a page whose set
+/// differed from the filtered read's would prove nothing about the two agreeing.
+async fn audit_trail_app() -> axum::Router {
     let admin = provisioned_admin();
     let audit = FakeAudit::default();
     let entry = |id: u128, action: &str, entity_type: &str, at_ms: i64| AuditEntry {
@@ -5800,7 +5834,12 @@ async fn the_audit_read_filters_and_needs_a_session() {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    let router = http::router(app).merge(http::audit_router(audit, admin, clock()));
+    http::router(app).merge(http::audit_router(audit, admin, clock()))
+}
+
+#[tokio::test]
+async fn the_audit_read_filters_and_needs_a_session() {
+    let router = audit_trail_app().await;
 
     // No session → the trail is behind the guard.
     let denied = router
@@ -5847,12 +5886,114 @@ async fn the_audit_read_filters_and_needs_a_session() {
 
     // Filter by action.
     let updates = router
+        .clone()
         .oneshot(get_with_cookie("/admin/audit?action=store.update", &cookie))
         .await
         .expect("route the action-filtered read");
     let updates = json_body(updates).await;
     assert_eq!(updates.as_array().expect("array").len(), 1);
     assert_eq!(updates[0]["action"], "store.update");
+}
+
+#[tokio::test]
+async fn the_audit_read_pages_when_asked_for_an_offset_and_windows_when_not() {
+    let router = audit_trail_app().await;
+    let cookie = admin_cookie(&router).await;
+
+    // A limit alone is still the *windowed* read ADR-0069 shipped: the newest N as a bare array,
+    // not a page. This is why `offset` and not `limit` is what asks this route for a page — a
+    // caller sending `?limit=200` today must keep getting what it gets today (ADR-0098).
+    let windowed = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2", &cookie))
+        .await
+        .expect("route the windowed read");
+    let windowed = json_body(windowed).await;
+    let windowed = windowed
+        .as_array()
+        .expect("a bare array, not a paged envelope");
+    assert_eq!(windowed.len(), 2, "the newest two");
+    assert_eq!(windowed[0]["action"], "tenant.update", "still newest-first");
+
+    // An offset asks for the paged form: the window, plus how many matched in total.
+    let page = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2&offset=0", &cookie))
+        .await
+        .expect("route the first page");
+    let page = json_body(page).await;
+    assert_eq!(page["items"].as_array().expect("the window").len(), 2);
+    assert_eq!(
+        page["total"], 3,
+        "the total is the match count, not the page"
+    );
+    assert_eq!(page["limit"], 2);
+    assert_eq!(page["offset"], 0);
+
+    let tail = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2&offset=2", &cookie))
+        .await
+        .expect("route the second page");
+    let tail = json_body(tail).await;
+    assert_eq!(tail["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(tail["total"], 3);
+    assert_eq!(
+        tail["items"][0]["action"], "store.create",
+        "the oldest entry is on the last page"
+    );
+
+    // The total counts what the *filters* matched, not the whole log — otherwise a pager over a
+    // filtered view would offer pages that are empty.
+    let filtered = router
+        .clone()
+        .oneshot(get_with_cookie(
+            "/admin/audit?entity_type=store&limit=1&offset=0",
+            &cookie,
+        ))
+        .await
+        .expect("route the filtered page");
+    let filtered = json_body(filtered).await;
+    assert_eq!(filtered["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(filtered["total"], 2, "two store entries, not three entries");
+
+    // The windowed form clamps an over-large limit (ADR-0069's behaviour, kept); the paged form
+    // refuses it, because there a clamp answers a different question than the one asked.
+    let clamped = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=100000", &cookie))
+        .await
+        .expect("route the over-large window");
+    assert_eq!(
+        clamped.status(),
+        StatusCode::OK,
+        "the windowed read pulls the bound into range rather than refusing"
+    );
+    assert_eq!(json_body(clamped).await.as_array().expect("array").len(), 3);
+
+    for (query, field) in [
+        ("limit=100000&offset=0", "limit"),
+        ("limit=0&offset=0", "limit"),
+        ("limit=2&offset=lots", "offset"),
+        ("offset=2", "offset"),
+        ("limit=lots", "limit"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&format!("/admin/audit?{query}"), &cookie))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{query}` is a client mistake, not a page",
+        );
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            field,
+            "`{query}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]
