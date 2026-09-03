@@ -55,9 +55,9 @@ The measurement, taken across `crates/pos-cloud/src/http.rs`, the twenty-five cl
 - **Three of the five lists that need paging have an index that finds their rows but cannot serve
   their `ORDER BY`.** `vouchers` is indexed `(tenant_id, campaign_id)` and ordered
   `created_at DESC, voucher_id DESC`; `catalog_items` and `employees` are both indexed `(tenant_id)`
-  and ordered `created_at DESC`. Only
-  `audit_log` `(tenant_id, at DESC)` and `media_assets` `(tenant_id, created_at DESC)` already carry
-  the sort. Without the sort in the index, `LIMIT`/`OFFSET` shrinks the *response* while the database
+  and ordered `created_at DESC`; `media_assets` `(tenant_id, created_at DESC)` covers the order it has
+  today but not the total order decision 9 requires of it. Only `audit_log` `(tenant_id, at DESC)`
+  comes close, and even there the `id` tiebreaker falls outside its index. Without the sort in the index, `LIMIT`/`OFFSET` shrinks the *response* while the database
   still sorts every matching row on every page — for a 30 000-code campaign, on every keystroke of a
   pager.
 
@@ -194,13 +194,37 @@ compute `pageCount` from the rows it happens to hold. When they are absent it be
 does today. A table that is handed 25 of 812 rows and left to paginate them client-side shows "1–25
 of 25", which is worse than no pager.
 
+**9. A paged read requires a total order, and the index must cover all of it.** *(Added by amendment
+during B3-2.)*
+
+`LIMIT`/`OFFSET` selects a window of a sorted sequence. If the `ORDER BY` does not distinguish every
+row, there is no sequence to take a window of: the database may return tied rows in any order, and two
+queries an admin makes seconds apart — page one and page two — can order them differently. The result
+is a row on both pages, or on neither. That is a **correctness** failure, not a performance one, and
+it hides in testing because a given plan usually happens to be stable.
+
+Every `created_at` in this schema is `timestamptz NOT NULL DEFAULT now()`, and PostgreSQL's `now()`
+is **transaction** time — so every row written by one transaction carries the *identical* timestamp,
+not merely a close one. Measured on the real database: six `media_assets` rows inserted in one
+transaction produced **one** distinct `created_at`. Any list ordered `created_at DESC` alone is
+therefore unordered across each batch it contains, and there is a live batch path — the CSV import
+rail loads a whole item file in one transaction.
+
+So a list joining the paged cohort must **order by something total** — the timestamp plus the row's
+own key, e.g. `ORDER BY created_at DESC, media_id DESC` — and **have an index covering that whole
+order**, because by decision 8's reasoning a tiebreaker the index does not carry puts the `Sort` node
+straight back.
+
+`vouchers` already satisfied both (`created_at DESC, voucher_id DESC`), which is why B3-1 was sound —
+by inheritance from the query that was already there, not by design.
+
 **Consequences.**
 
 - Five lists gain a second seam method, a second SQL statement, a fake implementation and a paged
   route form; three of them also gain an additive index so the page is cheap and not merely small.
   Thirty-four keep exactly what they have.
-- **Migrations:** three additive `CREATE INDEX IF NOT EXISTS`, one per slice that needs it,
-  forward-only and idempotent per ADR-0017. This ADR itself carries none.
+- **Migrations:** four additive `CREATE INDEX IF NOT EXISTS` — one per paged list whose index does
+  not cover its total order — forward-only and idempotent per ADR-0017. This ADR carries none itself.
 - Two response shapes exist per paged route. That is the cost of decision 1 and it is deliberate: the
   alternative was one shape and a truncated menu compile.
 - `docs/openapi.json` must describe both forms for the paged routes. It currently describes two paths
@@ -228,7 +252,8 @@ of 25", which is worse than no pager.
    SQL with `COUNT(*) OVER()`, fake, route, typed client, `DataTable` server props, and
    `Campaigns.tsx` actually passing a limit. One acute case proven all the way through before the
    mechanical cohort.
-2. **B3-2** — `media`, `audit`, `items` and `employees` on the vocabulary B3-1 fixed, each with the
-   additive index its `ORDER BY` needs where it does not already have one (`catalog_items` and
-   `employees` do not; `audit_log` and `media_assets` do).
+2. **B3-2** — `media`, `audit`, `items` and `employees` on the vocabulary B3-1 fixed. Each gains the
+   total order decision 9 requires and an index covering it: a tiebreaker plus a new index for
+   `media_assets`, `catalog_items` and `employees`; for `audit_log`, whose order is already total,
+   only the widened index.
 3. **B3-3** — `q`/`sort`/`order` across the paged cohort, each route declaring its own fields.

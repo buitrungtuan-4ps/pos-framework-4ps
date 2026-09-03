@@ -85,7 +85,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   written to include. It now reads "the row count can plausibly reach a size one response should not
   carry", which is the question that was always being asked.
 
-  Nothing shipped on the old wording: `vouchers` (#156) is in the cohort under either reading.
+  **And a third correction, which is a correctness one.** Every `created_at` in this schema is
+  `DEFAULT now()`, and PostgreSQL's `now()` is *transaction* time — so every row written by one
+  transaction carries the identical timestamp. Measured: six `media_assets` rows inserted in one
+  transaction gave **one** distinct `created_at`. A list ordered `created_at DESC` alone therefore has
+  no order at all across each batch it contains, and `LIMIT`/`OFFSET` over a non-total order can
+  return a row on two pages or on neither. There is a live batch path — the CSV import rail loads a
+  whole item file in one transaction.
+
+  So the record now carries it as a rule (decision 9): a paged read needs a total order — the
+  timestamp plus the row's own key — and an index covering all of it. `media_assets`,
+  `catalog_items` and `employees` each need both halves; `audit_log`, already ordered
+  `at DESC, id DESC`, needs only its index widened.
+
+  Nothing shipped on any of the old wording: `vouchers` (#156) is in the cohort under either reading
+  of the criterion, and already ordered `created_at DESC, voucher_id DESC` — a total order it
+  inherited from the query that was already there rather than from design.
 
 
 - **A campaign's voucher codes can be read a page at a time** (#156). ADR-0098 slice B3-1: the paging
