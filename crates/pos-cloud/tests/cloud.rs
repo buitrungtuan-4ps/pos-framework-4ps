@@ -5185,6 +5185,157 @@ fn fleet_app(admin: FakeAdmin, fleet: FakeFleet) -> axum::Router {
     http::router(app).merge(http::fleet_router(fleet, admin, clock()))
 }
 
+/// An [`AlertChannel`] that records the batches it was handed, so a test can prove the evaluator
+/// actually pushes rather than merely counting what it could have pushed.
+#[derive(Clone, Default)]
+struct SpyAlertChannel {
+    batches: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl pos_cloud::alerts::AlertChannel for SpyAlertChannel {
+    async fn deliver(
+        &self,
+        _now: Timestamp,
+        alerts: &[pos_cloud::alerts::FiringAlert],
+    ) -> Result<(), pos_cloud::alerts::ChannelError> {
+        self.batches.lock().expect("lock").push(
+            alerts
+                .iter()
+                .map(|alert| format!("{}:{}", alert.kind.as_str(), alert.dedup_key))
+                .collect(),
+        );
+        Ok(())
+    }
+}
+
+/// The seam is wired: one real evaluator tick over a fleet with an offline store reaches the channel.
+///
+/// This is the test the slice exists for. The unit tests around `deliver_opened` prove the delivery
+/// step behaves; this proves the *loop* calls it, which is the failure mode ADR-0073's "delivery is a
+/// separable follow-up" left open and the one nothing else would catch — a `pass` that computed the
+/// newly-opened set and dropped it counted `opened: 1` and delivered nothing, and every other test
+/// still passed.
+#[tokio::test]
+async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
+    let registry = FakeRegistry::default();
+    registry
+        .create_tenant(&TenantRecord {
+            tenant_id: tenant(),
+            name: "Pizza 4P's".to_owned(),
+            status: EntityStatus::Active,
+        })
+        .await
+        .expect("seed the tenant the evaluator sweeps");
+    let silent_store = StoreId::new(Ulid::from_u128(0x0A1E_2733));
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: silent_store,
+            name: "Thảo Điền".to_owned(),
+            status: EntityStatus::Active,
+            // Ten minutes of silence, well past the five-minute threshold below.
+            last_seen_at: Some(seen_ago(600_000)),
+            last_config_pull_at: Some(seen_ago(600_000)),
+            config_version_held: Some("v-current".to_owned()),
+            config_version_published: Some("v-current".to_owned()),
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
+        },
+    );
+    let channel = SpyAlertChannel::default();
+
+    // `run` passes once on entry and its shutdown select is `biased`, so an already-ready shutdown
+    // gives exactly one tick.
+    pos_cloud::alerts::evaluator::run(
+        registry,
+        fleet,
+        FakeWebhooks::default(),
+        FakeTaskHealth::default(),
+        FakeAlerts::default(),
+        Some(channel.clone()),
+        clock(),
+        pos_cloud::alerts::AlertThresholds {
+            store_offline_secs: 300,
+            ..pos_cloud::alerts::AlertThresholds::default()
+        },
+        core::time::Duration::from_secs(60),
+        std::future::ready(()),
+    )
+    .await;
+
+    let batches = channel.batches.lock().expect("lock").clone();
+    assert_eq!(
+        batches.len(),
+        1,
+        "one tick, one batch — not zero (the seam is wired) and not one per alert; got {batches:?}"
+    );
+    assert_eq!(
+        batches[0],
+        vec![format!("store_offline:{}", silent_store.as_ulid())],
+        "the batch carries the alert the tick opened"
+    );
+}
+
+/// The same tick with no channel configured is console-only, and that is not an error.
+#[tokio::test]
+async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
+    let registry = FakeRegistry::default();
+    registry
+        .create_tenant(&TenantRecord {
+            tenant_id: tenant(),
+            name: "Pizza 4P's".to_owned(),
+            status: EntityStatus::Active,
+        })
+        .await
+        .expect("seed the tenant");
+    let fleet = FakeFleet::default().with_row(
+        tenant(),
+        FleetRow {
+            store_id: StoreId::new(Ulid::from_u128(0x0A1E_2734)),
+            name: "Xuân Thủy".to_owned(),
+            status: EntityStatus::Active,
+            last_seen_at: Some(seen_ago(600_000)),
+            last_config_pull_at: Some(seen_ago(600_000)),
+            config_version_held: None,
+            config_version_published: None,
+            relay_backlog: 0,
+            relay_oldest_pending_at: None,
+            installed_version: None,
+            self_test_ok: None,
+            reported_at: None,
+        },
+    );
+    let alerts = FakeAlerts::default();
+
+    pos_cloud::alerts::evaluator::run(
+        registry,
+        fleet,
+        FakeWebhooks::default(),
+        FakeTaskHealth::default(),
+        alerts.clone(),
+        None::<SpyAlertChannel>,
+        clock(),
+        pos_cloud::alerts::AlertThresholds {
+            store_offline_secs: 300,
+            ..pos_cloud::alerts::AlertThresholds::default()
+        },
+        core::time::Duration::from_secs(60),
+        std::future::ready(()),
+    )
+    .await;
+
+    // The in-console channel is the table, and it is the one that always runs (ADR-0073).
+    let active = alerts.list_active().await.expect("read the active alerts");
+    assert_eq!(
+        active.len(),
+        1,
+        "console-only alerting still opens the alert; only the push is absent"
+    );
+}
+
 #[tokio::test]
 async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
     let online_store = StoreId::new(Ulid::from_u128(0x00F1_EE7A));

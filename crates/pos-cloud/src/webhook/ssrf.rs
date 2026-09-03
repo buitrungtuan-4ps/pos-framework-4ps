@@ -154,6 +154,28 @@ impl fmt::Display for ForbiddenReason {
     }
 }
 
+/// Vets `url` with the real resolver, on the blocking pool.
+///
+/// [`vet`] is sync because it is pure given a resolver, and the real resolver blocks — so every
+/// caller in an async context has to hand it to `spawn_blocking`. One wrapper rather than each
+/// caller remembering: the webhook dispatcher re-vets a stored URL before every delivery (a DNS
+/// record can be repointed at a private address after registration), and the alert channel vets its
+/// configured destination once at boot.
+///
+/// # Errors
+///
+/// A human-readable reason, whether the URL was refused or the vetting task failed to join.
+pub async fn vet_blocking(url: &str) -> Result<VettedUrl, String> {
+    let raw = url.to_owned();
+    match tokio::task::spawn_blocking(move || vet(&raw, resolve_host)).await {
+        Ok(Ok(vetted)) => Ok(vetted),
+        Ok(Err(rejection)) => Err(rejection.to_string()),
+        Err(join_error) => Err(format!(
+            "the SSRF vetting task failed to join: {join_error}"
+        )),
+    }
+}
+
 /// Vets a webhook destination, resolving its host with `resolve`.
 ///
 /// # Errors
