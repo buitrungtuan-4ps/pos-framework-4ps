@@ -106,8 +106,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   `DataTable` gains optional server-paging props and, when given them, stops sorting and slicing
   locally — handed 25 of 812 rows it currently renders "1–25 of 25", which is worse than no pager at
-  all. Delivery is three slices: the vocabulary plus `vouchers` proven end to end, then the remaining
-  five lists, then `q`/`sort`/`order`.
+  all.
+
+  One correction to this work's own earlier record rides along. An earlier pass called F2 item **B1**
+  (composite `(tenant_id, created_at)` indexes) a non-task because 37 of 51 tables already carry a
+  tenant-scoped index. That measured the wrong property — tenant scoping is not sort coverage — and on
+  the six lists this pages, four have an index that finds their rows but cannot serve their `ORDER BY`
+  (`vouchers` is `(tenant_id, campaign_id)` but orders by `created_at DESC, voucher_id DESC`;
+  `catalog_items`, `employees` and `devices` order by `created_at DESC` off a bare tenant index). Left
+  alone, `LIMIT` would shrink the response while the database still sorted all 30 000 rows on every
+  page. So B1 is real, narrower than the plan had it, and a prerequisite rather than a separate item:
+  each paging slice carries the additive index its own query needs.
+
+  Delivery is three slices: the vocabulary plus `vouchers` proven end to end, then the remaining five
+  lists, then `q`/`sort`/`order`.
 
 - **ADR-0097 gives the `/internal` routes a key of their own** (#148). Documentation only; no
   behaviour changes yet.

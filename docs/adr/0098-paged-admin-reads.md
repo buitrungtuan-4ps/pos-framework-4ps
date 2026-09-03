@@ -46,6 +46,14 @@ The measurement, taken across `crates/pos-cloud/src/http.rs`, the twenty-five cl
   despite being history reads.
 - **`DataTable` paginates client-side today.** Its `perPage` prop slices `sorted()`, and `total` is
   `sorted().length`. F2's plan called these "reserved server-paging props"; they do not exist.
+- **Four of the six lists that need paging have an index that finds their rows but cannot serve their
+  `ORDER BY`.** `vouchers` is indexed `(tenant_id, campaign_id)` and ordered
+  `created_at DESC, voucher_id DESC`; `catalog_items`, `employees` and `devices` are indexed
+  `(tenant_id)`, `(tenant_id)` and `(tenant_id, store_id)` and all ordered `created_at DESC`. Only
+  `audit_log` `(tenant_id, at DESC)` and `media_assets` `(tenant_id, created_at DESC)` already carry
+  the sort. Without the sort in the index, `LIMIT`/`OFFSET` shrinks the *response* while the database
+  still sorts every matching row on every page — for a 30 000-code campaign, on every keystroke of a
+  pager.
 
 **The finding that decides this ADR.** If `?limit=` gets a default — any default — then five item
 pickers, four store pickers and the menu compiler silently start seeing a truncated set. Nothing
@@ -62,6 +70,16 @@ authoring-bounded lists that will never need it, and — the part that matters �
 between the menu compiler and the items it compiles. The criterion in decision 3 replaces "every".
 The audit line that produced it was still right about the state of the world: there was, and outside
 those five windowed reads still is, no paging anywhere.
+
+**A correction to this work's own earlier record on B1.** An earlier scoping pass for F2 Part B item
+**B1** (`(tenant_id, created_at)` composite indexes on the admin tables) recorded it as a *non-task*,
+on the grounds that 37 of 51 tables already carry a tenant-scoped index. That measured the wrong
+property: tenant **scoping** is not sort **coverage**, and a paged read needs both. On the six lists
+this ADR actually pages, four lack the second — so B1 is not a non-task. It is narrower than the plan
+had it (six lists, not every table) and it is a **prerequisite of paging, not a separate item**: each
+paging slice carries the additive index its own `ORDER BY` needs, in the same PR as the SQL that
+depends on it, because an index landing a slice later means shipping a page that reads like paging and
+costs like a full sort.
 
 **Decision.**
 
@@ -159,7 +177,10 @@ of 25", which is worse than no pager.
 **Consequences.**
 
 - Six lists gain a second seam method, a second SQL statement, a fake implementation and a paged
-  route form. Thirty-three keep exactly what they have.
+  route form; four of them also gain an additive index so the page is cheap and not merely small.
+  Thirty-three keep exactly what they have.
+- **Migrations:** four additive `CREATE INDEX IF NOT EXISTS`, one per slice that needs it, forward-only
+  and idempotent per ADR-0017. This ADR itself carries none.
 - Two response shapes exist per paged route. That is the cost of decision 1 and it is deliberate: the
   alternative was one shape and a truncated menu compile.
 - `docs/openapi.json` must describe both forms for the paged routes. It currently describes two paths
@@ -182,8 +203,12 @@ of 25", which is worse than no pager.
 **Delivery.** Three slices, in this order:
 
 1. **B3-1** — the vocabulary (`PageRequest`, `Page<T>`, the parse-and-refuse helper, the caps, the
-   sort whitelist type), plus `vouchers` end-to-end: seam method, store-postgres SQL with
-   `COUNT(*) OVER()`, fake, route, typed client, `DataTable` server props, and `Campaigns.tsx`
-   actually passing a limit. One acute case proven all the way through before the mechanical cohort.
-2. **B3-2** — `media`, `audit`, `items`, `employees`, `devices` on the vocabulary B3-1 fixed.
+   sort whitelist type), plus `vouchers` end-to-end: an additive migration extending
+   `vouchers_by_campaign` to carry `created_at DESC, voucher_id DESC`, the seam method, store-postgres
+   SQL with `COUNT(*) OVER()`, fake, route, typed client, `DataTable` server props, and
+   `Campaigns.tsx` actually passing a limit. One acute case proven all the way through before the
+   mechanical cohort.
+2. **B3-2** — `media`, `audit`, `items`, `employees`, `devices` on the vocabulary B3-1 fixed, each
+   with the additive index its `ORDER BY` needs where it does not already have one (`catalog_items`,
+   `employees` and `devices` do not; `audit_log` and `media_assets` do).
 3. **B3-3** — `q`/`sort`/`order` across the paged cohort, each route declaring its own fields.
