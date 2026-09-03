@@ -17,6 +17,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The audit trail can be read from either end** (ADR-0098 slice B3-3). The paged form of
+  `GET /admin/audit` takes `?order=newest|oldest`; absent, it is `newest`, which is what the read has
+  always returned. `oldest` is what an incident reads like — a `since_ms`/`until_ms` window in the
+  order the actions actually happened, rather than backwards from the end of it.
+
+  The order is named for the trail rather than spelled `asc`/`desc` like the item read. There the
+  direction is relative to a named `?sort=` field; this route has none, so `asc` would have to mean
+  "ascending in time" — one word doing a different job on two routes, which is worse than two
+  spellings. A token that names neither order is refused with the two that do.
+
+  Only the *paged* read takes it. On the windowed read `?limit=` already means "the most recent this
+  many", so `?order=oldest&limit=200` has two honest readings — the newest two hundred shown
+  earliest-first, or the earliest two hundred — and they are different sets. The route refuses the
+  parameter there rather than picking one silently.
+
+  The Audit screen's "when" header is now a control that re-reads the trail; its other three columns
+  are no longer sortable. Each of those already has an *exact filter* above the table, which answers
+  "what did this admin do" better than ordering a million-row trail by a low-cardinality column, and
+  until now their headers sorted the twenty-five rows on screen as if they were the whole trail.
+
+  No `?sort=` on this route, and no `?q=`: free-text across a trail of millions cannot use a btree,
+  so it is a trigram-index decision — a new dependency, and an ADR of its own. Deliberately not made
+  here.
+
+  **Upgrade note** No migration. `audit_log_by_tenant_newest` (migration 0042) is
+  `(tenant_id, at DESC, id DESC)`, and the oldest-first order is that index read backwards — verified
+  against real PostgreSQL, which serves it with no sort step above the scan.
+
 - **The item master's page can be searched and ordered by the server** (#159, ADR-0098 slice B3-3).
   `GET /admin/catalog/items` takes `?q=`, `?sort=` and `?order=` alongside its page bounds. `q` is a
   case-insensitive substring of the item's name *or any of its per-locale names* — ADR-0074 exists

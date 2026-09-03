@@ -849,6 +849,20 @@ export interface ItemListFilter {
   readonly order?: "asc" | "desc";
 }
 
+/**
+ * Which end of the trail a page of `GET /admin/audit` starts from. The server refuses anything else
+ * by name.
+ *
+ * Named for the trail, not `asc`/`desc` like the item read: there the direction is relative to a
+ * named `sort` field, and this route has none — so "ascending" would mean something different on
+ * each route while spelling the same. `newest` is what the read has always returned and the default
+ * here too, so a caller that does not ask keeps what it had.
+ *
+ * Only the *paged* read takes it. On the windowed read `limit` already means "the most recent this
+ * many", so an order there would have two readings; the server refuses it rather than guessing.
+ */
+export type TrailOrder = "newest" | "oldest";
+
 export interface AuditFilter {
   readonly tenantId?: string;
   readonly entityType?: string;

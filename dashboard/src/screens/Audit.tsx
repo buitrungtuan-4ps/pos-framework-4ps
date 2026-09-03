@@ -7,7 +7,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { AuditEntry } from "../api/types";
+import type { AuditEntry, TrailOrder } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -59,6 +59,9 @@ export function Audit() {
   const [entityType, setEntityType] = createSignal("");
   const [action, setAction] = createSignal("");
   const [actor, setActor] = createSignal("");
+  // Which end of the trail the pager walks from. The server orders the whole matching set, so this
+  // is a re-read rather than a re-sort of the page (ADR-0098 B3-3).
+  const [order, setOrder] = createSignal<TrailOrder>("newest");
 
   const load = async (from = offset()) => {
     setError("");
@@ -71,6 +74,7 @@ export function Audit() {
           actorAdminId: actor().trim() || undefined,
         },
         { limit: PAGE_SIZE, offset: from },
+        order(),
       );
       // A page that came back empty from somewhere other than the start means the matching set
       // shrank under the pager — usually a filter that just narrowed. Step back rather than showing
@@ -93,11 +97,28 @@ export function Audit() {
 
   onMount(() => void load(0));
 
+  /**
+   * Re-reads the trail from the other end, starting at its first page.
+   *
+   * The table hands back the *column's* direction, and the column is the instant an action
+   * happened, so an ascending caret means earliest-first. The route's two orders are named for the
+   * trail rather than for a column, which is why this maps instead of passing the flag through.
+   *
+   * A page-four offset means nothing in the reversed order — it would name the fourth page from the
+   * other end — so this returns to the start.
+   */
+  const applyOrder = (_field: string, columnDescends: boolean) => {
+    setOrder(columnDescends ? "newest" : "oldest");
+    void load(0);
+  };
+
   const columns = (): Column<AuditEntry>[] => [
     {
       key: "when",
       header: t("audit.when"),
-      sortValue: (row) => row.at_ms,
+      // The one server-sortable column, and the only one worth sorting: `at` is what an audit trail
+      // is ordered by, and the server reverses the whole matching set rather than this page.
+      sortField: "at",
       cell: (row) => (
         <span class="text-sm text-ink-muted" title={absolute(row.at_ms)}>
           {formatRelativeAge(ageSeconds(row.at_ms))}
@@ -107,7 +128,11 @@ export function Audit() {
     {
       key: "actor",
       header: t("audit.actor"),
-      sortValue: (row) => row.actor_email,
+      // No sort, here or on the next two columns. Each already has an *exact filter* above, which
+      // answers "what did this admin do" better than ordering a million-row trail by a
+      // low-cardinality column ever would — and a `sortValue` would sort this page as if it were
+      // the trail, the lie the DataTable doc disclaims. Ordering by them is `?sort=` if it is ever
+      // asked for; it was deliberately not decided here (ADR-0098 B3-3).
       cell: (row) => (
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-ink">{row.actor_email}</span>
@@ -118,13 +143,11 @@ export function Audit() {
     {
       key: "action",
       header: t("audit.action"),
-      sortValue: (row) => row.action,
       cell: (row) => <span class="font-medium text-ink">{row.action}</span>,
     },
     {
       key: "entity",
       header: t("audit.entity"),
-      sortValue: (row) => row.entity_type,
       cell: (row) => <span class="text-sm text-ink">{row.entity_type}</span>,
     },
   ];
@@ -182,13 +205,18 @@ export function Audit() {
             // No `searchText`: a client-side box would filter this page rather than the log, which
             // is the lie the DataTable doc warns about. The three fields above already search the
             // whole trail on the server — and did so even before this, unlike the box, which only
-            // ever saw the newest 200 entries. Free-text across fields is ADR-0098's `?q=` (B3-3).
+            // ever saw the newest 200 entries. Free-text across fields would be ADR-0098's `?q=`,
+            // which on a trail of millions is a trigram-index decision and was not made in B3-3.
+            //
+            // `onSort` is what puts this table in server-sort mode, and until it was passed the
+            // headers re-sorted the page — twenty-five rows arranged as if they were the trail.
             <DataTable
               columns={columns()}
               rows={loaded()}
               pageSize={PAGE_SIZE}
               serverTotal={total()}
               onPage={(next) => void load(next)}
+              onSort={applyOrder}
               empty={<EmptyState title={t("audit.empty")} description={t("audit.emptyHint")} />}
               actionsHeader={t("common.actions")}
               actions={(row) => (

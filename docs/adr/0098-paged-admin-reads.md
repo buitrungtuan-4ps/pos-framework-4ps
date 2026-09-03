@@ -303,6 +303,43 @@ by inheritance from the query that was already there, not by design.
      substring predicate can use a btree, so it would be a full scan per page. That is a trigram-index
      decision (a new dependency, so its own ADR) and it is deliberately not made here. `sort` on
      `audit_log`'s own columns is cheap and is the remaining piece of this slice.
+
+     **Correction, on building it: `audit` wanted `order`, not `sort`.** This is the fifth time this
+     ADR's prose ran ahead of what the screen actually needs, and the reasoning that produced the
+     line above is the same each time — it counted what was *cheap to index* instead of what an
+     operator asks. The Audit screen has four sortable headers: the instant, the acting admin, the
+     action, and the entity type. The last three each already have an **exact filter** directly above
+     the table. "Show me this admin's changes" is the filter's question, and the filter answers it
+     over the whole trail; ordering a million-row trail by a low-cardinality column answers nothing
+     the filter does not answer better, and would need an index per column to do it. So no `?sort=`
+     shipped, and those three headers stopped being controls — until this slice they sorted the
+     twenty-five rows on screen as if they were the trail.
+
+     What the instant column needed was not a sort field but a *direction*: `?order=newest|oldest`.
+     An incident reads oldest-first — a `since_ms`/`until_ms` window in the order the actions
+     happened — and that is the one ordering question this screen has.
+
+     Three consequences worth recording:
+
+     - **No migration.** `audit_log_by_tenant_newest` (0042) is `(tenant_id, at DESC, id DESC)` and
+       the oldest-first order is that index read backwards. Verified against real PostgreSQL: the
+       plan for `ORDER BY at ASC, id ASC` names that index and carries no sort step. Decision 9's
+       requirement (a total order, ending in the primary key) is what makes the reversal exact — an
+       `at ASC, id DESC` would still be total, would still look right on one page, and would no
+       longer be that index; the plan guard catches it with `Sort Key: at, id DESC`.
+     - **The tokens are `newest`/`oldest`, not `asc`/`desc`.** On `/admin/catalog/items` the
+       direction is relative to a named `?sort=` field, so `asc` means "the sort's natural
+       direction" — for `sort=newest` that is `created_at DESC`. This route has no `sort`, so `asc`
+       here would have to mean "ascending in time": one parameter name meaning two different things
+       across two routes. Two spellings with a closed-set refusal on each is the smaller cost.
+     - **The order lives on the paged read only.** On the windowed read `?limit=` already means "the
+       most recent this many", so `?order=oldest&limit=200` reads either as the newest two hundred
+       shown earliest-first or as the earliest two hundred — different sets, both honest. The route
+       refuses the parameter there rather than choosing. `LIMIT`/`OFFSET` over an ordered set has no
+       such ambiguity, which is why the paged form can carry it: order first, window second, always.
+
+     This is the same shape as the `offset`-not-`limit` correction recorded above, and it has the
+     same cause: a `limit` that already meant something on this route before paging existed.
    - **`vouchers` wants neither** — no console screen renders a table of codes at all; the read
      serves a count and an operator printing a flyer run.
 
