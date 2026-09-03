@@ -133,11 +133,16 @@ impl EventStoreHarness for StoreHarness {
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
                  WHERE datname = current_database() AND pid <> pg_backend_pid() \
                    AND state IN ('idle in transaction', 'idle in transaction (aborted)'); \
-                 TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-                 admin_invites, admin_recovery_codes, admin_users, config_trees, store_liveness, \
-                 task_health, audit_log, alerts, catalog_tax_rates, media_assets, stores, \
-                 order_queue, subjects, webhook_endpoints, device_proposals, activation_codes, \
-                 device_credentials RESTART IDENTITY;",
+                 TRUNCATE activation_codes, admin_invites, admin_recovery_codes, admin_sessions, admin_users, alerts, \
+                 api_keys, audit_log, brands, campaigns, catalog_display_categories, \
+                 catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
+                 catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
+                 catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
+                 catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
+                 employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
+                 inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
+                 role_templates, rollups, scheduled_publishes, station_routing_rules, store_liveness, stores, \
+                 subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -178,10 +183,16 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
     let admin = admin().await?;
     admin
         .batch_execute(
-            "TRUNCATE events, event_outbox, rollups, api_keys, super_admin, admin_sessions, \
-             config_trees, store_liveness, task_health, audit_log, alerts, catalog_tax_rates, \
-             media_assets, stores, order_queue, subjects, webhook_endpoints, device_proposals, \
-             activation_codes, device_credentials RESTART IDENTITY",
+            "TRUNCATE activation_codes, admin_invites, admin_recovery_codes, admin_sessions, admin_users, alerts, \
+             api_keys, audit_log, brands, campaigns, catalog_display_categories, \
+             catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
+             catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
+             catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
+             catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
+             employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
+             inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
+             role_templates, rollups, scheduled_publishes, station_routing_rules, store_liveness, stores, \
+             subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -3916,6 +3927,26 @@ mod conditional_writes {
             assert_eq!(row.name, "Pizza oven");
             assert_eq!(row.backup_station_id.as_deref(), Some(station));
             assert_eq!(row.version, moved);
+
+            // The other half of the same probe, and the half that had no assertion: when the UPDATE
+            // matches nothing, the probe decides whether the caller sent a stale version (412) or
+            // named a station that does not exist (404). Only the stale branch was covered, so the
+            // probe could — and did — query a table that was not there while still looking correct.
+            assert_eq!(
+                floor
+                    .set_station(
+                        tenant,
+                        "00000000000000NOSUCHSTATIO",
+                        "Ghost",
+                        None,
+                        false,
+                        "active",
+                        &moved,
+                    )
+                    .await
+                    .expect("the probe must not raise"),
+                RowUpdate::NotFound
+            );
         });
     }
 

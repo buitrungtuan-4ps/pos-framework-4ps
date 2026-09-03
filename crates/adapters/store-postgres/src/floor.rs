@@ -544,7 +544,7 @@ impl PostgresFloor {
         }
         let present = connection
             .query_opt(
-                "SELECT 1 FROM floor_stations WHERE tenant_id = $1 AND id = $2",
+                "SELECT 1 FROM kitchen_stations WHERE tenant_id = $1 AND id = $2",
                 &[&tenant_id, &id],
             )
             .await

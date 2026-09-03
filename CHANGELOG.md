@@ -188,6 +188,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   controller-native rule before running the lane in production. Whether these routes should *also*
   carry an application-layer secret remains open.
 
+### Fixed
+- **A stale-version station update answered `503` instead of `412`, and `main`'s integration job
+  has been red for twelve consecutive runs** (#152). Two defects, one of them user-facing, both from
+  Q3c and both invisible to the pull-request gate.
+
+  The last green `main` was #139. The next merge, #140, is the one that introduced the bad query
+  below, and `main` has failed on every push since — twelve runs, eleven merges shipped on top of a
+  red base without it being visible to anyone reading a pull request.
+
+  `store-postgres`'s `set_station` updates `kitchen_stations`, but the follow-up probe that decides
+  *why* the update matched nothing — a stale version, or no such station — queried **`floor_stations`,
+  a table that does not exist**. So the conflict path raised a database error: every stale-version
+  station update answered `503 the cloud database failed` rather than the `412` the whole slice was
+  built to return, and a caller was told the server had broken when their own request was simply out
+  of date. Shipped in #140.
+
+  Separately, #143 added `catalog_tax_rate_versions` beside `catalog_tax_rates` but not to the test
+  suite's `TRUNCATE` lists, so a version row survived into the next case and a tenant that had never
+  saved rates reported one.
+
+  **Why the pull-request gate could not see either.** These tests live behind `store-postgres`'s
+  `integration` feature and run only in the post-merge `main` workflow, against a real PostgreSQL.
+  The gate neither compiles nor runs them, by design — so both defects merged green and `main` went
+  red and stayed red, with nothing in front of a reviewer to say so.
+
+  The `TRUNCATE` lists are now the **complete** table set rather than a hand-maintained subset. That
+  is the durable half: the suite passed only against a freshly created database, and a second
+  consecutive run failed nine cases, which is precisely the leakage that hid the tax-rate defect. It
+  now runs twice in a row green, so a new table is caught by the suite rather than by whoever reads
+  the `main` badge next.
+
+  A `RowUpdate::NotFound` assertion is added for `set_station`, the branch of that probe that had
+  none anywhere — which is how a probe against a non-existent table went on looking correct.
+
 ### Changed
 - **The last thirteen plain-text `400`s join the envelope, and two refusals that knew which field
   was wrong stop throwing it away** (#151). The second half of the migration ADR-0096 deferred; with
