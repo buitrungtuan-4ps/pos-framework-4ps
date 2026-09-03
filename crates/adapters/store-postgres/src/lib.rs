@@ -58,7 +58,7 @@ pub use campaigns::{CampaignRow, PostgresCampaigns};
 pub use catalog::{
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    PostgresCatalog,
+    ItemOrder, PostgresCatalog,
 };
 pub use config_trees::PostgresConfigTrees;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};

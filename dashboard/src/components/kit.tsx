@@ -75,7 +75,15 @@ export function Pager(props: {
 
 // --- DataTable ----------------------------------------------------------------------------------
 
-/** One column of a {@link DataTable}. `sortValue` (when present) makes the header a sort toggle. */
+/**
+ * One column of a {@link DataTable}.
+ *
+ * A column is sortable in whichever mode the table is in, and the two are declared separately
+ * because they are different capabilities: `sortValue` reads the value out of a row *here*, while
+ * `sortField` names a field the *server* knows how to order by. A column can have one, both or
+ * neither — and a column whose value is resolved from another table (a tax class's name, say) can
+ * only ever have `sortValue`, which is why the distinction is a prop and not an inference.
+ */
 export type Column<T> = {
   /** Stable key, also the sort identity. */
   key: string;
@@ -83,8 +91,16 @@ export type Column<T> = {
   header: string;
   /** Renders the cell for a row. */
   cell: (row: T) => JSX.Element;
-  /** When present, the column is sortable client-side on this value. */
+  /** When present, the column is sortable client-side on this value. Ignored in server mode. */
   sortValue?: (row: T) => string | number;
+  /**
+   * The server's own name for this column's sort field, when it has one.
+   *
+   * Server mode sorts by handing this token back through `onSort`; the route validates it against
+   * its own closed set of sortable fields. A column without one is not sortable in server mode, even
+   * if it has a `sortValue` — because sorting the page would order 25 rows as if they were the set.
+   */
+  sortField?: string;
   /** Extra classes for the header and cells (e.g. `font-mono`). */
   class?: string;
 };
@@ -104,6 +120,11 @@ export type Column<T> = {
  * about the set ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)). Handed 25 of 812 rows in
  * client mode this component would render "1–25 of 25", which is worse than showing no pager at all
  * — so the two modes are distinguished by a prop rather than inferred.
+ *
+ * In server mode a header sorts only if the column names a `sortField` *and* `onSort` is given; the
+ * click then asks the caller to re-read the set in that order. Without both, headers are inert
+ * rather than quietly sorting the page — a bug this component shipped with, since its own docstring
+ * promised no local re-sort while `visible()` returned the sorted rows regardless of mode.
  *
  * Its own generic controls — the search box and pager — read their labels from `t()` (every caller
  * would pass the identical strings); the columns' headers and cells are still supplied by the caller.
@@ -131,6 +152,13 @@ export function DataTable<T>(props: {
   serverTotal?: number;
   /** Asks the caller to load the page starting at `offset`. Server mode only. */
   onPage?: (offset: number) => void;
+  /**
+   * Asks the caller to re-read the set ordered by `field`, which is a column's `sortField`.
+   *
+   * Its presence is what makes headers sort in server mode. The caller is expected to reset to the
+   * first page: a page-four offset means nothing once the order changes.
+   */
+  onSort?: (field: string, descending: boolean) => void;
 }) {
   const [sortKey, setSortKey] = createSignal<string | null>(null);
   const [ascending, setAscending] = createSignal(true);
@@ -149,7 +177,9 @@ export function DataTable<T>(props: {
   const sorted = createMemo(() => {
     const key = sortKey();
     const base = filtered();
-    if (key === null) {
+    // The server already ordered the set this page came out of. Re-sorting here would reorder the
+    // window as if it were the whole thing — the lie this component's docstring disclaims.
+    if (serverSorted() || key === null) {
       return base;
     }
     const value = props.columns.find((column) => column.key === key)?.sortValue;
@@ -198,15 +228,34 @@ export function DataTable<T>(props: {
     }
   };
 
+  /**
+   * Whether a header click is answered by the server rather than by re-sorting `rows` here.
+   *
+   * Keyed on `onSort` alone: a caller that paged server-side but has no server sort to offer gets
+   * inert headers, which is the honest rendering of "this table cannot sort the set".
+   */
+  const serverSorted = () => props.onSort !== undefined;
+
+  /** Whether this column's header is a control at all, in the mode the table is in. */
+  const sortable = (column: Column<T>) =>
+    serverSorted() ? column.sortField !== undefined : column.sortValue !== undefined;
+
   const toggleSort = (column: Column<T>) => {
-    if (!column.sortValue) {
+    if (!sortable(column)) {
       return;
     }
-    if (sortKey() === column.key) {
+    const flip = sortKey() === column.key;
+    const descending = flip ? ascending() : false;
+    if (flip) {
       setAscending((value) => !value);
     } else {
       setSortKey(column.key);
       setAscending(true);
+    }
+    // The local signals drive the caret only; in server mode the order itself comes back with the
+    // rows. `column.sortField` is defined here because `sortable` gates on it in this mode.
+    if (serverSorted() && column.sortField !== undefined) {
+      props.onSort?.(column.sortField, descending);
     }
   };
 
@@ -237,7 +286,7 @@ export function DataTable<T>(props: {
                   <For each={props.columns}>
                     {(column) => (
                       <th class={`py-2 pr-4 font-medium ${column.class ?? ""}`}>
-                        <Show when={column.sortValue} fallback={<span>{column.header}</span>}>
+                        <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                           <button
                             type="button"
                             class="inline-flex items-center gap-1 font-medium hover:text-ink"

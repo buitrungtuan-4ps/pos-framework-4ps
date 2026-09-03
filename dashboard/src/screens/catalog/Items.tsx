@@ -9,7 +9,13 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type { CatalogItem, ItemCategory, ItemSubcategory, TaxClass } from "../../api/types";
+import type {
+  CatalogItem,
+  ItemCategory,
+  ItemSort,
+  ItemSubcategory,
+  TaxClass,
+} from "../../api/types";
 import { LOCALES, localeName, t } from "../../i18n";
 import { onScopedContext } from "../../lib/scoped";
 import { actingAdmin, tenantId } from "../../state/session";
@@ -19,8 +25,24 @@ import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
 import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
 
+/**
+ * How many items one page of the table carries.
+ *
+ * The read is paged server-side (ADR-0098), so the search box and the sortable headers ask the
+ * server rather than filtering the page: an item master runs to thousands for a chain, and a box
+ * that searched only the visible twelve would fail to find most of them.
+ */
+const PAGE_SIZE = 25;
+
 export function CatalogItems() {
-  const [items, setItems] = createSignal<CatalogItem[] | null>(null);
+  const [items, setItems] = createSignal<readonly CatalogItem[] | null>(null);
+  const [total, setTotal] = createSignal(0);
+  const [offset, setOffset] = createSignal(0);
+  // The applied search, and the text being typed. They differ so a keystroke does not fire a read.
+  const [search, setSearch] = createSignal("");
+  const [searchDraft, setSearchDraft] = createSignal("");
+  const [sort, setSort] = createSignal<ItemSort>("newest");
+  const [descending, setDescending] = createSignal(false);
   const [taxClasses, setTaxClasses] = createSignal<TaxClass[]>([]);
   const [categories, setCategories] = createSignal<ItemCategory[]>([]);
   const [subcategories, setSubcategories] = createSignal<ItemSubcategory[]>([]);
@@ -56,17 +78,36 @@ export function CatalogItems() {
   const activeSubcategories = () =>
     subcategories().filter((row) => row.status === "active" && row.item_category_id === newCategory());
 
-  const load = async () => {
+  const load = async (from = offset()) => {
     setError("");
     setBusy(true);
     try {
-      const [loadedItems, loadedTaxClasses, loadedCategories, loadedSubcategories] = await Promise.all([
-        api.listItems(tenantId()),
+      // The three taxonomy reads stay unpaged: they fill the create/edit drawer's selects and
+      // resolve an id to a label in the table, so each needs its whole (small) set.
+      const [page, loadedTaxClasses, loadedCategories, loadedSubcategories] = await Promise.all([
+        api.listItemsPage(
+          tenantId(),
+          { limit: PAGE_SIZE, offset: from },
+          {
+            q: search().trim() || undefined,
+            sort: sort(),
+            order: descending() ? "desc" : "asc",
+          },
+        ),
         api.listTaxClasses(tenantId()),
         api.listItemCategories(tenantId()),
         api.listItemSubcategories(tenantId()),
       ]);
-      setItems(loadedItems);
+      // A page empty from somewhere other than the start means the matching set shrank under the
+      // pager — a narrowed search, or an item just archived off the last page. Step back rather than
+      // showing an empty table over a non-zero count.
+      if (page.items.length === 0 && from > 0) {
+        await load(Math.max(0, from - PAGE_SIZE));
+        return;
+      }
+      setItems(page.items);
+      setTotal(page.total);
+      setOffset(page.offset);
       setTaxClasses(loadedTaxClasses);
       setCategories(loadedCategories);
       setSubcategories(loadedSubcategories);
@@ -77,8 +118,26 @@ export function CatalogItems() {
     }
   };
 
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+  /** Applies the typed search and returns to the first page — a page-four offset means nothing now. */
+  const applySearch = () => {
+    setSearch(searchDraft());
+    void load(0);
+  };
+
+  /** Re-reads the set in a new order, from its first page. */
+  const applySort = (field: string, wantsDescending: boolean) => {
+    setSort(field as ItemSort);
+    setDescending(wantsDescending);
+    void load(0);
+  };
+
+  // Load on open and whenever the tenant changes — never with an empty context (F0). A tenant switch
+  // starts at the first page and drops the search: neither means anything in another tenant.
+  onScopedContext("tenant", () => {
+    setSearch("");
+    setSearchDraft("");
+    void load(0);
+  });
 
   const openCreate = () => {
     setNewName("");
@@ -202,7 +261,7 @@ export function CatalogItems() {
     {
       key: "name",
       header: t("catalog.name"),
-      sortValue: (row) => row.name,
+      sortField: "name",
       cell: (row) => (
         <div class="flex flex-col gap-1">
           <span>{row.name}</span>
@@ -228,19 +287,21 @@ export function CatalogItems() {
     {
       key: "taxClass",
       header: t("catalog.taxClass"),
-      sortValue: (row) => taxClassName(row.tax_class_id),
+      // No sort: the value shown is a tax class's *name*, resolved from another table. The server
+      // orders `catalog_items`, and sorting the page by a label would order twenty-five rows as if
+      // they were the master. Sorting by a joined label is a bigger question than this slice.
       cell: (row) => taxClassName(row.tax_class_id),
     },
     {
       key: "category",
       header: t("catalog.category"),
-      sortValue: (row) => categoryName(row.item_category_id),
+      // Not sortable, for the reason the tax class column gives.
       cell: (row) => categoryName(row.item_category_id),
     },
     {
       key: "status",
       header: t("catalog.status"),
-      sortValue: (row) => row.status,
+      sortField: "status",
       cell: (row) => <StatusCell status={row.status} />,
     },
   ];
@@ -267,6 +328,39 @@ export function CatalogItems() {
           </div>
         }
       >
+        {/*
+          The search box is the screen's own, not the DataTable's: the table's box filters the rows
+          it was handed, and the rows it is handed are one page. This one asks the server, so it
+          searches the whole master — including each item's per-locale names (ADR-0074), which is
+          what an operator typing Vietnamese needs.
+        */}
+        <div class="mb-4 flex flex-wrap items-end gap-2">
+          <div class="min-w-56 flex-1">
+            <TextField
+              label={t("catalog.searchItems")}
+              value={searchDraft()}
+              onInput={setSearchDraft}
+              placeholder={t("catalog.searchItemsHint")}
+            />
+          </div>
+          <Button variant="secondary" disabled={busy()} onClick={applySearch}>
+            {t("action.search")}
+          </Button>
+          <Show when={search()}>
+            <Button
+              variant="secondary"
+              disabled={busy()}
+              onClick={() => {
+                setSearchDraft("");
+                setSearch("");
+                void load(0);
+              }}
+            >
+              {t("action.clear")}
+            </Button>
+          </Show>
+        </div>
+
         <Show
           when={items()}
           fallback={<p class="text-sm text-ink-muted">{t("catalog.loadHint")}</p>}
@@ -275,8 +369,10 @@ export function CatalogItems() {
             <DataTable
               columns={columns()}
               rows={loaded()}
-              searchText={(row) => `${row.name} ${taxClassName(row.tax_class_id)}`}
-              pageSize={12}
+              pageSize={PAGE_SIZE}
+              serverTotal={total()}
+              onPage={(next) => void load(next)}
+              onSort={applySort}
               empty={<EmptyState title={t("catalog.itemsEmpty")} />}
               actionsHeader={t("common.actions")}
               actions={(row) => (

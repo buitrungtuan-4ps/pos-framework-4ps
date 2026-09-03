@@ -49,6 +49,7 @@ import type {
   IngredientInput,
   InviteAdminResponse,
   ItemCategory,
+  ItemListFilter,
   ItemSubcategory,
   Json,
   LayoutButton,
@@ -1350,6 +1351,18 @@ export const api = {
         status: fields.status,
       },
     ),
+  // One page of the item master, searched and ordered by the server (ADR-0098 B3-3). The table is
+  // the only consumer that wants a window; `listItems` below stays for the pickers and the compiler.
+  listItemsPage: (tenantId: string, page: PageRequest, filter: ItemListFilter = {}) => {
+    const params = new URLSearchParams(tenantPageQuery(tenantId, page));
+    if (filter.q) params.set("q", filter.q);
+    if (filter.sort) params.set("sort", filter.sort);
+    if (filter.order) params.set("order", filter.order);
+    return requestJson<Page<CatalogItem>>(
+      "GET",
+      `/admin/catalog/items?${params.toString()}`,
+    );
+  },
   listItems: (tenantId: string) =>
     requestJson<CatalogItem[]>("GET", `/admin/catalog/items?${tenantQuery(tenantId)}`),
   createItem: (

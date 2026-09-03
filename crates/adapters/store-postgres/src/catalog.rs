@@ -209,11 +209,59 @@ pub struct PostgresCatalog {
 const CATALOG_ITEM_COLUMNS: &str = "menu_item_id, tenant_id, name, name_translations::text, \
      tax_class_id, item_category_id, item_subcategory_id, image_ref, status, xmin::text";
 
-/// The order both item reads impose — total, because `menu_item_id` is the primary key.
+/// A field the item master can be ordered by, as store-postgres knows it.
 ///
-/// One string rather than two copies: a page must be a window onto the *same* sequence the whole-set
-/// read returns, and an `ORDER BY` that drifted on one of them would make "page 2" mean nothing.
-const CATALOG_ITEM_ORDER: &str = "ORDER BY created_at DESC, menu_item_id DESC";
+/// Its own enum rather than a string from the caller: the `ORDER BY` fragments are the one place a
+/// SQL injection could live, so they are `&'static str` literals selected by an exhaustive match and
+/// nothing else. `pos-cloud`'s `ItemSort` maps onto this in one place, and
+/// `clippy::wildcard_enum_match_arm` is denied workspace-wide, so adding a variant here breaks that
+/// mapping at compile time instead of silently defaulting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ItemOrder {
+    /// By `created_at` — newest first when not reversed.
+    #[default]
+    Newest,
+    /// By `name`, alphabetically when not reversed.
+    Name,
+    /// By `status`.
+    Status,
+}
+
+/// The `ORDER BY` for one order and direction — always total, and always a literal.
+///
+/// The tiebreaker flips with the direction, so a reversed page really is the reverse of the forward
+/// one rather than a different total order that happens to share a first column.
+const fn catalog_item_order(order: ItemOrder, descending: bool) -> &'static str {
+    match (order, descending) {
+        (ItemOrder::Newest, false) => "ORDER BY created_at DESC, menu_item_id DESC",
+        (ItemOrder::Newest, true) => "ORDER BY created_at ASC, menu_item_id ASC",
+        (ItemOrder::Name, false) => "ORDER BY name ASC, menu_item_id ASC",
+        (ItemOrder::Name, true) => "ORDER BY name DESC, menu_item_id DESC",
+        (ItemOrder::Status, false) => "ORDER BY status ASC, menu_item_id ASC",
+        (ItemOrder::Status, true) => "ORDER BY status DESC, menu_item_id DESC",
+    }
+}
+
+/// The order the whole-set read imposes, and the paged read's default.
+///
+/// Derived from [`catalog_item_order`] rather than written twice: a page must be a window onto the
+/// *same* sequence the whole-set read returns, and an `ORDER BY` that drifted on one of them would
+/// make "page 2" mean nothing.
+const CATALOG_ITEM_ORDER: &str = catalog_item_order(ItemOrder::Newest, false);
+
+/// The search predicate the paged item read applies, as `$2`.
+///
+/// `position(lower(needle) in lower(haystack)) > 0` rather than `ILIKE '%' || needle || '%'`: a
+/// substring search is what the console's box means, and `ILIKE` would read `%` and `_` in what the
+/// operator typed as wildcards. Searching for "50%" should look for "50%", not for anything starting
+/// "50". No escaping rule, and nothing interpolated either way — the needle is a bound parameter.
+///
+/// The per-locale names are searched alongside the primary one (ADR-0074): an operator typing
+/// Vietnamese is the case those translations exist for, and matching only `name` would miss it.
+const CATALOG_ITEM_SEARCH: &str = "($2::text IS NULL \
+       OR position(lower($2) in lower(name)) > 0 \
+       OR EXISTS (SELECT 1 FROM jsonb_each_text(name_translations) AS translated \
+                  WHERE position(lower($2) in lower(translated.value)) > 0))";
 
 impl PostgresCatalog {
     pub(crate) fn new(pool: Pool) -> Self {
@@ -288,16 +336,18 @@ impl PostgresCatalog {
         Ok(rows.iter().map(catalog_item_row).collect())
     }
 
-    /// One page of a tenant's items, newest first, with how many the tenant has.
+    /// One page of the tenant's items matching `search`, in the order `order`/`descending` ask for,
+    /// with how many matched.
     ///
     /// `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one snapshot, so the count
-    /// cannot disagree with the page it labels.
+    /// cannot disagree with the page it labels — and it counts what the *search* matched, not the
+    /// tenant's whole master.
     ///
-    /// The `ORDER BY` is total — `created_at DESC, menu_item_id DESC` — because `created_at` alone
-    /// is not. It defaults to `now()`, which is transaction time, so items written by one CSV import
-    /// share one value exactly and a window over the tie could repeat or skip a row across pages
-    /// (ADR-0098 decision 9). `catalog_items_by_tenant_newest` (migration 0043) carries that whole
-    /// order, so the index walk *is* the sort and `LIMIT` stops the scan.
+    /// Every `ORDER BY` this can produce is total and is a literal — see [`catalog_item_order`] and
+    /// [`CATALOG_ITEM_SEARCH`]. The default order is covered by `catalog_items_by_tenant_newest`
+    /// (migration 0043) and the name order by `catalog_items_by_tenant_name` (0044), so both walk an
+    /// index rather than sorting the master. `status` has no index of its own: it is a two-value
+    /// column, so an index would not narrow anything a scan of one tenant's items does not.
     ///
     /// # Errors
     ///
@@ -305,17 +355,22 @@ impl PostgresCatalog {
     pub async fn fetch_items_page(
         &self,
         tenant_id: &str,
+        search: Option<&str>,
+        order: ItemOrder,
+        descending: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<CatalogItemRow>, i64), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let order_by = catalog_item_order(order, descending);
         let rows = connection
             .query(
                 &format!(
                     "SELECT {CATALOG_ITEM_COLUMNS}, count(*) OVER() FROM catalog_items \
-                     WHERE tenant_id = $1 {CATALOG_ITEM_ORDER} LIMIT $2 OFFSET $3"
+                     WHERE tenant_id = $1 AND {CATALOG_ITEM_SEARCH} \
+                     {order_by} LIMIT $3 OFFSET $4"
                 ),
-                &[&tenant_id, &limit, &offset],
+                &[&tenant_id, &search, &limit, &offset],
             )
             .await
             .map_err(unavailable)?;
@@ -1602,5 +1657,68 @@ fn catalog_item_row(row: &tokio_postgres::Row) -> CatalogItemRow {
         image_ref: row.get(7),
         status: row.get(8),
         version: row.get(9),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CATALOG_ITEM_ORDER, ItemOrder, catalog_item_order};
+
+    /// Every order this adapter can produce is *total*, because each ends in the primary key.
+    ///
+    /// This test exists because the `EXPLAIN` guards in the integration suite cannot see it. Those
+    /// assert the plan of a query *they* write, so they catch migration 0043 or 0044 being dropped —
+    /// but if the adapter's own `ORDER BY` lost its tiebreaker they would keep passing, and so would
+    /// the page-partition tests: with the index present, the index walk supplies the missing order
+    /// for free. Verified by mutation — removing `menu_item_id` from the name fragment passed every
+    /// other test in the tree and only this one caught it.
+    ///
+    /// Asserting the property rather than the six literals means a variant added later is covered
+    /// the day it is written.
+    #[test]
+    fn every_order_ends_in_the_primary_key_so_a_window_over_it_is_unambiguous() {
+        for order in [ItemOrder::Newest, ItemOrder::Name, ItemOrder::Status] {
+            for descending in [false, true] {
+                let fragment = catalog_item_order(order, descending);
+                assert!(
+                    fragment.ends_with("menu_item_id ASC")
+                        || fragment.ends_with("menu_item_id DESC"),
+                    "{order:?} descending={descending} must break ties on the primary key, \
+                     or LIMIT/OFFSET over it can repeat or skip a row; got {fragment:?}",
+                );
+            }
+        }
+    }
+
+    /// Reversing an order reverses its tiebreaker too, so a descending page is the exact reverse of
+    /// the ascending one rather than a different total order sharing a first column.
+    #[test]
+    fn reversing_an_order_reverses_every_column_of_it() {
+        for order in [ItemOrder::Newest, ItemOrder::Name, ItemOrder::Status] {
+            let forward = catalog_item_order(order, false);
+            let backward = catalog_item_order(order, true);
+            assert_eq!(
+                forward.matches("ASC").count() + forward.matches("DESC").count(),
+                backward.matches("ASC").count() + backward.matches("DESC").count(),
+                "{order:?} names the same number of columns in both directions",
+            );
+            assert_eq!(
+                forward.matches("ASC").count(),
+                backward.matches("DESC").count(),
+                "{order:?}: every column that ascends forward descends backward",
+            );
+        }
+    }
+
+    /// The whole-set read's order is the paged read's default, and they are one string.
+    ///
+    /// A page must be a window onto the same sequence the whole-set read returns. If these drifted,
+    /// "page 2" would name rows from an order nothing else uses.
+    #[test]
+    fn the_whole_set_order_is_the_paged_default() {
+        assert_eq!(
+            CATALOG_ITEM_ORDER,
+            catalog_item_order(ItemOrder::Newest, false)
+        );
     }
 }

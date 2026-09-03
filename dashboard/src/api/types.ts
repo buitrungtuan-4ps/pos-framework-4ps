@@ -833,6 +833,22 @@ export interface AuditEntry {
 
 /** The filters `GET /admin/audit` accepts. Every field is optional; an absent field does not filter.
  *  `tenantId` absent is the fleet-wide read (every tenant, including tenant-global entries). */
+/**
+ * How `GET /admin/catalog/items` orders a page. The server refuses anything else by name.
+ *
+ * `newest` is the order the unpaged read has always used and the default here too, so a screen that
+ * does not sort keeps what it had.
+ */
+export type ItemSort = "newest" | "name" | "status";
+
+/** What a page of the item master should contain and how it should be ordered (ADR-0098 B3-3). */
+export interface ItemListFilter {
+  /** Case-insensitive substring the name or any per-locale name must contain. */
+  readonly q?: string;
+  readonly sort?: ItemSort;
+  readonly order?: "asc" | "desc";
+}
+
 export interface AuditFilter {
   readonly tenantId?: string;
   readonly entityType?: string;

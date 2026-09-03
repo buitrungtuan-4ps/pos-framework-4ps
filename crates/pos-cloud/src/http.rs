@@ -133,9 +133,9 @@ use crate::auth::session::{clear_cookie, set_cookie};
 use crate::campaigns::{CampaignStore, CampaignStoreError, to_node as campaigns_to_node};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
-    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId, ModifierGroup,
-    ModifierGroupId, TaxClass,
+    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemListFilter, ItemSort, ItemSubcategory,
+    ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
+    ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
@@ -5470,6 +5470,18 @@ struct ItemListQuery {
     /// How many items to skip. Only meaningful with `limit`.
     #[serde(default)]
     offset: Option<String>,
+    /// A case-insensitive substring the item's name or any per-locale name must contain.
+    ///
+    /// Only meaningful with `limit`: on the unpaged read it is ignored, and the route says so by
+    /// refusing rather than by quietly returning the whole master.
+    #[serde(default)]
+    q: Option<String>,
+    /// Which order to return the page in — one of [`ItemSort::tokens`]. Only meaningful with `limit`.
+    #[serde(default)]
+    sort: Option<String>,
+    /// `asc` or `desc`, inverting `sort`'s natural direction. Only meaningful with `limit`.
+    #[serde(default)]
+    order: Option<String>,
 }
 
 /// `GET /admin/media`: the tenant, plus the optional paging bounds.
@@ -10851,6 +10863,18 @@ where
     // the item pickers need every item, or a menu compiles without whatever fell off the page. That
     // is the reason an absent `?limit=` can never come to mean a default page size.
     let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        // `q`/`sort`/`order` shape a *page*. Accepting them on the whole-set read and ignoring them
+        // would answer a different question than the caller asked and say nothing about it — so the
+        // route names the one parameter that is missing instead.
+        for (field, value) in [
+            ("q", query.q.as_deref()),
+            ("sort", query.sort.as_deref()),
+            ("order", query.order.as_deref()),
+        ] {
+            if present_param(value).is_some() {
+                return page_shaping_needs_a_limit_refusal(field);
+            }
+        }
         return match state.catalog.list_items(tenant_id).await {
             Ok(items) => (StatusCode::OK, Json(items)).into_response(),
             Err(error) => catalog_error_response(&error),
@@ -10860,10 +10884,81 @@ where
         Ok(page) => page,
         Err(refusal) => return refusal,
     };
-    match state.catalog.list_items_page(tenant_id, page).await {
+    let filter = match item_list_filter(
+        query.q.as_deref(),
+        query.sort.as_deref(),
+        query.order.as_deref(),
+    ) {
+        Ok(filter) => filter,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .catalog
+        .list_items_page(tenant_id, page, &filter)
+        .await
+    {
         Ok(read) => paged_ok(read, page),
         Err(error) => catalog_error_response(&error),
     }
+}
+
+/// Reads `?q=`, `?sort=` and `?order=` into an [`ItemListFilter`], refusing a token outside the
+/// route's own closed sets.
+///
+/// The refusal names the field and lists what it accepts (ADR-0096's shape), so a caller that sent
+/// `?sort=price` is told `sort` must be `newest`, `name`, or `status` rather than being handed the
+/// default order and left to wonder why nothing moved.
+///
+/// A blank or whitespace `q` is *absence*, not a search for nothing: clearing a search box sends
+/// `?q=`, and the one reading of that which is never right is "match only items whose name contains
+/// the empty string", which is every item — the same answer as no search, arrived at by accident.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the refusal is built where the field names are \
+              known, exactly as the other query parsers on this router do"
+)]
+fn item_list_filter(
+    search: Option<&str>,
+    sort: Option<&str>,
+    order: Option<&str>,
+) -> Result<ItemListFilter, Response> {
+    let search = present_param(search).map(str::to_owned);
+    let sort = match present_param(sort) {
+        None => ItemSort::default(),
+        Some(token) => match ItemSort::from_token(token) {
+            Some(sort) => sort,
+            None => return Err(enum_refusal("sort", ItemSort::tokens().iter().copied())),
+        },
+    };
+    let descending = match present_param(order) {
+        // Absent is ascending — the same reading `?order=asc` has, so a caller that omits the
+        // parameter and one that spells out the default get the same page.
+        None | Some("asc") => false,
+        Some("desc") => true,
+        Some(_unknown) => return Err(enum_refusal("order", ["asc", "desc"])),
+    };
+    Ok(ItemListFilter {
+        search,
+        sort,
+        descending,
+    })
+}
+
+/// The refusal for a page-shaping parameter sent to a read that was not asked to page.
+///
+/// Its own sentence rather than [`offset_without_limit_refusal`]'s, because the fix differs: an
+/// `offset` without a `limit` is a caller that forgot half a page, while a `q` without one is a
+/// caller expecting a filtered *set* — a thing this API does not offer, and will not, because the
+/// whole-set read exists for consumers that need every row.
+fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        format!(
+            "{field} shapes a page and needs a limit: without one this read returns every row, \
+             unfiltered and in its own order"
+        ),
+        &[(field, "MISSING_DEPENDENT_FIELD")],
+    )
 }
 
 /// A CSV download response ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5): the

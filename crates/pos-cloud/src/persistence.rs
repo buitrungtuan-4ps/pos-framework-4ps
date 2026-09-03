@@ -26,16 +26,17 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
     CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
-    CatalogTaxonomyRow, DeviceRow, EmployeeRow, FleetStoreRow, InventoryRow, MediaAssetRow,
-    NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow, PendingOrderRow,
-    PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
-    PostgresCampaigns, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
-    PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia, PostgresOrderQueue,
-    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresReleases, PostgresRollups,
-    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
-    ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow,
-    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
+    CatalogTaxonomyRow, DeviceRow, EmployeeRow, FleetStoreRow, InventoryRow, ItemOrder,
+    MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow,
+    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
+    PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
+    PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
+    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresReleases,
+    PostgresRollups, PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory,
+    PostgresSubjects, PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers,
+    PostgresWebhooks, ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate,
+    ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    VoucherRow,
 };
 
 use pos_ports::PortError;
@@ -70,9 +71,9 @@ use crate::auth::totp::TotpSecret;
 use crate::campaigns::{CampaignStore, CampaignStoreError};
 use crate::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
-    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemSubcategory, ItemSubcategoryId,
-    LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId, ModifierGroup,
-    ModifierGroupId, TaxClass,
+    DisplaySubcategory, ItemCategory, ItemCategoryId, ItemListFilter, ItemSort, ItemSubcategory,
+    ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
+    ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -3512,10 +3513,22 @@ impl CatalogStore for PostgresCatalog {
         &self,
         tenant_id: TenantId,
         page: PageRequest,
+        filter: &ItemListFilter,
     ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+        // The one place the domain's sort vocabulary meets the adapter's. Exhaustive by necessity:
+        // `clippy::wildcard_enum_match_arm` is denied, so a new `ItemSort` variant fails to compile
+        // here rather than quietly falling back to the newest order.
+        let order = match filter.sort {
+            ItemSort::Newest => ItemOrder::Newest,
+            ItemSort::Name => ItemOrder::Name,
+            ItemSort::Status => ItemOrder::Status,
+        };
         let (rows, total) = self
             .fetch_items_page(
                 &tenant_id.to_string(),
+                filter.search.as_deref(),
+                order,
+                filter.descending,
                 i64::from(page.limit()),
                 i64::from(page.offset()),
             )
