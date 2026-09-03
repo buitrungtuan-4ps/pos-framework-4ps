@@ -17,6 +17,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **ADR-0097 gives the `/internal` routes a key of their own** (#148). Documentation only; no
+  behaviour changes yet.
+
+  #144 closed the internet-facing half of the `/internal` exposure in both deploy lanes. What stayed
+  open was everything *inside* the trust boundary — another container on the compose network, a pod
+  reached by service IP, a fork terminating TLS where the deny does not reach. This record decides a
+  shared secret on the three routes: `X-Pos-Internal-Key`, a `404` refusal with no oracle, the secret
+  in the cloud's existing mode-0600 `deploy/secrets/cloud.toml`, and a **boot refusal** when it is
+  absent rather than "absent means off" — because `CloudConfig` is not `deny_unknown_fields`, so one
+  transposed letter in the key name would otherwise leave a file that looks armed in front of an open
+  surface.
+
+  **The measurement that shaped it: nothing calls these routes yet.** `/internal/ingest` has no HTTP
+  caller at all (the production feed is the in-process NATS cursor); `/internal/reconcile` has no
+  non-test caller; `/internal/ota/report` has one client whose only exercise is the contract suite.
+  So the usual reason this change is expensive — a deployed fleet that cannot be assumed upgraded —
+  does not apply, and a three-mode compatibility window would be machinery bought for nobody. That
+  stops being true when R5's artifact route or a real `report()` caller lands. The cost is a step
+  function and we are still on the cheap side of it.
+
+  Two things the record is careful to say rather than imply. The secret is **cloud-side only** and
+  must not reach a store box: `cloud-sync-http` serves `/activate` and `/internal/*` through one
+  transport built on every box with a `cloud_url`, so an unconditional header would ship a
+  fleet-wide secret to an unauthenticated pre-activation endpoint on every unprovisioned machine —
+  worse than today. And a shared secret **cannot make `/internal/ota/report` attributable**: that
+  route reads `tenant_id`/`store_id` out of the body, so any key-holder could still file a report for
+  any store. The fix for that is the surface, not the secret — it moves to
+  `/sync/stores/{store_id}/…` when it gains a real caller.
+
+  Amends ADR-0040 §53, ADR-0087 §40 and ADR-0078 §32, each of which recorded the no-authentication
+  posture as deliberate. Each was right about the network and silent about what happens inside it.
+
 - **ADR-0095 splits what ADR-0094 left into three shapes** (#141). Documentation only; no behaviour
   changes.
 
