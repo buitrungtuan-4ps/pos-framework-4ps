@@ -87,20 +87,52 @@ impl PostgresMedia {
             .query(
                 "SELECT media_id, content_type, detail_bytes, \
                  (EXTRACT(EPOCH FROM created_at) * 1000)::bigint \
-                 FROM media_assets WHERE tenant_id = $1 ORDER BY created_at DESC",
+                 FROM media_assets WHERE tenant_id = $1 \
+                 ORDER BY created_at DESC, media_id DESC",
                 &[&tenant_id],
             )
             .await
             .map_err(unavailable)?;
-        Ok(rows
-            .iter()
-            .map(|row| MediaAssetRow {
-                media_id: row.get(0),
-                content_type: row.get(1),
-                detail_bytes: row.get(2),
-                created_at_ms: row.get(3),
-            })
-            .collect())
+        Ok(rows.iter().map(media_asset_row).collect())
+    }
+
+    /// One page of a tenant's assets, newest first, with the size of the whole library.
+    ///
+    /// `count(*) OVER()` rides on the windowed `SELECT` rather than running separately: one round
+    /// trip, one snapshot, so the count cannot disagree with the page it labels.
+    ///
+    /// The `ORDER BY` is total — `created_at DESC, media_id DESC` — because `created_at` alone is
+    /// not. It defaults to `now()`, which is transaction time, so a batch of uploads shares one
+    /// value exactly and a window over the tie could repeat or skip a row across pages (ADR-0098
+    /// decision 9). `media_assets_by_tenant_newest` (migration 0041) carries that whole order, so
+    /// the index walk *is* the sort and `LIMIT` stops the scan.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_summaries_page(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<MediaAssetRow>, i64), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT media_id, content_type, detail_bytes, \
+                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint, \
+                 count(*) OVER() \
+                 FROM media_assets WHERE tenant_id = $1 \
+                 ORDER BY created_at DESC, media_id DESC \
+                 LIMIT $2 OFFSET $3",
+                &[&tenant_id, &limit, &offset],
+            )
+            .await
+            .map_err(unavailable)?;
+        // Every row carries the same window count; an empty page carries none, which is the right
+        // answer both for a page past the end and for a tenant with no assets.
+        let total = rows.first().map_or(0, |row| row.get::<_, i64>(4));
+        Ok((rows.iter().map(media_asset_row).collect(), total))
     }
 
     /// Reads one rendition's bytes (the detail when `detail` is true, else the thumbnail), or `None`
@@ -143,5 +175,19 @@ impl PostgresMedia {
             .await
             .map_err(unavailable)?;
         Ok(removed == 1)
+    }
+}
+
+/// Reads one media summary out of a query result.
+///
+/// Shared by the paged and unpaged reads so their column order cannot drift: the paged query appends
+/// a fifth column and this reads the first four, so a column added at the *front* of either breaks
+/// both together rather than silently mismatching one.
+fn media_asset_row(row: &tokio_postgres::Row) -> MediaAssetRow {
+    MediaAssetRow {
+        media_id: row.get(0),
+        content_type: row.get(1),
+        detail_bytes: row.get(2),
+        created_at_ms: row.get(3),
     }
 }

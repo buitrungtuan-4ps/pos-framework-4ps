@@ -17,6 +17,8 @@ use core::future::Future;
 use pos_proto::ids::TenantId;
 use pos_proto::ulid::Ulid;
 
+use crate::paging::{Page, PageRequest};
+
 /// A media asset's identifier — a ULID minted at upload. Cloud-only: an item or brand references it
 /// (`image_ref`), but it never crosses the edge wire, so it lives beside the seam like
 /// [`MenuId`](crate::catalog::Menu) rather than in `pos-proto`. Serializes as its bare ULID string, so
@@ -98,10 +100,30 @@ pub trait MediaStore {
     ) -> impl Future<Output = Result<Option<Vec<u8>>, MediaStoreError>> + Send;
 
     /// Lists a tenant's assets, newest first, without their bytes.
+    ///
+    /// Every asset, unpaged. Kept as it is and not deprecated
+    /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)): `components/ImagePicker.tsx` reads
+    /// this to offer a tenant's images when an operator attaches one to an item, and a picker showing
+    /// the first twenty-five of a library cannot find the picture you want.
     fn list(
         &self,
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<MediaSummary>, MediaStoreError>> + Send;
+
+    /// One page of a tenant's assets, newest first, with the size of the whole library.
+    ///
+    /// Beside [`list`](Self::list) rather than replacing it: the Media screen's table wants a page
+    /// and the image picker wants the library, and those are different questions.
+    ///
+    /// The order is `created_at DESC, media_id DESC` — total, per ADR-0098 decision 9. `created_at`
+    /// alone is not: it defaults to `now()`, which is *transaction* time, so every asset uploaded in
+    /// one transaction shares it exactly and `LIMIT`/`OFFSET` over the tie could return a row on two
+    /// pages or on neither.
+    fn list_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<MediaSummary>, MediaStoreError>> + Send;
 
     /// Deletes one asset, returning whether a row was removed.
     fn delete(
@@ -133,6 +155,8 @@ mod tests {
     use pos_proto::ids::TenantId;
     use pos_proto::ulid::Ulid;
 
+    use crate::paging::{Page, PageRequest};
+
     #[derive(Default)]
     struct FakeMedia {
         assets: Mutex<Vec<NewMediaAsset>>,
@@ -163,19 +187,22 @@ mod tests {
         }
 
         async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
-            Ok(self
-                .assets
-                .lock()
-                .expect("lock")
-                .iter()
-                .filter(|asset| asset.tenant_id == tenant_id)
-                .map(|asset| MediaSummary {
-                    media_id: asset.media_id,
-                    content_type: asset.content_type.clone(),
-                    detail_bytes: asset.detail.len(),
-                    created_at_ms: 0,
-                })
-                .collect())
+            Ok(self.summaries(tenant_id))
+        }
+
+        async fn list_page(
+            &self,
+            tenant_id: TenantId,
+            page: PageRequest,
+        ) -> Result<Page<MediaSummary>, MediaStoreError> {
+            let matching = self.summaries(tenant_id);
+            let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+            let items = matching
+                .into_iter()
+                .skip(page.offset() as usize)
+                .take(page.limit() as usize)
+                .collect();
+            Ok(Page::new(items, total))
         }
 
         async fn delete(
@@ -205,6 +232,27 @@ mod tests {
             content_type: "image/jpeg".to_owned(),
             thumbnail: vec![1, 2, 3],
             detail: vec![4, 5, 6, 7],
+        }
+    }
+
+    impl FakeMedia {
+        /// The tenant's assets as summaries, in insertion order.
+        ///
+        /// Shared by both reads so the paged one cannot filter differently from the unpaged one — a
+        /// divergence no test comparing only lengths would catch.
+        fn summaries(&self, tenant_id: TenantId) -> Vec<MediaSummary> {
+            self.assets
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|asset| asset.tenant_id == tenant_id)
+                .map(|asset| MediaSummary {
+                    media_id: asset.media_id,
+                    content_type: asset.content_type.clone(),
+                    detail_bytes: asset.detail.len(),
+                    created_at_ms: 0,
+                })
+                .collect()
         }
     }
 
@@ -252,5 +300,91 @@ mod tests {
             "deleting an absent asset reports no row removed",
         );
         assert!(store.list(tenant(1)).await.expect("list").is_empty());
+    }
+
+    /// Stores `count` assets for one tenant, with ids that make a page's contents identifiable.
+    async fn stored(store: &FakeMedia, tenant_n: u128, count: u128) {
+        for index in 0..count {
+            store
+                .put(&asset(tenant_n, 1_000 + index))
+                .await
+                .expect("put");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_carries_its_own_rows_and_the_size_of_the_whole_library() {
+        // The distinction the pager renders, and the one a page exists for: `items` is the window,
+        // `total` is the library. Reporting the page's own length as `total` would make the Media
+        // screen read "1-10 of 10" and hide the rest of the library with no error anywhere.
+        let store = FakeMedia::default();
+        stored(&store, 1, 25).await;
+
+        let page = store
+            .list_page(tenant(1), PageRequest::new(10, 0).expect("in range"))
+            .await
+            .expect("page");
+        assert_eq!(page.items.len(), 10, "the window is the limit");
+        assert_eq!(page.total, 25, "the total is the library, not the window");
+    }
+
+    #[tokio::test]
+    async fn consecutive_pages_partition_the_library_without_overlap_or_gaps() {
+        let store = FakeMedia::default();
+        stored(&store, 1, 25).await;
+
+        let mut seen = Vec::new();
+        for offset in [0, 10, 20] {
+            let page = store
+                .list_page(tenant(1), PageRequest::new(10, offset).expect("in range"))
+                .await
+                .expect("page");
+            assert_eq!(page.total, 25, "the total does not change as pages advance");
+            seen.extend(page.items.into_iter().map(|row| row.media_id.to_string()));
+        }
+        assert_eq!(
+            seen.len(),
+            25,
+            "three pages of ten cover twenty-five assets"
+        );
+        let mut unique = seen.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), 25, "no asset appears on two pages");
+    }
+
+    #[tokio::test]
+    async fn a_page_past_the_end_is_empty_and_not_an_error() {
+        // An operator on page four of a library that just had rows deleted gets an empty page.
+        let store = FakeMedia::default();
+        stored(&store, 1, 5).await;
+
+        let page = store
+            .list_page(tenant(1), PageRequest::new(10, 100).expect("in range"))
+            .await
+            .expect("a page past the end still reads");
+        assert!(page.items.is_empty());
+        assert_eq!(page.total, 5, "and still reports the library's size");
+    }
+
+    #[tokio::test]
+    async fn the_paged_read_is_tenant_scoped_exactly_like_the_unpaged_one() {
+        // The filter has to be identical on both reads: a page that leaked a neighbour's assets
+        // would hand one tenant another's photographs.
+        let store = FakeMedia::default();
+        stored(&store, 1, 3).await;
+        stored(&store, 2, 7).await;
+
+        let page = store
+            .list_page(tenant(1), PageRequest::new(100, 0).expect("in range"))
+            .await
+            .expect("page");
+        assert_eq!(page.total, 3, "only this tenant's assets are counted");
+        assert_eq!(page.items.len(), 3);
+        assert_eq!(
+            store.list(tenant(1)).await.expect("list").len(),
+            3,
+            "and the unpaged read agrees",
+        );
     }
 }

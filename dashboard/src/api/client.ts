@@ -1211,8 +1211,15 @@ export const api = {
   // Upload an image; the server re-encodes it to two bounded renditions and returns the new id.
   uploadMedia: (tenantId: string, file: Blob) =>
     requestUpload<UploadedMedia>(`/admin/media?${tenantQuery(tenantId)}`, file),
+  // The whole library, unpaged — what the item image picker needs: you cannot find the photograph
+  // you want in the first twenty-four of eight hundred (ADR-0098). Permanent, not a legacy shape.
   listMedia: (tenantId: string) =>
     requestJson<MediaSummary[]>("GET", `/admin/media?${tenantQuery(tenantId)}`),
+  // One page of the library, for the Media screen's grid. Paged because the grid mounts an `<img>`
+  // per asset and each fetches a rendition, so an unpaged grid of a large library is hundreds of
+  // requests on open — a bigger cost than the JSON it arrives in.
+  listMediaPage: (tenantId: string, page: PageRequest) =>
+    requestJson<Page<MediaSummary>>("GET", `/admin/media?${tenantPageQuery(tenantId, page)}`),
   deleteMedia: (tenantId: string, mediaId: string) =>
     requestVoid(
       "DELETE",

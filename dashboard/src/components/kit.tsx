@@ -19,6 +19,60 @@ import {
 import { t } from "../i18n";
 import { Button, TextField } from "./ui";
 
+// --- Pager --------------------------------------------------------------------------------------
+
+/**
+ * "1–25 of 812", with prev/next.
+ *
+ * Extracted from {@link DataTable} because a table is not the only thing worth paging: the media
+ * library is a grid of thumbnails, and a second pager written by hand beside the first is how two
+ * pagers come to disagree about whether the last page is reachable. Purely presentational — it owns
+ * no page state, derives everything from what it is handed, and asks the caller for a new `offset`.
+ *
+ * Renders nothing when the whole set fits in one page, so a caller can mount it unconditionally.
+ */
+export function Pager(props: {
+  /** Where this page starts in the set. */
+  offset: number;
+  /** The page size that was asked for. */
+  limit: number;
+  /** How many rows the set holds in total, across every page. */
+  total: number;
+  /** How many rows *this* page actually carries — the last page is usually short. */
+  shown: number;
+  /** Asks the caller to load the page starting at `offset`. */
+  onOffset: (offset: number) => void;
+}) {
+  const from = () => (props.total === 0 ? 0 : props.offset + 1);
+  const to = () => Math.min(props.total, props.offset + props.shown);
+  const hasPrev = () => props.offset > 0;
+  const hasNext = () => props.offset + props.limit < props.total;
+
+  return (
+    <Show when={props.limit > 0 && props.total > props.limit}>
+      <div class="flex items-center justify-between gap-2 text-sm text-ink-muted">
+        <span>{t("table.range", { from: from(), to: to(), total: props.total })}</span>
+        <div class="flex gap-2">
+          <Button
+            variant="secondary"
+            disabled={!hasPrev()}
+            onClick={() => props.onOffset(Math.max(0, props.offset - props.limit))}
+          >
+            {t("table.prev")}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!hasNext()}
+            onClick={() => props.onOffset(props.offset + props.limit)}
+          >
+            {t("table.next")}
+          </Button>
+        </div>
+      </div>
+    </Show>
+  );
+}
+
 // --- DataTable ----------------------------------------------------------------------------------
 
 /** One column of a {@link DataTable}. `sortValue` (when present) makes the header a sort toggle. */
@@ -131,12 +185,6 @@ export function DataTable<T>(props: {
     const start = current() * perPage();
     return sorted().slice(start, start + perPage());
   });
-  const from = () => (total() === 0 ? 0 : current() * perPage() + 1);
-  const to = () =>
-    serverPaged()
-      ? Math.min(total(), current() * perPage() + props.rows.length)
-      : Math.min(total(), (current() + 1) * perPage());
-
   /**
    * Moves the pager, and in server mode asks the caller to fetch that page.
    *
@@ -227,27 +275,13 @@ export function DataTable<T>(props: {
               </tbody>
             </table>
           </div>
-          <Show when={perPage() > 0 && total() > perPage()}>
-            <div class="flex items-center justify-between gap-2 text-sm text-ink-muted">
-              <span>{t("table.range", { from: from(), to: to(), total: total() })}</span>
-              <div class="flex gap-2">
-                <Button
-                  variant="secondary"
-                  disabled={current() === 0}
-                  onClick={() => goToPage(current() - 1)}
-                >
-                  {t("table.prev")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={current() >= pageCount() - 1}
-                  onClick={() => goToPage(current() + 1)}
-                >
-                  {t("table.next")}
-                </Button>
-              </div>
-            </div>
-          </Show>
+          <Pager
+            offset={current() * perPage()}
+            limit={perPage()}
+            total={total()}
+            shown={visible().length}
+            onOffset={(offset) => goToPage(perPage() > 0 ? Math.floor(offset / perPage()) : 0)}
+          />
         </Show>
       </Show>
     </div>

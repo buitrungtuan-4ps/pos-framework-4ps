@@ -2317,6 +2317,28 @@ impl MediaStore for PostgresMedia {
         rows.into_iter().map(media_summary).collect()
     }
 
+    async fn list_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<MediaSummary>, MediaStoreError> {
+        // `PageRequest` already range-checked these, so widening `u32` into the `i64` the SQL binds
+        // cannot lose or sign-flip anything — which is why the adapter takes bare integers.
+        let (rows, total) = self
+            .fetch_summaries_page(
+                &tenant_id.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))?;
+        let items = rows
+            .into_iter()
+            .map(media_summary)
+            .collect::<Result<Vec<MediaSummary>, MediaStoreError>>()?;
+        Ok(Page::new(items, u32::try_from(total).unwrap_or(u32::MAX)))
+    }
+
     async fn delete(
         &self,
         tenant_id: TenantId,

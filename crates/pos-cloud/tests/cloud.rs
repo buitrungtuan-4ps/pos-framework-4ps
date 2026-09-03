@@ -62,6 +62,7 @@ use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
 use pos_cloud::orders::{StoreDirectory, orders_router};
+use pos_cloud::paging::{Page, PageRequest};
 use pos_cloud::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
     EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
@@ -7832,19 +7833,22 @@ impl MediaStore for FakeMedia {
     }
 
     async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
-        Ok(self
-            .assets
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|asset| asset.tenant_id == tenant_id)
-            .map(|asset| MediaSummary {
-                media_id: asset.media_id,
-                content_type: asset.content_type.clone(),
-                detail_bytes: asset.detail.len(),
-                created_at_ms: 0,
-            })
-            .collect())
+        Ok(self.summaries(tenant_id))
+    }
+
+    async fn list_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<MediaSummary>, MediaStoreError> {
+        let matching = self.summaries(tenant_id);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
     }
 
     async fn delete(
@@ -7856,6 +7860,26 @@ impl MediaStore for FakeMedia {
         let before = assets.len();
         assets.retain(|asset| !(asset.tenant_id == tenant_id && asset.media_id == media_id));
         Ok(assets.len() < before)
+    }
+}
+
+impl FakeMedia {
+    /// The tenant's assets as summaries, in insertion order.
+    ///
+    /// Shared by both reads so the paged one cannot filter differently from the unpaged one.
+    fn summaries(&self, tenant_id: TenantId) -> Vec<MediaSummary> {
+        self.assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|asset| asset.tenant_id == tenant_id)
+            .map(|asset| MediaSummary {
+                media_id: asset.media_id,
+                content_type: asset.content_type.clone(),
+                detail_bytes: asset.detail.len(),
+                created_at_ms: 0,
+            })
+            .collect()
     }
 }
 
@@ -7993,6 +8017,112 @@ async fn media_uploads_serves_lists_and_deletes_and_rejects_a_non_image() {
         .await
         .expect("route the gone thumbnail");
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_media_list_returns_a_bare_array_unpaged_and_an_envelope_when_a_limit_is_named() {
+    // The two shapes of the same route (ADR-0098). The image picker sends no `limit` and must keep
+    // getting a plain array of the whole library; the Media screen's table sends one and gets the
+    // window plus the library's size. A route that answered one shape for both requests would
+    // either break the picker's `.map` or leave the table with no count to page by.
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    for _upload in 0..3 {
+        let created = router
+            .clone()
+            .oneshot(post_bytes_with_cookie(
+                &format!("/admin/media?tenant_id={tenant}"),
+                tiny_png(),
+                "image/png",
+                &cookie,
+            ))
+            .await
+            .expect("route the upload");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    let unpaged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the unpaged list");
+    assert_eq!(unpaged.status(), StatusCode::OK);
+    let unpaged = json_body(unpaged).await;
+    assert_eq!(
+        unpaged
+            .as_array()
+            .expect("a bare array, not an envelope")
+            .len(),
+        3,
+    );
+
+    let paged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}&limit=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the paged list");
+    assert_eq!(paged.status(), StatusCode::OK);
+    let paged = json_body(paged).await;
+    assert_eq!(paged["items"].as_array().expect("the window").len(), 2);
+    assert_eq!(paged["total"], 3, "the total is the library, not the page");
+    assert_eq!(paged["limit"], 2, "the bounds used are echoed back");
+    assert_eq!(paged["offset"], 0);
+
+    // A second page carries the remaining asset and the same total.
+    let tail = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}&limit=2&offset=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the second page");
+    let tail = json_body(tail).await;
+    assert_eq!(tail["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(tail["total"], 3);
+    assert_eq!(tail["offset"], 2);
+}
+
+#[tokio::test]
+async fn the_media_list_refuses_a_page_bound_it_cannot_serve() {
+    // The refusals `parse_page` builds, reached through a real route so the wiring is covered too:
+    // a limit past the cap, a limit that is not a number, and an offset with no limit to skip into.
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    for (query, field) in [
+        ("limit=100000", "limit"),
+        ("limit=0", "limit"),
+        ("limit=lots", "limit"),
+        ("offset=25", "offset"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/media?tenant_id={tenant}&{query}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{query}` is a client mistake, not a page",
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "`{query}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]

@@ -5456,6 +5456,22 @@ struct VoucherListQuery {
     offset: Option<String>,
 }
 
+/// `GET /admin/media`: the tenant, plus the optional paging bounds.
+///
+/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
+#[derive(Debug, Clone, Deserialize)]
+struct MediaListQuery {
+    /// The tenant whose assets to list (a 26-character ULID).
+    tenant_id: String,
+    /// How many summaries to return. **Absent means unpaged**: every asset, as an array — which is
+    /// what the item image picker asks for.
+    #[serde(default)]
+    limit: Option<String>,
+    /// How many summaries to skip. Only meaningful with `limit`.
+    #[serde(default)]
+    offset: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CreateTenantRequest {
     name: String,
@@ -10090,7 +10106,7 @@ where
 async fn admin_list_media<M, A, C>(
     State(state): State<MediaState<M, A, C>>,
     headers: HeaderMap,
-    Query(query): Query<RegistryTenantQuery>,
+    Query(query): Query<MediaListQuery>,
 ) -> Response
 where
     M: MediaStore + Clone + Send + Sync + 'static,
@@ -10111,21 +10127,38 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.media.list(tenant_id).await {
-        Ok(rows) => {
-            let view: Vec<MediaSummaryView> = rows
-                .iter()
-                .map(|row| MediaSummaryView {
-                    media_id: row.media_id.to_string(),
-                    content_type: row.content_type.clone(),
-                    detail_bytes: u64::try_from(row.detail_bytes).unwrap_or(u64::MAX),
-                    created_at_ms: row.created_at_ms,
-                })
-                .collect();
-            (StatusCode::OK, Json(view)).into_response()
-        }
+    // Two reads, chosen by whether the caller named a limit (ADR-0098). The image picker attaches a
+    // photograph to an item and needs the whole library to find one in; the Media screen's table
+    // wants twenty-five rows and a count. Neither is a default for the other.
+    let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        return match state.media.list(tenant_id).await {
+            Ok(rows) => (StatusCode::OK, Json(media_views(rows))).into_response(),
+            Err(error) => media_error_response(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.media.list_page(tenant_id, page).await {
+        Ok(read) => paged_ok(Page::new(media_views(read.items), read.total), page),
         Err(error) => media_error_response(&error),
     }
+}
+
+/// The wire view of a batch of media summaries.
+///
+/// Shared by the paged and unpaged reads, so an asset cannot render one way on the table and another
+/// in the picker.
+fn media_views(rows: Vec<crate::media::MediaSummary>) -> Vec<MediaSummaryView> {
+    rows.into_iter()
+        .map(|row| MediaSummaryView {
+            media_id: row.media_id.to_string(),
+            content_type: row.content_type.clone(),
+            detail_bytes: u64::try_from(row.detail_bytes).unwrap_or(u64::MAX),
+            created_at_ms: row.created_at_ms,
+        })
+        .collect()
 }
 
 /// A super-admin uploads an image: it is re-encoded to two bounded JPEG renditions and stored. The raw
