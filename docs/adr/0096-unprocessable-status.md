@@ -20,6 +20,9 @@ invented its own body instead. There are now three shapes on the wire where ther
 | `{"missing_fallback":[…]}` | 1 — `http.rs` 13205 | **not read at all** |
 | bare text | 4 — `http.rs` 9803, 12522, 13880, 15148 | read as the raw body |
 
+Nine sites answer 422 today. **Seven of them should; two of them should not** — see *Two of the nine
+are not 422 at all* below. Adding the status is not a licence to keep every existing use of it.
+
 The middle row is a live defect, not an untidiness. `dashboard/src/api/client.ts` declares
 `violations?: string[]` and branches on it; nothing looks at `missing_fallback`. A translation grid
 rejected for a missing `en` therefore falls through to the raw-text path, and the operator's toast
@@ -46,6 +49,30 @@ result is still inconsistent, go and look at the other screen*. Collapsing them 
 an operator hunting for a typo in a form where there is none. That is a worse error message than the
 raw JSON we ship today, because it is confidently wrong rather than obviously broken.
 
+**Two of the nine are not 422 at all.** Found while reading the sites to implement this, and worth
+stating before the status exists, because a new variant is exactly the kind of thing that gets
+applied by find-and-replace to every site that currently answers the code.
+
+`http.rs` 13880 and 15148 both refuse a password shorter than `MIN_PASSWORD_LEN`. That is **one field,
+out of range** — the definition of `INVALID_ARGUMENT` given above, and the shape this repo already
+uses everywhere else for exactly this: `("pin", "OUT_OF_RANGE")` at 1791, `("cutoff_hour",
+"OUT_OF_RANGE")` at 2781, `("tax_rates", "OUT_OF_RANGE")` at 6639. Those two sites answering 422 is
+a pre-existing inconsistency, not evidence about what 422 is for. They become
+`400 INVALID_ARGUMENT` with `("password", "OUT_OF_RANGE")`, and the doc comment at 13852 that
+promises `422` is corrected with them.
+
+The other seven are cross-field or cross-referential and stay 422:
+
+- 4618, a routing rule naming a station that does not exist;
+- 8206, 8301, 8700, capability flags violating a §10 inter-flag rule;
+- 13205, a translation key missing its `en` fallback;
+- 12522, a price book that will not compile from otherwise-valid parts;
+- 9803, an image the pipeline understood and could not reduce within the size budget — the request
+  is well-formed and the *content* cannot be processed, which is the textbook case.
+
+So the split is **seven and two**, and the test that separates them is the same one that justifies
+the status at all: is there a field to name? If yes it is 400, whatever the handler answers today.
+
 **Decision. Add `ErrorStatus::Unprocessable`, wire token `UNPROCESSABLE`, mapping to HTTP 422.**
 
 The twelfth variant, added exactly as ADR-0094 added the eleventh: a new arm in the enum, in `ALL`,
@@ -70,9 +97,10 @@ ceiling, and 412 was added the moment a real refusal needed it. This is the same
 
 **Scope.**
 
-In: the twelfth variant; the nine conversions; the `pos-edge` match arms the new variant breaks; the
-console's dead `violations` branch and its stale comment; the CHANGELOG's "Known limitation" note,
-which undercounts the plain-text sites and omits the JSON-shaped ones entirely.
+In: the twelfth variant; the seven conversions to it; the two re-classifications to
+`INVALID_ARGUMENT` and the doc comment that promises otherwise; the `pos-edge` match arms the new
+variant breaks; the console's dead `violations` branch and its stale comment; the CHANGELOG's "Known
+limitation" note, which undercounts the plain-text sites and omits the JSON-shaped ones entirely.
 
 Out, with reasons:
 
@@ -117,5 +145,6 @@ Out, with reasons:
 - None of the nine routes appears in `docs/openapi.json`, so no published contract changes. The
   status is nonetheless documented in `naming-and-api.md` §4, where the other eleven are.
 
-**Delivery.** This ADR, then one slice: the variant, the nine conversions, the edge match arms, the
-console cleanup, and the test assertions that currently pin the old body shapes.
+**Delivery.** This ADR, then one slice: the variant, the seven conversions, the two
+re-classifications, the edge match arms, the console cleanup, and the test assertions that currently
+pin the old body shapes.
