@@ -37,7 +37,7 @@ pub use dispatch::{
     DeliveryError, DeliveryOutcome, WebhookEndpoint, WebhookError, WebhookTransport, deliver_next,
 };
 pub use sign::{Signature, SigningSecret};
-pub use ssrf::{SsrfRejection, VettedUrl, vet};
+pub use ssrf::{SsrfRejection, VettedUrl, vet, vet_blocking};
 pub use store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };

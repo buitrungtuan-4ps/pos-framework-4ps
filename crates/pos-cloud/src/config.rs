@@ -12,6 +12,8 @@ use std::net::SocketAddr;
 
 use serde::Deserialize;
 
+use crate::webhook::sign::SigningSecret;
+
 /// How many messages one cursor pull gathers, when the config does not say.
 const fn default_batch() -> usize {
     256
@@ -234,6 +236,29 @@ pub struct CloudConfig {
     /// ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
     #[serde(default = "default_alert_eval_interval_secs")]
     pub alert_eval_interval_secs: u64,
+    /// Where newly-opened alerts are pushed off-console, or unset for console-only alerting
+    /// ([ADR-0073](../../../docs/adr/0073-alerting.md) slice 4).
+    ///
+    /// **Unset is a supported posture, not a gap.** The in-console channel — the `alerts` table the
+    /// notification bell reads — is the primary one and always runs. This adds the push that wakes
+    /// somebody at 02:00, and a deployment that watches its console during the hours it cares about
+    /// does not need it.
+    ///
+    /// One URL for the whole deployment rather than one per tenant: the conditions delivered here
+    /// include server-wide ones (the projector is unhealthy, the stream is near capacity) that belong
+    /// to no tenant. It is SSRF-vetted at boot through the same [`crate::webhook::vet`] the tenant
+    /// webhooks use, so a private or link-local address is refused there rather than here.
+    #[serde(default)]
+    pub alert_webhook_url: Option<String>,
+    /// The HMAC secret newly-opened alert batches are signed with, required whenever
+    /// [`Self::alert_webhook_url`] is set (ADR-0073 slice 4, ADR-0032's signature scheme).
+    ///
+    /// Unsigned alerts would let anyone who learns the URL post fabricated ones — "every store is
+    /// offline" is a convincing thing to be told — so a URL without a secret is a boot refusal rather
+    /// than a warning. Generate it with `openssl rand -hex 32` and give the same value to the
+    /// receiver.
+    #[serde(default)]
+    pub alert_webhook_secret: Option<SigningSecret>,
     /// How often the scheduled-publish activator applies due publishes, in seconds
     /// ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
     #[serde(default = "default_scheduled_publish_interval_secs")]
@@ -352,6 +377,37 @@ impl CloudConfig {
             }
             Some(_) => {}
         }
+        // An alert webhook without a secret would deliver unsigned batches, which a receiver cannot
+        // tell from a forgery. The URL itself is vetted at boot, not here — that needs DNS.
+        match (&self.alert_webhook_url, &self.alert_webhook_secret) {
+            (Some(_), None) => {
+                return Err(format!(
+                    "alert_webhook_secret is required when alert_webhook_url is set: an unsigned \
+                     alert batch is indistinguishable from a forged one. Generate one with \
+                     `openssl rand -hex 32` (at least {MIN_INTERNAL_SECRET_LEN} characters) and give \
+                     the same value to the receiver — ADR-0073"
+                ));
+            }
+            (Some(_), Some(secret)) if secret.expose_secret().len() < MIN_INTERNAL_SECRET_LEN => {
+                // The length, not the value.
+                return Err(format!(
+                    "alert_webhook_secret must be at least {MIN_INTERNAL_SECRET_LEN} characters \
+                     (got {}) — ADR-0073",
+                    secret.expose_secret().len()
+                ));
+            }
+            (None, Some(_)) => {
+                // Not fatal, but it means somebody set half the pair and believes alerts are being
+                // delivered. Naming it is the whole point of `deny_unknown_fields` being absent here.
+                return Err(
+                    "alert_webhook_secret is set but alert_webhook_url is not: nothing is delivered. \
+                     Set the URL, or remove the secret — ADR-0073"
+                        .to_owned(),
+                );
+            }
+            // Both set is armed; neither is console-only. Both are fine, and neither needs a word.
+            (None, None) | (Some(_), Some(_)) => {}
+        }
         Ok(())
     }
 }
@@ -393,7 +449,7 @@ impl core::fmt::Debug for InternalSecret {
 
 #[cfg(test)]
 mod tests {
-    use super::{CloudConfig, InternalSecret, MIN_INTERNAL_SECRET_LEN};
+    use super::{CloudConfig, InternalSecret, MIN_INTERNAL_SECRET_LEN, SigningSecret};
 
     /// The shortest config that parses — the same two keys `parses_a_minimal_config` uses.
     const MINIMAL_TOML: &str =
@@ -405,6 +461,68 @@ mod tests {
         config.internal_shared_secret =
             Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
         config
+    }
+
+    #[test]
+    fn an_alert_webhook_url_without_a_secret_refuses_the_boot() {
+        // An unsigned alert batch is indistinguishable from one a stranger posted, and "every store
+        // is offline" is a convincing thing to be told (ADR-0073 slice 4).
+        let mut config = valid();
+        config.alert_webhook_url = Some("https://ops.example.com/alerts".to_owned());
+        let error = config.validate().expect_err("half a pair is refused");
+        assert!(
+            error.contains("alert_webhook_secret is required"),
+            "the message names the missing field: {error}"
+        );
+    }
+
+    #[test]
+    fn an_alert_secret_without_a_url_refuses_the_boot_rather_than_delivering_nowhere() {
+        // The other half of the pair. Silently accepting this leaves an operator believing alerts
+        // are being pushed when nothing is configured to receive them.
+        let mut config = valid();
+        config.alert_webhook_secret = Some(SigningSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
+        let error = config.validate().expect_err("half a pair is refused");
+        assert!(
+            error.contains("alert_webhook_url is not"),
+            "the message names what is missing: {error}"
+        );
+    }
+
+    #[test]
+    fn a_short_alert_secret_is_refused_by_length_and_never_quoted() {
+        let mut config = valid();
+        config.alert_webhook_url = Some("https://ops.example.com/alerts".to_owned());
+        config.alert_webhook_secret = Some(SigningSecret::new("hunter2"));
+        let error = config.validate().expect_err("too short");
+        assert!(
+            error.contains("at least") && error.contains("(got 7)"),
+            "the length, not the value: {error}"
+        );
+        assert!(
+            !error.contains("hunter2"),
+            "a refusal that quoted the secret would put it in a log: {error}"
+        );
+    }
+
+    #[test]
+    fn console_only_alerting_is_a_valid_posture() {
+        // Neither field set. The in-console channel is the primary one and always runs; a deployment
+        // that watches its console does not have to configure a push (ADR-0073).
+        let config = valid();
+        assert!(config.alert_webhook_url.is_none());
+        config.validate().expect("console-only alerting validates");
+    }
+
+    #[test]
+    fn the_alert_secret_is_redacted_from_debug_output() {
+        let secret = SigningSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN));
+        let rendered = format!("{secret:?}");
+        assert!(
+            !rendered.contains(&"a".repeat(MIN_INTERNAL_SECRET_LEN)),
+            "CloudConfig derives Debug, so a plaintext secret here would reach any log that dumps \
+             the config: {rendered}"
+        );
     }
 
     #[test]

@@ -38,7 +38,14 @@ pub const REPLAY_TOLERANCE: i64 = 300;
 /// A per-endpoint webhook signing secret.
 ///
 /// Redacted from [`fmt::Debug`], so an endpoint that derives `Debug` cannot log it.
-#[derive(Clone)]
+///
+/// `Deserialize` is transparent, so it reads as a bare string: the tenant webhook secrets are minted
+/// server-side and reloaded from their table, and the deployment-wide alert secret
+/// ([`CloudConfig::alert_webhook_secret`](crate::config::CloudConfig::alert_webhook_secret)) is read
+/// from the config file `bootstrap.sh` writes. Deriving it here rather than adding a third secret
+/// newtype beside `InternalSecret`, which was already shaped after this one.
+#[derive(Clone, serde::Deserialize)]
+#[serde(transparent)]
 pub struct SigningSecret(String);
 
 impl SigningSecret {

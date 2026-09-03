@@ -17,6 +17,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **Alerts can now be pushed off the console** (roadmap Track O2 slice 4, ADR-0073). The evaluator has
+  been storing every firing alert since O2 slice 3, and the notification bell reads them — but nothing
+  left the building. A store that went dark at 02:00 waited in the table until somebody opened the
+  console. It now also posts newly-opened alerts to a webhook, so somebody can be woken.
+
+  Set `alert_webhook_url` and `alert_webhook_secret` in the cloud's config file to arm it. Leaving them
+  unset is a supported posture, not a gap: the in-console channel is the primary one and always runs.
+
+  The batch goes as one signed JSON body — the same HMAC scheme and the same SSRF-vetted URL handling
+  the tenant webhooks use (ADR-0032), because an alert batch is just another signed body to an
+  endpoint an operator nominated. Twelve stores dropping off at once is one notification, not twelve.
+
+  **A failed push never fails an evaluation pass.** The alerts are stored and in the console before a
+  channel is asked, so an unreachable endpoint does not undo that, and the evaluator's health row
+  stays green. The reason appears in that row's detail as `delivery_error` instead, so "alerts are
+  firing and not arriving" is visible as its own state rather than looking like either half being
+  down.
+
+  The pushed body carries the alert kind, severity, tenant id, dedup key, the composed one-line
+  summary and the numeric detail — and nothing else. There is no field a customer or employee
+  identifier could arrive in, and a test pins the field set so a later change to what is sent to a
+  third party has to be deliberate.
+
+  **Upgrade note** No migration, no wire change, no permission change. Two new optional config keys.
+  A URL without a secret, or a secret without a URL, is refused at boot rather than accepted: the
+  first would deliver unsigned batches a receiver cannot tell from forgeries, and the second reads as
+  armed while delivering nothing.
+
 - **The employee roster can be read a page at a time** (roadmap v3 B3-4, ADR-0098). `GET
   /admin/employees?limit=&offset=` returns `{ items, total, limit, offset }`; naming no limit still
   returns the whole roster as an array, which is what the permission-node publish needs — a node

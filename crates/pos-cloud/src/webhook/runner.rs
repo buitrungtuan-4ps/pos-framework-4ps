@@ -27,7 +27,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::time::Timestamp;
 
 use super::dispatch::{DeliveryOutcome, WebhookEndpoint, WebhookTransport, deliver_next};
-use super::ssrf::{VettedUrl, resolve_host, vet};
+use super::ssrf::vet_blocking;
 use super::store::{WebhookEndpointId, WebhookEndpointStore, WebhookStoreError};
 
 /// How many pages one endpoint may deliver in a single tick, so a far-behind endpoint catching up
@@ -109,7 +109,7 @@ where
     for persisted in enabled {
         // Re-vet before delivering, so a URL that has since repointed at a forbidden address is not
         // delivered to — the endpoint is skipped this tick, its cursor untouched.
-        let vetted = match revet(&persisted.url).await {
+        let vetted = match vet_blocking(&persisted.url).await {
             Ok(vetted) => vetted,
             Err(reason) => {
                 tracing::warn!(
@@ -183,19 +183,6 @@ async fn dispatch_one<S, W, T>(
                 return;
             }
         }
-    }
-}
-
-/// Re-vets a stored URL on the blocking pool (the resolver blocks), returning the freshly-vetted
-/// destination or a human-readable reason it was refused.
-async fn revet(url: &str) -> Result<VettedUrl, String> {
-    let raw = url.to_owned();
-    match tokio::task::spawn_blocking(move || vet(&raw, resolve_host)).await {
-        Ok(Ok(vetted)) => Ok(vetted),
-        Ok(Err(rejection)) => Err(rejection.to_string()),
-        Err(join_error) => Err(format!(
-            "the SSRF vetting task failed to join: {join_error}"
-        )),
     }
 }
 

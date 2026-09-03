@@ -20,6 +20,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
+use super::channel::AlertChannel;
 use super::eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
 use super::model::FiringAlert;
 use super::store::{AlertRecord, AlertStore, AlertStoreError};
@@ -29,7 +30,9 @@ use crate::registry::RegistryStore;
 use crate::webhook::store::WebhookEndpointStore;
 
 /// What one evaluation pass did, for the tick's health detail.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// No longer `Copy`: `delivery_error` carries the reason a push failed, and a reason is a sentence.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PassSummary {
     /// How many conditions were firing this pass.
     pub firing: usize,
@@ -37,6 +40,14 @@ pub struct PassSummary {
     pub opened: usize,
     /// How many previously-active alerts were resolved because their condition cleared.
     pub resolved: usize,
+    /// Why off-console delivery did not happen, or `None` if it did (or if nothing needed pushing,
+    /// or no channel is configured).
+    ///
+    /// A failed delivery is deliberately *not* a failed pass: the alerts are already stored and
+    /// already in the console before a channel is asked, so the evaluator did its job
+    /// ([ADR-0073](../../../docs/adr/0073-alerting.md)). It surfaces here so the tick's health detail
+    /// can say "firing, and not arriving", which is a different fault from either half being down.
+    pub delivery_error: Option<String>,
 }
 
 /// Reconciles the firing set against the store: opens a new alert for each firing condition that has
@@ -162,12 +173,13 @@ where
 
 /// One full pass: gather, evaluate, reconcile. Split out so the loop body stays small and the errors
 /// collapse to one string for the tick's health detail.
-async fn pass<Rg, Fl, Wh, Th, Al>(
+async fn pass<Rg, Fl, Wh, Th, Al, Ch>(
     registry: &Rg,
     fleet: &Fl,
     webhooks: &Wh,
     task_health: &Th,
     alerts: &Al,
+    channel: Option<&Ch>,
     now: Timestamp,
     thresholds: &AlertThresholds,
 ) -> Result<PassSummary, String>
@@ -177,6 +189,7 @@ where
     Wh: WebhookEndpointStore + Sync,
     Th: TaskHealthStore + Sync,
     Al: AlertStore + Sync,
+    Ch: AlertChannel + Sync,
 {
     let tenants = gather(registry, fleet, webhooks).await?;
     let health = task_health.list_health().await.map_err(|e| e.to_string())?;
@@ -190,11 +203,39 @@ where
     })
     .await
     .map_err(|e| e.to_string())?;
+    let delivery_error = deliver_opened(channel, now, &opened).await;
     Ok(PassSummary {
         firing: firing.len(),
         opened: opened.len(),
         resolved,
+        delivery_error,
     })
+}
+
+/// Pushes the newly-opened alerts to `channel`, returning why it did not work — never an error.
+///
+/// **The return type is the invariant.** `Option<String>` rather than `Result<(), _>` so there is no
+/// arrangement of the caller in which a `?` turns a failed push into a failed pass: the alerts are
+/// stored and in the console before this is called, and a channel that cannot be reached does not
+/// undo that ([ADR-0073](../../../docs/adr/0073-alerting.md)).
+///
+/// An empty batch never reaches the channel. A channel asked every tick with nothing to say would
+/// deliver "all clear" a thousand times a day, which is how the one message that matters comes to be
+/// filtered into a folder nobody reads.
+async fn deliver_opened<Ch: AlertChannel + Sync>(
+    channel: Option<&Ch>,
+    now: Timestamp,
+    opened: &[FiringAlert],
+) -> Option<String> {
+    let channel = channel?;
+    if opened.is_empty() {
+        return None;
+    }
+    channel
+        .deliver(now, opened)
+        .await
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// Runs the alert evaluator until `shutdown` resolves. Each tick gathers the read models, evaluates
@@ -204,12 +245,13 @@ where
     reason = "each store the loop reads is its own seam handle, plus the clock, thresholds, interval \
               and shutdown; bundling them would just be unpacked here, as the sibling loops' runs are"
 )]
-pub async fn run<Rg, Fl, Wh, Th, Al, C>(
+pub async fn run<Rg, Fl, Wh, Th, Al, Ch, C>(
     registry: Rg,
     fleet: Fl,
     webhooks: Wh,
     task_health: Th,
     alerts: Al,
+    channel: Option<Ch>,
     clock: C,
     thresholds: AlertThresholds,
     interval: Duration,
@@ -220,6 +262,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, C>(
     Wh: WebhookEndpointStore + Sync,
     Th: TaskHealthStore + Sync,
     Al: AlertStore + Sync,
+    Ch: AlertChannel + Sync,
     C: ClockSource,
 {
     tokio::pin!(shutdown);
@@ -231,6 +274,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, C>(
             &webhooks,
             &task_health,
             &alerts,
+            channel.as_ref(),
             now,
             &thresholds,
         )
@@ -245,6 +289,16 @@ pub async fn run<Rg, Fl, Wh, Th, Al, C>(
                         "alert evaluator pass"
                     );
                 }
+                // A delivery failure is logged at warn and reported in the detail, but the tick stays
+                // healthy: the alerts are stored and the console has them (ADR-0073).
+                if let Some(error) = &summary.delivery_error {
+                    tracing::warn!(
+                        %error,
+                        opened = summary.opened,
+                        "alerts opened but off-console delivery failed; they are stored and in the \
+                         console"
+                    );
+                }
                 tick_detail(
                     true,
                     interval.as_secs(),
@@ -252,6 +306,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, C>(
                         "firing": summary.firing,
                         "opened": summary.opened,
                         "resolved": summary.resolved,
+                        "delivery_error": summary.delivery_error,
                     }),
                 )
             }
@@ -287,7 +342,7 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use super::reconcile;
+    use super::{AlertChannel, deliver_opened, reconcile};
     use crate::alerts::model::{AlertKind, FiringAlert};
     use crate::alerts::store::{AlertRecord, AlertStore, AlertStoreError};
 
@@ -361,6 +416,93 @@ mod tests {
             "offline",
             json!({ "minutes_offline": minutes }),
         )
+    }
+
+    /// A channel that records what it was asked to send, and can be told to fail.
+    #[derive(Default)]
+    struct SpyChannel {
+        batches: Mutex<Vec<usize>>,
+        fail: bool,
+    }
+
+    impl AlertChannel for SpyChannel {
+        async fn deliver(
+            &self,
+            _now: Timestamp,
+            alerts: &[FiringAlert],
+        ) -> Result<(), crate::alerts::channel::ChannelError> {
+            self.batches.lock().expect("lock").push(alerts.len());
+            if self.fail {
+                return Err(crate::alerts::channel::ChannelError::new(
+                    "the endpoint refused with 503",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_push_is_reported_and_never_raised() {
+        // The property the whole slice rests on. `deliver_opened` returns `Option<String>`, so there
+        // is no `?` a future edit could add that would turn this into a failed pass — the alerts are
+        // already stored and in the console (ADR-0073).
+        let channel = SpyChannel {
+            fail: true,
+            ..SpyChannel::default()
+        };
+        let reason = deliver_opened(Some(&channel), ts(1_000), &[offline(1, 6)]).await;
+        let reason = reason.expect("the failure is reported");
+        assert!(
+            reason.contains("503"),
+            "the reason survives for the tick's health detail: {reason}"
+        );
+        assert_eq!(
+            channel.batches.lock().expect("lock").as_slice(),
+            [1],
+            "it was asked once, with the one opened alert"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_batch_never_reaches_the_channel() {
+        // Most ticks open nothing. Pushing "all clear" every minute is how the one message that
+        // matters gets filtered into a folder nobody reads.
+        let channel = SpyChannel::default();
+        assert!(
+            deliver_opened(Some(&channel), ts(1_000), &[])
+                .await
+                .is_none()
+        );
+        assert!(
+            channel.batches.lock().expect("lock").is_empty(),
+            "the channel was not asked at all"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_whole_opened_batch_goes_in_one_call() {
+        // Twelve stores dropping off at once is one notification, not twelve — which is why the seam
+        // takes a slice rather than an alert.
+        let channel = SpyChannel::default();
+        let opened = vec![offline(1, 6), offline(2, 7), offline(3, 8)];
+        assert!(
+            deliver_opened(Some(&channel), ts(1_000), &opened)
+                .await
+                .is_none(),
+            "a successful push reports nothing"
+        );
+        assert_eq!(
+            channel.batches.lock().expect("lock").as_slice(),
+            [3],
+            "one call carrying all three, not three calls"
+        );
+    }
+
+    #[tokio::test]
+    async fn console_only_alerting_delivers_nothing_and_reports_nothing() {
+        // No channel configured is the default posture, and it is not an error.
+        let reason = deliver_opened(None::<&SpyChannel>, ts(1_000), &[offline(1, 6)]).await;
+        assert!(reason.is_none());
     }
 
     #[tokio::test]

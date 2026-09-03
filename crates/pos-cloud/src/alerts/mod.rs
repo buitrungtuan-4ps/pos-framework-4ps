@@ -9,11 +9,13 @@
 //! channels. This module holds the domain model and the pure evaluator; the durable store, the
 //! background loop, delivery, and the `/admin` surface land in the following slices.
 
+pub mod channel;
 pub mod eval;
 pub mod evaluator;
 pub mod model;
 pub mod store;
 
+pub use channel::{AlertChannel, ChannelError, WebhookAlertChannel};
 pub use eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
 pub use evaluator::{PassSummary, reconcile};
 pub use model::{AlertKind, AlertSeverity, FiringAlert};

@@ -104,3 +104,41 @@ here so the gap is explicit, not silently dropped:
   makes the partial coverage explicit and each gap is a scoped follow-up rather than a re-design.
 - **Neutral.** Alert thresholds are cloud-wide config, not per-tenant — a per-tenant override is a later
   refinement if a tenant needs a different offline tolerance.
+
+## Delivery note — slice 4, the off-console channel (2026-09-03)
+
+The `AlertChannel` seam and the webhook channel this ADR named are built. What shipped matches the
+decision above, with three things worth recording.
+
+**The seam takes a batch, not an alert.** `deliver(now, &[FiringAlert])` rather than one call per
+alert, because the channels after this one have a per-message cost: twelve stores dropping off when a
+regional link fails is one notification an operator reads, or twelve they start filtering. The
+webhook channel posts the batch as one signed JSON body.
+
+**Delivery cannot fail a pass, and the type is what enforces it.** `deliver_opened` returns
+`Option<String>` — the reason it did not work — rather than `Result<(), _>`. That is deliberate: with
+a `Result` in that position, any later edit adding a `?` would turn an unreachable ops endpoint into a
+failed evaluator tick, and the alerts were already stored and already in the console before the
+channel was asked. The reason surfaces in the tick's health detail as `delivery_error`, so an
+operator can see "firing, and not arriving" — which is a third state, distinct from the evaluator
+being down and from nothing being wrong.
+
+An empty batch never reaches a channel. Most ticks open nothing, and a channel told "all clear" every
+minute is how the one message that matters ends up in a folder nobody reads.
+
+**One destination for the deployment, not one per tenant.** `alert_webhook_url` +
+`alert_webhook_secret` in the cloud's config file, which `bootstrap.sh` writes server-side. Per-tenant
+was considered and is wrong for this ADR's own condition list: `projector_unhealthy` and
+`jetstream_capacity` are server-wide and belong to no tenant, so there is no tenant webhook they could
+be sent to. A URL without a secret is a **boot refusal**, not a warning — an unsigned batch is
+indistinguishable from one a stranger posted, and "every store is offline" is a convincing thing to be
+told. So is a secret without a URL, because that configuration silently delivers nothing while reading
+as armed.
+
+The URL is SSRF-vetted once at boot through the same `vet` the tenant webhooks use, not per tick: a
+DNS lookup does not belong on the alert path, and a mistyped ops URL should be learned about at start.
+A refused URL logs at `error` and leaves alerting console-only rather than failing the boot — taking
+the whole cloud down over an ops endpoint typo is the wrong trade.
+
+**What is still a follow-up.** Email and a Zalo/Telegram chat channel, as further adapters behind the
+same trait — the seam is what this slice was for. Neither needs this ADR reopened.

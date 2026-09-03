@@ -198,12 +198,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         interval_secs = config.alert_eval_interval_secs,
         "alert evaluator started"
     );
+    // The off-console channel (ADR-0073 slice 4), when one is configured. The URL is SSRF-vetted here
+    // rather than per tick: a boot refusal is the right place to learn the ops endpoint resolves to a
+    // private address, and re-vetting every minute would put a DNS lookup on the alert path.
+    let alert_channel = match (&config.alert_webhook_url, &config.alert_webhook_secret) {
+        (Some(url), Some(secret)) => match webhook::vet_blocking(url).await {
+            Ok(destination) => {
+                tracing::info!(destination = %destination.url, "alert webhook channel armed");
+                Some(alerts::WebhookAlertChannel::new(
+                    TlsWebhookSender::new(webhook_timeout),
+                    destination,
+                    secret.clone(),
+                ))
+            }
+            Err(rejection) => {
+                // Not fatal: console alerting still works, and refusing to boot would take the whole
+                // cloud down over a mistyped ops URL. Loud, though — somebody believes this is armed.
+                tracing::error!(
+                    %rejection,
+                    "alert_webhook_url was refused; alerts stay console-only until it is corrected"
+                );
+                None
+            }
+        },
+        // Console-only. Validated in pairs at load (`CloudConfig::validate`), so a half-set pair
+        // never reaches here.
+        _ => None,
+    };
     let alert_task = tokio::spawn(alerts::evaluator::run(
         store.registry(),
         store.fleet(),
         store.webhooks(),
         store.task_health(),
         store.alerts(),
+        alert_channel,
         SystemClock,
         alert_thresholds,
         alert_interval,
