@@ -17,7 +17,7 @@ use deadpool_postgres::Pool;
 use pos_ports::PortError;
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
 /// The config-tree store over a shared pool. Built by [`PostgresStore::config_trees`](crate::PostgresStore::config_trees).
 #[derive(Clone, Debug)]
@@ -30,8 +30,13 @@ impl PostgresConfigTrees {
         Self { pool }
     }
 
-    /// Loads a store's tree state as the raw JSON text of a `ConfigTreeState`, or `None` if the
-    /// `(tenant, store)` pair has no row yet.
+    /// Loads a store's tree state as the raw JSON text of a `ConfigTreeState` **and the version the
+    /// row was read at**, or `None` if the `(tenant, store)` pair has no row yet.
+    ///
+    /// The version is `xmin::text`, the same opaque token every other conditional write in this
+    /// adapter uses ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). It is
+    /// not the tree's `ConfigVersionId`: that one lives *inside* the document and is the caller's
+    /// concern, while this one is the row's and is what [`Self::save_state`] compares.
     ///
     /// # Errors
     ///
@@ -40,22 +45,37 @@ impl PostgresConfigTrees {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Option<String>, PortError> {
+    ) -> Result<Option<(String, String)>, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_opt(
-                "SELECT state::text FROM config_trees WHERE tenant_id = $1 AND store_id = $2",
+                "SELECT state::text, xmin::text FROM config_trees \
+                 WHERE tenant_id = $1 AND store_id = $2",
                 &[&tenant.to_string(), &store_id.to_string()],
             )
             .await
             .map_err(unavailable)?;
-        Ok(row.map(|row| row.get(0)))
+        Ok(row.map(|row| (row.get(0), row.get(1))))
     }
 
-    /// Upserts a store's tree state (the raw `ConfigTreeState` JSON).
+    /// Writes a store's tree state (the raw `ConfigTreeState` JSON) **only if the row is still at
+    /// `expected`** ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    ///
+    /// This replaces an unconditional upsert, and the two cases are deliberately different
+    /// statements rather than one `ON CONFLICT` that papers over them:
+    ///
+    /// - `expected = None` — the caller read no row, so this must *create* one. `ON CONFLICT DO
+    ///   NOTHING` returns zero rows if another publish created it first, which is a
+    ///   [`RowUpdate::VersionMismatch`], not a silent overwrite. An upsert here would clobber that
+    ///   other publish entirely.
+    /// - `expected = Some(v)` — the row must still be at `v`. Zero rows means either the version
+    ///   moved or the row is gone, and the probe on the failure path separates them, exactly as the
+    ///   record-shaped writes in this adapter do.
     ///
     /// The `$3::text::jsonb` cast pins the bound parameter's inference to `text` before jsonb, the
-    /// same reason the rollup and event tables cast their bound documents.
+    /// same reason the rollup and event tables cast their bound documents. The comparison is on
+    /// `xmin::text` rather than a cast of `expected` to `xid`, because casting caller-supplied text
+    /// to `xid` raises `invalid input syntax for type xid` and would turn a stale token into a `500`.
     ///
     /// # Errors
     ///
@@ -65,19 +85,55 @@ impl PostgresConfigTrees {
         tenant: TenantId,
         store_id: StoreId,
         state_json: &str,
-    ) -> Result<(), PortError> {
+        expected: Option<&str>,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO config_trees (tenant_id, store_id, state) \
-                 VALUES ($1, $2, $3::text::jsonb) \
-                 ON CONFLICT (tenant_id, store_id) \
-                 DO UPDATE SET state = EXCLUDED.state, updated_at = now()",
-                &[&tenant.to_string(), &store_id.to_string(), &state_json],
+        let tenant_text = tenant.to_string();
+        let store_text = store_id.to_string();
+
+        let Some(expected) = expected else {
+            let inserted = connection
+                .query_opt(
+                    "INSERT INTO config_trees (tenant_id, store_id, state) \
+                     VALUES ($1, $2, $3::text::jsonb) \
+                     ON CONFLICT (tenant_id, store_id) DO NOTHING \
+                     RETURNING xmin::text",
+                    &[&tenant_text, &store_text, &state_json],
+                )
+                .await
+                .map_err(unavailable)?;
+            return Ok(inserted.map_or(RowUpdate::VersionMismatch, |row| {
+                RowUpdate::Updated(row.get(0))
+            }));
+        };
+
+        let updated = connection
+            .query_opt(
+                "UPDATE config_trees SET state = $3::text::jsonb, updated_at = now() \
+                 WHERE tenant_id = $1 AND store_id = $2 \
+                 AND xmin::text = $4 RETURNING xmin::text",
+                &[&tenant_text, &store_text, &state_json, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+
+        // Zero rows is ambiguous on its own: the version moved, or the row is not there. The probe
+        // is what makes a conflict distinguishable from an absence.
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM config_trees WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant_text, &store_text],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Upserts a store's liveness row from a config pull ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)):

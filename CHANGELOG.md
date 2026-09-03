@@ -52,6 +52,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   measurement, fitting two of them.
 
 ### Changed
+- **The config tree stops losing concurrent publishes** (#142). Q3c slice 5a, ADR-0095 shape A. Every
+  one of the twelve `ConfigTreeStore::save` call sites used to reconstruct the whole four-layer
+  document from a freshly loaded state and write it back unconditionally, so two publishes that
+  overlapped kept only the second — the first operator's layer edit *and* its history entry were
+  gone, silently. `load` now returns the version it read at and `save` applies only if the stored
+  state is still at that version; under `store-postgres` that is the same `xmin` compare-and-swap the
+  record-shaped entities use, with no migration.
+
+  Two kinds of write sit on that precondition, and they behave differently on purpose. A config layer
+  is a map of nodes, so the ten routes that publish *nodes* — floor, stations, inventory, campaigns,
+  tax, locale, channels, tender, QR, permissions, capabilities — write only their own keys and
+  **retry** when they lose a race: reload, re-apply your keys to the winner's layer, save again. A
+  menu publish and a floor publish that overlap now both survive, where before one was lost and where
+  a plain refusal would have shown someone a conflict about a key they never touched.
+
+  The two routes where an operator types the document itself — `PUT
+  /admin/stores/{store_id}/config/{level}` and `POST /admin/stores/{store_id}/config/rollback` —
+  **require `If-Match`** and answer a stale one with `412 VERSION_MISMATCH`, because there a second
+  writer really does destroy typed work. `If-Match: *` asserts "this store has never been published
+  to"; it is the one place in the console a wildcard is accepted, and it is refused once a version
+  exists. The Config screen sends the version it last read, reloads on a `412` and says what
+  happened. The background activator for scheduled publishes takes the same precondition: losing the
+  race leaves the row pending for the next pass rather than failing it.
+
+  **Upgrade note.** Two console routes change contract: a `PUT /admin/stores/{store_id}/config/{level}`
+  or `POST /admin/stores/{store_id}/config/rollback` without an `If-Match` header is now refused with
+  `400 INVALID_ARGUMENT`. No other config route changes, and no migration is needed.
 - **The floor and people entities join the conditional-write mechanism** (#140). Q3c slice 4: areas,
   tables, kitchen stations, employees and role templates — the five remaining record-shaped entities
   in the console — go through the same `Version`/`Versioned`/`UpdateOutcome` seam and the same

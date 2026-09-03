@@ -27,6 +27,7 @@ use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore,
 };
 use crate::health::{TaskHealthStore, tick_detail};
+use crate::version::UpdateOutcome;
 
 /// The canonical name of the scheduled-publish activator loop, for task-health reporting.
 pub const SCHEDULED_PUBLISH_ACTIVATOR: &str = "scheduled_publish_activator";
@@ -185,10 +186,14 @@ async fn apply_one<Cfg>(
 where
     Cfg: ConfigTreeStore,
 {
-    let state_before = config_trees
+    let loaded = config_trees
         .load(publish.tenant_id, publish.store_id)
         .await
         .map_err(|error| error.to_string())?;
+    let (state_before, row_version) = match loaded {
+        Some(versioned) => (Some(versioned.record), Some(versioned.etag)),
+        None => (None, None),
+    };
     let mut store_layer = state_before.as_ref().map_or_else(
         || serde_json::Value::Object(serde_json::Map::new()),
         |existing| existing.layers[2].clone(),
@@ -206,11 +211,28 @@ where
     let version_id = mint_version_id(now_ms).ok_or_else(|| "OS entropy unavailable".to_owned())?;
     match tree.publish(ConfigLevel::Store, store_layer, version_id) {
         Ok(id) => {
-            config_trees
-                .save(publish.tenant_id, publish.store_id, &tree.state())
+            // The activator has no operator and no `If-Match`, but it still composes on what it
+            // read, so it takes the same precondition every console write does
+            // ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)). Losing the
+            // race is not an error: the row stays pending and the next tick re-reads and retries,
+            // which is exactly what `pass` already does for every other failure.
+            match config_trees
+                .save(
+                    publish.tenant_id,
+                    publish.store_id,
+                    &tree.state(),
+                    row_version.as_ref(),
+                )
                 .await
-                .map_err(|error| error.to_string())?;
-            Ok(id)
+                .map_err(|error| error.to_string())?
+            {
+                UpdateOutcome::Updated(_) => Ok(id),
+                UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound => Err(
+                    "the store's configuration changed while this scheduled publish was being \
+                     applied; it stays pending and the next pass will retry it"
+                        .to_owned(),
+                ),
+            }
         }
         Err(ConfigError::Invalid(violations)) => {
             Err(format!("the scheduled node is invalid: {violations:?}"))
@@ -491,15 +513,19 @@ mod tests {
             &self,
             tenant: TenantId,
             store: StoreId,
-        ) -> Result<Option<crate::config_tree::ConfigTreeState>, crate::config_tree::ConfigStoreError>
-        {
+        ) -> Result<
+            Option<crate::version::Versioned<crate::config_tree::ConfigTreeState>>,
+            crate::config_tree::ConfigStoreError,
+        > {
             Ok(self
                 .states
                 .lock()
                 .expect("lock")
                 .iter()
                 .find(|(t, s, _)| *t == tenant && *s == store)
-                .map(|(_, _, state)| state.clone()))
+                .map(|(_, _, state)| {
+                    crate::version::Versioned::new(state.clone(), crate::version::Version::new("1"))
+                }))
         }
 
         async fn save(
@@ -507,11 +533,14 @@ mod tests {
             tenant: TenantId,
             store: StoreId,
             state: &crate::config_tree::ConfigTreeState,
-        ) -> Result<(), crate::config_tree::ConfigStoreError> {
+            _expected: Option<&crate::version::Version>,
+        ) -> Result<crate::version::UpdateOutcome, crate::config_tree::ConfigStoreError> {
             let mut states = self.states.lock().expect("lock");
             states.retain(|(t, s, _)| !(*t == tenant && *s == store));
             states.push((tenant, store, state.clone()));
-            Ok(())
+            Ok(crate::version::UpdateOutcome::Updated(
+                crate::version::Version::new("1"),
+            ))
         }
 
         async fn record_store_seen(
@@ -556,7 +585,7 @@ mod tests {
             .expect("load")
             .expect("a tree was saved");
         assert!(
-            state.layers[2]
+            state.record.layers[2]
                 .as_object()
                 .is_some_and(|map| map.contains_key("campaigns")),
             "the scheduled campaigns node was published onto the Store layer"

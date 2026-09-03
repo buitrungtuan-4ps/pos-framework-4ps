@@ -2490,65 +2490,45 @@ where
 
     // Load the store's tree, set the flag keys on its Store layer (index 2), and re-publish that layer,
     // preserving the other Store-level keys (`menu`, `layout`, `permissions`).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        for (key, value) in &request.flags {
-            map.insert(key.clone(), serde_json::Value::Bool(*value));
-        }
-    }
+    let nodes: Vec<(String, serde_json::Value)> = request
+        .flags
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::Bool(*value)))
+        .collect();
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "config.capabilities.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                serde_json::to_value(&request.flags).ok(),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "config.capabilities.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            serde_json::to_value(&request.flags).ok(),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -2648,63 +2628,41 @@ where
 
     // Set the `tax` key on the store's Store layer (index 2) and re-publish it, preserving the other
     // Store-level keys (`menu`, `layout`, `permissions`, `floor`, capability flags).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("tax".to_owned(), tax_value);
-    }
+    let nodes = vec![("tax".to_owned(), tax_value)];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "config.tax.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                serde_json::to_value(entries.len()).ok(),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "config.tax.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            serde_json::to_value(entries.len()).ok(),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -2772,11 +2730,6 @@ where
 /// load→merge→publish→version shape as the other node publishes. Each field is checked with its domain
 /// constructor before anything is written (a real IANA timezone against the tz database, a 3-letter
 /// currency, an hour in `0..=23`), so a bad value is a `400` naming it rather than a stored error.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one publish scenario: validate three fields with their domain constructors, then the \
-              load→merge→version→save→audit shape shared with the other node publishes"
-)]
 async fn admin_publish_locale<Cfg, A, C>(
     State(state): State<ConfigLocaleState<Cfg, A, C>>,
     headers: HeaderMap,
@@ -2848,63 +2801,41 @@ where
 
     // Set the `locale` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys.
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("locale".to_owned(), locale_value.clone());
-    }
+    let nodes = vec![("locale".to_owned(), locale_value.clone())];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "config.locale.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(locale_value),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "config.locale.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(locale_value),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -2968,7 +2899,11 @@ async fn read_store_node<Cfg>(
 where
     Cfg: ConfigTreeStore,
 {
-    match config_trees.load(tenant_id, store_id).await {
+    match config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(Some(state)) => Ok(state
             .layers
             .get(2)
@@ -2995,53 +2930,40 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
+    let nodes = vec![(node_key.to_owned(), node_value.clone())];
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let store_layer = store_layer_with(state_before.as_ref(), node_key, node_value.clone());
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
-    };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                context,
-                Some(tenant_id),
-                action,
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(node_value),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            context,
+            Some(tenant_id),
+            action,
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(node_value),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -4632,12 +4554,6 @@ where
 /// them — the same load→compile→validate→write→version shape as [`admin_publish_menu`], onto the
 /// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
 /// backup): an invalid plan is a `422` with the violated rules, never a stored state.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one publish is a single linear transaction — load areas/tables/stations/rules, compile \
-              both nodes, validate, merge onto the Store layer and version it; splitting the \
-              load-compile-write flow would scatter the config-tree state the final publish needs"
-)]
 async fn admin_publish_floor<F, Cfg, A, C>(
     State(state): State<FloorPublishState<F, Cfg, A, C>>,
     headers: HeaderMap,
@@ -4713,69 +4629,49 @@ where
 
     // Set the `floor` and `stations` keys on the store's Store layer (index 2) and re-publish it,
     // preserving the other Store-level keys (`menu`, `layout`, `permissions`, capability flags).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("floor".to_owned(), floor_value);
-        map.insert("stations".to_owned(), stations_value);
-    }
+    let nodes = vec![
+        ("floor".to_owned(), floor_value),
+        ("stations".to_owned(), stations_value),
+    ];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "floor.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(serde_json::json!({
-                    "config_version_id": id.to_string(),
-                    "area_count": floor_plan.areas().len(),
-                    "table_count": floor_plan.tables().count(),
-                    "station_count": station_plan.stations().len(),
-                })),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "floor.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(serde_json::json!({
+                "config_version_id": id.to_string(),
+                "area_count": floor_plan.areas().len(),
+                "table_count": floor_plan.tables().count(),
+                "station_count": station_plan.stations().len(),
+            })),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -8175,25 +8071,255 @@ where
         })
 }
 
-/// Sets one node `key` on a store's Store-layer object (index 2), preserving its other keys, and
-/// returns the layer to re-publish. A missing or non-object prior layer starts from an empty object,
-/// so the first publish and a corrupt layer both compose cleanly.
-fn store_layer_with(
+/// Drops the version a config-tree read was handed, keeping the state.
+///
+/// A read of the tree wants the four layers and the history; the version the row was read at is a
+/// *writer's* precondition ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// Read paths say so by calling this, rather than silently discarding a field.
+pub(crate) fn strip_tree_version(
+    loaded: Option<Versioned<ConfigTreeState>>,
+) -> Option<ConfigTreeState> {
+    loaded.map(|versioned| versioned.record)
+}
+
+/// A store's config tree as it was read, with the version the store handed out.
+///
+/// The two travel together because a conditional write needs both: the state to compose the next
+/// publish from, and the version to write against.
+struct LoadedTree {
+    state: Option<ConfigTreeState>,
+    version: Option<Version>,
+}
+
+/// Loads a store's tree for a write, keeping the version it was read at.
+///
+/// Split from [`publish_store_layer`] so each route can compose its own layer in between, which is
+/// the only part of the twelve node-publish routes that actually differs.
+async fn load_tree_for_write<Cfg>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<LoadedTree, Response>
+where
+    Cfg: ConfigTreeStore,
+{
+    match config_trees.load(tenant_id, store_id).await {
+        Ok(Some(versioned)) => Ok(LoadedTree {
+            state: Some(versioned.record),
+            version: Some(versioned.etag),
+        }),
+        Ok(None) => Ok(LoadedTree {
+            state: None,
+            version: None,
+        }),
+        Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+/// Sets `nodes` on a store's tree at `level` and saves it, retrying if another publish lands first.
+///
+/// Twelve routes used to hand-roll the load→compose→publish→save cycle, and each copy was a place
+/// the conditional write could be forgotten. It is one function now
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+///
+/// # Why this retries instead of refusing
+///
+/// A layer is a **map of nodes**, and this writes only the keys in `nodes`. Two publishes of
+/// *different* nodes — a menu and a floor, say — do not conflict in any way an operator would
+/// recognise: nothing either of them authored is lost. What the old code lost was the *document*,
+/// because each publish wrote back a whole tree composed from a stale read.
+///
+/// So the precondition here is the store's, evaluated at write time, and losing it is not the
+/// caller's problem: reload, re-apply this write's own keys onto what is now there, and save again.
+/// Both nodes land and neither operator sees a conflict. Refusing instead would hand someone a
+/// "the configuration changed" error for an edit that never touched their key, which is friction
+/// with no correctness behind it.
+///
+/// Concurrent edits to the *same* node are a different question, and they are answered a layer up:
+/// the authoring records a node is compiled from are themselves conditionally written (slices 2–4),
+/// so two people cannot silently overwrite each other's catalog or floor edits. By the time a
+/// publish runs, it is compiling committed data.
+///
+/// The two routes where a human edits the document itself — `PUT /admin/config` and the rollback —
+/// are the exception and go through [`publish_authored_layer`] instead.
+async fn publish_config_nodes<Cfg, C>(
+    config_trees: &Cfg,
+    clock: &C,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    level: ConfigLevel,
+    nodes: Vec<(String, serde_json::Value)>,
+) -> Result<ConfigVersionId, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    // Bounded so a pathological hot store cannot spin. Three attempts is far beyond what a console's
+    // publish rate can lose; exhausting them means something other than a racing operator.
+    const ATTEMPTS: u8 = 3;
+
+    let mut last_conflict = false;
+    for _ in 0..ATTEMPTS {
+        let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
+        let layer = layer_with_nodes(loaded.state.as_ref(), level, &nodes);
+        let mut tree = match loaded.state {
+            Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+            None => ConfigTree::new(store_id, CapabilityValidator),
+        };
+        let Some(version_id) = mint_version_id(clock.now().as_milliseconds_since_epoch()) else {
+            tracing::error!("could not read OS entropy to mint a config version id");
+            return Err(service_unavailable("configuration"));
+        };
+        let id = match tree.publish(level, layer, version_id) {
+            Ok(id) => id,
+            Err(ConfigError::Invalid(violations)) => {
+                return Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(ConfigViolations { violations }),
+                )
+                    .into_response());
+            }
+        };
+        match config_trees
+            .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
+            .await
+        {
+            Ok(UpdateOutcome::Updated(_)) => return Ok(id),
+            Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => {
+                last_conflict = true;
+                tracing::debug!("a concurrent config publish won; re-applying this node");
+            }
+            Err(error) => return Err(config_store_error_response(&error)),
+        }
+    }
+    if last_conflict {
+        tracing::warn!("a config publish lost {ATTEMPTS} races in a row and gave up");
+    }
+    Err(version_mismatch())
+}
+
+/// Sets `nodes` on the layer at `level`, preserving every other key.
+///
+/// A missing or non-object prior layer starts from an empty object, so a store's first publish and a
+/// corrupt layer both compose cleanly.
+fn layer_with_nodes(
     state_before: Option<&ConfigTreeState>,
-    key: &str,
-    value: serde_json::Value,
+    level: ConfigLevel,
+    nodes: &[(String, serde_json::Value)],
 ) -> serde_json::Value {
     let mut layer = state_before.map_or_else(
         || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
+        |existing| existing.layer(level).clone(),
     );
     if !layer.is_object() {
         layer = serde_json::Value::Object(serde_json::Map::new());
     }
     if let serde_json::Value::Object(map) = &mut layer {
-        map.insert(key.to_owned(), value);
+        for (key, value) in nodes {
+            map.insert(key.clone(), value.clone());
+        }
     }
     layer
+}
+
+/// Publishes a whole authored `layer` at `level`, refusing a write made against a stale read.
+///
+/// This is the other half of [`publish_config_nodes`], and the difference is what the caller is
+/// doing. A node publish sets one key and commutes with the others, so it retries. This one replaces
+/// a layer an operator *typed* — every key in it, including keys they never looked at — so a second
+/// writer really does destroy work. That earns a refusal the operator has to see, carrying the
+/// `ConfigVersionId` they were editing so the history screen can show them what changed.
+///
+/// Used only by `PUT /admin/config` and `POST /admin/config/versions/{id}/restore`.
+async fn publish_authored_layer<Cfg, C>(
+    config_trees: &Cfg,
+    clock: &C,
+    headers: &HeaderMap,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    loaded: LoadedTree,
+    level: ConfigLevel,
+    layer: serde_json::Value,
+) -> Result<ConfigVersionId, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let mut tree = match loaded.state {
+        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
+        None => ConfigTree::new(store_id, CapabilityValidator),
+    };
+    if_match_config(headers, tree.current_version())?;
+    let Some(version_id) = mint_version_id(clock.now().as_milliseconds_since_epoch()) else {
+        tracing::error!("could not read OS entropy to mint a config version id");
+        return Err(service_unavailable("configuration"));
+    };
+    match tree.publish(level, layer, version_id) {
+        Ok(id) => match config_trees
+            .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
+            .await
+        {
+            // The `If-Match` above compared against this handler's own read, which another publish
+            // may already have overtaken. This is the precondition the store evaluates at write
+            // time, and it is the one that actually prevents the interleave.
+            Ok(UpdateOutcome::Updated(_)) => Ok(id),
+            Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => Err(version_mismatch()),
+            Err(error) => Err(config_store_error_response(&error)),
+        },
+        Err(ConfigError::Invalid(violations)) => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ConfigViolations { violations }),
+        )
+            .into_response()),
+    }
+}
+
+/// The `If-Match` a config publish must carry, compared against the version the tree holds.
+///
+/// A store that has never been published to has no current version, and says so: `If-Match: *` is
+/// how a caller asserts "there is nothing here yet". That is the one place a wildcard is accepted in
+/// this tree — the record-shaped routes refuse it, because for them it means "overwrite whatever is
+/// there", which is the behaviour ADR-0094 exists to remove. Here it means the opposite: *only* if
+/// nothing is there.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
+)]
+fn if_match_config(headers: &HeaderMap, current: Option<ConfigVersionId>) -> Result<(), Response> {
+    let Some(raw) = headers.get(IF_MATCH) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "this write must carry the version it was read at, as an If-Match header",
+            &[("if-match", "REQUIRED")],
+        ));
+    };
+    let Ok(raw) = raw.to_str() else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must be a strong entity-tag",
+            &[("if-match", "INVALID_FORMAT")],
+        ));
+    };
+    let trimmed = raw.trim();
+
+    let Some(current) = current else {
+        return if trimmed == "*" {
+            Ok(())
+        } else {
+            Err(version_mismatch())
+        };
+    };
+    match parse_entity_tag(trimmed) {
+        Ok(expected) if expected.as_str() == current.to_string() => Ok(()),
+        // A wildcard here claims the store has never been published to, and it has: same refusal as
+        // naming the wrong version, because it is the same wrong claim about the same tree.
+        Ok(_) | Err(EntityTagRefusal::Wildcard) => Err(version_mismatch()),
+        Err(EntityTagRefusal::Malformed) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must be a strong entity-tag",
+            &[("if-match", "INVALID_FORMAT")],
+        )),
+    }
 }
 
 /// Assembles a tenant's authored inventory into a `PublishedInventory`, writes it as the store's
@@ -8247,54 +8373,41 @@ where
 
     // Set the `inventory` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys (`menu`, `tax`, `campaigns`, `permissions`, `floor`, capability flags).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let store_layer = store_layer_with(state_before.as_ref(), "inventory", inventory_value);
+    let nodes = vec![("inventory".to_owned(), inventory_value)];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "config.inventory.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                serde_json::to_value(summary).ok(),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "config.inventory.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            serde_json::to_value(summary).ok(),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -8400,63 +8513,41 @@ where
 
     // Set the `campaigns` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys (`menu`, `tax`, `permissions`, `floor`, capability flags).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("campaigns".to_owned(), campaigns_value);
-    }
+    let nodes = vec![("campaigns".to_owned(), campaigns_value)];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "config.campaigns.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                serde_json::to_value(campaigns.len()).ok(),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "config.campaigns.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            serde_json::to_value(campaigns.len()).ok(),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -8567,10 +8658,11 @@ where
         tracing::error!("could not serialise a campaigns node");
         return service_unavailable("campaign");
     };
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
+    let loaded = match load_tree_for_write(&state.config_trees, tenant_id, store_id).await {
+        Ok(loaded) => loaded,
+        Err(refusal) => return refusal,
     };
+    let state_before = &loaded.state;
     match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
         Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
         Err(violations) => (
@@ -8774,10 +8866,11 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
+    let loaded = match load_tree_for_write(&state.config_trees, tenant_id, store_id).await {
+        Ok(loaded) => loaded,
+        Err(refusal) => return refusal,
     };
+    let state_before = &loaded.state;
     let Some(mut node) = state_before
         .as_ref()
         .map(|s| s.layer(ConfigLevel::Store))
@@ -8837,63 +8930,39 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
+    let nodes = vec![(write.key.to_owned(), write.node)];
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        write.level,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let mut layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layer(write.level).clone(),
-    );
-    if !layer.is_object() {
-        layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    if let serde_json::Value::Object(map) = &mut layer {
-        map.insert(write.key.to_owned(), write.node);
-    }
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
-    };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(write.level, layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            audit_action(
-                &state.audit,
-                &state.clock,
-                context,
-                Some(tenant_id),
-                write.action,
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(write.detail),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
-        )
-            .into_response(),
-    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        write.action,
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(write.detail),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(PublishedConfig {
+            config_version_id: id.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 /// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
@@ -8925,7 +8994,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match state.config_trees.load(tenant_id, store_id).await {
+    match state
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(state_before) => {
             let rollout = state_before
                 .as_ref()
@@ -9028,7 +9102,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match state.config_trees.load(tenant_id, store_id).await {
+    match state
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(state_before) => {
             let placement = state_before
                 .as_ref()
@@ -12443,69 +12522,50 @@ where
     // Load the store's tree (or start one), set the `menu` and `layout` keys on its Store layer, and
     // re-publish that layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order
     // (`ConfigLevel::ORDER`); writing the whole layer back preserves any other Store-level keys there.
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |s| s.layers[2].clone(),
-    );
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("menu".to_owned(), book_value);
-        map.insert("layout".to_owned(), layout_value);
-    } else {
-        store_layer = serde_json::json!({ "menu": book_value, "layout": layout_value });
-    }
+    let nodes = vec![
+        ("menu".to_owned(), book_value),
+        ("layout".to_owned(), layout_value),
+    ];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            // Records that a menu was compiled and published to a store — the menu compiled and the
-            // config version it produced, keyed to the store. The compiled book itself rides the
-            // config tree; the config version history (a later G2 slice) is where it is diffed.
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "catalog.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(serde_json::json!({
-                    "menu_id": menu_id.to_string(),
-                    "config_version_id": id.to_string(),
-                })),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        // Records that a menu was compiled and published to a store — the menu compiled and the
+        // config version it produced, keyed to the store. The compiled book itself rides the
+        // config tree; the config version history (a later G2 slice) is where it is diffed.
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "catalog.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(serde_json::json!({
+                "menu_id": menu_id.to_string(),
+                "config_version_id": id.to_string(),
+            })),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -12569,13 +12629,6 @@ struct PublishPermissionsRequest {
 /// tree — the same load→compile→write→version shape as [`admin_publish_menu`], onto the `permissions`
 /// key instead of `menu`/`layout`. The PIN hash rides in the node (the edge verifies against it,
 /// ADR-0030); the audit records only the config version and staff count, never a name or PIN.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one publish is a single linear transaction — load assignments/employees/roles + each \
-              assigned employee's PIN hash, compile the document, set the `permissions` node on the \
-              Store layer and version it; splitting the load-compile-write flow would scatter the \
-              config-tree state the final publish needs"
-)]
 async fn admin_publish_permissions<P, Cfg, A, C>(
     State(state): State<PeoplePublishState<P, Cfg, A, C>>,
     headers: HeaderMap,
@@ -12651,67 +12704,46 @@ where
 
     // Set the `permissions` key on the store's Store layer (index 2 in Tenant→Brand→Store→Device) and
     // re-publish that layer, preserving any other Store-level keys (`menu`, `layout`, …).
-    let state_before = match state.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert("permissions".to_owned(), document_value);
-    } else {
-        store_layer = serde_json::json!({ "permissions": document_value });
-    }
+    let nodes = vec![("permissions".to_owned(), document_value)];
 
-    let mut tree = match state_before {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(state.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
-    };
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
-        Ok(id) => {
-            if let Err(error) = state
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
-            // The trail records the config version and how many staff the node carries — never a name
-            // or a PIN (ADR-0070).
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "permissions.publish",
-                "store",
-                &store_id.to_string(),
-                None,
-                Some(serde_json::json!({
-                    "config_version_id": id.to_string(),
-                    "staff_count": staff_count,
-                })),
-            )
-            .await;
-            (
-                StatusCode::OK,
-                Json(PublishedConfig {
-                    config_version_id: id.to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
+    {
+        // The trail records the config version and how many staff the node carries — never a name
+        // or a PIN (ADR-0070).
+        audit_action(
+            &state.audit,
+            &state.clock,
+            &context,
+            Some(tenant_id),
+            "permissions.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(serde_json::json!({
+                "config_version_id": id.to_string(),
+                "staff_count": staff_count,
+            })),
         )
-            .into_response(),
+        .await;
+        (
+            StatusCode::OK,
+            Json(PublishedConfig {
+                config_version_id: id.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -13507,7 +13539,12 @@ where
         tracing::warn!(%error, "recording store liveness on a config pull failed");
     }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's trees.
-    match app.config_trees.load(grant.tenant(), store_id).await {
+    match app
+        .config_trees
+        .load(grant.tenant(), store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             let response = match tree.update_for(held) {
@@ -15334,24 +15371,27 @@ where
     };
 
     // Rehydrate the store's tree (or start a fresh one), authoring against the §10-aware validator.
-    let mut tree = match app.config_trees.load(tenant_id, store_id).await {
-        Ok(Some(state)) => ConfigTree::from_state(store_id, CapabilityValidator, state),
-        Ok(None) => ConfigTree::new(store_id, CapabilityValidator),
-        Err(error) => return config_store_error_response(&error),
+    let loaded = match load_tree_for_write(&app.config_trees, tenant_id, store_id).await {
+        Ok(loaded) => loaded,
+        Err(refusal) => return refusal,
     };
-    let Some(version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return service_unavailable("configuration");
+    let id = match publish_authored_layer(
+        &app.config_trees,
+        &app.clock,
+        &headers,
+        tenant_id,
+        store_id,
+        loaded,
+        level,
+        document,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
     };
-    match tree.publish(level, document, version_id) {
-        Ok(id) => {
-            if let Err(error) = app
-                .config_trees
-                .save(tenant_id, store_id, &tree.state())
-                .await
-            {
-                return config_store_error_response(&error);
-            }
+    {
+        {
             // Records that a new version was published and at which level — not the config document
             // itself; the full old→new history is the config version list (a later G2 slice).
             let level_token = match level {
@@ -15383,11 +15423,6 @@ where
             )
                 .into_response()
         }
-        Err(ConfigError::Invalid(violations)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
-        )
-            .into_response(),
     }
 }
 
@@ -15418,7 +15453,12 @@ where
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
             Err(refusal) => return refusal,
         };
-    match app.config_trees.load(tenant_id, store_id).await {
+    match app
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
@@ -15477,7 +15517,12 @@ where
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
             Err(refusal) => return refusal,
         };
-    match app.config_trees.load(tenant_id, store_id).await {
+    match app
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             let current = tree.current_version();
@@ -15532,7 +15577,12 @@ where
         ),
         Err(refusal) => return refusal,
     };
-    match app.config_trees.load(tenant_id, store_id).await {
+    match app
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
@@ -15589,13 +15639,19 @@ where
         ),
         Err(refusal) => return refusal,
     };
-    let Some(state) = (match app.config_trees.load(tenant_id, store_id).await {
-        Ok(state) => state,
-        Err(error) => return config_store_error_response(&error),
-    }) else {
+    let loaded = match load_tree_for_write(&app.config_trees, tenant_id, store_id).await {
+        Ok(loaded) => loaded,
+        Err(refusal) => return refusal,
+    };
+    let Some(state) = loaded.state else {
         return no_published_configuration();
     };
     let mut tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+    // A rollback is a write, and it composes on what it read: refuse it if someone published in
+    // between, so an operator cannot roll back over an edit they never saw (ADR-0095).
+    if let Err(refusal) = if_match_config(&headers, tree.current_version()) {
+        return refusal;
+    }
     let Some(new_version_id) = mint_version_id(app.clock.now().as_milliseconds_since_epoch())
     else {
         tracing::error!("could not read OS entropy to mint a config version id");
@@ -15604,12 +15660,14 @@ where
     let Some(new_id) = tree.restore(version_id, new_version_id) else {
         return not_found("config version");
     };
-    if let Err(error) = app
+    match app
         .config_trees
-        .save(tenant_id, store_id, &tree.state())
+        .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
         .await
     {
-        return config_store_error_response(&error);
+        Ok(UpdateOutcome::Updated(_)) => {}
+        Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => return version_mismatch(),
+        Err(error) => return config_store_error_response(&error),
     }
     audit_action(
         &app.audit,

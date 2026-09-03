@@ -411,7 +411,12 @@ where
     /// Reads `store.order_relay.{enabled,wait_ms}` from the store's effective config, tolerating any
     /// shape: an absent or malformed value falls back to the default rather than failing intake.
     async fn config_for(&self, tenant: TenantId, store_id: StoreId) -> RelayConfig {
-        let Ok(Some(state)) = self.config_trees.load(tenant, store_id).await else {
+        let Ok(Some(state)) = self
+            .config_trees
+            .load(tenant, store_id)
+            .await
+            .map(crate::http::strip_tree_version)
+        else {
             return RelayConfig::default();
         };
         let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);

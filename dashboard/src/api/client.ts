@@ -228,10 +228,24 @@ async function requestJsonIfMatch<T>(
   etag: ETag,
   body?: unknown,
 ): Promise<T> {
+  return requestJsonIfMatchRaw<T>(method, path, `"${etag}"`, body);
+}
+
+// The same conditional write with the header value formed by the caller, for the config tree
+// (ADR-0095). Its precondition is not always an entity-tag: a store that has never been published
+// to is asserted with `If-Match: *`, which the record-shaped routes above refuse and this one
+// requires. Passing the formed value through keeps that grammar in one place — `configPrecondition`
+// — instead of teaching this helper a second shape.
+async function requestJsonIfMatchRaw<T>(
+  method: string,
+  path: string,
+  ifMatch: string,
+  body?: unknown,
+): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: {
-      "if-match": `"${etag}"`,
+      "if-match": ifMatch,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -240,6 +254,13 @@ async function requestJsonIfMatch<T>(
     throw await failure(response);
   }
   return (await response.json()) as T;
+}
+
+// The `If-Match` a config publish or rollback carries: the version the tree was read at, or `*` for
+// a store with no published version yet. `*` is an assertion, not a waiver — the server refuses it
+// once a version exists.
+function configPrecondition(version: string | null): string {
+  return version === null ? "*" : `"${version}"`;
 }
 
 // The same conditional write as `requestJsonIfMatch`, for the routes that answer `204` rather than
@@ -414,10 +435,22 @@ export const api = {
     requestJsonOrNull<Json>(
       `/admin/stores/${encodeURIComponent(storeId)}/config?${tenantQuery(tenantId)}`,
     ),
-  publishConfig: (tenantId: string, storeId: string, level: ConfigLevel, document: Json) =>
-    requestJson<PublishedConfig>(
+  // `version` is the config version the tree was read at, or `null` for a store that has never been
+  // published to (ADR-0095). Both are preconditions: a publish made against a version the tree no
+  // longer holds is refused with `412`, and so is a "nothing here yet" claim about a store that has
+  // since been published to. The ten *node* publishes below carry no precondition — they write one
+  // key of a layer and the server retries them around a competing write of a different key.
+  publishConfig: (
+    tenantId: string,
+    storeId: string,
+    level: ConfigLevel,
+    document: Json,
+    version: string | null,
+  ) =>
+    requestJsonIfMatchRaw<PublishedConfig>(
       "PUT",
       `/admin/stores/${encodeURIComponent(storeId)}/config/${level}?${tenantQuery(tenantId)}`,
+      configPrecondition(version),
       document,
     ),
   // Config version history (ADR-0069 G2): list the append-only versions, read one's effective
@@ -432,10 +465,14 @@ export const api = {
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/config/versions/${encodeURIComponent(versionId)}?${tenantQuery(tenantId)}`,
     ),
-  rollbackConfig: (tenantId: string, storeId: string, versionId: string) =>
-    requestJson<PublishedConfig>(
+  // `version` is the current config version as the screen last read it (ADR-0095). A rollback
+  // composes on what it read — it restores an *earlier* document over the current one — so a publish
+  // that landed while the operator was choosing makes the rollback a clobber, and it is refused.
+  rollbackConfig: (tenantId: string, storeId: string, versionId: string, version: string | null) =>
+    requestJsonIfMatchRaw<PublishedConfig>(
       "POST",
       `/admin/stores/${encodeURIComponent(storeId)}/config/rollback?${tenantQuery(tenantId)}`,
+      configPrecondition(version),
       { version_id: versionId },
     ),
 

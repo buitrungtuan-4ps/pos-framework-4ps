@@ -113,6 +113,28 @@ export function Config() {
     }
   };
 
+  // The precondition the two authored writes carry (ADR-0095): the version this screen last read the
+  // tree at, or `null` for a store that has never been published to. A failed version read leaves the
+  // list empty, so this reads `null` and the server refuses the write — the safe way round, because
+  // the alternative is publishing over a version we never saw.
+  const currentVersion = () => versions().find((version) => version.current)?.version_id ?? null;
+
+  // A `412` means somebody published while this editor was open (ADR-0095). Reload and say so rather
+  // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
+  // the operator needs to read what changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("config.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
+    const message = caught instanceof ApiError ? caught.message : String(caught);
+    setError(message);
+    toast.error(message);
+  };
+
   const load = async () => {
     setError("");
     setOk("");
@@ -151,13 +173,16 @@ export function Config() {
     }
     setBusy(true);
     try {
-      const result = await api.rollbackConfig(tenantId(), storeId(), versionId);
+      const result = await api.rollbackConfig(
+        tenantId(),
+        storeId(),
+        versionId,
+        currentVersion(),
+      );
       toast.ok(t("config.rolledBack", { version: result.config_version_id }));
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
-      setError(message);
-      toast.error(message);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -248,11 +273,17 @@ export function Config() {
     }
     setBusy(true);
     try {
-      const result = await api.publishConfig(tenantId(), storeId(), level(), parsed);
+      const result = await api.publishConfig(
+        tenantId(),
+        storeId(),
+        level(),
+        parsed,
+        currentVersion(),
+      );
       setOk(t("config.published", { version: result.config_version_id }));
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      await fail(caught);
     } finally {
       setBusy(false);
     }

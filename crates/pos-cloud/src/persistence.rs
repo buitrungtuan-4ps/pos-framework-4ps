@@ -381,15 +381,19 @@ impl ConfigTreeStore for PostgresConfigTrees {
         &self,
         tenant: TenantId,
         store: StoreId,
-    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
+    ) -> Result<Option<Versioned<ConfigTreeState>>, ConfigStoreError> {
         match self
             .load_state(tenant, store)
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))?
         {
-            Some(json) => serde_json::from_str(&json).map(Some).map_err(|error| {
-                ConfigStoreError::new(format!("decoding the stored config tree failed: {error}"))
-            }),
+            Some((json, version)) => serde_json::from_str(&json)
+                .map(|state| Some(Versioned::new(state, Version::new(version))))
+                .map_err(|error| {
+                    ConfigStoreError::new(format!(
+                        "decoding the stored config tree failed: {error}"
+                    ))
+                }),
             None => Ok(None),
         }
     }
@@ -399,12 +403,14 @@ impl ConfigTreeStore for PostgresConfigTrees {
         tenant: TenantId,
         store: StoreId,
         state: &ConfigTreeState,
-    ) -> Result<(), ConfigStoreError> {
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, ConfigStoreError> {
         let json = serde_json::to_string(state).map_err(|error| {
             ConfigStoreError::new(format!("encoding the config tree failed: {error}"))
         })?;
-        self.save_state(tenant, store, &json)
+        self.save_state(tenant, store, &json, expected.map(Version::as_str))
             .await
+            .map(update_outcome)
             .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 
