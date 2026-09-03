@@ -85,6 +85,7 @@ import type {
   TaxClass,
   TaxRate,
   Tenant,
+  TrailOrder,
   TranslationGrid,
   TranslationImportReport,
   Page,
@@ -1710,9 +1711,15 @@ export const api = {
   // One page of the same filtered set, plus how many matched. On this route the *offset* is what
   // asks for a page: `limit` already meant "the newest this many" before paging existed, and making
   // it change the response shape would break a request already in flight (ADR-0098).
-  listAuditPage: (filter: AuditFilter, page: PageRequest) => {
+  //
+  // `order` is sent only when it is not the default, so a caller that does not sort produces the
+  // same request it produced before the order existed.
+  listAuditPage: (filter: AuditFilter, page: PageRequest, order?: TrailOrder) => {
     const params = auditFilterParams({ ...filter, limit: page.limit });
     params.set("offset", String(page.offset ?? 0));
+    if (order && order !== "newest") {
+      params.set("order", order);
+    }
     return requestJson<Page<AuditEntry>>("GET", `/admin/audit?${params.toString()}`);
   },
 

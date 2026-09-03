@@ -99,6 +99,11 @@ pub struct AuditEntry {
 /// no rule for which won. The bound now belongs to whichever read is being asked for — a count for
 /// [`query`](AuditStore::query), a page for [`query_page`](AuditStore::query_page) — and this type is
 /// only ever about *which rows match* ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+///
+/// It carries no [`TrailOrder`] either, for the same reason and not by oversight: the order is not a
+/// filter, and only one of the two reads can honour it. Sitting here it would be a field
+/// [`query`](AuditStore::query) had to either ignore or reinterpret — exactly the two-answers shape
+/// the `limit` had.
 #[derive(Debug, Clone, Default)]
 pub struct AuditQuery {
     /// The tenant to scope to, or `None` for the fleet-wide read.
@@ -115,6 +120,51 @@ pub struct AuditQuery {
     pub since_ms: Option<i64>,
     /// Only entries at or before this instant (Unix ms), or `None` for no upper bound.
     pub until_ms: Option<i64>,
+}
+
+/// Which end of the trail a paged read starts from.
+///
+/// Named for the trail rather than for a column. `/admin/catalog/items` spells its direction
+/// `asc`/`desc`, but there it is relative to a named `?sort=` field; this route has no sort for a
+/// direction to be relative *to*, so "ascending" would have to mean "ascending in time" — the same
+/// word doing a different job on two routes, which is worse than two spellings. The trail's two
+/// orders have plain names, so it uses them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TrailOrder {
+    /// Most recent first — the trail's default, and its only order before this existed.
+    #[default]
+    Newest,
+    /// Earliest first, which is how an incident reads: a `since_ms`/`until_ms` window in the order
+    /// the actions actually happened, rather than backwards from the end of it.
+    Oldest,
+}
+
+impl TrailOrder {
+    /// The wire token for this order.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+        }
+    }
+
+    /// The order a wire token names, or `None` if it names none.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "newest" => Some(Self::Newest),
+            "oldest" => Some(Self::Oldest),
+            _unknown => None,
+        }
+    }
+
+    /// Every accepted token, for the refusal that names what a route will take. Kept honest against
+    /// the variants by `a_trail_order_token_round_trips_and_an_unknown_one_is_not_read_as_a_default`.
+    #[must_use]
+    pub const fn tokens() -> &'static [&'static str] {
+        &["newest", "oldest"]
+    }
 }
 
 /// Appends and reads console audit entries.
@@ -158,12 +208,17 @@ pub trait AuditStore {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<AuditEntry>, AuditStoreError>> + Send;
 
-    /// One page of the entries matching `filter`, newest-first, with how many matched in total.
+    /// One page of the entries matching `filter`, in the order `order` asks for, with how many
+    /// matched in total.
     ///
     /// Beside [`query`](Self::query) rather than replacing it, for the reason ADR-0098 gives: the
-    /// window and the page are different questions. The order is `at DESC, id DESC` — already total,
+    /// window and the page are different questions. Either order is `at` then `id` — already total,
     /// since `id` is the primary key, which is why `audit_log` needs only a widened index and not a
-    /// new sort (decision 9).
+    /// new sort (decision 9). [`TrailOrder::Oldest`] is that index read backwards, so it needed no
+    /// index of its own.
+    ///
+    /// The order changes which page a row lands on, never which rows match or how many: `total` is
+    /// the same either way.
     ///
     /// `total` counts every matching row, not the page, and on an append-only log that count is the
     /// expensive part of this read: the database walks the whole matching range to produce it. The
@@ -178,6 +233,7 @@ pub trait AuditStore {
         &self,
         filter: &AuditQuery,
         page: PageRequest,
+        order: TrailOrder,
     ) -> impl Future<Output = Result<Page<AuditEntry>, AuditStoreError>> + Send;
 }
 
@@ -247,5 +303,47 @@ impl AuditStoreError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TrailOrder;
+
+    #[test]
+    fn a_trail_order_token_round_trips_and_an_unknown_one_is_not_read_as_a_default() {
+        for order in [TrailOrder::Newest, TrailOrder::Oldest] {
+            assert_eq!(
+                TrailOrder::from_token(order.as_token()),
+                Some(order),
+                "every token this type prints is a token it reads",
+            );
+        }
+        assert_eq!(
+            TrailOrder::from_token("asc"),
+            None,
+            "the direction vocabulary the item read uses is not silently accepted here — it would \
+             mean the opposite of what a caller expects on half the routes",
+        );
+        assert_eq!(
+            TrailOrder::tokens().len(),
+            2,
+            "the list the refusal shows a caller covers every variant",
+        );
+        for order in [TrailOrder::Newest, TrailOrder::Oldest] {
+            assert!(
+                TrailOrder::tokens().contains(&order.as_token()),
+                "{order:?} is offered to callers, not only accepted from them",
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_order_is_the_one_the_trail_had_before_the_order_existed() {
+        assert_eq!(
+            TrailOrder::default(),
+            TrailOrder::Newest,
+            "an absent `?order=` must answer exactly what the route answered before",
+        );
     }
 }

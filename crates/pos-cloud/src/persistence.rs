@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
-    BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
+    AuditOrder, BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
     CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
     CatalogTaxonomyRow, DeviceRow, EmployeeRow, FleetStoreRow, InventoryRow, ItemOrder,
     MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow,
@@ -58,7 +58,9 @@ use pos_core::activation::CodeStatus;
 
 use crate::activation::{ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode};
 use crate::alerts::{AlertKind, AlertRecord, AlertSeverity, AlertStore, AlertStoreError};
-use crate::audit::{AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore, AuditStoreError};
+use crate::audit::{
+    AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore, AuditStoreError, TrailOrder,
+};
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
     AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
@@ -2488,8 +2490,16 @@ impl AuditStore for PostgresAudit {
         &self,
         filter: &AuditQuery,
         page: PageRequest,
+        order: TrailOrder,
     ) -> Result<Page<AuditEntry>, AuditStoreError> {
         let tenant = filter.tenant.map(|tenant| tenant.to_string());
+        // The one place the trail's order vocabulary meets the adapter's. Exhaustive by necessity:
+        // `clippy::wildcard_enum_match_arm` is denied, so a new `TrailOrder` variant fails to
+        // compile here rather than quietly falling back to newest-first.
+        let order = match order {
+            TrailOrder::Newest => AuditOrder::Newest,
+            TrailOrder::Oldest => AuditOrder::Oldest,
+        };
         let (rows, total) = self
             .search_page(
                 tenant.as_deref(),
@@ -2499,6 +2509,7 @@ impl AuditStore for PostgresAudit {
                 filter.actor_admin_id.as_deref(),
                 filter.since_ms,
                 filter.until_ms,
+                order,
                 i64::from(page.limit()),
                 i64::from(page.offset()),
             )

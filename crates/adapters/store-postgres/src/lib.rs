@@ -53,7 +53,7 @@ pub use admin::{
 };
 pub use alerts::{AlertRow, PostgresAlerts};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
-pub use audit::{AuditLogRow, PostgresAudit};
+pub use audit::{AuditLogRow, AuditOrder, PostgresAudit};
 pub use campaigns::{CampaignRow, PostgresCampaigns};
 pub use catalog::{
     CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,

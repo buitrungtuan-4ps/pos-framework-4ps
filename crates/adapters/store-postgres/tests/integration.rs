@@ -2931,6 +2931,7 @@ mod media {
 
 mod audit_log {
     use super::{block_on, prepared};
+    use store_postgres::AuditOrder;
 
     /// Entries append and read back newest-first, scoped to their tenant (a NULL-tenant global entry
     /// shows only in the fleet-wide read); before/after round-trip through jsonb; and the grant is
@@ -3270,7 +3271,18 @@ mod audit_log {
             trail(&audit, "tenant-b", 7).await;
 
             let (first, total) = audit
-                .search_page(Some("tenant-a"), None, None, None, None, None, None, 10, 0)
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    AuditOrder::Newest,
+                    10,
+                    0,
+                )
                 .await
                 .expect("first page");
             assert_eq!(first.len(), 10, "the window is the limit");
@@ -3287,6 +3299,7 @@ mod audit_log {
                         None,
                         None,
                         None,
+                        AuditOrder::Newest,
                         10,
                         offset,
                     )
@@ -3315,6 +3328,7 @@ mod audit_log {
                     None,
                     Some(1_005),
                     Some(1_009),
+                    AuditOrder::Newest,
                     10,
                     0,
                 )
@@ -3345,7 +3359,18 @@ mod audit_log {
             assert_eq!(windowed.len(), 6, "only this tenant's entries");
 
             let (paged, total) = audit
-                .search_page(Some("tenant-a"), None, None, None, None, None, None, 6, 0)
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    AuditOrder::Newest,
+                    6,
+                    0,
+                )
                 .await
                 .expect("paged");
             assert_eq!(total, 6, "the count is tenant-scoped too");
@@ -3364,6 +3389,7 @@ mod audit_log {
                     None,
                     None,
                     None,
+                    AuditOrder::Newest,
                     10,
                     100,
                 )
@@ -3371,6 +3397,111 @@ mod audit_log {
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
             assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// Every page of `tenant-a`'s trail in one order, stitched into the sequence a caller paging
+    /// through would see, ten at a time.
+    ///
+    /// Reads until a page comes back empty rather than dividing by `expected`, so a page that
+    /// dropped or repeated a row lands in the stitched sequence instead of being hidden by the
+    /// arithmetic. `expected` is checked against the window count on every non-empty page.
+    async fn stitched_trail(
+        audit: &store_postgres::PostgresAudit,
+        order: AuditOrder,
+        expected: i64,
+    ) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        let mut offset = 0;
+        loop {
+            let (page, total) = audit
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    order,
+                    10,
+                    offset,
+                )
+                .await
+                .expect("a page of the trail");
+            if page.is_empty() {
+                return ids;
+            }
+            assert_eq!(
+                total, expected,
+                "{order:?}: the order does not change how many matched",
+            );
+            ids.extend(page.into_iter().map(|row| row.id));
+            offset += 10;
+        }
+    }
+
+    /// The reversed order windows the same set backwards, and the same index still serves it.
+    ///
+    /// Two properties in one scenario because they are one claim: `?order=oldest` shipped without a
+    /// migration on the grounds that `audit_log_by_tenant_newest` read *backwards* is the whole of
+    /// the oldest-first order. The set assertion proves the pages are a partition; the plan
+    /// assertion proves the database gets there by walking that index rather than by sorting.
+    #[test]
+    fn the_reversed_trail_partitions_the_same_set_and_is_still_served_by_the_index() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 25).await;
+            trail(&audit, "tenant-b", 7).await;
+
+            let newest = stitched_trail(&audit, AuditOrder::Newest, 25).await;
+            let oldest = stitched_trail(&audit, AuditOrder::Oldest, 25).await;
+            let mut reversed = oldest.clone();
+            reversed.reverse();
+            assert_eq!(
+                reversed, newest,
+                "one order is the other read backwards — every page of it, not one page flipped",
+            );
+            let mut unique = oldest.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no entry appears on two pages either way");
+
+            admin
+                .batch_execute("ANALYZE audit_log")
+                .await
+                .expect("analyze");
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT id FROM audit_log WHERE tenant_id = $1 \
+                         ORDER BY at ASC, id ASC LIMIT $2 OFFSET $3",
+                        &[&"tenant-a", &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("audit_log_by_tenant_newest"),
+                "the newest-first index should serve the reversed order too; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "reading that index backwards needs no sort step; plan was:\n{plan}"
+            );
         });
     }
 

@@ -55,6 +55,39 @@ pub struct AuditLogRow {
 const AUDIT_COLUMNS: &str = "id, tenant_id, actor_admin_id, actor_email, actor_role, action, \
      entity_type, entity_id, before::text, after::text, request_id, at";
 
+/// Which end of the trail a read walks from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuditOrder {
+    /// Most recent first — every read's order before the paged one could be asked for another.
+    #[default]
+    Newest,
+    /// Earliest first.
+    Oldest,
+}
+
+/// The `ORDER BY` for one order, as SQL. Always a literal, never assembled from caller input.
+///
+/// Both are *total*: each ends in `id`, the table's primary key, so a `LIMIT`/`OFFSET` window over
+/// either cannot return a row on two pages or on neither
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9).
+///
+/// `Oldest` is the exact reverse of `Newest`, every column of it — which is why this order needed no
+/// new migration. `audit_log_by_tenant_newest` (migration 0042) is `(tenant_id, at DESC, id DESC)`,
+/// and a btree walks backwards as cheaply as forwards, so it covers both.
+const fn audit_order(order: AuditOrder) -> &'static str {
+    match order {
+        AuditOrder::Newest => "ORDER BY at DESC, id DESC",
+        AuditOrder::Oldest => "ORDER BY at ASC, id ASC",
+    }
+}
+
+/// The order the unpaged reads impose, and the paged read's default.
+///
+/// Derived from [`audit_order`] rather than written out again: a page must be a window onto the same
+/// sequence the unpaged reads return, and an `ORDER BY` that drifted on one of them would make
+/// "page 2" name rows from an order nothing else uses.
+const AUDIT_ORDER: &str = audit_order(AuditOrder::Newest);
+
 /// The filter predicates the two filtered reads share, as `$1..$7`.
 ///
 /// One string rather than two copies: [`search`](PostgresAudit::search) and
@@ -154,20 +187,20 @@ impl PostgresAudit {
                     .query(
                         &format!(
                             "SELECT {AUDIT_COLUMNS} FROM audit_log WHERE tenant_id = $1 \
-                             ORDER BY at DESC, id DESC LIMIT $2"
+                             {AUDIT_ORDER} LIMIT $2"
                         ),
                         &[&tenant, &limit],
                     )
                     .await
             }
-            None => connection
-                .query(
-                    &format!(
-                        "SELECT {AUDIT_COLUMNS} FROM audit_log ORDER BY at DESC, id DESC LIMIT $1"
-                    ),
-                    &[&limit],
-                )
-                .await,
+            None => {
+                connection
+                    .query(
+                        &format!("SELECT {AUDIT_COLUMNS} FROM audit_log {AUDIT_ORDER} LIMIT $1"),
+                        &[&limit],
+                    )
+                    .await
+            }
         }
         .map_err(unavailable)?;
         Ok(rows.iter().map(audit_row).collect())
@@ -203,7 +236,7 @@ impl PostgresAudit {
                 &format!(
                     "SELECT {AUDIT_COLUMNS} FROM audit_log \
                      WHERE {AUDIT_FILTERS} \
-                     ORDER BY at DESC, id DESC LIMIT $8"
+                     {AUDIT_ORDER} LIMIT $8"
                 ),
                 &[
                     &tenant_id,
@@ -221,23 +254,27 @@ impl PostgresAudit {
         Ok(rows.iter().map(audit_row).collect())
     }
 
-    /// One page of the rows matching every non-`None` filter, newest-first, with how many matched.
+    /// One page of the rows matching every non-`None` filter, in the order `order` asks for, with
+    /// how many matched.
     ///
     /// The same predicates as [`search`](Self::search) — both read [`AUDIT_FILTERS`], so a filter
-    /// cannot be tightened on one read and left on the other — and the same total `ORDER BY`
-    /// (`at DESC, id DESC`, total because `id` is the primary key). `count(*) OVER()` rides on the
-    /// windowed `SELECT`: one round trip, one snapshot, so the count cannot disagree with the page.
+    /// cannot be tightened on one read and left on the other — and a total `ORDER BY` either way
+    /// (see [`audit_order`]). `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one
+    /// snapshot, so the count cannot disagree with the page. The order does not affect the count:
+    /// the same rows match either way, so only *which* page they land on changes.
     ///
     /// The count is the expensive half. `LIMIT` can stop the index scan; `count(*) OVER()` cannot —
     /// it walks every matching row. `audit_log_by_tenant_newest` (migration 0042) makes that walk
-    /// index-only for the console's tenant-scoped read, which is the case that matters.
+    /// index-only for the console's tenant-scoped read, which is the case that matters, and covers
+    /// both orders because a btree scans backwards as cheaply as forwards.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the same independent filter columns `search` takes, plus the page's two bounds"
+        reason = "the same independent filter columns `search` takes, plus the order and the page's \
+                  two bounds"
     )]
     pub async fn search_page(
         &self,
@@ -248,16 +285,18 @@ impl PostgresAudit {
         actor_admin_id: Option<&str>,
         since_ms: Option<i64>,
         until_ms: Option<i64>,
+        order: AuditOrder,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<AuditLogRow>, i64), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let order_by = audit_order(order);
         let rows = connection
             .query(
                 &format!(
                     "SELECT {AUDIT_COLUMNS}, count(*) OVER() FROM audit_log \
                      WHERE {AUDIT_FILTERS} \
-                     ORDER BY at DESC, id DESC LIMIT $8 OFFSET $9"
+                     {order_by} LIMIT $8 OFFSET $9"
                 ),
                 &[
                     &tenant_id,
@@ -295,5 +334,68 @@ fn audit_row(row: &tokio_postgres::Row) -> AuditLogRow {
         after_json: row.get(9),
         request_id: row.get(10),
         at_ms: row.get(11),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AUDIT_ORDER, AuditOrder, audit_order};
+
+    /// Every order this adapter can produce is *total*, because each ends in the primary key.
+    ///
+    /// This test exists because nothing else in the tree can see it. The integration suite's
+    /// `EXPLAIN` guards assert the plan of a query *they* write, so they catch migration 0042 being
+    /// dropped — but if this adapter's own `ORDER BY` lost its tiebreaker they would keep passing,
+    /// and so would the page-partition tests: with the index present, the index walk supplies the
+    /// missing order for free. The same blind spot was found by mutation on the catalog fragments.
+    ///
+    /// Asserting the property rather than the two literals means an order added later is covered
+    /// the day it is written.
+    #[test]
+    fn both_orders_end_in_the_primary_key_so_a_window_over_either_is_unambiguous() {
+        for order in [AuditOrder::Newest, AuditOrder::Oldest] {
+            let fragment = audit_order(order);
+            assert!(
+                fragment.ends_with("id ASC") || fragment.ends_with("id DESC"),
+                "{order:?} must break ties on the primary key, or LIMIT/OFFSET over it can repeat \
+                 or skip a row; got {fragment:?}",
+            );
+        }
+    }
+
+    /// The two orders are exact reverses, every column of them.
+    ///
+    /// This is the property that let `?order=oldest` ship without a migration: reading
+    /// `(tenant_id, at DESC, id DESC)` backwards is the whole of the oldest-first order, so
+    /// migration 0042's index covers both. An `at ASC, id DESC` — a plausible slip — would still be
+    /// total, would still look right on one page, and would no longer be that index read backwards.
+    #[test]
+    fn the_oldest_order_is_the_newest_order_reversed_in_every_column() {
+        let newest = audit_order(AuditOrder::Newest);
+        let oldest = audit_order(AuditOrder::Oldest);
+        assert_eq!(
+            newest.matches("DESC").count(),
+            oldest.matches("ASC").count(),
+            "every column that descends newest-first ascends oldest-first",
+        );
+        assert_eq!(
+            newest.matches("ASC").count(),
+            oldest.matches("DESC").count(),
+            "and the other way around: {newest:?} against {oldest:?}",
+        );
+        assert_eq!(
+            newest.replace("DESC", "ASC"),
+            oldest,
+            "the two name the same columns in the same sequence",
+        );
+    }
+
+    /// The unpaged reads' order is the paged read's default, and they are one string.
+    ///
+    /// A page must be a window onto the same sequence the unpaged reads return. If these drifted,
+    /// "page 2" would name rows from an order nothing else uses.
+    #[test]
+    fn the_unpaged_reads_use_the_paged_default_order() {
+        assert_eq!(AUDIT_ORDER, audit_order(AuditOrder::Newest));
     }
 }

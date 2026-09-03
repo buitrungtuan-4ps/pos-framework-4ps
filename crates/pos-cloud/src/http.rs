@@ -114,7 +114,9 @@ use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
-use crate::audit::{AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder};
+use crate::audit::{
+    AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder,
+};
 use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
     LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
@@ -14731,6 +14733,9 @@ const AUDIT_READ_MAX_LIMIT: u32 = 500;
 ///
 /// `offset` is what opts a caller into the paged form here, where every other paged read keys on
 /// `limit` — see [`parse_audit_page`], which explains why this route could not use the same trigger.
+///
+/// `order` belongs to the paged form only, and the windowed read refuses it rather than ignoring it
+/// — see [`windowed_read_cannot_be_ordered_refusal`].
 struct AuditReadQuery {
     #[serde(default)]
     tenant_id: Option<String>,
@@ -14750,6 +14755,8 @@ struct AuditReadQuery {
     limit: Option<String>,
     #[serde(default)]
     offset: Option<String>,
+    #[serde(default)]
+    order: Option<String>,
 }
 
 /// One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw
@@ -14853,6 +14860,9 @@ where
     // per-entity audit panel wants the newest few for one entity and no count; the Audit screen's
     // table wants a page and a total.
     let Some(page) = parse_audit_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        if present_param(query.order.as_deref()).is_some() {
+            return windowed_read_cannot_be_ordered_refusal();
+        }
         let limit = match windowed_audit_limit(query.limit.as_deref()) {
             Ok(limit) => limit,
             Err(refusal) => return refusal,
@@ -14866,10 +14876,52 @@ where
         Ok(page) => page,
         Err(refusal) => return refusal,
     };
-    match state.audit.query_page(&filter, page).await {
+    let order = match parse_trail_order(query.order.as_deref()) {
+        Ok(order) => order,
+        Err(refusal) => return refusal,
+    };
+    match state.audit.query_page(&filter, page, order).await {
         Ok(read) => paged_ok(Page::new(audit_views(read.items), read.total), page),
         Err(error) => audit_read_failure(&error),
     }
+}
+
+/// Reads `?order=` off the paged audit read, defaulting to the trail's own order.
+///
+/// # Errors
+///
+/// A closed-set refusal naming `order` and the tokens it accepts, if the value names no order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the refusal is built where the field names are \
+              known, exactly as the other query parsers on this router do"
+)]
+fn parse_trail_order(order: Option<&str>) -> Result<TrailOrder, Response> {
+    match present_param(order) {
+        None => Ok(TrailOrder::default()),
+        Some(token) => TrailOrder::from_token(token)
+            .ok_or_else(|| enum_refusal("order", TrailOrder::tokens().iter().copied())),
+    }
+}
+
+/// The refusal for `?order=` sent to the *windowed* audit read.
+///
+/// Its own sentence rather than [`page_shaping_needs_a_limit_refusal`]'s, because on this route the
+/// missing parameter is the `offset` and the reason is sharper than "it would be ignored": on the
+/// windowed read `limit` already means "the most recent this many", so `?order=oldest&limit=200`
+/// has two honest readings — the newest two hundred entries shown earliest-first, or the earliest
+/// two hundred entries — and they are different sets. The route will not guess between them.
+///
+/// The paged read has no such ambiguity, which is why the order lives there: `LIMIT`/`OFFSET`
+/// window an already-ordered set, so the order is applied first and the window second, always.
+fn windowed_read_cannot_be_ordered_refusal() -> Response {
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        "order shapes a page and needs an offset: on this read `limit` means \"the most recent this \
+         many\", so an order would have two readings — the newest entries earliest-first, or the \
+         earliest entries — and those are different sets",
+        &[("order", "MISSING_DEPENDENT_FIELD")],
+    )
 }
 
 /// The wire view of a batch of audit entries, shared by the windowed and paged reads.
