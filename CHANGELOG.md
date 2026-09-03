@@ -84,6 +84,48 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   measurement, fitting two of them.
 
 ### Security
+- **The three `/internal` routes now require a key of their own** (#149). ADR-0097, merged as #148.
+
+  `/internal/ingest`, `/internal/reconcile` and `/internal/ota/report` authenticated nothing. #144
+  closed the internet-facing half in both deploy lanes; what stayed open was everything *inside* the
+  trust boundary — another container on the compose network, a pod reached by service IP, a fork
+  terminating TLS where the deny does not reach. Reaching them meant forged events for any tenant, an
+  existence oracle over a store's event log, or a falsified fleet report.
+
+  They now require `X-Pos-Internal-Key`, compared with the same `constant_time_eq` `/admin/setup`
+  uses. The refusal is a **`404` with one wording** for absent, wrong and not-configured alike: a
+  `403` confirms the route is there, which is what both proxy denies and ADR-0050's activation
+  refusal decline to confirm. **This does not replace either proxy deny** — the key decides who
+  inside the network may call them, the deny decides whether the internet reaches them at all — and
+  the `tls-modes` gate still fails if either deny is removed. Its hint text, which taught the
+  opposite, is corrected here along with the four `http.rs` doc comments, both proxy configs,
+  `k8s/README.md` and the adapter's.
+
+  The guard sits on `/internal/reconcile`'s **handler**, not its router: that router also carries
+  `/admin/reconcile`, which is behind a console permission and must not start demanding an operator's
+  secret. A test pins that.
+
+  **Fail closed at boot.** `CloudConfig::validate` refuses to start without the secret, rather than
+  treating absence as "authentication off". That is the load-bearing part: `CloudConfig` is not
+  `#[serde(deny_unknown_fields)]`, so `internal_shared_secet` — one transposed letter — deserialises
+  to `None`, and under "absent means off" that typo leaves a mode-0600 file that reads as armed in
+  front of an open surface. The value lives in `deploy/secrets/cloud.toml` beside the Postgres
+  password and `admin_setup_token`, wrapped in a newtype whose `Debug` is redacted, and
+  `bootstrap.sh` mints it.
+
+  Two things ADR-0097 is explicit about rather than leaving implied. The secret is **cloud-side
+  only**: `cloud-sync-http` serves `/activate` and `/internal/*` through one transport built on every
+  box with a `cloud_url`, so an edge attaching the header unconditionally would send a fleet-wide
+  secret to an unauthenticated pre-activation endpoint on every unprovisioned machine. And a shared
+  secret **cannot make `/internal/ota/report` attributable** — it reads `tenant_id`/`store_id` out of
+  the body, so any key-holder can still file a report for any store. That one is fixed by the
+  surface, not the secret: it moves to `/sync/stores/{store_id}/…` when it gains a real caller.
+
+  **Upgrade note.** An existing deployment will not start until its `cloud.toml` gains
+  `internal_shared_secret`; the refusal names the field and how to generate one. `bootstrap.sh` mints
+  it for new boxes, and `docs/fork-checklist.md` lists it as required. Nothing in the fleet is
+  affected: the routes have no production callers, which is what made now the cheap time to do this.
+
 - **A refused webhook registration reported what the cloud's own DNS resolver saw** (#147).
 
   `POST /admin/webhooks` vets a URL against SSRF before storing it (ADR-0032), and the refusal was

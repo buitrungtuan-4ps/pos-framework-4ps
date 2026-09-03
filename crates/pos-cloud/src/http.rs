@@ -139,6 +139,7 @@ use crate::catalog::{
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::cloud::{Cloud, DailyRollup};
+use crate::config::InternalSecret;
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
     ConfigValidator, SyncOutcome,
@@ -258,6 +259,10 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     admin_session_idle_ttl_secs: u64,
     admin_invite_ttl_secs: u64,
     admin_setup_token: Option<String>,
+    /// The `/internal` shared secret (ADR-0097). `Option` only so `CloudApp::new` can be built
+    /// before it is supplied; `CloudConfig::validate` refuses to boot without it, and a `None` here
+    /// refuses every `/internal` request rather than admitting one.
+    internal_shared_secret: Option<InternalSecret>,
     login_rate_limiter: LoginRateLimiter,
     /// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`
     /// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)). It is the rate limit's client key, so
@@ -299,6 +304,7 @@ where
             admin_session_idle_ttl_secs: self.admin_session_idle_ttl_secs,
             admin_invite_ttl_secs: self.admin_invite_ttl_secs,
             admin_setup_token: self.admin_setup_token.clone(),
+            internal_shared_secret: self.internal_shared_secret.clone(),
             login_rate_limiter: self.login_rate_limiter.clone(),
             trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
@@ -331,6 +337,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             admin_session_idle_ttl_secs: DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS,
             admin_invite_ttl_secs: DEFAULT_ADMIN_INVITE_TTL_SECS,
             admin_setup_token: None,
+            internal_shared_secret: None,
             login_rate_limiter: LoginRateLimiter::new(
                 DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
                 DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
@@ -406,6 +413,14 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub fn with_admin_setup_token(mut self, token: Option<String>) -> Self {
         self.admin_setup_token = token;
+        self
+    }
+
+    /// The shared secret `/internal/ingest` requires
+    /// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+    #[must_use]
+    pub fn with_internal_shared_secret(mut self, secret: Option<InternalSecret>) -> Self {
+        self.internal_shared_secret = secret;
         self
     }
 }
@@ -576,6 +591,10 @@ struct ReconcileState<Rec, A, C> {
     store: Rec,
     admin: A,
     clock: C,
+    /// The `/internal` shared secret (ADR-0097). It guards the **handler**, not this router: the
+    /// same router serves `/admin/reconcile`, which is behind a console permission and must not
+    /// start demanding an internal header.
+    internal_shared_secret: Option<InternalSecret>,
 }
 
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
@@ -588,7 +607,12 @@ struct ReconcileState<Rec, A, C> {
 /// unauthenticated (absent from the public OpenAPI, exactly like `/internal/ingest`); the admin read is
 /// behind [`ConsolePermission::Read`]. Stated independently and merged in `main`, rather than threading
 /// an extra collaborator through every `CloudApp` handler.
-pub fn reconcile_router<Rec, A, C>(store: Rec, admin: A, clock: C) -> Router
+pub fn reconcile_router<Rec, A, C>(
+    store: Rec,
+    admin: A,
+    clock: C,
+    internal_shared_secret: Option<InternalSecret>,
+) -> Router
 where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
@@ -601,6 +625,7 @@ where
             store,
             admin,
             clock,
+            internal_shared_secret,
         })
 }
 
@@ -630,9 +655,12 @@ struct ReconcileResponse {
 /// Answers which of the edge's candidate ids the cloud is missing for a store
 /// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), and records the run into the history
 /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Internal (the reconciliation partner of
-/// `/internal/ingest`), so it carries no authentication and is absent from the public OpenAPI.
+/// `/internal/ingest`), so it is absent from the public OpenAPI and requires the `X-Pos-Internal-Key`
+/// shared secret ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the
+/// proxy denies both deploy lanes apply.
 async fn reconcile<Rec, A, C>(
     State(state): State<ReconcileState<Rec, A, C>>,
+    headers: HeaderMap,
     Json(request): Json<ReconcileRequest>,
 ) -> Response
 where
@@ -640,6 +668,9 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
+    if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
+        return refusal;
+    }
     let (tenant_id, store_id) = match parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
@@ -801,6 +832,9 @@ where
 struct OtaReportState<R, C> {
     reports: R,
     clock: C,
+    /// The `/internal` shared secret (ADR-0097). Guarded at the handler like the other two, for one
+    /// shape across all three, even though this router carries only the one route.
+    internal_shared_secret: Option<InternalSecret>,
 }
 
 /// An edge's OTA report body ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)): which store
@@ -828,28 +862,43 @@ struct OtaReportRequest {
 /// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
 /// private-network, and absent from the public OpenAPI, exactly like `/internal/ingest` and
 /// `/internal/reconcile`; the server stamps the arrival instant from its own clock.
-pub fn ota_report_router<R, C>(reports: R, clock: C) -> Router
+pub fn ota_report_router<R, C>(
+    reports: R,
+    clock: C,
+    internal_shared_secret: Option<InternalSecret>,
+) -> Router
 where
     R: OtaReportStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/internal/ota/report", post(ingest_ota_report::<R, C>))
-        .with_state(OtaReportState { reports, clock })
+        .with_state(OtaReportState {
+            reports,
+            clock,
+            internal_shared_secret,
+        })
 }
 
 /// Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
-/// Internal (the reporting partner of `/internal/ingest`), so it carries no authentication and is
-/// absent from the public OpenAPI. A malformed id or an empty version is a `400`; a store failure is
-/// a retryable `503`; success is `204`.
+/// Internal (the reporting partner of `/internal/ingest`), so it is absent from the public OpenAPI
+/// and requires the `X-Pos-Internal-Key` shared secret
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies.
+/// A malformed id or an empty version is a `400`; a store failure is a retryable `503`; success is
+/// `204`. The key does not make the report *attributable* — the store id rides in the body — which is
+/// why ADR-0097 records this route as owing a move to `/sync` when it gains a real caller.
 async fn ingest_ota_report<R, C>(
     State(state): State<OtaReportState<R, C>>,
+    headers: HeaderMap,
     Json(request): Json<OtaReportRequest>,
 ) -> Response
 where
     R: OtaReportStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
+    if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
+        return refusal;
+    }
     let (tenant_id, store_id) = match parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
@@ -13432,9 +13481,13 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
 }
 
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
-/// so it is deliberately absent from the public OpenAPI document and carries no authentication.
+/// so it is deliberately absent from the public OpenAPI document and requires the
+/// `X-Pos-Internal-Key` shared secret
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies
+/// both deploy lanes apply — neither control replaces the other.
 async fn ingest<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
     Json(events): Json<Vec<EventEnvelope<RawPayload>>>,
 ) -> Response
 where
@@ -13449,6 +13502,9 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
+    if let Err(refusal) = internal_guard(app.internal_shared_secret.as_ref(), &headers) {
+        return refusal;
+    }
     match app.cloud.ingest(&events).await {
         Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
         Err(error) => error_response(&error),
@@ -13795,6 +13851,45 @@ fn client_ip(headers: &HeaderMap, trusted_hops: usize) -> Option<&str> {
 }
 
 /// A header's value as a trimmed `&str`, or `None` when it is absent or not valid UTF-8.
+/// The header the three `/internal/*` routes require
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+///
+/// Its own header rather than `Authorization`, because that space is `pos_<ULID>_<secret>` and
+/// resolves to a `Grant` carrying the tenant every `/sync` handler reads. A tenantless shared secret
+/// has no `Grant` to be, so reusing the header would put a second parse branch inside the one
+/// function that answers *who is calling*. `X-Pos-Webhook-Signature` set the naming convention.
+pub(crate) const INTERNAL_KEY_HEADER: &str = "X-Pos-Internal-Key";
+
+/// Refuses a request to an `/internal` route that does not carry the shared secret.
+///
+/// The refusal is a `404` with one wording for every failure — absent header, wrong value, and (once
+/// `CloudConfig::validate` guarantees the secret is set) any future "not configured" case are
+/// indistinguishable to a caller. That is not tidiness: `403` confirms the route is there, which is
+/// exactly what the two proxy denies refuse to confirm and what ADR-0050 refuses on activation. A
+/// caller who belongs here has the key.
+///
+/// The comparison is `constant_time_eq`, the same one `/admin/setup` uses.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 404 the handler returns, the same               shape `parse_ulid_fields` carries this expectation for"
+)]
+fn internal_guard(expected: Option<&InternalSecret>, headers: &HeaderMap) -> Result<(), Response> {
+    // `None` is unreachable in a booted process — `CloudConfig::validate` refuses to start without
+    // the secret — but it refuses rather than admits, so a fork that wires the router by hand gets a
+    // closed route instead of an open one.
+    let Some(expected) = expected else {
+        tracing::warn!("refused an /internal request: no shared secret is configured");
+        return Err(api_error(ErrorStatus::NotFound, "no such route"));
+    };
+    let presented = header_str(headers, INTERNAL_KEY_HEADER).unwrap_or_default();
+    if constant_time_eq(presented, expected.expose()) {
+        return Ok(());
+    }
+    // The route, never the header value or the body: the bodies here carry tenant and store ids.
+    tracing::warn!("refused an /internal request without a valid key");
+    Err(api_error(ErrorStatus::NotFound, "no such route"))
+}
+
 fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers
         .get(name)

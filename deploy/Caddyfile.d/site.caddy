@@ -8,7 +8,8 @@
 encode zstd gzip
 
 # `/internal/*` is the cloud's own trusted-network surface and is NOT part of the public one.
-# Those handlers take no `HeaderMap` and perform no authentication — deliberately, because they are
+# Those handlers require the X-Pos-Internal-Key shared secret (ADR-0097), which is a second control
+# and not a replacement for this deny — they are
 # documented as private-network-only (`/internal/ingest` is the reconciliation re-push,
 # `/internal/reconcile` the id-diff endpoint, `/internal/ota/report` the fleet report). Nothing
 # enforced that assumption: this file used to proxy every path, so all three were reachable,

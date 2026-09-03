@@ -71,8 +71,13 @@ struct FetchRequest<'a> {
 }
 
 /// The update-report request body: which store, the version it now runs, and its self-test outcome
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). The `/internal` route is
-/// trusted-network, so the identity rides in the body as `/internal/reconcile` does.
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). The identity rides in the body as
+/// `/internal/reconcile` does — which is why the route's shared secret
+/// ([ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md)) does not make the report
+/// *attributable*: a key-holder can file one for any store. ADR-0097 records the move to
+/// `/sync/stores/{store_id}/…` this owes once it has a production caller. This adapter does **not**
+/// attach the key: one transport serves both `/activate` and `/internal/*`, so doing it
+/// unconditionally would send a fleet-wide secret to an unauthenticated pre-activation endpoint.
 #[derive(serde::Serialize)]
 struct ReportRequest<'a> {
     tenant_id: String,

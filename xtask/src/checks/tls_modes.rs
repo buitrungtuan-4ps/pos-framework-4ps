@@ -101,10 +101,10 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
                 }
             }
             // `/internal/*` must be denied here, in the shared block, so all four postures inherit
-            // it. Those handlers authenticate nothing — they are documented as private-network-only
-            // — and this file is the only thing standing between them and the internet. Dropping
-            // the deny re-opens unauthenticated event injection and falsifiable fleet state for any
-            // tenant, which is not the kind of regression that shows up in a test run.
+            // it. Those handlers now require a shared secret (ADR-0097), and that is a second
+            // control rather than a replacement for this one: the deny is what keeps the surface
+            // off the internet at all, so dropping it would put event injection and falsifiable
+            // fleet state one leaked key away — not the kind of regression a test run shows.
             if !text.contains(INTERNAL_DENY) {
                 findings.push(
                     Finding::new(
@@ -113,9 +113,10 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
                         "the shared site block does not deny `/internal/*`".to_owned(),
                     )
                     .with_hint(
-                        "the /internal routes carry no authentication by design; the proxy is \
-                         what keeps them private, so the deny belongs in the shared block where \
-                         every TLS posture inherits it",
+                        "the /internal routes require a shared secret (ADR-0097) *and* this \
+                         deny; neither replaces the other, and removing the deny leaves event \
+                         injection and falsifiable fleet state one leaked key from the internet. \
+                         The deny belongs in the shared block where every posture inherits it",
                     ),
                 );
             }
@@ -187,7 +188,11 @@ fn k8s_internal_deny(root: &std::path::Path) -> Result<Vec<Finding>, Error> {
             "the Kubernetes Ingress does not deny `/internal/*`".to_owned(),
         )
         .with_hint(
-            "the /internal routes authenticate nothing by design, so the proxy is what keeps them              private; the Compose lane denies them in deploy/Caddyfile.d/site.caddy and this lane              must too, or it publishes unauthenticated event injection and falsifiable fleet state              to the internet — see k8s/README.md, which also gives the curl that verifies the deny              actually took effect",
+            "the /internal routes require a shared secret (ADR-0097) *and* this deny; neither \
+             replaces the other. The Compose lane denies them in deploy/Caddyfile.d/site.caddy \
+             and this lane must too, or it publishes event injection and falsifiable fleet \
+             state to the internet behind one shared key - see k8s/README.md, which also gives \
+             the curl that verifies the deny actually took effect",
         ),
     ])
 }
