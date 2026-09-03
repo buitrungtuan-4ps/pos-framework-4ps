@@ -5456,6 +5456,38 @@ struct VoucherListQuery {
     offset: Option<String>,
 }
 
+/// `GET /admin/catalog/items`: the tenant, plus the optional paging bounds.
+///
+/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
+#[derive(Debug, Clone, Deserialize)]
+struct ItemListQuery {
+    /// The tenant whose items to list (a 26-character ULID).
+    tenant_id: String,
+    /// How many items to return. **Absent means unpaged**: the whole item master, as an array —
+    /// which is what the menu compiler and five of the six console pickers ask for.
+    #[serde(default)]
+    limit: Option<String>,
+    /// How many items to skip. Only meaningful with `limit`.
+    #[serde(default)]
+    offset: Option<String>,
+}
+
+/// `GET /admin/media`: the tenant, plus the optional paging bounds.
+///
+/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
+#[derive(Debug, Clone, Deserialize)]
+struct MediaListQuery {
+    /// The tenant whose assets to list (a 26-character ULID).
+    tenant_id: String,
+    /// How many summaries to return. **Absent means unpaged**: every asset, as an array — which is
+    /// what the item image picker asks for.
+    #[serde(default)]
+    limit: Option<String>,
+    /// How many summaries to skip. Only meaningful with `limit`.
+    #[serde(default)]
+    offset: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CreateTenantRequest {
     name: String,
@@ -10090,7 +10122,7 @@ where
 async fn admin_list_media<M, A, C>(
     State(state): State<MediaState<M, A, C>>,
     headers: HeaderMap,
-    Query(query): Query<RegistryTenantQuery>,
+    Query(query): Query<MediaListQuery>,
 ) -> Response
 where
     M: MediaStore + Clone + Send + Sync + 'static,
@@ -10111,21 +10143,38 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.media.list(tenant_id).await {
-        Ok(rows) => {
-            let view: Vec<MediaSummaryView> = rows
-                .iter()
-                .map(|row| MediaSummaryView {
-                    media_id: row.media_id.to_string(),
-                    content_type: row.content_type.clone(),
-                    detail_bytes: u64::try_from(row.detail_bytes).unwrap_or(u64::MAX),
-                    created_at_ms: row.created_at_ms,
-                })
-                .collect();
-            (StatusCode::OK, Json(view)).into_response()
-        }
+    // Two reads, chosen by whether the caller named a limit (ADR-0098). The image picker attaches a
+    // photograph to an item and needs the whole library to find one in; the Media screen's table
+    // wants twenty-five rows and a count. Neither is a default for the other.
+    let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        return match state.media.list(tenant_id).await {
+            Ok(rows) => (StatusCode::OK, Json(media_views(rows))).into_response(),
+            Err(error) => media_error_response(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.media.list_page(tenant_id, page).await {
+        Ok(read) => paged_ok(Page::new(media_views(read.items), read.total), page),
         Err(error) => media_error_response(&error),
     }
+}
+
+/// The wire view of a batch of media summaries.
+///
+/// Shared by the paged and unpaged reads, so an asset cannot render one way on the table and another
+/// in the picker.
+fn media_views(rows: Vec<crate::media::MediaSummary>) -> Vec<MediaSummaryView> {
+    rows.into_iter()
+        .map(|row| MediaSummaryView {
+            media_id: row.media_id.to_string(),
+            content_type: row.content_type.clone(),
+            detail_bytes: u64::try_from(row.detail_bytes).unwrap_or(u64::MAX),
+            created_at_ms: row.created_at_ms,
+        })
+        .collect()
 }
 
 /// A super-admin uploads an image: it is re-encoded to two bounded JPEG renditions and stored. The raw
@@ -10776,7 +10825,7 @@ fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, ()> {
 async fn admin_list_items<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
-    Query(query): Query<RegistryTenantQuery>,
+    Query(query): Query<ItemListQuery>,
 ) -> Response
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
@@ -10797,8 +10846,22 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.catalog.list_items(tenant_id).await {
-        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+    // Two reads, chosen by whether the caller named a limit (ADR-0098). This route has the most
+    // consumers of any list in the console and only one of them is a table: the menu compiler and
+    // the item pickers need every item, or a menu compiles without whatever fell off the page. That
+    // is the reason an absent `?limit=` can never come to mean a default page size.
+    let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        return match state.catalog.list_items(tenant_id).await {
+            Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+            Err(error) => catalog_error_response(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.list_items_page(tenant_id, page).await {
+        Ok(read) => paged_ok(read, page),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -14566,6 +14629,13 @@ const AUDIT_READ_MAX_LIMIT: u32 = 500;
 /// does not filter. `tenant_id` absent is the fleet-wide read (every tenant, including tenant-global
 /// entries); present scopes to one tenant.
 #[derive(Debug, Clone, Deserialize)]
+/// `GET /admin/audit`: the filters, plus the bound.
+///
+/// `limit` is a `String` rather than a `u32` so that one parser owns it and an unparseable value
+/// gets a refusal naming the field (ADR-0096's shape) instead of axum's own query rejection.
+///
+/// `offset` is what opts a caller into the paged form here, where every other paged read keys on
+/// `limit` — see [`parse_audit_page`], which explains why this route could not use the same trigger.
 struct AuditReadQuery {
     #[serde(default)]
     tenant_id: Option<String>,
@@ -14582,7 +14652,9 @@ struct AuditReadQuery {
     #[serde(default)]
     until_ms: Option<i64>,
     #[serde(default)]
-    limit: Option<u32>,
+    limit: Option<String>,
+    #[serde(default)]
+    offset: Option<String>,
 }
 
 /// One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw
@@ -14673,10 +14745,6 @@ where
         },
         None => None,
     };
-    let limit = query
-        .limit
-        .unwrap_or(AUDIT_READ_DEFAULT_LIMIT)
-        .clamp(1, AUDIT_READ_MAX_LIMIT);
     let filter = crate::audit::AuditQuery {
         tenant,
         entity_type: query.entity_type,
@@ -14685,21 +14753,109 @@ where
         actor_admin_id: query.actor_admin_id,
         since_ms: query.since_ms,
         until_ms: query.until_ms,
-        limit,
     };
-    match state.audit.query(&filter).await {
-        Ok(entries) => {
-            let view: Vec<AuditEntryView> = entries
-                .into_iter()
-                .map(AuditEntryView::from_entry)
-                .collect();
-            (StatusCode::OK, Json(view)).into_response()
-        }
-        Err(error) => {
-            tracing::error!(%error, "an audit read failed");
-            service_unavailable("audit")
-        }
+    // Two reads over the same filters, chosen by whether the caller named an offset (ADR-0098). The
+    // per-entity audit panel wants the newest few for one entity and no count; the Audit screen's
+    // table wants a page and a total.
+    let Some(page) = parse_audit_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        let limit = match windowed_audit_limit(query.limit.as_deref()) {
+            Ok(limit) => limit,
+            Err(refusal) => return refusal,
+        };
+        return match state.audit.query(&filter, limit).await {
+            Ok(entries) => (StatusCode::OK, Json(audit_views(entries))).into_response(),
+            Err(error) => audit_read_failure(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.audit.query_page(&filter, page).await {
+        Ok(read) => paged_ok(Page::new(audit_views(read.items), read.total), page),
+        Err(error) => audit_read_failure(&error),
     }
+}
+
+/// The wire view of a batch of audit entries, shared by the windowed and paged reads.
+fn audit_views(entries: Vec<AuditEntry>) -> Vec<AuditEntryView> {
+    entries
+        .into_iter()
+        .map(AuditEntryView::from_entry)
+        .collect()
+}
+
+/// Maps an audit read failure to a retryable `503`, logging the detail rather than leaking it.
+fn audit_read_failure(error: &crate::audit::AuditStoreError) -> Response {
+    tracing::error!(%error, "an audit read failed");
+    service_unavailable("audit")
+}
+
+/// The bound for the *windowed* audit read: how many of the newest matching entries to return.
+///
+/// Defaulted and clamped, which is ADR-0069's behaviour for this read and is deliberately kept.
+/// `limit` here does not mean "one page of this size" — it means "the most recent this many" — so
+/// pulling an over-large value into range answers the question the caller asked, just less of it.
+/// That is the opposite of the paged form, where a clamp would answer a *different* question (see
+/// [`crate::paging`]).
+///
+/// A value that is not a number is still refused: there is no honest reading of `?limit=lots`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the refusal is built where the field names are \
+              known, exactly as the other query parsers on this router do"
+)]
+fn windowed_audit_limit(limit: Option<&str>) -> Result<u32, Response> {
+    match present_param(limit) {
+        None => Ok(AUDIT_READ_DEFAULT_LIMIT),
+        Some(text) => match text.parse::<u32>() {
+            Ok(value) => Ok(value.clamp(1, AUDIT_READ_MAX_LIMIT)),
+            Err(_ignored) => Err(page_bound_refusal("limit")),
+        },
+    }
+}
+
+/// Reads the paging bounds off `/admin/audit`, where the trigger is `offset` and not `limit`.
+///
+/// `None` means "not a paged request" and the caller should serve the windowed read.
+///
+/// # Why this route's trigger differs
+///
+/// Everywhere else, naming a `limit` is what asks for a page, because `limit` did not previously
+/// exist on those reads. On `/admin/audit` it did: ADR-0069 gave it a *different* meaning — "the most
+/// recent this many", defaulted to 200 and clamped at 500 — and the console sends it today. Making
+/// `?limit=200` return a paged envelope instead of a bare array would change the response shape of a
+/// request already in flight, which is the one thing ADR-0098 exists to prevent. So on this route the
+/// second read is asked for by naming an `offset`.
+///
+/// ADR-0098 put `audit` in the paged cohort without drawing this consequence from its own
+/// measurement that five query structs already carry a `limit`. That is recorded as a correction in
+/// the ADR rather than left as a surprise here.
+///
+/// Within the paged form the `limit` is *checked*, not clamped, exactly as elsewhere: it is a page
+/// size, and a caller stitching pages together must be told when the size it used was not the size
+/// it asked for.
+fn parse_audit_page(
+    limit: Option<&str>,
+    offset: Option<&str>,
+) -> Option<Result<PageRequest, Response>> {
+    let offset_text = present_param(offset)?;
+    let Some(limit_text) = present_param(limit) else {
+        // A page is a limit and an offset together. Defaulting the limit here would make the page
+        // size invisible to the caller stitching pages, which decision 1 rules out.
+        return Some(Err(offset_without_limit_refusal()));
+    };
+    let Ok(limit) = limit_text.parse::<u32>() else {
+        return Some(Err(page_bound_refusal("limit")));
+    };
+    let Ok(offset) = offset_text.parse::<u32>() else {
+        return Some(Err(page_bound_refusal("offset")));
+    };
+    Some(match PageRequest::new(limit, offset) {
+        Ok(request) => Ok(request),
+        Err(PageRequestError::LimitOutOfRange) => Err(page_bound_refusal("limit")),
+        Err(PageRequestError::OffsetOutOfRange) => Err(page_bound_refusal("offset")),
+    })
 }
 
 /// Records one console mutation to the audit trail ([ADR-0069](../../../docs/adr/0069-audit-trail.md)),
@@ -17312,7 +17468,8 @@ fn page_bound_refusal(field: &str) -> Response {
 fn offset_without_limit_refusal() -> Response {
     api_error_with_details(
         ErrorStatus::InvalidArgument,
-        "offset needs a limit: without one the whole set is returned and there is nothing to skip",
+        "offset needs a limit: paging is a limit and an offset together, and without a limit this \
+         read answers with its unpaged form instead",
         &[("offset", "MISSING_DEPENDENT_FIELD")],
     )
 }

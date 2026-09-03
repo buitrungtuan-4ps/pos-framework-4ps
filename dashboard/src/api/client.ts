@@ -428,6 +428,23 @@ const tenantPageQuery = (tenantId: string, page?: PageRequest) => {
   return parts.join("&");
 };
 
+/**
+ * The audit filters as query parameters, shared by the windowed and paged reads.
+ *
+ * One builder so a filter cannot be sent by one read and dropped by the other — which would make a
+ * page a window onto a different set than its own total counts.
+ */
+const auditFilterParams = (filter: AuditFilter) => {
+  const params = new URLSearchParams();
+  if (filter.tenantId) params.set("tenant_id", filter.tenantId);
+  if (filter.entityType) params.set("entity_type", filter.entityType);
+  if (filter.entityId) params.set("entity_id", filter.entityId);
+  if (filter.action) params.set("action", filter.action);
+  if (filter.actorAdminId) params.set("actor_admin_id", filter.actorAdminId);
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  return params;
+};
+
 /** `tenant_id` plus an optional rollup window (`from`/`to`/`limit`), as a query string. */
 const rollupWindowQuery = (
   tenantId: string,
@@ -1211,8 +1228,15 @@ export const api = {
   // Upload an image; the server re-encodes it to two bounded renditions and returns the new id.
   uploadMedia: (tenantId: string, file: Blob) =>
     requestUpload<UploadedMedia>(`/admin/media?${tenantQuery(tenantId)}`, file),
+  // The whole library, unpaged — what the item image picker needs: you cannot find the photograph
+  // you want in the first twenty-four of eight hundred (ADR-0098). Permanent, not a legacy shape.
   listMedia: (tenantId: string) =>
     requestJson<MediaSummary[]>("GET", `/admin/media?${tenantQuery(tenantId)}`),
+  // One page of the library, for the Media screen's grid. Paged because the grid mounts an `<img>`
+  // per asset and each fetches a rendition, so an unpaged grid of a large library is hundreds of
+  // requests on open — a bigger cost than the JSON it arrives in.
+  listMediaPage: (tenantId: string, page: PageRequest) =>
+    requestJson<Page<MediaSummary>>("GET", `/admin/media?${tenantPageQuery(tenantId, page)}`),
   deleteMedia: (tenantId: string, mediaId: string) =>
     requestVoid(
       "DELETE",
@@ -1664,16 +1688,19 @@ export const api = {
   // --- console audit trail (ADR-0069, Track G2) ---
   // A fleet-wide, filterable read of who changed what, behind console.data.read. Every filter is
   // optional; an absent `tenantId` reads across every tenant (including tenant-global entries).
+  // The windowed read ADR-0069 shipped: the newest `limit` matching entries as a bare array, with
+  // no count. What the per-entity audit panel wants — the last few changes to one thing.
   listAudit: (filter: AuditFilter = {}) => {
-    const params = new URLSearchParams();
-    if (filter.tenantId) params.set("tenant_id", filter.tenantId);
-    if (filter.entityType) params.set("entity_type", filter.entityType);
-    if (filter.entityId) params.set("entity_id", filter.entityId);
-    if (filter.action) params.set("action", filter.action);
-    if (filter.actorAdminId) params.set("actor_admin_id", filter.actorAdminId);
-    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
-    const query = params.toString();
+    const query = auditFilterParams(filter).toString();
     return requestJson<AuditEntry[]>("GET", query ? `/admin/audit?${query}` : "/admin/audit");
+  },
+  // One page of the same filtered set, plus how many matched. On this route the *offset* is what
+  // asks for a page: `limit` already meant "the newest this many" before paging existed, and making
+  // it change the response shape would break a request already in flight (ADR-0098).
+  listAuditPage: (filter: AuditFilter, page: PageRequest) => {
+    const params = auditFilterParams({ ...filter, limit: page.limit });
+    params.set("offset", String(page.offset ?? 0));
+    return requestJson<Page<AuditEntry>>("GET", `/admin/audit?${params.toString()}`);
   },
 
   // --- operational alerts (ADR-0073, Track O2) ---

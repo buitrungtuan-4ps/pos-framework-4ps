@@ -16,7 +16,52 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **Three more `/admin` lists answer a second, paged question** (#158, ADR-0098 slice B3-2). Media,
+  the audit trail and the item master each keep the read they had and gain a page beside it, along
+  with the index the page needs.
+
+  - `GET /admin/media` — `?limit=` returns a page plus the library's size; absent, the whole library
+    as before, which is what the item image picker needs. The Media screen now pages its grid at 24.
+    The saving is not response size: the grid mounts an `<img>` per asset and each fetches a
+    thumbnail, so an unpaged grid of a large library is hundreds of requests when the screen opens.
+  - `GET /admin/audit` — here the trigger is `?offset=`, not `?limit=`. `limit` already meant "the
+    most recent this many" (ADR-0069), defaulted to 200 and clamped at 500, and the console sends it
+    today; changing what it returns would break a request already in flight. `limit` alone therefore
+    answers exactly as before. The Audit screen pages at 25 server-side.
+  - `GET /admin/catalog/items` — `?limit=` returns a page plus the size of the item master. Absent,
+    the whole master, permanently: the menu compiler and five of the six console consumers of this
+    read fill pickers, not tables, and a menu compiled from a page would be missing whatever fell
+    off it. The Items screen still reads the whole master; it cannot move to a page until `?q=`
+    exists to replace its search box (B3-3).
+
+  New `Pager` component in the CRUD kit, extracted from `DataTable`: the media library is a grid, not
+  a table, and a second hand-rolled pager beside the first is how two pagers come to disagree about
+  whether the last page is reachable.
+
+  **Upgrade note** Three additive index migrations, applied idempotently on boot (ADR-0017):
+  `0041_media_page_index.sql`, `0042_audit_page_index.sql`, `0043_catalog_item_page_index.sql`. The
+  media and item reads also gain a primary-key tiebreaker in their `ORDER BY` (ADR-0098 decision 9),
+  which changes the order *within* a batch of rows sharing a `created_at` — those rows previously had
+  no defined order at all, which is the bug the tiebreaker fixes.
+
 ### Fixed
+- **Creating or renaming a catalog item failed against real PostgreSQL** (#158). Both statements bind
+  the item's per-locale names as text into a `jsonb` column and cast it `$4::jsonb`. PostgreSQL infers
+  a bare `$N::jsonb` parameter *as* `jsonb`, and `tokio-postgres` then refuses to send a Rust `&str`
+  for it — so the statement failed at the driver and the route answered `503`. Every other `jsonb`
+  parameter in the tree already carried the `$N::text::jsonb` double cast; these two, added with the
+  per-locale names column (migration 0029), did not.
+
+  It shipped because nothing in the store-postgres suite had ever called `insert_item`: the console
+  tests run against the fake, which has no parameter types to get wrong, and the integration file
+  only exercised placements. A round-trip test now covers both writes, and it fails if the cast is
+  reverted.
+
+- **`?limit=abc` on `/admin/audit` returned axum's raw query rejection** rather than an AIP-193 body
+  naming the field (#158). One parser now owns the parameter on that route, so an unparseable value
+  is refused the same way an out-of-range one is.
+
 - **An empty optional id means "unset" on every field, not two of them** (#280). Seven typed
   wrappers sat on `parse_optional_ulid`, and two — `brand_id` on a store, `parent_menu_id` on a menu
   — matched on `Some(text)` without trimming or filtering. So `""` meant "malformed, `400`" for

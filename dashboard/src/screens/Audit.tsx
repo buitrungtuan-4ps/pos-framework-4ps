@@ -21,8 +21,14 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 
-/** The most rows one read returns; the server caps at 500. */
-const AUDIT_LIMIT = 200;
+/**
+ * How many entries one page of the table carries.
+ *
+ * The server pages this read (ADR-0098), so the table shows exactly what was fetched and the pager
+ * counts from the server's total rather than from `rows.length`. Before this it pulled the newest
+ * 200 and paged them locally at 20, which quietly made "of 200" the whole history.
+ */
+const PAGE_SIZE = 25;
 
 /** The age, in whole seconds, of a Unix-ms instant against the browser clock (clamped at zero). */
 function ageSeconds(atMs: number): number {
@@ -42,7 +48,9 @@ function pretty(value: unknown): string {
 }
 
 export function Audit() {
-  const [entries, setEntries] = createSignal<AuditEntry[] | null>(null);
+  const [entries, setEntries] = createSignal<readonly AuditEntry[] | null>(null);
+  const [total, setTotal] = createSignal(0);
+  const [offset, setOffset] = createSignal(0);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [selected, setSelected] = createSignal<AuditEntry | null>(null);
@@ -52,17 +60,28 @@ export function Audit() {
   const [action, setAction] = createSignal("");
   const [actor, setActor] = createSignal("");
 
-  const load = async () => {
+  const load = async (from = offset()) => {
     setError("");
     setBusy(true);
     try {
-      const loaded = await api.listAudit({
-        entityType: entityType().trim() || undefined,
-        action: action().trim() || undefined,
-        actorAdminId: actor().trim() || undefined,
-        limit: AUDIT_LIMIT,
-      });
-      setEntries(loaded);
+      const page = await api.listAuditPage(
+        {
+          entityType: entityType().trim() || undefined,
+          action: action().trim() || undefined,
+          actorAdminId: actor().trim() || undefined,
+        },
+        { limit: PAGE_SIZE, offset: from },
+      );
+      // A page that came back empty from somewhere other than the start means the matching set
+      // shrank under the pager — usually a filter that just narrowed. Step back rather than showing
+      // an empty table over a non-zero count.
+      if (page.items.length === 0 && from > 0) {
+        await load(Math.max(0, from - PAGE_SIZE));
+        return;
+      }
+      setEntries(page.items);
+      setTotal(page.total);
+      setOffset(page.offset);
     } catch (caught) {
       const message = caught instanceof ApiError ? caught.message : String(caught);
       setError(message);
@@ -72,7 +91,7 @@ export function Audit() {
     }
   };
 
-  onMount(() => void load());
+  onMount(() => void load(0));
 
   const columns = (): Column<AuditEntry>[] => [
     {
@@ -132,7 +151,7 @@ export function Audit() {
       <Card
         title={t("audit.recent")}
         actions={
-          <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+          <Button variant="secondary" disabled={busy()} onClick={() => void load(0)}>
             {t("action.refresh")}
           </Button>
         }
@@ -160,11 +179,16 @@ export function Audit() {
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={entries()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
           {(loaded) => (
+            // No `searchText`: a client-side box would filter this page rather than the log, which
+            // is the lie the DataTable doc warns about. The three fields above already search the
+            // whole trail on the server — and did so even before this, unlike the box, which only
+            // ever saw the newest 200 entries. Free-text across fields is ADR-0098's `?q=` (B3-3).
             <DataTable
               columns={columns()}
               rows={loaded()}
-              searchText={(row) => `${row.action} ${row.actor_email} ${row.entity_type}`}
-              pageSize={20}
+              pageSize={PAGE_SIZE}
+              serverTotal={total()}
+              onPage={(next) => void load(next)}
               empty={<EmptyState title={t("audit.empty")} description={t("audit.emptyHint")} />}
               actionsHeader={t("common.actions")}
               actions={(row) => (

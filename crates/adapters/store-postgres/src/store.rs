@@ -133,6 +133,19 @@ const MIGRATION_0039: &str = include_str!("../migrations/0039_tax_rate_versions.
 /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 1).
 const MIGRATION_0040: &str = include_str!("../migrations/0040_voucher_page_index.sql");
 
+/// An index covering the media library's total order, so a page of it is correct as well as cheap
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+const MIGRATION_0041: &str = include_str!("../migrations/0041_media_page_index.sql");
+
+/// An index covering the audit trail's whole order, including the `id` tiebreaker its read already
+/// asks for, so a page and its total are both index-only
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+const MIGRATION_0042: &str = include_str!("../migrations/0042_audit_page_index.sql");
+
+/// An index covering the item master's total order, so a page of it is correct as well as cheap
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+const MIGRATION_0043: &str = include_str!("../migrations/0043_catalog_item_page_index.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -351,6 +364,18 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0040)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0041)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0042)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0043)
             .await
             .map_err(unavailable)
     }

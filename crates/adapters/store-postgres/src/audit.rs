@@ -55,6 +55,21 @@ pub struct AuditLogRow {
 const AUDIT_COLUMNS: &str = "id, tenant_id, actor_admin_id, actor_email, actor_role, action, \
      entity_type, entity_id, before::text, after::text, request_id, at";
 
+/// The filter predicates the two filtered reads share, as `$1..$7`.
+///
+/// One string rather than two copies: [`search`](PostgresAudit::search) and
+/// [`search_page`](PostgresAudit::search_page) must agree about *which rows match*, or a page would
+/// be a window onto a different set than its own total counts. Each filter is bound unconditionally
+/// and applied as `($n IS NULL OR column = $n)`, so a `None` matches every row and the filters run
+/// in SQL *before* the bound — a narrow filter still reaches older matches.
+const AUDIT_FILTERS: &str = "($1::text IS NULL OR tenant_id = $1) \
+       AND ($2::text IS NULL OR entity_type = $2) \
+       AND ($3::text IS NULL OR entity_id = $3) \
+       AND ($4::text IS NULL OR action = $4) \
+       AND ($5::text IS NULL OR actor_admin_id = $5) \
+       AND ($6::bigint IS NULL OR at >= $6) \
+       AND ($7::bigint IS NULL OR at <= $7)";
+
 /// The console audit trail over a shared pool. Built by [`PostgresStore::audit`](crate::PostgresStore::audit).
 #[derive(Clone, Debug)]
 pub struct PostgresAudit {
@@ -158,11 +173,10 @@ impl PostgresAudit {
         Ok(rows.iter().map(audit_row).collect())
     }
 
-    /// Reads audit rows newest-first matching every non-`None` filter, up to `limit`. Each filter is
-    /// bound unconditionally and applied as `($n IS NULL OR column = $n)`, so a `None` matches every
-    /// row and the filters run in SQL *before* the `LIMIT` — a narrow filter still reaches older
-    /// matches. `tenant_id = $1` (when `Some`) excludes the tenant-global `NULL` rows, exactly as
-    /// [`fetch`](Self::fetch) does; `None` reads across every tenant including the global rows.
+    /// Reads audit rows newest-first matching every non-`None` filter, up to `limit` — see
+    /// [`AUDIT_FILTERS`] for how a `None` matches everything. `tenant_id = $1` (when `Some`) excludes
+    /// the tenant-global `NULL` rows, exactly as [`fetch`](Self::fetch) does; `None` reads across
+    /// every tenant including the global rows.
     ///
     /// # Errors
     ///
@@ -188,13 +202,7 @@ impl PostgresAudit {
             .query(
                 &format!(
                     "SELECT {AUDIT_COLUMNS} FROM audit_log \
-                     WHERE ($1::text IS NULL OR tenant_id = $1) \
-                       AND ($2::text IS NULL OR entity_type = $2) \
-                       AND ($3::text IS NULL OR entity_id = $3) \
-                       AND ($4::text IS NULL OR action = $4) \
-                       AND ($5::text IS NULL OR actor_admin_id = $5) \
-                       AND ($6::bigint IS NULL OR at >= $6) \
-                       AND ($7::bigint IS NULL OR at <= $7) \
+                     WHERE {AUDIT_FILTERS} \
                      ORDER BY at DESC, id DESC LIMIT $8"
                 ),
                 &[
@@ -211,6 +219,64 @@ impl PostgresAudit {
             .await
             .map_err(unavailable)?;
         Ok(rows.iter().map(audit_row).collect())
+    }
+
+    /// One page of the rows matching every non-`None` filter, newest-first, with how many matched.
+    ///
+    /// The same predicates as [`search`](Self::search) — both read [`AUDIT_FILTERS`], so a filter
+    /// cannot be tightened on one read and left on the other — and the same total `ORDER BY`
+    /// (`at DESC, id DESC`, total because `id` is the primary key). `count(*) OVER()` rides on the
+    /// windowed `SELECT`: one round trip, one snapshot, so the count cannot disagree with the page.
+    ///
+    /// The count is the expensive half. `LIMIT` can stop the index scan; `count(*) OVER()` cannot —
+    /// it walks every matching row. `audit_log_by_tenant_newest` (migration 0042) makes that walk
+    /// index-only for the console's tenant-scoped read, which is the case that matters.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the same independent filter columns `search` takes, plus the page's two bounds"
+    )]
+    pub async fn search_page(
+        &self,
+        tenant_id: Option<&str>,
+        entity_type: Option<&str>,
+        entity_id: Option<&str>,
+        action: Option<&str>,
+        actor_admin_id: Option<&str>,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<AuditLogRow>, i64), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {AUDIT_COLUMNS}, count(*) OVER() FROM audit_log \
+                     WHERE {AUDIT_FILTERS} \
+                     ORDER BY at DESC, id DESC LIMIT $8 OFFSET $9"
+                ),
+                &[
+                    &tenant_id,
+                    &entity_type,
+                    &entity_id,
+                    &action,
+                    &actor_admin_id,
+                    &since_ms,
+                    &until_ms,
+                    &limit,
+                    &offset,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        // Every row carries the same window count; an empty page carries none, which is the right
+        // answer both for a page past the end and for a filter that matched nothing.
+        let total = rows.first().map_or(0, |row| row.get::<_, i64>(12));
+        Ok((rows.iter().map(audit_row).collect(), total))
     }
 }
 

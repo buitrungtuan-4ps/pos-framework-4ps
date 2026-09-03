@@ -2592,7 +2592,27 @@ mod scheduled_publishes {
 // ---------------------------------------------------------------------------
 
 mod media {
+    use core::fmt::Write as _;
+
     use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// Stores `count` assets for one tenant, each in its own transaction, with ids that sort the
+    /// same way whichever column the read leans on.
+    async fn upload(media: &store_postgres::PostgresMedia, tenant: &str, count: u32) {
+        for index in 0..count {
+            media
+                .insert(
+                    &format!("{tenant}-asset-{index:04}"),
+                    tenant,
+                    "image/jpeg",
+                    &[0x01],
+                    &[0x02, 0x03],
+                    2,
+                )
+                .await
+                .expect("insert an asset");
+        }
+    }
 
     #[test]
     fn stores_reads_one_rendition_lists_and_stays_tenant_scoped() {
@@ -2697,6 +2717,209 @@ mod media {
                     .len(),
                 1,
                 "the neighbour's asset is untouched"
+            );
+        });
+    }
+
+    /// A page carries its own window and the size of the whole library, and consecutive pages
+    /// partition that library without overlap or gaps (ADR-0098 slice B3-2).
+    ///
+    /// This is the half only real PostgreSQL can answer: `count(*) OVER()` is a window function
+    /// whose value depends on the frame the planner builds, and `LIMIT`/`OFFSET` interact with the
+    /// `ORDER BY` in ways a `Vec::skip().take()` fake cannot reproduce.
+    #[test]
+    fn a_page_of_the_library_carries_the_window_and_the_total_and_pages_do_not_overlap() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+            upload(&media, TENANT_A, 25).await;
+
+            let (first, total) = media
+                .fetch_summaries_page(TENANT_A, 10, 0)
+                .await
+                .expect("first page");
+            assert_eq!(first.len(), 10, "the window is the limit");
+            assert_eq!(total, 25, "the total is the library, not the window");
+
+            let mut seen: Vec<String> = first.into_iter().map(|row| row.media_id).collect();
+            for offset in [10, 20] {
+                let (page, page_total) = media
+                    .fetch_summaries_page(TENANT_A, 10, offset)
+                    .await
+                    .expect("later page");
+                assert_eq!(page_total, 25, "the total does not change as pages advance");
+                seen.extend(page.into_iter().map(|row| row.media_id));
+            }
+            assert_eq!(
+                seen.len(),
+                25,
+                "three pages of ten cover twenty-five assets"
+            );
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no asset appears on two pages");
+        });
+    }
+
+    /// The paged read orders the same way the unpaged one does, is tenant-scoped the same way, and
+    /// answers a page past the end with no rows rather than an error.
+    #[test]
+    fn the_paged_library_agrees_with_the_unpaged_one_on_order_and_scope() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+            upload(&media, TENANT_A, 6).await;
+            // A neighbour's assets must reach neither read nor the count.
+            upload(&media, TENANT_B, 4).await;
+
+            let unpaged: Vec<String> = media
+                .fetch_summaries(TENANT_A)
+                .await
+                .expect("unpaged")
+                .into_iter()
+                .map(|row| row.media_id)
+                .collect();
+            assert_eq!(unpaged.len(), 6, "only this tenant's assets");
+
+            let (paged, total) = media
+                .fetch_summaries_page(TENANT_A, 6, 0)
+                .await
+                .expect("paged");
+            assert_eq!(total, 6, "the count is tenant-scoped too");
+            let paged: Vec<String> = paged.into_iter().map(|row| row.media_id).collect();
+            assert_eq!(
+                paged, unpaged,
+                "a full-width page is the unpaged read, in the same order"
+            );
+
+            // A page past the end: empty, and `total` falls back to zero because the window count
+            // rides on the rows and there are none. Both say "nothing to show".
+            let (beyond, beyond_total) = media
+                .fetch_summaries_page(TENANT_A, 10, 100)
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// The premise ADR-0098 decision 9 rests on, measured here rather than trusted: `created_at`
+    /// defaults to `now()`, which is *transaction* time, so assets written in one transaction share
+    /// one timestamp exactly — and `created_at DESC` alone therefore orders nothing across them.
+    ///
+    /// The assertion on the tie is deterministic and is the point of the test. The partition check
+    /// below it is the property that follows, but note honestly what it does and does not prove:
+    /// with the tiebreaker dropped, PostgreSQL *may* return a stable order anyway for a given plan,
+    /// so this test alone would not reliably catch that. What catches it is the pair — this test
+    /// pins the premise, and `the_paged_library_query_is_served_by_the_index_and_not_by_a_sort`
+    /// pins the index that carries the total order.
+    #[test]
+    fn a_batch_written_in_one_transaction_shares_one_timestamp_and_still_pages() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+            // One transaction, six rows — the shape a bulk import or a seeded fixture produces.
+            let mut inserts = String::new();
+            for index in 0..6 {
+                write!(
+                    inserts,
+                    "INSERT INTO media_assets \
+                     (media_id, tenant_id, content_type, thumbnail, detail, detail_bytes) \
+                     VALUES ('batch-{index:04}', '{TENANT_A}', 'image/jpeg', \
+                     '\\x01'::bytea, '\\x0203'::bytea, 2);"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            admin
+                .batch_execute(&format!("BEGIN; {inserts} COMMIT;"))
+                .await
+                .expect("write the batch in one transaction");
+
+            let distinct: i64 = admin
+                .query_one(
+                    "SELECT count(DISTINCT created_at) FROM media_assets WHERE tenant_id = $1",
+                    &[&TENANT_A],
+                )
+                .await
+                .expect("count the distinct timestamps")
+                .get(0);
+            assert_eq!(
+                distinct, 1,
+                "six rows in one transaction carry one created_at, not six close ones — \
+                 which is why the read's ORDER BY needs media_id as a tiebreaker"
+            );
+
+            let mut seen = Vec::new();
+            for offset in [0, 2, 4] {
+                let (page, total) = media
+                    .fetch_summaries_page(TENANT_A, 2, offset)
+                    .await
+                    .expect("page over the tied batch");
+                assert_eq!(total, 6);
+                seen.extend(page.into_iter().map(|row| row.media_id));
+            }
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                6,
+                "three pages of two cover the tied batch exactly once each; got {seen:?}"
+            );
+        });
+    }
+
+    /// The index migration 0041 added covers this query's `ORDER BY`, so `LIMIT` stops the scan
+    /// instead of truncating a sort of the whole library.
+    ///
+    /// Asserted through `EXPLAIN` rather than by timing: a timing test on 40 rows would pass either
+    /// way. What this catches is the migration being dropped or the read's `ORDER BY` drifting away
+    /// from the index it was built for — including the tiebreaker, whose absence from the index is
+    /// what would put a `Sort` node back above the scan.
+    #[test]
+    fn the_paged_library_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let media = store.media();
+            upload(&media, TENANT_A, 40).await;
+            // Without statistics the planner picks a sequential scan on a table this small
+            // whatever indexes exist, so the assertion would be about row count rather than about
+            // the index. `ANALYZE` plus a disabled seqscan asks the question the test means.
+            admin
+                .batch_execute("ANALYZE media_assets")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT media_id FROM media_assets WHERE tenant_id = $1 \
+                         ORDER BY created_at DESC, media_id DESC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("media_assets_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
             );
         });
     }
@@ -2999,6 +3222,205 @@ mod audit_log {
                     .iter()
                     .all(|row| row.tenant_id.as_deref() == Some("tenant-a")),
                 "a tenant filter never returns NULL-tenant rows"
+            );
+        });
+    }
+
+    /// Appends `count` entries for one tenant, one per millisecond so the order is unambiguous
+    /// before the `id` tiebreaker is even consulted.
+    ///
+    /// The id carries the tenant because `audit_log.id` is the primary key across every tenant: two
+    /// calls with the same index range would collide, not partition.
+    async fn trail(audit: &store_postgres::PostgresAudit, tenant: &str, count: i64) {
+        for index in 0..count {
+            audit
+                .insert(
+                    &format!("{tenant}-page-{index:04}"),
+                    Some(tenant),
+                    "01ADMIN0000000000000000OPS",
+                    "ops@pizza4ps.test",
+                    "ops",
+                    "store.update",
+                    "store",
+                    "store-1",
+                    None,
+                    None,
+                    None,
+                    1_000 + index,
+                )
+                .await
+                .expect("append an entry");
+        }
+    }
+
+    /// A page of the trail carries its own window and the size of the *matching* set, and
+    /// consecutive pages partition that set (ADR-0098 slice B3-2).
+    ///
+    /// `total` counting the filtered match rather than the whole log is the property that matters
+    /// here: a pager over a filtered view whose total came from the unfiltered table would offer
+    /// pages that are empty.
+    #[test]
+    fn a_page_of_the_trail_carries_the_window_and_the_matching_total() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 25).await;
+            // A neighbour's entries, and one tenant-global row, must reach neither the page nor the
+            // count when a tenant is named.
+            trail(&audit, "tenant-b", 7).await;
+
+            let (first, total) = audit
+                .search_page(Some("tenant-a"), None, None, None, None, None, None, 10, 0)
+                .await
+                .expect("first page");
+            assert_eq!(first.len(), 10, "the window is the limit");
+            assert_eq!(total, 25, "the total is the matching set, not the window");
+
+            let mut seen: Vec<String> = first.into_iter().map(|row| row.id).collect();
+            for offset in [10, 20] {
+                let (page, page_total) = audit
+                    .search_page(
+                        Some("tenant-a"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        10,
+                        offset,
+                    )
+                    .await
+                    .expect("later page");
+                assert_eq!(page_total, 25, "the total does not change as pages advance");
+                seen.extend(page.into_iter().map(|row| row.id));
+            }
+            assert_eq!(
+                seen.len(),
+                25,
+                "three pages of ten cover twenty-five entries"
+            );
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no entry appears on two pages");
+
+            // A narrower filter narrows the total too, not just the rows.
+            let (rows, filtered_total) = audit
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1_005),
+                    Some(1_009),
+                    10,
+                    0,
+                )
+                .await
+                .expect("filtered page");
+            assert_eq!(filtered_total, 5, "five entries fall inside the window");
+            assert_eq!(rows.len(), 5);
+        });
+    }
+
+    /// The paged read matches the same rows in the same order as the windowed one, and a page past
+    /// the end is empty rather than an error.
+    #[test]
+    fn the_paged_trail_agrees_with_the_windowed_read_on_order_and_scope() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 6).await;
+            trail(&audit, "tenant-b", 4).await;
+
+            let windowed: Vec<String> = audit
+                .search(Some("tenant-a"), None, None, None, None, None, None, 6)
+                .await
+                .expect("windowed")
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
+            assert_eq!(windowed.len(), 6, "only this tenant's entries");
+
+            let (paged, total) = audit
+                .search_page(Some("tenant-a"), None, None, None, None, None, None, 6, 0)
+                .await
+                .expect("paged");
+            assert_eq!(total, 6, "the count is tenant-scoped too");
+            let paged: Vec<String> = paged.into_iter().map(|row| row.id).collect();
+            assert_eq!(
+                paged, windowed,
+                "a full-width page is the windowed read, in the same order"
+            );
+
+            let (beyond, beyond_total) = audit
+                .search_page(
+                    Some("tenant-a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    10,
+                    100,
+                )
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// Migration 0042's index carries the trail's whole order, tiebreaker included, so a page needs
+    /// no sort step above the scan.
+    ///
+    /// `audit_log`'s read was already ordered totally (`at DESC, id DESC`) — this is the one paged
+    /// table where nothing about the query changed. What was missing was the `id` column in the
+    /// index, without which the plan finishes the order with a `Sort` and `LIMIT` truncates a
+    /// completed sort. That is also what makes the `count(*) OVER()` walk index-only.
+    #[test]
+    fn the_paged_trail_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let audit = store.audit();
+            trail(&audit, "tenant-a", 40).await;
+            admin
+                .batch_execute("ANALYZE audit_log")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT id FROM audit_log WHERE tenant_id = $1 \
+                         ORDER BY at DESC, id DESC LIMIT $2 OFFSET $3",
+                        &[&"tenant-a", &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("audit_log_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
             );
         });
     }
@@ -4354,6 +4776,293 @@ mod conditional_writes {
 // time — the class of defect #152 fixed (a presence probe naming the wrong table) is invisible to
 // every test that does not run the SQL.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The item master, paged: window, total, order and the index that carries it (ADR-0098).
+// ---------------------------------------------------------------------------
+
+mod catalog_item_pages {
+    use core::fmt::Write as _;
+
+    use store_postgres::PostgresCatalog;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// Inserts `count` items for one tenant. The id carries the tenant because `menu_item_id` is the
+    /// primary key across every tenant: two calls with the same index range would collide.
+    async fn stock(catalog: &PostgresCatalog, tenant: &str, count: u32) {
+        for index in 0..count {
+            catalog
+                .insert_item(
+                    &format!("{tenant}-item-{index:04}"),
+                    tenant,
+                    &format!("Item {index:04}"),
+                    "{}",
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("insert an item");
+        }
+    }
+
+    /// An item's per-locale names survive a create and an update against real PostgreSQL.
+    ///
+    /// This is a regression guard for a bug these paging tests found, not a paging test. Both writes
+    /// bind `name_translations` as text into a `jsonb` column, and they cast it `$N::text::jsonb`
+    /// rather than `$N::jsonb`. The difference is not cosmetic: PostgreSQL infers a bare `$N::jsonb`
+    /// parameter *as* `jsonb`, and `tokio-postgres` then refuses to send a Rust `&str` for it — so
+    /// both statements failed at the driver, and every item create and rename answered `503`.
+    ///
+    /// It shipped because nothing in this suite had ever called `insert_item`: the console tests run
+    /// against the fake, which has no parameter types to get wrong, and this file only exercised
+    /// placements. Every other `jsonb` parameter in the tree already carried the double cast; these
+    /// two, added with the per-locale names column (migration 0029), did not.
+    #[test]
+    fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+
+            let version = catalog
+                .insert_item(
+                    "item-jsonb",
+                    TENANT_A,
+                    "Margherita",
+                    r#"{"vi":"Bánh Margherita"}"#,
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("a create must reach the database, not fail at the driver");
+
+            let stored = catalog.fetch_items(TENANT_A).await.expect("read back");
+            let row = stored.first().expect("the item");
+            assert_eq!(row.name, "Margherita");
+            assert!(
+                row.name_translations.contains("Bánh Margherita"),
+                "the per-locale name round-trips through the jsonb column; got {:?}",
+                row.name_translations,
+            );
+
+            let outcome = catalog
+                .set_item(
+                    TENANT_A,
+                    "item-jsonb",
+                    "Margherita Classic",
+                    r#"{"vi":"Bánh Margherita cổ điển"}"#,
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                    "active",
+                    &version,
+                )
+                .await
+                .expect("an update must reach the database too");
+            assert!(
+                matches!(outcome, store_postgres::RowUpdate::Updated(_)),
+                "the update applies at the version the create returned",
+            );
+
+            let stored = catalog
+                .fetch_items(TENANT_A)
+                .await
+                .expect("read back again");
+            let row = stored.first().expect("the item");
+            assert_eq!(row.name, "Margherita Classic");
+            assert!(row.name_translations.contains("cổ điển"));
+        });
+    }
+
+    /// A page carries its own window and the size of the whole item master, and consecutive pages
+    /// partition it without overlap or gaps (ADR-0098 slice B3-2).
+    #[test]
+    fn a_page_of_the_item_master_carries_the_window_and_the_total() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 25).await;
+            // A neighbour's items must reach neither the page nor the count.
+            stock(&catalog, TENANT_B, 7).await;
+
+            let (first, total) = catalog
+                .fetch_items_page(TENANT_A, 10, 0)
+                .await
+                .expect("first page");
+            assert_eq!(first.len(), 10, "the window is the limit");
+            assert_eq!(total, 25, "the total is the master, not the window");
+
+            let mut seen: Vec<String> = first.into_iter().map(|row| row.menu_item_id).collect();
+            for offset in [10, 20] {
+                let (page, page_total) = catalog
+                    .fetch_items_page(TENANT_A, 10, offset)
+                    .await
+                    .expect("later page");
+                assert_eq!(page_total, 25, "the total does not change as pages advance");
+                seen.extend(page.into_iter().map(|row| row.menu_item_id));
+            }
+            assert_eq!(seen.len(), 25, "three pages of ten cover twenty-five items");
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no item appears on two pages");
+            assert!(
+                unique.iter().all(|id| id.starts_with(TENANT_A)),
+                "no neighbour's item reached the pages",
+            );
+        });
+    }
+
+    /// The paged read returns the same rows in the same order as the whole-set read, and a page past
+    /// the end is empty rather than an error.
+    #[test]
+    fn the_paged_item_master_agrees_with_the_whole_set_read() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 6).await;
+            stock(&catalog, TENANT_B, 4).await;
+
+            let whole: Vec<String> = catalog
+                .fetch_items(TENANT_A)
+                .await
+                .expect("whole set")
+                .into_iter()
+                .map(|row| row.menu_item_id)
+                .collect();
+            assert_eq!(whole.len(), 6, "only this tenant's items");
+
+            let (paged, total) = catalog
+                .fetch_items_page(TENANT_A, 6, 0)
+                .await
+                .expect("paged");
+            assert_eq!(total, 6, "the count is tenant-scoped too");
+            let paged: Vec<String> = paged.into_iter().map(|row| row.menu_item_id).collect();
+            assert_eq!(
+                paged, whole,
+                "a full-width page is the whole-set read, in the same order"
+            );
+
+            let (beyond, beyond_total) = catalog
+                .fetch_items_page(TENANT_A, 10, 100)
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// A batch written in one transaction shares one `created_at`, which is why the read needs the
+    /// `menu_item_id` tiebreaker — the premise of ADR-0098 decision 9, measured rather than trusted.
+    ///
+    /// A CSV import of a menu is exactly this shape. The tie assertion is deterministic; the
+    /// partition check below it is the property that follows, and the `EXPLAIN` guard is what
+    /// actually catches the tiebreaker going missing.
+    #[test]
+    fn an_imported_batch_shares_one_timestamp_and_still_pages() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            let mut inserts = String::new();
+            for index in 0..6 {
+                write!(
+                    inserts,
+                    "INSERT INTO catalog_items \
+                     (menu_item_id, tenant_id, name, tax_class_id) \
+                     VALUES ('import-{index:04}', '{TENANT_A}', 'Imported {index}', 'tax-standard');"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            admin
+                .batch_execute(&format!("BEGIN; {inserts} COMMIT;"))
+                .await
+                .expect("write the import in one transaction");
+
+            let distinct: i64 = admin
+                .query_one(
+                    "SELECT count(DISTINCT created_at) FROM catalog_items WHERE tenant_id = $1",
+                    &[&TENANT_A],
+                )
+                .await
+                .expect("count the distinct timestamps")
+                .get(0);
+            assert_eq!(
+                distinct, 1,
+                "six items imported in one transaction carry one created_at, not six close ones — \
+                 which is why the read's ORDER BY needs menu_item_id as a tiebreaker"
+            );
+
+            let mut seen = Vec::new();
+            for offset in [0, 2, 4] {
+                let (page, total) = catalog
+                    .fetch_items_page(TENANT_A, 2, offset)
+                    .await
+                    .expect("page over the imported batch");
+                assert_eq!(total, 6);
+                seen.extend(page.into_iter().map(|row| row.menu_item_id));
+            }
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                6,
+                "three pages of two cover the batch exactly once each; got {seen:?}"
+            );
+        });
+    }
+
+    /// Migration 0043's index carries the read's whole order, so `LIMIT` stops the scan instead of
+    /// truncating a sort of every item a chain sells.
+    #[test]
+    fn the_paged_item_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 40).await;
+            admin
+                .batch_execute("ANALYZE catalog_items")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT menu_item_id FROM catalog_items WHERE tenant_id = $1 \
+                         ORDER BY created_at DESC, menu_item_id DESC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("catalog_items_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
+            );
+        });
+    }
+}
 
 mod catalog_keyed_rows {
     use store_postgres::{PostgresCatalog, RowUpdate};

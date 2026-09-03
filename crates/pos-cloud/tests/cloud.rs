@@ -62,6 +62,7 @@ use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
 use pos_cloud::orders::{StoreDirectory, orders_router};
+use pos_cloud::paging::{Page, PageRequest};
 use pos_cloud::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
     EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
@@ -5585,52 +5586,83 @@ impl AuditStore for FakeAudit {
         Ok(rows)
     }
 
-    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
+    async fn query(
+        &self,
+        filter: &AuditQuery,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let mut rows = self.matching(filter);
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
+    async fn query_page(
+        &self,
+        filter: &AuditQuery,
+        page: PageRequest,
+    ) -> Result<Page<AuditEntry>, AuditStoreError> {
+        let matching = self.matching(filter);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
+    }
+}
+
+impl FakeAudit {
+    /// Every entry matching `filter`, newest-first and unbounded.
+    ///
+    /// Shared by both filtered reads so the page cannot match a different set than its own total
+    /// counts — the divergence the store-postgres impl avoids by having both queries read one
+    /// `AUDIT_FILTERS` string.
+    fn matching(&self, filter: &AuditQuery) -> Vec<AuditEntry> {
         let mut rows: Vec<AuditEntry> = self
             .entries
             .lock()
             .expect("lock")
             .iter()
-            .filter(|entry| query.tenant.is_none() || entry.tenant_id == query.tenant)
+            .filter(|entry| filter.tenant.is_none() || entry.tenant_id == filter.tenant)
             .filter(|entry| {
-                query
+                filter
                     .entity_type
                     .as_ref()
                     .is_none_or(|value| &entry.entity_type == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .entity_id
                     .as_ref()
                     .is_none_or(|value| &entry.entity_id == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .action
                     .as_ref()
                     .is_none_or(|value| &entry.action == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .actor_admin_id
                     .as_ref()
                     .is_none_or(|value| &entry.actor.admin_id == value)
             })
             .filter(|entry| {
-                query
+                filter
                     .since_ms
                     .is_none_or(|since| entry.at.as_milliseconds_since_epoch() >= since)
             })
             .filter(|entry| {
-                query
+                filter
                     .until_ms
                     .is_none_or(|until| entry.at.as_milliseconds_since_epoch() <= until)
             })
             .cloned()
             .collect();
         rows.reverse(); // stored oldest-first; the read is newest-first.
-        rows.truncate(query.limit as usize);
-        Ok(rows)
+        rows
     }
 }
 
@@ -5758,8 +5790,11 @@ async fn registry_writes_record_to_the_audit_trail() {
     );
 }
 
-#[tokio::test]
-async fn the_audit_read_filters_and_needs_a_session() {
+/// A router over a trail of three entries: two `store` rows and one `tenant` row, oldest first.
+///
+/// Shared by the filter test and the paging test so both read the same trail — a page whose set
+/// differed from the filtered read's would prove nothing about the two agreeing.
+async fn audit_trail_app() -> axum::Router {
     let admin = provisioned_admin();
     let audit = FakeAudit::default();
     let entry = |id: u128, action: &str, entity_type: &str, at_ms: i64| AuditEntry {
@@ -5799,7 +5834,12 @@ async fn the_audit_read_filters_and_needs_a_session() {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    let router = http::router(app).merge(http::audit_router(audit, admin, clock()));
+    http::router(app).merge(http::audit_router(audit, admin, clock()))
+}
+
+#[tokio::test]
+async fn the_audit_read_filters_and_needs_a_session() {
+    let router = audit_trail_app().await;
 
     // No session → the trail is behind the guard.
     let denied = router
@@ -5846,12 +5886,114 @@ async fn the_audit_read_filters_and_needs_a_session() {
 
     // Filter by action.
     let updates = router
+        .clone()
         .oneshot(get_with_cookie("/admin/audit?action=store.update", &cookie))
         .await
         .expect("route the action-filtered read");
     let updates = json_body(updates).await;
     assert_eq!(updates.as_array().expect("array").len(), 1);
     assert_eq!(updates[0]["action"], "store.update");
+}
+
+#[tokio::test]
+async fn the_audit_read_pages_when_asked_for_an_offset_and_windows_when_not() {
+    let router = audit_trail_app().await;
+    let cookie = admin_cookie(&router).await;
+
+    // A limit alone is still the *windowed* read ADR-0069 shipped: the newest N as a bare array,
+    // not a page. This is why `offset` and not `limit` is what asks this route for a page — a
+    // caller sending `?limit=200` today must keep getting what it gets today (ADR-0098).
+    let windowed = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2", &cookie))
+        .await
+        .expect("route the windowed read");
+    let windowed = json_body(windowed).await;
+    let windowed = windowed
+        .as_array()
+        .expect("a bare array, not a paged envelope");
+    assert_eq!(windowed.len(), 2, "the newest two");
+    assert_eq!(windowed[0]["action"], "tenant.update", "still newest-first");
+
+    // An offset asks for the paged form: the window, plus how many matched in total.
+    let page = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2&offset=0", &cookie))
+        .await
+        .expect("route the first page");
+    let page = json_body(page).await;
+    assert_eq!(page["items"].as_array().expect("the window").len(), 2);
+    assert_eq!(
+        page["total"], 3,
+        "the total is the match count, not the page"
+    );
+    assert_eq!(page["limit"], 2);
+    assert_eq!(page["offset"], 0);
+
+    let tail = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=2&offset=2", &cookie))
+        .await
+        .expect("route the second page");
+    let tail = json_body(tail).await;
+    assert_eq!(tail["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(tail["total"], 3);
+    assert_eq!(
+        tail["items"][0]["action"], "store.create",
+        "the oldest entry is on the last page"
+    );
+
+    // The total counts what the *filters* matched, not the whole log — otherwise a pager over a
+    // filtered view would offer pages that are empty.
+    let filtered = router
+        .clone()
+        .oneshot(get_with_cookie(
+            "/admin/audit?entity_type=store&limit=1&offset=0",
+            &cookie,
+        ))
+        .await
+        .expect("route the filtered page");
+    let filtered = json_body(filtered).await;
+    assert_eq!(filtered["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(filtered["total"], 2, "two store entries, not three entries");
+
+    // The windowed form clamps an over-large limit (ADR-0069's behaviour, kept); the paged form
+    // refuses it, because there a clamp answers a different question than the one asked.
+    let clamped = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/audit?limit=100000", &cookie))
+        .await
+        .expect("route the over-large window");
+    assert_eq!(
+        clamped.status(),
+        StatusCode::OK,
+        "the windowed read pulls the bound into range rather than refusing"
+    );
+    assert_eq!(json_body(clamped).await.as_array().expect("array").len(), 3);
+
+    for (query, field) in [
+        ("limit=100000&offset=0", "limit"),
+        ("limit=0&offset=0", "limit"),
+        ("limit=2&offset=lots", "offset"),
+        ("offset=2", "offset"),
+        ("limit=lots", "limit"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&format!("/admin/audit?{query}"), &cookie))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{query}` is a client mistake, not a page",
+        );
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            field,
+            "`{query}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]
@@ -7009,6 +7151,17 @@ impl FakeCatalog {
         *next += 1;
         Version::new(next.to_string())
     }
+
+    /// The tenant's items, in insertion order — shared by the whole-set and paged reads.
+    fn tenant_items(&self, tenant_id: TenantId) -> Vec<Versioned<CatalogItem>> {
+        self.items
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|item| item.record.tenant_id == tenant_id)
+            .cloned()
+            .collect()
+    }
 }
 
 impl CatalogStore for FakeCatalog {
@@ -7025,14 +7178,22 @@ impl CatalogStore for FakeCatalog {
         &self,
         tenant_id: TenantId,
     ) -> Result<Vec<Versioned<CatalogItem>>, CatalogStoreError> {
-        Ok(self
-            .items
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|item| item.record.tenant_id == tenant_id)
-            .cloned()
-            .collect())
+        Ok(self.tenant_items(tenant_id))
+    }
+
+    async fn list_items_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+        let matching = self.tenant_items(tenant_id);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
     }
 
     async fn update_item(
@@ -7832,19 +7993,22 @@ impl MediaStore for FakeMedia {
     }
 
     async fn list(&self, tenant_id: TenantId) -> Result<Vec<MediaSummary>, MediaStoreError> {
-        Ok(self
-            .assets
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|asset| asset.tenant_id == tenant_id)
-            .map(|asset| MediaSummary {
-                media_id: asset.media_id,
-                content_type: asset.content_type.clone(),
-                detail_bytes: asset.detail.len(),
-                created_at_ms: 0,
-            })
-            .collect())
+        Ok(self.summaries(tenant_id))
+    }
+
+    async fn list_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<MediaSummary>, MediaStoreError> {
+        let matching = self.summaries(tenant_id);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
     }
 
     async fn delete(
@@ -7856,6 +8020,26 @@ impl MediaStore for FakeMedia {
         let before = assets.len();
         assets.retain(|asset| !(asset.tenant_id == tenant_id && asset.media_id == media_id));
         Ok(assets.len() < before)
+    }
+}
+
+impl FakeMedia {
+    /// The tenant's assets as summaries, in insertion order.
+    ///
+    /// Shared by both reads so the paged one cannot filter differently from the unpaged one.
+    fn summaries(&self, tenant_id: TenantId) -> Vec<MediaSummary> {
+        self.assets
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|asset| asset.tenant_id == tenant_id)
+            .map(|asset| MediaSummary {
+                media_id: asset.media_id,
+                content_type: asset.content_type.clone(),
+                detail_bytes: asset.detail.len(),
+                created_at_ms: 0,
+            })
+            .collect()
     }
 }
 
@@ -7993,6 +8177,112 @@ async fn media_uploads_serves_lists_and_deletes_and_rejects_a_non_image() {
         .await
         .expect("route the gone thumbnail");
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_media_list_returns_a_bare_array_unpaged_and_an_envelope_when_a_limit_is_named() {
+    // The two shapes of the same route (ADR-0098). The image picker sends no `limit` and must keep
+    // getting a plain array of the whole library; the Media screen's table sends one and gets the
+    // window plus the library's size. A route that answered one shape for both requests would
+    // either break the picker's `.map` or leave the table with no count to page by.
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    for _upload in 0..3 {
+        let created = router
+            .clone()
+            .oneshot(post_bytes_with_cookie(
+                &format!("/admin/media?tenant_id={tenant}"),
+                tiny_png(),
+                "image/png",
+                &cookie,
+            ))
+            .await
+            .expect("route the upload");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    let unpaged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the unpaged list");
+    assert_eq!(unpaged.status(), StatusCode::OK);
+    let unpaged = json_body(unpaged).await;
+    assert_eq!(
+        unpaged
+            .as_array()
+            .expect("a bare array, not an envelope")
+            .len(),
+        3,
+    );
+
+    let paged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}&limit=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the paged list");
+    assert_eq!(paged.status(), StatusCode::OK);
+    let paged = json_body(paged).await;
+    assert_eq!(paged["items"].as_array().expect("the window").len(), 2);
+    assert_eq!(paged["total"], 3, "the total is the library, not the page");
+    assert_eq!(paged["limit"], 2, "the bounds used are echoed back");
+    assert_eq!(paged["offset"], 0);
+
+    // A second page carries the remaining asset and the same total.
+    let tail = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}&limit=2&offset=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the second page");
+    let tail = json_body(tail).await;
+    assert_eq!(tail["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(tail["total"], 3);
+    assert_eq!(tail["offset"], 2);
+}
+
+#[tokio::test]
+async fn the_media_list_refuses_a_page_bound_it_cannot_serve() {
+    // The refusals `parse_page` builds, reached through a real route so the wiring is covered too:
+    // a limit past the cap, a limit that is not a number, and an offset with no limit to skip into.
+    let router = media_app(provisioned_admin(), FakeMedia::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    for (query, field) in [
+        ("limit=100000", "limit"),
+        ("limit=0", "limit"),
+        ("limit=lots", "limit"),
+        ("offset=25", "offset"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/media?tenant_id={tenant}&{query}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{query}` is a client mistake, not a page",
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "`{query}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]
@@ -8829,6 +9119,109 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
         .await
         .expect("route list menus");
     assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+}
+
+#[tokio::test]
+async fn the_item_list_returns_the_whole_master_unpaged_and_a_page_when_a_limit_is_named() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let item_id = json_body(created).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    // An absent limit is the whole item master as a bare array, which the menu compiler and the
+    // item pickers depend on — five of the six console consumers of this read are not tables.
+    let whole = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the whole-set list");
+    assert_eq!(
+        json_body(whole)
+            .await
+            .as_array()
+            .expect("a bare array, not an envelope")
+            .len(),
+        1,
+    );
+
+    // Naming a limit asks for a page instead (ADR-0098): the window, plus the size of the master.
+    let paged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}&limit=1"),
+            &cookie,
+        ))
+        .await
+        .expect("route the paged list");
+    assert_eq!(paged.status(), StatusCode::OK);
+    let paged = json_body(paged).await;
+    assert_eq!(paged["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(paged["items"][0]["menu_item_id"], item_id);
+    assert_eq!(paged["total"], 1, "one item in the master");
+    assert_eq!(paged["limit"], 1, "the bounds used are echoed back");
+    assert_eq!(paged["offset"], 0);
+    assert!(
+        paged["items"][0]["etag"].is_string(),
+        "a paged row keeps the per-row etag ADR-0095 put on it",
+    );
+
+    // A page past the end is empty and not an error, and still reports the master's size.
+    let beyond = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}&limit=10&offset=50"),
+            &cookie,
+        ))
+        .await
+        .expect("route the page past the end");
+    let beyond = json_body(beyond).await;
+    assert!(beyond["items"].as_array().expect("the window").is_empty());
+    assert_eq!(beyond["total"], 1);
+
+    for (bound, field) in [
+        ("limit=100000", "limit"),
+        ("limit=0", "limit"),
+        ("offset=1", "offset"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/catalog/items?tenant_id={tenant}&{bound}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{bound}` is a client mistake, not a page",
+        );
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            field,
+            "`{bound}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]

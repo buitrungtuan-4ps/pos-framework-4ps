@@ -2317,6 +2317,28 @@ impl MediaStore for PostgresMedia {
         rows.into_iter().map(media_summary).collect()
     }
 
+    async fn list_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<MediaSummary>, MediaStoreError> {
+        // `PageRequest` already range-checked these, so widening `u32` into the `i64` the SQL binds
+        // cannot lose or sign-flip anything — which is why the adapter takes bare integers.
+        let (rows, total) = self
+            .fetch_summaries_page(
+                &tenant_id.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| MediaStoreError::new(error.to_string()))?;
+        let items = rows
+            .into_iter()
+            .map(media_summary)
+            .collect::<Result<Vec<MediaSummary>, MediaStoreError>>()?;
+        Ok(Page::new(items, u32::try_from(total).unwrap_or(u32::MAX)))
+    }
+
     async fn delete(
         &self,
         tenant_id: TenantId,
@@ -2439,22 +2461,53 @@ impl AuditStore for PostgresAudit {
         rows.into_iter().map(audit_entry).collect()
     }
 
-    async fn query(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, AuditStoreError> {
-        let tenant = query.tenant.map(|tenant| tenant.to_string());
+    async fn query(
+        &self,
+        filter: &AuditQuery,
+        limit: u32,
+    ) -> Result<Vec<AuditEntry>, AuditStoreError> {
+        let tenant = filter.tenant.map(|tenant| tenant.to_string());
         let rows = self
             .search(
                 tenant.as_deref(),
-                query.entity_type.as_deref(),
-                query.entity_id.as_deref(),
-                query.action.as_deref(),
-                query.actor_admin_id.as_deref(),
-                query.since_ms,
-                query.until_ms,
-                i64::from(query.limit),
+                filter.entity_type.as_deref(),
+                filter.entity_id.as_deref(),
+                filter.action.as_deref(),
+                filter.actor_admin_id.as_deref(),
+                filter.since_ms,
+                filter.until_ms,
+                i64::from(limit),
             )
             .await
             .map_err(|error| AuditStoreError::new(error.to_string()))?;
         rows.into_iter().map(audit_entry).collect()
+    }
+
+    async fn query_page(
+        &self,
+        filter: &AuditQuery,
+        page: PageRequest,
+    ) -> Result<Page<AuditEntry>, AuditStoreError> {
+        let tenant = filter.tenant.map(|tenant| tenant.to_string());
+        let (rows, total) = self
+            .search_page(
+                tenant.as_deref(),
+                filter.entity_type.as_deref(),
+                filter.entity_id.as_deref(),
+                filter.action.as_deref(),
+                filter.actor_admin_id.as_deref(),
+                filter.since_ms,
+                filter.until_ms,
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| AuditStoreError::new(error.to_string()))?;
+        let entries: Vec<AuditEntry> = rows
+            .into_iter()
+            .map(audit_entry)
+            .collect::<Result<_, _>>()?;
+        Ok(Page::new(entries, u32::try_from(total).unwrap_or(u32::MAX)))
     }
 }
 
@@ -3453,6 +3506,26 @@ impl CatalogStore for PostgresCatalog {
             .await
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         rows.into_iter().map(catalog_item_record).collect()
+    }
+
+    async fn list_items_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+        let (rows, total) = self
+            .fetch_items_page(
+                &tenant_id.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let items: Vec<Versioned<CatalogItem>> = rows
+            .into_iter()
+            .map(catalog_item_record)
+            .collect::<Result<_, _>>()?;
+        Ok(Page::new(items, u32::try_from(total).unwrap_or(u32::MAX)))
     }
 
     async fn update_item(

@@ -12,13 +12,25 @@ import type { MediaSummary } from "../api/types";
 import { locale, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, tenantId } from "../state/session";
-import { ConfirmDialog, EmptyState, TechnicalDetails } from "../components/kit";
+import { ConfirmDialog, EmptyState, Pager, TechnicalDetails } from "../components/kit";
 import { MediaThumbnail } from "../components/ImagePicker";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { toast } from "../components/Toast";
 
+/**
+ * How many assets one page of the grid carries.
+ *
+ * Divisible by 2, 3 and 4 — the grid's three breakpoints — so no page ends in a ragged row at any
+ * width. The read is paged because the grid mounts an `<img>` per asset and each one fetches a
+ * thumbnail rendition: on a library of eight hundred that is eight hundred requests when the screen
+ * opens, which is the cost paging actually saves here (ADR-0098).
+ */
+const PAGE_SIZE = 24;
+
 export function Media() {
-  const [assets, setAssets] = createSignal<MediaSummary[] | null>(null);
+  const [assets, setAssets] = createSignal<readonly MediaSummary[] | null>(null);
+  const [total, setTotal] = createSignal(0);
+  const [offset, setOffset] = createSignal(0);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [pendingDelete, setPendingDelete] = createSignal<MediaSummary | null>(null);
@@ -35,11 +47,21 @@ export function Media() {
     toast.error(message);
   };
 
-  const load = async () => {
+  const load = async (from = offset()) => {
     setError("");
     setBusy(true);
     try {
-      setAssets(await api.listMedia(tenantId()));
+      const page = await api.listMediaPage(tenantId(), { limit: PAGE_SIZE, offset: from });
+      // A page that came back empty from somewhere other than the start means the library shrank
+      // under the pager — the last asset on the last page was just deleted. Step back rather than
+      // showing an empty grid over a non-zero count, which reads as "your images are gone".
+      if (page.items.length === 0 && from > 0) {
+        await load(Math.max(0, from - PAGE_SIZE));
+        return;
+      }
+      setAssets(page.items);
+      setTotal(page.total);
+      setOffset(page.offset);
     } catch (caught) {
       fail(caught);
     } finally {
@@ -47,8 +69,9 @@ export function Media() {
     }
   };
 
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+  // Load on open and whenever the tenant changes — never with an empty context (F0). A tenant switch
+  // starts at the first page: the offset that fitted one library means nothing in another.
+  onScopedContext("tenant", () => void load(0));
 
   const upload = async (file: File) => {
     setError("");
@@ -56,7 +79,9 @@ export function Media() {
     try {
       await api.uploadMedia(tenantId(), file);
       toast.ok(t("media.uploaded"));
-      await load();
+      // The read is newest-first, so the upload is on the first page — which is where the operator
+      // expects to see the thing they just added.
+      await load(0);
     } catch (caught) {
       fail(caught);
     } finally {
@@ -163,6 +188,15 @@ export function Media() {
                         </div>
                       )}
                     </For>
+                  </div>
+                  <div class="pt-4">
+                    <Pager
+                      offset={offset()}
+                      limit={PAGE_SIZE}
+                      total={total()}
+                      shown={loaded().length}
+                      onOffset={(next) => void load(next)}
+                    />
                   </div>
                 </Show>
               )}

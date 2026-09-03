@@ -205,6 +205,16 @@ pub struct PostgresCatalog {
     pool: Pool,
 }
 
+/// The columns both item reads return, in a stable order matching [`catalog_item_row`].
+const CATALOG_ITEM_COLUMNS: &str = "menu_item_id, tenant_id, name, name_translations::text, \
+     tax_class_id, item_category_id, item_subcategory_id, image_ref, status, xmin::text";
+
+/// The order both item reads impose — total, because `menu_item_id` is the primary key.
+///
+/// One string rather than two copies: a page must be a window onto the *same* sequence the whole-set
+/// read returns, and an `ORDER BY` that drifted on one of them would make "page 2" mean nothing.
+const CATALOG_ITEM_ORDER: &str = "ORDER BY created_at DESC, menu_item_id DESC";
+
 impl PostgresCatalog {
     pub(crate) fn new(pool: Pool) -> Self {
         Self { pool }
@@ -240,7 +250,7 @@ impl PostgresCatalog {
                 "INSERT INTO catalog_items \
                  (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
                  item_subcategory_id, image_ref) \
-                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8) \
                  RETURNING xmin::text",
                 &[
                     &menu_item_id,
@@ -267,29 +277,52 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT menu_item_id, tenant_id, name, name_translations::text, tax_class_id, \
-                 item_category_id, item_subcategory_id, image_ref, status, xmin::text \
-                 FROM catalog_items \
-                 WHERE tenant_id = $1 ORDER BY created_at DESC",
+                &format!(
+                    "SELECT {CATALOG_ITEM_COLUMNS} FROM catalog_items \
+                     WHERE tenant_id = $1 {CATALOG_ITEM_ORDER}"
+                ),
                 &[&tenant_id],
             )
             .await
             .map_err(unavailable)?;
-        Ok(rows
-            .iter()
-            .map(|row| CatalogItemRow {
-                menu_item_id: row.get(0),
-                tenant_id: row.get(1),
-                name: row.get(2),
-                name_translations: row.get(3),
-                tax_class_id: row.get(4),
-                item_category_id: row.get(5),
-                item_subcategory_id: row.get(6),
-                image_ref: row.get(7),
-                status: row.get(8),
-                version: row.get(9),
-            })
-            .collect())
+        Ok(rows.iter().map(catalog_item_row).collect())
+    }
+
+    /// One page of a tenant's items, newest first, with how many the tenant has.
+    ///
+    /// `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one snapshot, so the count
+    /// cannot disagree with the page it labels.
+    ///
+    /// The `ORDER BY` is total — `created_at DESC, menu_item_id DESC` — because `created_at` alone
+    /// is not. It defaults to `now()`, which is transaction time, so items written by one CSV import
+    /// share one value exactly and a window over the tie could repeat or skip a row across pages
+    /// (ADR-0098 decision 9). `catalog_items_by_tenant_newest` (migration 0043) carries that whole
+    /// order, so the index walk *is* the sort and `LIMIT` stops the scan.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_items_page(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<CatalogItemRow>, i64), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {CATALOG_ITEM_COLUMNS}, count(*) OVER() FROM catalog_items \
+                     WHERE tenant_id = $1 {CATALOG_ITEM_ORDER} LIMIT $2 OFFSET $3"
+                ),
+                &[&tenant_id, &limit, &offset],
+            )
+            .await
+            .map_err(unavailable)?;
+        // Every row carries the same window count; an empty page carries none, which is the right
+        // answer both for a page past the end and for a tenant with no items.
+        let total = rows.first().map_or(0, |row| row.get::<_, i64>(10));
+        Ok((rows.iter().map(catalog_item_row).collect(), total))
     }
 
     /// Renames an item, sets its tax class and status, within its tenant. Applies only if the row is
@@ -320,7 +353,7 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let updated = connection
             .query_opt(
-                "UPDATE catalog_items SET name = $3, name_translations = $4::jsonb, \
+                "UPDATE catalog_items SET name = $3, name_translations = $4::text::jsonb, \
                  tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, \
                  image_ref = $8, status = $9, updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2 \
@@ -1549,5 +1582,25 @@ impl PostgresCatalog {
             .await
             .map_err(unavailable)?;
         Ok(changed == 1)
+    }
+}
+
+/// Reads one catalog item out of a query result.
+///
+/// Shared by the whole-set and paged reads so their column order cannot drift: the paged query
+/// appends an eleventh column and this reads the first ten, so a column added at the *front* of
+/// either breaks both together rather than silently mismatching one.
+fn catalog_item_row(row: &tokio_postgres::Row) -> CatalogItemRow {
+    CatalogItemRow {
+        menu_item_id: row.get(0),
+        tenant_id: row.get(1),
+        name: row.get(2),
+        name_translations: row.get(3),
+        tax_class_id: row.get(4),
+        item_category_id: row.get(5),
+        item_subcategory_id: row.get(6),
+        image_ref: row.get(7),
+        status: row.get(8),
+        version: row.get(9),
     }
 }
