@@ -157,18 +157,22 @@ async function failure(response: Response): Promise<ApiError> {
   }
   const text = await response.text().catch(() => "");
   const trimmed = text.trim();
-  // Three body shapes reach here, and all three have to be readable.
+  // Two body shapes reach here, and both have to be readable.
   //
   // The cloud is being migrated onto the AIP-193 envelope — `{"error":{code,status,message,details}}`
   // — one group of handlers at a time (roadmap v3 Q3), so at any point in that migration some
-  // handlers answer the envelope and the rest answer plain text. A rejected config publish is a
-  // third shape again: `422 {"violations":[...]}`. Reading all three is what lets the conversion
-  // land in reviewable slices instead of one 619-site commit: no intermediate state can strand the
-  // console on a body it cannot parse.
+  // handlers answer the envelope and the rest answer plain text. Reading both is what lets the
+  // conversion land in reviewable slices instead of one 619-site commit: no intermediate state can
+  // strand the console on a body it cannot parse.
+  //
+  // There used to be a third branch here, for a rejected config publish's `{"violations":[...]}`,
+  // and the comment above it claimed three shapes when there were four: the translation grid's
+  // `{"missing_fallback":[...]}` had no branch at all, so an operator saw raw JSON in a dialog.
+  // ADR-0096 removed the cause rather than adding a fourth parser — those refusals now carry
+  // `UNPROCESSABLE` in the envelope, with the offending keys in `details`.
   if (trimmed.startsWith("{")) {
     try {
       const body = JSON.parse(trimmed) as {
-        violations?: string[];
         error?: { status?: unknown; message?: unknown; details?: unknown };
       };
       const envelope = body.error;
@@ -180,11 +184,8 @@ async function failure(response: Response): Promise<ApiError> {
           errorDetails(envelope.details),
         );
       }
-      if (Array.isArray(body.violations) && body.violations.length > 0) {
-        return new ApiError(response.status, body.violations.join("; "));
-      }
     } catch {
-      // Neither known JSON shape; fall through to the raw text.
+      // Not the envelope; fall through to the raw text.
     }
   }
   return new ApiError(response.status, trimmed || response.statusText);

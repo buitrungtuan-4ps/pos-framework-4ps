@@ -161,13 +161,27 @@ impl StoreOutcome {
 
 /// The lowercase `snake_case` class the relay's `port_error_from_wire` recognises. Classes it does
 /// not distinguish collapse to `failed_precondition` — a store's refusal is its own decision, a `409`.
+///
+/// Exhaustive rather than closed with a `_` arm: the collapse is a deliberate decision per status,
+/// and a wildcard would make it the default for statuses nobody has considered yet. Adding one to
+/// [`ErrorStatus`] must fail the build here (ADR-0096).
 fn status_wire(status: ErrorStatus) -> &'static str {
     match status {
         ErrorStatus::InvalidArgument => "invalid_argument",
         ErrorStatus::AlreadyExists => "already_exists",
         ErrorStatus::ResourceExhausted => "resource_exhausted",
         ErrorStatus::NotFound => "not_found",
-        _ => "failed_precondition",
+        // A refusal on the order's own content is still the store refusing, and the relay has no
+        // `unprocessable` class to receive it (ADR-0096 leaves `PortError` alone), so it collapses
+        // like the rest rather than inventing a wire class the cloud would not recognise.
+        ErrorStatus::Unprocessable
+        | ErrorStatus::FailedPrecondition
+        | ErrorStatus::PermissionDenied
+        | ErrorStatus::Unauthenticated
+        | ErrorStatus::Unavailable
+        | ErrorStatus::VersionMismatch
+        | ErrorStatus::Internal
+        | ErrorStatus::Unspecified => "failed_precondition",
     }
 }
 

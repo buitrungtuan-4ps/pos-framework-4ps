@@ -148,3 +148,19 @@ Out, with reasons:
 **Delivery.** This ADR, then one slice: the variant, the seven conversions, the two
 re-classifications, the edge match arms, the console cleanup, and the test assertions that currently
 pin the old body shapes.
+
+**Two notes, on implementation.** The seven-and-two split held exactly as written above; these are
+the places the slice went slightly further than the decision.
+
+The relay's status-to-class mapper was to "decide explicitly rather than letting its `_` arm swallow
+the new one". It lost the `_` arm entirely instead. Naming `Unprocessable` beside a surviving
+wildcard would have fixed this status and left the next one to be swallowed by default — and the
+whole reason `pos-edge`'s matches are exhaustive is that a new status should not be able to acquire
+a meaning nobody chose for it. The collapse to `failed_precondition` is still what eight of the
+twelve do; it is now eight deliberate decisions rather than one accident with four exceptions.
+
+The two re-classified password refusals were to become `400` with `("password", "OUT_OF_RANGE")`.
+Their message changed too, from `"the password is too short"` to one naming the minimum. A `400`
+sends the reader to a field; a refusal that names the field and then declines to say what it accepts
+sends them there to guess. That is the shape Q3b slice 4a established for every other range refusal
+in this tree, and there was no reason for these two to keep their own.

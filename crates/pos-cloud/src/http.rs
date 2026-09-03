@@ -4614,11 +4614,7 @@ where
     let mut violations = pos_core::floor::floor_violations(&floor_plan);
     violations.extend(pos_core::floor::station_violations(&station_plan));
     if !violations.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
-        )
-            .into_response();
+        return unprocessable_violations(&violations);
     }
 
     let (Ok(floor_value), Ok(stations_value)) = (
@@ -8202,11 +8198,7 @@ where
         let id = match tree.publish(level, layer, version_id) {
             Ok(id) => id,
             Err(ConfigError::Invalid(violations)) => {
-                return Err((
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(ConfigViolations { violations }),
-                )
-                    .into_response());
+                return Err(unprocessable_violations(&violations));
             }
         };
         match config_trees
@@ -8297,11 +8289,7 @@ where
             Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => Err(version_mismatch()),
             Err(error) => Err(config_store_error_response(&error)),
         },
-        Err(ConfigError::Invalid(violations)) => Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
-        )
-            .into_response()),
+        Err(ConfigError::Invalid(violations)) => Err(unprocessable_violations(&violations)),
     }
 }
 
@@ -8696,11 +8684,7 @@ where
     let state_before = &loaded.state;
     match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
         Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
-        Err(violations) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ConfigViolations { violations }),
-        )
-            .into_response(),
+        Err(violations) => unprocessable_violations(&violations),
     }
 }
 
@@ -9799,11 +9783,13 @@ where
             );
         }
         Err(ImagePipelineError::Budget { .. }) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
+            // The pipeline understood the image and could not fit it in the budget: well-formed
+            // request, unprocessable content (ADR-0096). There is no field to name — the upload is
+            // the whole body — so this carries no `details`.
+            return api_error(
+                ErrorStatus::Unprocessable,
                 "the image could not be reduced within the size budget",
-            )
-                .into_response();
+            );
         }
         Err(ImagePipelineError::Encode(_)) => {
             tracing::error!("encoding a media rendition failed");
@@ -12519,7 +12505,7 @@ where
     // store failure.
     let book = match compile_menu(&items, &menus, &placements, menu_id) {
         Ok(book) => book,
-        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+        Err(error) => return api_error(ErrorStatus::Unprocessable, error.to_string()),
     };
     let Ok(book_value) = serde_json::to_value(&book) else {
         tracing::error!("could not serialise a compiled menu book");
@@ -13076,13 +13062,6 @@ struct TranslationTenantQuery {
     tenant_id: String,
 }
 
-/// The keys a rejected grid failed the fallback rule on — every key must carry a non-empty `en`.
-#[derive(Debug, Clone, serde::Serialize)]
-struct GridViolations {
-    /// The keys missing a non-empty `en` value ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
-    missing_fallback: Vec<String>,
-}
-
 /// Builds the translation-grid sub-router, stated independently of [`CloudApp`]
 /// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
 ///
@@ -13201,13 +13180,26 @@ where
     };
     let missing = grid.keys_missing_fallback();
     if !missing.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(GridViolations {
-                missing_fallback: missing,
-            }),
-        )
-            .into_response();
+        // The one refusal in this file that knows exactly which fields are at fault, so it is the
+        // one that most needs `details` — and the one that had the worst behaviour before ADR-0096:
+        // its bespoke `{"missing_fallback":[…]}` body had no reader in the console at all, so an
+        // operator's toast rendered the raw JSON.
+        //
+        // `<key>.en` rather than `<key>`: it is the `en` value that is missing, and a path a reader
+        // can act on beats a name they have to interpret.
+        let fields: Vec<String> = missing.iter().map(|key| format!("{key}.en")).collect();
+        let details: Vec<(&str, &str)> = fields
+            .iter()
+            .map(|field| (field.as_str(), "REQUIRED"))
+            .collect();
+        return api_error_with_details(
+            ErrorStatus::Unprocessable,
+            format!(
+                "every key needs a non-empty `en` fallback; these do not: {}",
+                missing.join(", ")
+            ),
+            &details,
+        );
     }
     match state
         .translations
@@ -13849,7 +13841,7 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
 /// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
 ///
 /// Token-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch
-/// (compared in constant time), `422` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
+/// (compared in constant time), `400` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
 /// `409` once an administrator is already enrolled, and on success `201` with the one-time TOTP
 /// enrolment. The password is hashed with Argon2id under a fresh CSPRNG salt and never stored in the
 /// clear; the TOTP secret is generated here and returned exactly once.
@@ -13876,11 +13868,14 @@ where
         return api_error(ErrorStatus::Unauthenticated, "setup failed");
     }
     if request.password.len() < MIN_PASSWORD_LEN {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the password is too short",
-        )
-            .into_response();
+        // One field, out of range — a `400`, not the `422` this answered before ADR-0096. The
+        // difference is what it tells the reader to do: there *is* a field to go and fix, which is
+        // exactly what separates `INVALID_ARGUMENT` from `UNPROCESSABLE`.
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("the password must be at least {MIN_PASSWORD_LEN} characters"),
+            &[("password", "OUT_OF_RANGE")],
+        );
     }
     let Some((secret, phc)) = mint_credential(&request.password) else {
         tracing::error!("could not mint a super-admin credential (entropy or hashing failed)");
@@ -15144,11 +15139,14 @@ where
     W: Clone + Send + Sync + 'static,
 {
     if request.password.len() < MIN_PASSWORD_LEN {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the password is too short",
-        )
-            .into_response();
+        // One field, out of range — a `400`, not the `422` this answered before ADR-0096. The
+        // difference is what it tells the reader to do: there *is* a field to go and fix, which is
+        // exactly what separates `INVALID_ARGUMENT` from `UNPROCESSABLE`.
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("the password must be at least {MIN_PASSWORD_LEN} characters"),
+            &[("password", "OUT_OF_RANGE")],
+        );
     }
     let now = app.clock.now();
     let invite = match app
@@ -15395,14 +15393,6 @@ struct ConfigTenantQuery {
 struct PublishedConfig {
     /// The new config version id (a ULID).
     config_version_id: String,
-}
-
-/// The violations a rejected publish reported — the composed document failed validation, so nothing
-/// changed and the last good version stays current.
-#[derive(Debug, Clone, serde::Serialize)]
-struct ConfigViolations {
-    /// One human-readable message per violation.
-    violations: Vec<String>,
 }
 
 /// Authors one level of a store's config tree and publishes the composed version (super-admin only).
@@ -16486,6 +16476,22 @@ pub(crate) fn api_error_with_details(
         |body, (field, reason)| body.with_detail(*field, *reason),
     );
     (http_status(status), Json(body)).into_response()
+}
+
+/// The `422` a composed document earns when every field in it is valid and the document they make
+/// together is not ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+///
+/// The violations arrive from `pos-core` as prose a person can read — "the routing rule for station
+/// `S01` names a backup station that does not exist" — not as field paths, so they join into
+/// `message` rather than becoming `details`. Inventing a `field` for them would be fabricating
+/// structure the domain never produced, and a client that branched on the fabricated `reason` would
+/// be branching on a guess.
+///
+/// Separated from [`api_error`] so the four sites that report violations cannot each pick their own
+/// separator: before this they could not even agree on a *body*, which is how the fifth shape —
+/// the translation grid's — ended up with no reader in the console at all.
+fn unprocessable_violations(violations: &[String]) -> Response {
+    api_error(ErrorStatus::Unprocessable, violations.join("; "))
 }
 
 /// Parses `N` named ULID fields at once, refusing with a detail per field that **actually** failed.

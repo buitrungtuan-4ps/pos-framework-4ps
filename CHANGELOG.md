@@ -78,6 +78,50 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   carry an application-layer secret remains open.
 
 ### Changed
+- **Nine refusals that could not say what was wrong with them now can** (#146). ADR-0096.
+
+  `ErrorStatus` mapped to 400/401/403/404/409/412/429/500/503 and nothing else, so a handler that
+  wanted to answer *"every field is valid and the document they make together is not"* had no status
+  to say it with. Nine invented a body of their own instead, and the console grew a parser per shape
+  until it ran out: a translation grid rejected for a missing `en` fallback answered
+  `{"missing_fallback":["menu.rice"]}`, which nothing in the console read, so the operator's toast
+  rendered that JSON verbatim in a dialog where a sentence belongs.
+
+  **`ErrorStatus::Unprocessable` (`UNPROCESSABLE`, `422`) is the twelfth status**, added exactly as
+  ADR-0094 added the eleventh. Older readers are safe by construction: `Open<ErrorStatus>` keeps an
+  unrecognised token as text rather than failing the parse, so a build that predates this shows an
+  unknown status and still renders the message.
+
+  **Seven of the nine become it**, and how each carries its reasons follows from what it knows.
+  Violations that arrive from `pos-core` as prose — a routing rule naming a station that does not
+  exist, capability flags contradicting each other, a price book that will not compile — join into
+  `message`; inventing a `field` for them would fabricate structure the domain never produced. The
+  translation grid *does* know its fields, so each offending key becomes one
+  `{"field": "<key>.en", "reason": "REQUIRED"}` entry, `.en` because it is the `en` value that is
+  missing and a path beats a name a reader has to interpret.
+
+  **Two of the nine were never 422**, which is the correction this slice found while reading them:
+  `/admin/setup` and `/admin/invites/accept` refuse a password shorter than the minimum, and that is
+  one field out of range. They become `400 INVALID_ARGUMENT` with `("password", "OUT_OF_RANGE")`,
+  matching the `("pin", "OUT_OF_RANGE")` shape already used everywhere else for exactly this, and
+  the message now says what it accepts instead of only that the value was rejected.
+
+  The test that separates the two groups is the one that justifies the status at all: **is there a
+  field to name?** If yes it is `400`, whatever the handler answered before. That is also why the
+  cheap alternative — call all nine `INVALID_ARGUMENT` and add nothing — was rejected: it is one line
+  of code and a permanently worse error message, sending an operator hunting for a typo in a form
+  where there is none.
+
+  The console loses a parser rather than gaining one: four body shapes become two — the envelope,
+  and raw text for what Q3 has not converted yet. `pos-edge`'s two `ErrorStatus` matches gain the
+  arm they are exhaustive to force, and the relay's status-to-class mapper drops its `_` arm so the
+  next status added cannot be swallowed into `failed_precondition` by default.
+
+  **Upgrade note.** No `PROTOCOL_VERSION` change: none of the nine routes appears in
+  `docs/openapi.json`, and the envelope's shape is unchanged — only a new value in an existing field
+  the type was built to tolerate. A client that branches on `response.status` sees `400` instead of
+  `422` on the two password routes.
+
 - **Tax rates and the translation grid stop losing concurrent saves** (#143). Q3c slice 5b, ADR-0095
   shape C. Both screens load a whole grid, an operator edits one cell, and the screen `PUT`s the
   whole grid back — a read-modify-write with a human thinking in the middle, so two operators editing
@@ -297,12 +341,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   whole crate found them. `StatusCode` is now an unused import in three of those files.
 
 ### Known limitation
-- **Three refusals cannot join the envelope: it has no `422`.** `ErrorStatus` maps to
-  400/401/403/404/409/429/500/503 and nothing else, so `"the password is too short"` (two routes)
-  and `"the image could not be reduced within the size budget"` stay as they are rather than have
-  their status quietly changed to `400`. `422` is the honest code for all three — the request is
-  well-formed and still unprocessable. Adding a variant is a `pos-proto` change and wants an ADR
-  first, so this is recorded rather than decided.
+- ~~**Three refusals cannot join the envelope: it has no `422`.**~~ **Closed by #146 (ADR-0096),
+  and it undercounted twice.** There were **nine**, not three: this note saw only four bare-text
+  sites and listed three of them, missing the menu compiler's, and it did not mention the five that
+  answered JSON bodies of their own invention at all — four `{"violations":[…]}` and one
+  `{"missing_fallback":[…]}`. The second omission mattered more than the first, because the
+  `missing_fallback` body had no reader in the console, so it was a live defect rather than an
+  untidiness, and a note that never named it could not surface it.
+
+  Its judgement about the two password routes was also wrong in the safe direction: it called `422`
+  "the honest code for all three", and one field out of range is a `400`. Recorded rather than
+  quietly amended, because the reason it happened is worth keeping — the note was written from a
+  grep for the status code, and a grep for a code finds the sites that answer it, not the sites that
+  should.
 
 - **An absent entity and a down dependency each answer in one shape** — 103 sites (#135). Q3b
   slice 4b, and the last of the cloud's repeated refusal families.
