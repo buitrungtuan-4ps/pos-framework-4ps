@@ -288,3 +288,33 @@ by inheritance from the query that was already there, not by design.
      search the whole trail — its client-side box only ever saw the newest 200 rows, so removing it
      is a fix rather than a loss.
 3. **B3-3** — `q`/`sort`/`order` across the paged cohort, each route declaring its own fields.
+
+   **Scoped down on measurement, and `items` delivered.** "Across the cohort" turned out to name
+   less work than it sounds, because the cohort's screens do not all want these:
+
+   - **`items` has both, and needed them** — its sub-screen finds a row by typing, which is why B3-2
+     could not move that screen. `?q=` matches the name or any per-locale name; `?sort=` offers
+     `newest`, `name` and `status` from a closed enum, with migration 0044 covering the name order.
+     The screen now pages, searches and sorts server-side.
+   - **`media` wants neither.** It is a grid of thumbnails with no search box and no sortable
+     header; adding a `?q=` nothing calls would be the shape of finding #273.
+   - **`audit` wants `sort`, not `q`.** Its three exact-match filters already search the whole trail,
+     and a free-text `?q=` over a log that reaches millions of rows is a different problem: no
+     substring predicate can use a btree, so it would be a full scan per page. That is a trigram-index
+     decision (a new dependency, so its own ADR) and it is deliberately not made here. `sort` on
+     `audit_log`'s own columns is cheap and is the remaining piece of this slice.
+   - **`vouchers` wants neither** — no console screen renders a table of codes at all; the read
+     serves a count and an operator printing a flyer run.
+
+   **A guard's limit, found by mutation.** The `EXPLAIN` tests each assert the plan of a query the
+   *test* writes, so they catch a migration being dropped but not the adapter's own `ORDER BY`
+   losing its tiebreaker — and the page-partition tests cannot catch that either, because with the
+   index present the index walk supplies the missing order for free. Removing `menu_item_id` from
+   the name fragment passed every test in the tree. The gap is closed by asserting the invariant
+   where it lives: a unit test over the `ORDER BY` fragments requiring each to end in the primary
+   key, which covers a variant added later the day it is written.
+
+   **A live defect this slice fixed.** B3-2 left `DataTable` sorting the page in server mode while
+   its docstring said otherwise, which the Audit screen made reachable. Server-mode sorting is now
+   gated on the column naming a server field *and* the caller offering `onSort`; headers are inert
+   otherwise rather than quietly ordering a window.

@@ -40,8 +40,8 @@ use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
-    ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection,
-    ModifierGroup, TaxClass,
+    ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu, MenuId,
+    MenuPlacement, MenuSection, ModifierGroup, TaxClass,
 };
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -7162,6 +7162,51 @@ impl FakeCatalog {
             .cloned()
             .collect()
     }
+
+    /// The tenant's items matching `filter`, in the order it asks for — newest-first by default,
+    /// with every tie broken on the item id so each order is total (ADR-0098 decision 9).
+    fn filtered_items(
+        &self,
+        tenant_id: TenantId,
+        filter: &ItemListFilter,
+    ) -> Vec<Versioned<CatalogItem>> {
+        let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+        let mut matching: Vec<Versioned<CatalogItem>> = self
+            .tenant_items(tenant_id)
+            .into_iter()
+            .filter(|item| {
+                needle.as_ref().is_none_or(|needle| {
+                    item.record.name.to_lowercase().contains(needle)
+                        || item
+                            .record
+                            .name_translations
+                            .values()
+                            .any(|value| value.to_lowercase().contains(needle))
+                })
+            })
+            .collect();
+        matching.reverse();
+        match filter.sort {
+            ItemSort::Newest => {}
+            ItemSort::Name => matching.sort_by(|left, right| {
+                left.record
+                    .name
+                    .cmp(&right.record.name)
+                    .then_with(|| right.record.menu_item_id.cmp(&left.record.menu_item_id))
+            }),
+            ItemSort::Status => matching.sort_by(|left, right| {
+                left.record
+                    .status
+                    .as_str()
+                    .cmp(right.record.status.as_str())
+                    .then_with(|| right.record.menu_item_id.cmp(&left.record.menu_item_id))
+            }),
+        }
+        if filter.descending {
+            matching.reverse();
+        }
+        matching
+    }
 }
 
 impl CatalogStore for FakeCatalog {
@@ -7185,8 +7230,9 @@ impl CatalogStore for FakeCatalog {
         &self,
         tenant_id: TenantId,
         page: PageRequest,
+        filter: &ItemListFilter,
     ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
-        let matching = self.tenant_items(tenant_id);
+        let matching = self.filtered_items(tenant_id, filter);
         let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
         let items = matching
             .into_iter()
@@ -9122,6 +9168,92 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
 }
 
 #[tokio::test]
+async fn a_paged_item_read_searches_and_sorts_on_the_server() {
+    // The wire half of B3-3: `?q=`, `?sort=` and `?order=` have to reach the store, not be parsed
+    // and dropped. Each assertion here would pass against a handler that ignored its parameter if
+    // the fixture were smaller — so the fixture is three items whose name order differs from their
+    // creation order.
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    for name in ["Zucchini", "Anchovy", "Margherita"] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/catalog/items",
+                &serde_json::json!({
+                    "tenant_id": tenant,
+                    "name": name,
+                    "tax_class_id": ulid_text(7),
+                    "name_translations": { "vi": format!("Bánh {name}") },
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route create item");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    let names = |body: &serde_json::Value| -> Vec<String> {
+        body["items"]
+            .as_array()
+            .expect("the window")
+            .iter()
+            .map(|row| row["name"].as_str().expect("a name").to_owned())
+            .collect()
+    };
+    let read = |query: &str| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let uri = format!("/admin/catalog/items?tenant_id={tenant}&{query}");
+        async move {
+            let response = router
+                .oneshot(get_with_cookie(&uri, &cookie))
+                .await
+                .expect("route the paged read");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        }
+    };
+
+    // Default order is newest-first, unchanged from the unpaged read.
+    let newest = read("limit=10").await;
+    assert_eq!(names(&newest), ["Margherita", "Anchovy", "Zucchini"]);
+
+    // `?sort=name` is a different order, and `?order=desc` reverses it.
+    let by_name = read("limit=10&sort=name").await;
+    assert_eq!(names(&by_name), ["Anchovy", "Margherita", "Zucchini"]);
+    let reversed = read("limit=10&sort=name&order=desc").await;
+    assert_eq!(names(&reversed), ["Zucchini", "Margherita", "Anchovy"]);
+
+    // `?q=` narrows the rows *and* the total, so the pager does not offer empty pages.
+    let searched = read("limit=10&q=anch").await;
+    assert_eq!(names(&searched), ["Anchovy"]);
+    assert_eq!(searched["total"], 1, "the total counts the match");
+
+    // The search reaches the per-locale names too (ADR-0074): "Bánh" is in no primary name.
+    let vietnamese = read("limit=10&q=B%C3%A1nh").await;
+    assert_eq!(
+        vietnamese["total"], 3,
+        "every item's Vietnamese name matches"
+    );
+
+    // A search and a sort compose, and the page still carries the matching total.
+    //
+    // The needle is `i`, chosen after this test first asserted the wrong number: every per-locale
+    // name here begins "Bánh", so a needle containing `n`, `a` or `h` matches all three through the
+    // translation and proves nothing about narrowing. `i` appears in Zucchini and Margherita, in
+    // neither Anchovy nor "Bánh".
+    let both = read("limit=1&sort=name&q=i").await;
+    assert_eq!(
+        names(&both),
+        ["Margherita"],
+        "first by name among the matches, not the first match in the default order",
+    );
+    assert_eq!(both["total"], 2, "Margherita and Zucchini contain an i");
+}
+
+#[tokio::test]
 async fn the_item_list_returns_the_whole_master_unpaged_and_a_page_when_a_limit_is_named() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());
     let cookie = admin_cookie(&router).await;
@@ -9202,6 +9334,15 @@ async fn the_item_list_returns_the_whole_master_unpaged_and_a_page_when_a_limit_
         ("limit=100000", "limit"),
         ("limit=0", "limit"),
         ("offset=1", "offset"),
+        // A page-shaping parameter without a limit: the fix is "add a limit", not "correct the
+        // value", so it gets its own sentence and names the parameter it arrived with.
+        ("q=marg", "q"),
+        ("sort=name", "sort"),
+        ("order=desc", "order"),
+        // Inside the paged form, a token outside the route's closed set is refused with the list of
+        // what it accepts, rather than answered with the default order.
+        ("limit=5&sort=price", "sort"),
+        ("limit=5&order=sideways", "order"),
     ] {
         let refused = router
             .clone()

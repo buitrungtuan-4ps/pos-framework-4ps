@@ -435,6 +435,78 @@ pub struct LayoutButton {
 /// row for the same reason the record-shaped reads do: it is the only place an editor can obtain the
 /// token `update_*` demands.
 ///
+/// How a page of the item master is ordered.
+///
+/// A closed set, and that is the point: the wire sends a token, this enum is the only thing that maps
+/// a token to an `ORDER BY`, and the fragments it maps to are `&'static str` literals. No caller text
+/// reaches the SQL, so there is no escaping rule for anyone to remember — the type carries the
+/// guarantee.
+///
+/// Every variant's order is *total*: each ends with the primary key. `ORDER BY name` is no more total
+/// than `ORDER BY created_at` was — two items can share a name, and a window over that tie can repeat
+/// or skip a row across pages just the same. [ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)
+/// decision 9 applies to every sort a route offers, not only its default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ItemSort {
+    /// Newest first — the order the unpaged read has always used, and the default.
+    #[default]
+    Newest,
+    /// By name, for finding a dish rather than reviewing recent edits.
+    Name,
+    /// By status, so a tenant's live menu groups apart from what it has archived.
+    Status,
+}
+
+impl ItemSort {
+    /// The wire token for this order, as `?sort=` sends it.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Name => "name",
+            Self::Status => "status",
+        }
+    }
+
+    /// Reads a wire token, or `None` when it is not one this read offers.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "newest" => Some(Self::Newest),
+            "name" => Some(Self::Name),
+            "status" => Some(Self::Status),
+            _unknown => None,
+        }
+    }
+
+    /// Every token, for the refusal that tells a caller what it may send.
+    #[must_use]
+    pub const fn tokens() -> &'static [&'static str] {
+        &["newest", "name", "status"]
+    }
+}
+
+/// What a caller wants of a page of items beyond its bounds: which rows, in what order.
+///
+/// Separate from [`PageRequest`] rather than folded into it. `PageRequest` is the vocabulary every
+/// paged read shares, and neither the voucher nor the media read can search or sort — a caller that
+/// set a search on a request those reads accept would have it silently ignored, which is the class of
+/// quiet wrong answer ADR-0098 exists to prevent. A read that offers these takes them explicitly, in
+/// its own type, with its own closed set of sort fields.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ItemListFilter {
+    /// Case-insensitive substring the item must match, in its name or in any per-locale name.
+    ///
+    /// `None` matches every item. The per-locale names are searched too, because ADR-0074 exists for
+    /// the reason an operator types Vietnamese: matching only the primary name would miss the search
+    /// that matters most in the market this runs in.
+    pub search: Option<String>,
+    /// The order the page comes back in.
+    pub sort: ItemSort,
+    /// Whether `sort` runs the other way. `Newest` is newest-first by nature; this inverts it.
+    pub descending: bool,
+}
+
 /// All reads and writes are tenant-scoped; the `store-postgres` impl is RLS-isolated by tenant, like
 /// every other cloud table.
 pub trait CatalogStore {
@@ -455,19 +527,21 @@ pub trait CatalogStore {
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<CatalogItem>>, CatalogStoreError>> + Send;
 
-    /// One page of a tenant's items, newest first, with how many the tenant has.
+    /// One page of a tenant's items — those matching `filter`, in the order it asks for, with how
+    /// many matched.
     ///
     /// Beside [`list_items`](Self::list_items), not replacing it: the item master runs to thousands
     /// for a chain, and the Items table is the one consumer that wants a window rather than the set.
     ///
-    /// The order is `created_at DESC, menu_item_id DESC` — total, per ADR-0098 decision 9.
-    /// `created_at` alone is not: it defaults to `now()`, which is *transaction* time, so items
-    /// imported in one transaction share it exactly and a window over the tie could return a row on
-    /// two pages or on neither.
+    /// `total` counts what the filter matched, not the tenant's whole master — a pager over a search
+    /// whose total came from the unfiltered table would offer pages that are empty.
+    ///
+    /// Every order [`ItemSort`] offers is total, ending in the primary key, per ADR-0098 decision 9.
     fn list_items_page(
         &self,
         tenant_id: TenantId,
         page: PageRequest,
+        filter: &ItemListFilter,
     ) -> impl Future<Output = Result<Page<Versioned<CatalogItem>>, CatalogStoreError>> + Send;
 
     /// Renames an item, sets its tax class, and/or sets its status, within its tenant. Returns
@@ -726,8 +800,8 @@ mod tests {
 
     use super::{
         CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
-        DisplaySubcategory, ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId,
-        MenuPlacement, MenuSection, ModifierGroup, TaxClass,
+        DisplaySubcategory, ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton,
+        Menu, MenuId, MenuPlacement, MenuSection, ModifierGroup, TaxClass,
     };
     use crate::paging::{Page, PageRequest};
     use crate::registry::EntityStatus;
@@ -773,6 +847,56 @@ mod tests {
                 .cloned()
                 .collect()
         }
+
+        /// The tenant's items that match `filter`, in the order it asks for.
+        ///
+        /// The fake sorts in memory where store-postgres sorts in SQL, which is what a fake is for.
+        /// What both must agree on is *which* rows match and that the order is total — so this
+        /// breaks every tie on the item id, exactly as every `ItemSort` fragment does.
+        fn filtered_items(
+            &self,
+            tenant_id: TenantId,
+            filter: &ItemListFilter,
+        ) -> Vec<Versioned<CatalogItem>> {
+            let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+            let mut matching: Vec<Versioned<CatalogItem>> = self
+                .tenant_items(tenant_id)
+                .into_iter()
+                .filter(|item| {
+                    needle.as_ref().is_none_or(|needle| {
+                        item.record.name.to_lowercase().contains(needle)
+                            || item
+                                .record
+                                .name_translations
+                                .values()
+                                .any(|value| value.to_lowercase().contains(needle))
+                    })
+                })
+                .collect();
+            // Newest-first is insertion order reversed in the fake; the id tiebreaker then makes
+            // every order total.
+            matching.reverse();
+            match filter.sort {
+                ItemSort::Newest => {}
+                ItemSort::Name => matching.sort_by(|left, right| {
+                    left.record
+                        .name
+                        .cmp(&right.record.name)
+                        .then_with(|| right.record.menu_item_id.cmp(&left.record.menu_item_id))
+                }),
+                ItemSort::Status => matching.sort_by(|left, right| {
+                    left.record
+                        .status
+                        .as_str()
+                        .cmp(right.record.status.as_str())
+                        .then_with(|| right.record.menu_item_id.cmp(&left.record.menu_item_id))
+                }),
+            }
+            if filter.descending {
+                matching.reverse();
+            }
+            matching
+        }
     }
 
     impl CatalogStore for FakeCatalog {
@@ -796,8 +920,9 @@ mod tests {
             &self,
             tenant_id: TenantId,
             page: PageRequest,
+            filter: &ItemListFilter,
         ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
-            let matching = self.tenant_items(tenant_id);
+            let matching = self.filtered_items(tenant_id, filter);
             let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
             let items = matching
                 .into_iter()
@@ -1392,6 +1517,188 @@ mod tests {
             image_ref: None,
             status: EntityStatus::Active,
         }
+    }
+
+    /// A page of items, with `filter`'s defaults unless stated.
+    async fn page_of(
+        store: &FakeCatalog,
+        tenant_n: u128,
+        limit: u32,
+        offset: u32,
+        filter: &ItemListFilter,
+    ) -> Page<Versioned<CatalogItem>> {
+        store
+            .list_items_page(
+                tenant(tenant_n),
+                PageRequest::new(limit, offset).expect("in range"),
+                filter,
+            )
+            .await
+            .expect("page")
+    }
+
+    #[tokio::test]
+    async fn a_search_narrows_the_rows_and_the_total_together() {
+        // The property a pager over a search depends on: `total` must count what matched, not the
+        // tenant's whole master. A total taken from the unfiltered table would offer pages the
+        // search cannot fill, and the operator would page into emptiness.
+        let store = FakeCatalog::default();
+        for (id, name) in [(500, "Margherita"), (501, "Marinara"), (502, "Tiramisu")] {
+            store.create_item(&item(1, id, name)).await.expect("create");
+        }
+
+        let filter = ItemListFilter {
+            search: Some("mari".to_owned()),
+            ..ItemListFilter::default()
+        };
+        let page = page_of(&store, 1, 10, 0, &filter).await;
+        assert_eq!(page.total, 1, "the total counts the match, not the master");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items.first().expect("row").record.name, "Marinara");
+
+        // Case-insensitive, and a substring rather than a prefix.
+        let anywhere = ItemListFilter {
+            search: Some("RAMIS".to_owned()),
+            ..ItemListFilter::default()
+        };
+        assert_eq!(page_of(&store, 1, 10, 0, &anywhere).await.total, 1);
+    }
+
+    #[tokio::test]
+    async fn a_search_matches_a_per_locale_name_not_only_the_primary_one() {
+        // ADR-0074 exists because operators work in Vietnamese. A search that read only `name`
+        // would fail exactly the person the translations were added for.
+        let store = FakeCatalog::default();
+        let mut translated = item(1, 500, "Margherita");
+        translated
+            .name_translations
+            .insert("vi".to_owned(), "Bánh Margherita".to_owned());
+        store.create_item(&translated).await.expect("create");
+        store
+            .create_item(&item(1, 501, "Tiramisu"))
+            .await
+            .expect("create");
+
+        let filter = ItemListFilter {
+            search: Some("bánh".to_owned()),
+            ..ItemListFilter::default()
+        };
+        let page = page_of(&store, 1, 10, 0, &filter).await;
+        assert_eq!(page.total, 1, "the Vietnamese name is searched too");
+        assert_eq!(page.items.first().expect("row").record.name, "Margherita");
+    }
+
+    #[tokio::test]
+    async fn a_blank_search_is_absence_and_not_a_search_for_nothing() {
+        let store = FakeCatalog::default();
+        store
+            .create_item(&item(1, 500, "Margherita"))
+            .await
+            .expect("create");
+        let blank = ItemListFilter {
+            search: Some(String::new()),
+            ..ItemListFilter::default()
+        };
+        assert_eq!(
+            page_of(&store, 1, 10, 0, &blank).await.total,
+            1,
+            "an empty needle matches every row, which is the same answer as no search",
+        );
+    }
+
+    #[tokio::test]
+    async fn every_sort_the_route_offers_is_total_so_pages_partition_the_set() {
+        // The property decision 9 is about, applied to each sort rather than only the default: two
+        // items sharing a sort key must still fall on exactly one page each. Here every item has the
+        // same name, so the whole order rests on the tiebreaker.
+        let store = FakeCatalog::default();
+        for id in 500..506 {
+            store
+                .create_item(&item(1, id, "Margherita"))
+                .await
+                .expect("create");
+        }
+
+        for sort in [ItemSort::Newest, ItemSort::Name, ItemSort::Status] {
+            for descending in [false, true] {
+                let filter = ItemListFilter {
+                    search: None,
+                    sort,
+                    descending,
+                };
+                let mut seen = Vec::new();
+                for offset in [0, 2, 4] {
+                    let page = page_of(&store, 1, 2, offset, &filter).await;
+                    assert_eq!(page.total, 6);
+                    seen.extend(page.items.into_iter().map(|row| row.record.menu_item_id));
+                }
+                let mut unique = seen.clone();
+                unique.sort_unstable();
+                unique.dedup();
+                assert_eq!(
+                    unique.len(),
+                    6,
+                    "{} {} pages every item exactly once; got {seen:?}",
+                    sort.as_token(),
+                    if descending {
+                        "descending"
+                    } else {
+                        "ascending"
+                    },
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reversing_a_sort_reverses_the_page_rather_than_reordering_it() {
+        let store = FakeCatalog::default();
+        for (id, name) in [(500, "Anchovy"), (501, "Margherita"), (502, "Zucchini")] {
+            store.create_item(&item(1, id, name)).await.expect("create");
+        }
+        let names = |page: Page<Versioned<CatalogItem>>| -> Vec<String> {
+            page.items.into_iter().map(|row| row.record.name).collect()
+        };
+
+        let ascending = ItemListFilter {
+            search: None,
+            sort: ItemSort::Name,
+            descending: false,
+        };
+        let descending = ItemListFilter {
+            search: None,
+            sort: ItemSort::Name,
+            descending: true,
+        };
+        let forward = names(page_of(&store, 1, 10, 0, &ascending).await);
+        assert_eq!(forward, ["Anchovy", "Margherita", "Zucchini"]);
+        let mut backward = names(page_of(&store, 1, 10, 0, &descending).await);
+        backward.reverse();
+        assert_eq!(
+            backward, forward,
+            "descending is the reverse of ascending, not a different order sharing a first column",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sort_token_round_trips_and_an_unknown_one_is_not_read_as_a_default() {
+        for sort in [ItemSort::Newest, ItemSort::Name, ItemSort::Status] {
+            assert_eq!(
+                ItemSort::from_token(sort.as_token()),
+                Some(sort),
+                "every token this type prints is a token it reads",
+            );
+        }
+        assert_eq!(
+            ItemSort::from_token("price"),
+            None,
+            "an unoffered field is refused at the seam, not silently answered with the default",
+        );
+        assert_eq!(
+            ItemSort::tokens().len(),
+            3,
+            "the list the refusal shows a caller covers every variant",
+        );
     }
 
     #[tokio::test]

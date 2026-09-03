@@ -4784,7 +4784,7 @@ mod conditional_writes {
 mod catalog_item_pages {
     use core::fmt::Write as _;
 
-    use store_postgres::PostgresCatalog;
+    use store_postgres::{ItemOrder, PostgresCatalog};
 
     use super::{TENANT_A, TENANT_B, block_on, prepared};
 
@@ -4891,7 +4891,7 @@ mod catalog_item_pages {
             stock(&catalog, TENANT_B, 7).await;
 
             let (first, total) = catalog
-                .fetch_items_page(TENANT_A, 10, 0)
+                .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 10, 0)
                 .await
                 .expect("first page");
             assert_eq!(first.len(), 10, "the window is the limit");
@@ -4900,7 +4900,7 @@ mod catalog_item_pages {
             let mut seen: Vec<String> = first.into_iter().map(|row| row.menu_item_id).collect();
             for offset in [10, 20] {
                 let (page, page_total) = catalog
-                    .fetch_items_page(TENANT_A, 10, offset)
+                    .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 10, offset)
                     .await
                     .expect("later page");
                 assert_eq!(page_total, 25, "the total does not change as pages advance");
@@ -4938,7 +4938,7 @@ mod catalog_item_pages {
             assert_eq!(whole.len(), 6, "only this tenant's items");
 
             let (paged, total) = catalog
-                .fetch_items_page(TENANT_A, 6, 0)
+                .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 6, 0)
                 .await
                 .expect("paged");
             assert_eq!(total, 6, "the count is tenant-scoped too");
@@ -4949,7 +4949,7 @@ mod catalog_item_pages {
             );
 
             let (beyond, beyond_total) = catalog
-                .fetch_items_page(TENANT_A, 10, 100)
+                .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 10, 100)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
@@ -5000,7 +5000,7 @@ mod catalog_item_pages {
             let mut seen = Vec::new();
             for offset in [0, 2, 4] {
                 let (page, total) = catalog
-                    .fetch_items_page(TENANT_A, 2, offset)
+                    .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 2, offset)
                     .await
                     .expect("page over the imported batch");
                 assert_eq!(total, 6);
@@ -5013,6 +5013,171 @@ mod catalog_item_pages {
                 unique.len(),
                 6,
                 "three pages of two cover the batch exactly once each; got {seen:?}"
+            );
+        });
+    }
+
+    /// `?q=` narrows the rows and the total together, and reaches the per-locale names.
+    ///
+    /// Only real PostgreSQL can answer this: the predicate is `position(lower(..) in lower(..))` over
+    /// `name` *and* over every value in a `jsonb` document via `jsonb_each_text`, with the count
+    /// riding on the same statement. A `Vec::filter` fake agreeing with itself proves none of it.
+    #[test]
+    fn a_search_narrows_the_page_and_its_total_including_per_locale_names() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            for (id, name, vi) in [
+                ("i-1", "Margherita", "Banh Margherita"),
+                ("i-2", "Marinara", "Banh Marinara"),
+                ("i-3", "Tiramisu", "Banh ngot Tiramisu"),
+            ] {
+                catalog
+                    .insert_item(
+                        id,
+                        TENANT_A,
+                        name,
+                        &format!("{{\"vi\":\"{vi}\"}}"),
+                        "tax-standard",
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .expect("insert an item");
+            }
+
+            // A primary-name substring, case-insensitively.
+            let (rows, total) = catalog
+                .fetch_items_page(TENANT_A, Some("MARI"), ItemOrder::Newest, false, 10, 0)
+                .await
+                .expect("search");
+            assert_eq!(total, 1, "the total counts the match, not the master");
+            assert_eq!(rows.first().expect("a row").name, "Marinara");
+
+            // A per-locale substring appearing in no primary name at all.
+            let (rows, total) = catalog
+                .fetch_items_page(TENANT_A, Some("ngot"), ItemOrder::Newest, false, 10, 0)
+                .await
+                .expect("search");
+            assert_eq!(total, 1, "the per-locale name is searched too");
+            assert_eq!(rows.first().expect("a row").name, "Tiramisu");
+
+            // No match is an empty page and a zero total, not an error.
+            let (rows, total) = catalog
+                .fetch_items_page(TENANT_A, Some("carbonara"), ItemOrder::Newest, false, 10, 0)
+                .await
+                .expect("search");
+            assert!(rows.is_empty());
+            assert_eq!(total, 0);
+
+            // `%` is a character in the needle, not a wildcard: the read uses `position`, not
+            // `ILIKE`, so an operator searching for a literal percent gets a literal search.
+            let (rows, _total) = catalog
+                .fetch_items_page(TENANT_A, Some("%"), ItemOrder::Newest, false, 10, 0)
+                .await
+                .expect("search");
+            assert!(
+                rows.is_empty(),
+                "a percent sign matches nothing here; under ILIKE it would match everything",
+            );
+        });
+    }
+
+    /// Each order the route offers is total in SQL, so pages partition the set under every one.
+    ///
+    /// Every item here shares a name, so `?sort=name` rests entirely on the tiebreaker — the case
+    /// that would silently repeat or skip a row if the `ORDER BY` stopped at `name`.
+    #[test]
+    fn every_offered_order_partitions_the_master_in_both_directions() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            for index in 0..6 {
+                catalog
+                    .insert_item(
+                        &format!("same-{index:04}"),
+                        TENANT_A,
+                        "Margherita",
+                        "{}",
+                        "tax-standard",
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .expect("insert an item");
+            }
+
+            for order in [ItemOrder::Newest, ItemOrder::Name, ItemOrder::Status] {
+                for descending in [false, true] {
+                    let mut seen = Vec::new();
+                    for offset in [0, 2, 4] {
+                        let (page, total) = catalog
+                            .fetch_items_page(TENANT_A, None, order, descending, 2, offset)
+                            .await
+                            .expect("page");
+                        assert_eq!(total, 6);
+                        seen.extend(page.into_iter().map(|row| row.menu_item_id));
+                    }
+                    let mut unique = seen.clone();
+                    unique.sort_unstable();
+                    unique.dedup();
+                    assert_eq!(
+                        unique.len(),
+                        6,
+                        "{order:?} descending={descending} covers each item once; got {seen:?}",
+                    );
+                }
+            }
+        });
+    }
+
+    /// Migration 0044's index carries the *name* order, so `?sort=name` stops a scan rather than
+    /// sorting the whole master — the economy 0043 bought for the default order, kept for the second.
+    ///
+    /// This is the guard that makes offering a second order safe: without it, a query parameter
+    /// reintroduces exactly the cost 0043 exists to remove.
+    #[test]
+    fn the_name_sorted_page_is_served_by_its_own_index() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 40).await;
+            admin
+                .batch_execute("ANALYZE catalog_items")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT menu_item_id FROM catalog_items WHERE tenant_id = $1 \
+                         ORDER BY name ASC, menu_item_id ASC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("catalog_items_by_tenant_name"),
+                "the name sort should be served by migration 0044's index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
             );
         });
     }

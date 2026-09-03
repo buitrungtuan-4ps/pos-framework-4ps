@@ -146,6 +146,10 @@ const MIGRATION_0042: &str = include_str!("../migrations/0042_audit_page_index.s
 /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
 const MIGRATION_0043: &str = include_str!("../migrations/0043_catalog_item_page_index.sql");
 
+/// An index covering the item master's name order, the second order the paged read offers
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 3).
+const MIGRATION_0044: &str = include_str!("../migrations/0044_catalog_item_name_index.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -376,6 +380,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0043)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0044)
             .await
             .map_err(unavailable)
     }

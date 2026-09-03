@@ -17,6 +17,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The item master's page can be searched and ordered by the server** (#159, ADR-0098 slice B3-3).
+  `GET /admin/catalog/items` takes `?q=`, `?sort=` and `?order=` alongside its page bounds. `q` is a
+  case-insensitive substring of the item's name *or any of its per-locale names* — ADR-0074 exists
+  because operators type Vietnamese, and a search that read only the primary name would miss the
+  case those translations are for. `sort` is one of `newest` (the default and the order the unpaged
+  read has always used), `name`, or `status`; anything else is refused by name rather than answered
+  with the default.
+
+  The Items sub-screen now pages server-side at 25 with its own search box and sortable headers. Its
+  previous box filtered the twelve rows on screen; this one asks the server, so it searches the whole
+  master. The tax-class and category columns are no longer sortable: the value shown in each is a
+  label resolved from another table, and sorting the page by it would order twenty-five rows as if
+  they were the master.
+
+  **Upgrade note** One additive index migration, applied idempotently on boot (ADR-0017):
+  `0044_catalog_item_name_index.sql`, which carries the name order so `?sort=name` stops a scan
+  rather than sorting every item a chain sells. `?sort=status` has no index by design — the column
+  holds one of two values.
+
 - **Three more `/admin` lists answer a second, paged question** (#158, ADR-0098 slice B3-2). Media,
   the audit trail and the item master each keep the read they had and gain a page beside it, along
   with the index the page needs.
@@ -46,6 +65,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   no defined order at all, which is the bug the tiebreaker fixes.
 
 ### Fixed
+- **A server-paged table sorted the page it was showing, not the set** (#159). `DataTable`'s own
+  docstring promised no local re-sort in server mode, but `visible()` returned the sorted rows in
+  both modes and a header click was gated only on the column having a client-side accessor. The
+  Audit screen went server-paged in #158 with four sortable columns, so clicking one there ordered
+  the twenty-five rows on screen as if they were the whole trail.
+
+  Server mode now sorts only when a column names a `sortField` *and* the caller passes `onSort`,
+  and the click asks the caller to re-read the set; without both, headers render as plain text
+  rather than as controls that quietly lie. The Audit screen's headers are inert until its own
+  `?sort=` lands.
+
 - **Creating or renaming a catalog item failed against real PostgreSQL** (#158). Both statements bind
   the item's per-locale names as text into a `jsonb` column and cast it `$4::jsonb`. PostgreSQL infers
   a bare `$N::jsonb` parameter *as* `jsonb`, and `tokio-postgres` then refuses to send a Rust `&str`
