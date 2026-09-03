@@ -52,12 +52,12 @@ The measurement, taken across `crates/pos-cloud/src/http.rs`, the twenty-five cl
   despite being history reads.
 - **`DataTable` paginates client-side today.** Its `perPage` prop slices `sorted()`, and `total` is
   `sorted().length`. F2's plan called these "reserved server-paging props"; they do not exist.
-- **Four of the six lists that need paging have an index that finds their rows but cannot serve their
-  `ORDER BY`.** `vouchers` is indexed `(tenant_id, campaign_id)` and ordered
-  `created_at DESC, voucher_id DESC`; `catalog_items`, `employees` and `devices` are indexed
-  `(tenant_id)`, `(tenant_id)` and `(tenant_id, store_id)` and all ordered `created_at DESC`. Only
-  `audit_log` `(tenant_id, at DESC)` and `media_assets` `(tenant_id, created_at DESC)` already carry
-  the sort. Without the sort in the index, `LIMIT`/`OFFSET` shrinks the *response* while the database
+- **Three of the five lists that need paging have an index that finds their rows but cannot serve
+  their `ORDER BY`.** `vouchers` is indexed `(tenant_id, campaign_id)` and ordered
+  `created_at DESC, voucher_id DESC`; `catalog_items` and `employees` are both indexed `(tenant_id)`
+  and ordered `created_at DESC`; `media_assets` `(tenant_id, created_at DESC)` covers the order it has
+  today but not the total order decision 9 requires of it. Only `audit_log` `(tenant_id, at DESC)`
+  comes close, and even there the `id` tiebreaker falls outside its index. Without the sort in the index, `LIMIT`/`OFFSET` shrinks the *response* while the database
   still sorts every matching row on every page — for a 30 000-code campaign, on every keystroke of a
   pager.
 
@@ -71,8 +71,8 @@ un-migrated legacy client to be phased out. It is a correct caller whose need pa
 **A correction to `docs/cloud-admin-ux-plan.md`.** That plan says "pagination/limit/cursor on
 **every** list" (§F2 audit) and "pagination on every new list" (§exit criteria), and its F2 row reads
 "pagination/filter/sort/q params + read-one on every entity". On the measurement, "every" is wrong in
-both directions: it would paginate four compile-time registries and thirty-three
-authoring-bounded lists that will never need it, and — the part that matters — it would put a page
+both directions: it would paginate four compile-time registries and thirty-four
+small lists that will never need it, and — the part that matters — it would put a page
 between the menu compiler and the items it compiles. The criterion in decision 3 replaces "every".
 The audit line that produced it was still right about the state of the world: there was, and outside
 those five windowed reads still is, no paging anywhere.
@@ -81,7 +81,7 @@ those five windowed reads still is, no paging anywhere.
 **B1** (`(tenant_id, created_at)` composite indexes on the admin tables) recorded it as a *non-task*,
 on the grounds that 37 of 51 tables already carry a tenant-scoped index. That measured the wrong
 property: tenant **scoping** is not sort **coverage**, and a paged read needs both. On the six lists
-this ADR actually pages, four lack the second — so B1 is not a non-task. It is narrower than the plan
+this ADR actually pages, three lack the second — so B1 is not a non-task. It is narrower than the plan
 had it (six lists, not every table) and it is a **prerequisite of paging, not a separate item**: each
 paging slice carries the additive index its own `ORDER BY` needs, in the same PR as the SQL that
 depends on it, because an index landing a slice later means shipping a page that reads like paging and
@@ -128,20 +128,34 @@ pub struct Page<T> { pub items: Vec<T>, pub total: u32 }
 
 **3. A list gets a paged method only when both halves are true.**
 
-(a) a console screen renders the whole set into the DOM, and (b) the row count is driven by data
-volume or fleet size rather than by a human authoring each row. Both, because (a) alone describes
-every list and (b) alone describes tables nobody looks at.
+(a) a console screen renders the whole set into the DOM, and (b) the row count can plausibly reach a
+size one response should not carry. Both, because (a) alone describes every list and (b) alone
+describes tables nobody looks at.
+
+**Amended during B3-2.** (b) first read "the row count is driven by data volume or fleet size rather
+than by a human authoring each row". That is a cleaner-sounding line and it is wrong twice over. It
+reads as a binary when what matters is magnitude: a chain's `items` and a company's `employees` are
+each authored by a human *and* number in the thousands, so the original wording excluded two lists it
+was written to include. And applied to `devices` it produced a straightforwardly wrong answer —
+see below.
 
 | Cohort | Lists | Why |
 |---|---|---|
-| **Paged** (6) | `vouchers`, `media`, `audit`, `items`, `employees`, `devices` | 10 000-per-batch mints; one row per asset; one per console write; a chain's item master; headcount; fleet size |
-| **Not paged** (33) | `admins`, `alerts`, `api_keys`, `areas`, `assignments`, `brands`, `campaigns`, `display_categories`, `display_subcategories`, `fleet`, `ingredients`, `invites`, `item_categories`, `item_subcategories`, `layout_buttons`, `menu_sections`, `menus`, `modifier_groups`, `placements`, `recipes`, `roles`, `routing`, `scheduled`, `sessions`, `stations`, `stores`, `suppliers`, `table_qr`, `tables`, `tax_classes`, `tax_rates`, `tenants`, `webhooks` | bounded by authoring effort, by fleet size at a scale a page does not help, or already windowed |
+| **Paged** (5) | `vouchers`, `media`, `audit`, `items`, `employees` | 10 000-per-batch mints; one row per uploaded asset; one row per console write; a chain's item master in the thousands; headcount in the thousands |
+| **Not paged** (34) | `admins`, `alerts`, `api_keys`, `areas`, `assignments`, `brands`, `campaigns`, `devices`, `display_categories`, `display_subcategories`, `fleet`, `ingredients`, `invites`, `item_categories`, `item_subcategories`, `layout_buttons`, `menu_sections`, `menus`, `modifier_groups`, `placements`, `recipes`, `roles`, `routing`, `scheduled`, `sessions`, `stations`, `stores`, `suppliers`, `table_qr`, `tables`, `tax_classes`, `tax_rates`, `tenants`, `webhooks` | too few rows to page, or already windowed |
 | **Never** (4) | `permissions`, `capabilities`, `countries`, `locales` | compile-time registries |
 
-`recipes` and `suppliers` are the judgment call: recipe count tracks the item master, so it will
-follow `items` if that ever bites. It stays unpaged here because `Inventory.tsx` reads all three
-lists together to render one editor, and paging one of the three buys nothing while the other two
-are read whole. Revisit when the item master, not the plan, says so.
+**`devices` was in the paged cohort and should not have been.** This record justified it with "fleet
+size", which is not what the route reads: `GET /admin/stores/{store_id}/devices` lists **one store's**
+devices — a few terminals, a KDS, a printer or two — so the count is bounded by what someone installs
+in one shop and fleet size never enters it. Caught when B3-2 went to build it and read the route's
+own path. It is authoring-bounded like `areas` and `tables`, and moves to the row above; the paged
+cohort is five, not six.
+
+`recipes` and `suppliers` are the remaining judgment call: recipe count tracks the item master, so it
+will follow `items` if that ever bites. They stay unpaged here because `Inventory.tsx` reads all three
+lists together to render one editor, and paging one of the three buys nothing while the other two are
+read whole. Revisit when the item master, not the plan, says so.
 
 **4. `?q=` is allowed without `?limit=`, because that is what a picker needs.**
 
@@ -180,13 +194,37 @@ compute `pageCount` from the rows it happens to hold. When they are absent it be
 does today. A table that is handed 25 of 812 rows and left to paginate them client-side shows "1–25
 of 25", which is worse than no pager.
 
+**9. A paged read requires a total order, and the index must cover all of it.** *(Added by amendment
+during B3-2.)*
+
+`LIMIT`/`OFFSET` selects a window of a sorted sequence. If the `ORDER BY` does not distinguish every
+row, there is no sequence to take a window of: the database may return tied rows in any order, and two
+queries an admin makes seconds apart — page one and page two — can order them differently. The result
+is a row on both pages, or on neither. That is a **correctness** failure, not a performance one, and
+it hides in testing because a given plan usually happens to be stable.
+
+Every `created_at` in this schema is `timestamptz NOT NULL DEFAULT now()`, and PostgreSQL's `now()`
+is **transaction** time — so every row written by one transaction carries the *identical* timestamp,
+not merely a close one. Measured on the real database: six `media_assets` rows inserted in one
+transaction produced **one** distinct `created_at`. Any list ordered `created_at DESC` alone is
+therefore unordered across each batch it contains, and there is a live batch path — the CSV import
+rail loads a whole item file in one transaction.
+
+So a list joining the paged cohort must **order by something total** — the timestamp plus the row's
+own key, e.g. `ORDER BY created_at DESC, media_id DESC` — and **have an index covering that whole
+order**, because by decision 8's reasoning a tiebreaker the index does not carry puts the `Sort` node
+straight back.
+
+`vouchers` already satisfied both (`created_at DESC, voucher_id DESC`), which is why B3-1 was sound —
+by inheritance from the query that was already there, not by design.
+
 **Consequences.**
 
-- Six lists gain a second seam method, a second SQL statement, a fake implementation and a paged
-  route form; four of them also gain an additive index so the page is cheap and not merely small.
-  Thirty-three keep exactly what they have.
-- **Migrations:** four additive `CREATE INDEX IF NOT EXISTS`, one per slice that needs it, forward-only
-  and idempotent per ADR-0017. This ADR itself carries none.
+- Five lists gain a second seam method, a second SQL statement, a fake implementation and a paged
+  route form; three of them also gain an additive index so the page is cheap and not merely small.
+  Thirty-four keep exactly what they have.
+- **Migrations:** four additive `CREATE INDEX IF NOT EXISTS` — one per paged list whose index does
+  not cover its total order — forward-only and idempotent per ADR-0017. This ADR carries none itself.
 - Two response shapes exist per paged route. That is the cost of decision 1 and it is deliberate: the
   alternative was one shape and a truncated menu compile.
 - `docs/openapi.json` must describe both forms for the paged routes. It currently describes two paths
@@ -214,7 +252,8 @@ of 25", which is worse than no pager.
    SQL with `COUNT(*) OVER()`, fake, route, typed client, `DataTable` server props, and
    `Campaigns.tsx` actually passing a limit. One acute case proven all the way through before the
    mechanical cohort.
-2. **B3-2** — `media`, `audit`, `items`, `employees`, `devices` on the vocabulary B3-1 fixed, each
-   with the additive index its `ORDER BY` needs where it does not already have one (`catalog_items`,
-   `employees` and `devices` do not; `audit_log` and `media_assets` do).
+2. **B3-2** — `media`, `audit`, `items` and `employees` on the vocabulary B3-1 fixed. Each gains the
+   total order decision 9 requires and an index covering it: a tiebreaker plus a new index for
+   `media_assets`, `catalog_items` and `employees`; for `audit_log`, whose order is already total,
+   only the widened index.
 3. **B3-3** — `q`/`sort`/`order` across the paged cohort, each route declaring its own fields.
