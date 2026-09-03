@@ -16,6 +16,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **The console surface has a generated API document** (roadmap v3 B5, ADR-0019 amended).
+  `GET /admin/openapi.json` serves it and `docs/openapi-admin.json` commits it — a second document
+  beside `/v1`'s, because the two have different audiences: `/v1` is what an integrator calls with a
+  scoped API key, `/admin` is what a console calls with a session cookie. A fork writing its own
+  console, a mobile admin app or an internal tool now has the routes written down.
+
+  Each documented route carries its path, method, parameters, every status code it can answer, and the
+  AIP-193 error envelope those failures carry. Success bodies are described in prose rather than as
+  schemas — the amendment explains why in full, but briefly: an `/admin` handler returns a `pos-proto`
+  wire type directly, and generating schemas from those means putting a doc-generation crate inside the
+  backbone, which is its own decision.
+
+  **Coverage is 7 of 137 routes, and the other 130 are listed in the code.** Not as a comment: four
+  tests hold that list honest, and the one that matters is that a route added without either an
+  annotation or a list entry **fails the build**. The surface can no longer grow undocumented without
+  someone writing it down. The list only shrinks.
+
+  **Upgrade note** No migration, no new dependency, no wire change. `/v1/openapi.json` is untouched.
+
 ### Changed
 - **The nine `/admin/inventory` handlers that act on one record now read one record.** Reading,
   editing or deleting a single ingredient, recipe or supplier used to list the tenant's whole

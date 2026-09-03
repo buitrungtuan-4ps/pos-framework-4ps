@@ -21,8 +21,8 @@
 //!    pulling configuration ([ADR-0039](../../../docs/adr/0039-config-delivery.md), `read_config`
 //!    scope) and proposing/reading its devices ([ADR-0041](../../../docs/adr/0041-device-onboarding.md),
 //!    `manage_devices` scope, via [`device_router`]). Bearer-authed, tenant-isolated, and — being
-//!    store operation rather than an integrator API — absent from the public OpenAPI, like `/admin`
-//!    and `/internal`.
+//!    store operation rather than an integrator API — absent from the *integrator* OpenAPI
+//!    document, like `/internal`.
 //!  * `/admin/*` — the **interactive** super-admin surface ([`crate::auth::admin`],
 //!    [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): a two-factor login that issues a
 //!    host-only session cookie, the session guard the rest of the admin routes stand behind, and —
@@ -35,8 +35,10 @@
 //!    ([ADR-0041](../../../docs/adr/0041-device-onboarding.md), via [`device_router`]): list the
 //!    pending queue and approve or reject; and authoring the translation grid
 //!    ([ADR-0043](../../../docs/adr/0043-translation-grid.md), via [`translation_router`]): read and
-//!    replace a tenant's localized strings, `en`-validated. Not part of the public contract, so —
-//!    like `/internal` — it is absent from the OpenAPI document.
+//!    replace a tenant's localized strings, `en`-validated. Not part of the *integrator* contract,
+//!    so it is absent from `/v1/openapi.json` — but it has a generated document of its own at
+//!    `/admin/openapi.json` ([`crate::openapi_admin`], roadmap v3 B5), because a fork writing its
+//!    own console needs the routes, parameters and outcomes written down.
 //!
 //! # One error shape, arriving in slices
 //!
@@ -169,6 +171,7 @@ use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
+use crate::openapi_admin::AdminApiDoc;
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeStore, EmployeeUpdate,
@@ -454,6 +457,7 @@ where
             get(daily_rollups::<S, R, K, C, A, T, W>),
         )
         .route("/v1/openapi.json", get(openapi))
+        .route("/admin/openapi.json", get(admin_openapi))
         .route(
             "/sync/stores/{store_id}/config",
             get(edge_config_sync::<S, R, K, C, A, T, W>),
@@ -14052,6 +14056,16 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
 }
 
+/// Serves the generated `/admin` console API document (roadmap v3 B5).
+///
+/// Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and
+/// the console SPA this server already ships publicly names every one of these paths in its own
+/// JavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot
+/// already read, while blocking the fork developer the document exists for.
+async fn admin_openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(AdminApiDoc::openapi())
+}
+
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
 /// so it is deliberately absent from the public OpenAPI document and requires the
 /// `X-Pos-Internal-Key` shared secret
@@ -14308,9 +14322,26 @@ where
 /// The session token is minted here — a 256-bit CSPRNG value, at the binary edge — and passed to
 /// [`login`], which stores only its hash ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)); the
 /// browser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a
-/// store outage is a `503`. Not in the OpenAPI document — this is the admin surface, not the public
-/// `/v1` API.
-async fn admin_login<S, R, K, C, A, T, W>(
+/// store outage is a `503`. Described in the console document (`/admin/openapi.json`), not the
+/// integrator one.
+#[utoipa::path(
+    post,
+    path = "/admin/login",
+    request_body(
+        description = "Email, password, and the six-digit TOTP code",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Signed in. The session cookie is set; the body is empty"),
+        (status = 401, description = "One generic refusal for every credential failure — wrong \
+                                      email, wrong password, wrong or reused TOTP code — so a \
+                                      caller cannot tell which", body = crate::openapi_admin::ErrorResponse),
+        (status = 429, description = "Too many attempts; `Retry-After` names the wait", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_login<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
@@ -14505,14 +14536,35 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-/// `POST /admin/setup` — first-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+/// First-boot super-admin enrolment.
+///
+/// [ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md).
 ///
 /// Token-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch
 /// (compared in constant time), `400` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
 /// `409` once an administrator is already enrolled, and on success `201` with the one-time TOTP
 /// enrolment. The password is hashed with Argon2id under a fresh CSPRNG salt and never stored in the
 /// clear; the TOTP secret is generated here and returned exactly once.
-async fn admin_setup<S, R, K, C, A, T, W>(
+#[utoipa::path(
+    post,
+    path = "/admin/setup",
+    request_body(
+        description = "The enrolment token from the server's environment, and the first \
+                       administrator's chosen email and password",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Enrolled. The body carries the one-time TOTP enrolment (QR \
+                                      payload and base32 secret) — returned exactly once, never \
+                                      readable again"),
+        (status = 400, description = "The password is shorter than the minimum", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "The enrolment token is wrong", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "An administrator is already enrolled", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_setup<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     Json(request): Json<SetupRequest>,
 ) -> Response
@@ -14588,7 +14640,18 @@ where
 ///
 /// Idempotent — a request with no session, or one the store cannot reach, still clears the client
 /// cookie, so the browser is always logged out even if the server-side row lingers to its TTL.
-async fn admin_logout<S, R, K, C, A, T, W>(
+#[utoipa::path(
+    post,
+    path = "/admin/logout",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 204, description = "Signed out, and idempotent: a request with no session, or \
+                                      one whose store is unreachable, still clears the client \
+                                      cookie"),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_logout<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
@@ -14610,9 +14673,23 @@ where
     set_cookie_response(StatusCode::NO_CONTENT, &clear_cookie())
 }
 
-/// Confirms the caller holds a live super-admin session — the guard every other `/admin` route will
-/// stand behind, exposed here as a `204`/`401` "am I signed in?" check for the admin UI.
-async fn admin_session<S, R, K, C, A, T, W>(
+/// Confirms the caller holds a live super-admin session.
+///
+/// The guard every other `/admin` route stands behind, exposed here as a `204`/`401` "am I signed
+/// in?" check for the admin UI.
+#[utoipa::path(
+    get,
+    path = "/admin/session",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 204, description = "The session is live. The guard every other /admin route \
+                                      stands behind, exposed as an \"am I signed in?\" check"),
+        (status = 401, description = "No session cookie, or it names no live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The session store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_session<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
@@ -14631,14 +14708,29 @@ where
     }
 }
 
-/// `GET /admin/whoami` — the acting admin's own identity (id, email, name, role, status), so the
-/// console can label the signed-in operator and show only the areas their role grants
+/// The acting admin's own identity — id, email, name, role, status.
+///
+/// So a console can label the signed-in operator and show only the areas their role grants
 /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available
 /// to any authenticated admin regardless of role, so it is gated by the plain session guard rather
 /// than a [`ConsolePermission`]. It returns the same credential-free [`AdminUser`] shape the roster
 /// lists — never a password hash or a TOTP secret — and role gating in the console is only a UX
 /// convenience; the server re-checks every route's required permission regardless.
-async fn admin_whoami<S, R, K, C, A, T, W>(
+#[utoipa::path(
+    get,
+    path = "/admin/whoami",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "The acting administrator — id, email, role, status — never a \
+                                      password hash or a TOTP secret. Role gating in a console is \
+                                      a convenience only: the server re-checks every route's \
+                                      required permission regardless"),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_whoami<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
@@ -15436,7 +15528,7 @@ fn hex_value(digit: u8) -> Option<u8> {
 /// A request to re-enrol TOTP: the current password, re-confirming the knowledge factor before the
 /// possession factor is rotated. [`fmt::Debug`] redacts it.
 #[derive(Clone, Deserialize)]
-struct ReenrolTotpRequest {
+pub(crate) struct ReenrolTotpRequest {
     /// The current super-admin password.
     password: String,
 }
@@ -15477,13 +15569,32 @@ struct RecoveryCodesStatus {
     remaining: u64,
 }
 
-/// `POST /admin/totp` — a signed-in admin re-enrols their authenticator
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Re-confirms the current
+/// A signed-in admin re-enrols their authenticator.
+///
+/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Re-confirms the current
 /// password (the knowledge factor) before rotating the TOTP secret (the possession factor), so a
 /// session-only attacker — one holding the cookie but not the password — cannot lock the owner out by
 /// re-enrolling. On success the new one-time enrolment (QR + base32 secret) is returned once; existing
 /// sessions stay valid, and the next sign-in uses the new authenticator.
-async fn admin_reenrol_totp<S, R, K, C, A, T, W>(
+#[utoipa::path(
+    post,
+    path = "/admin/totp",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The acting administrator's current password — re-asked so a session-only \
+                       attacker cannot rotate the second factor and lock the owner out",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Re-enrolled. The new one-time enrolment (QR payload and \
+                                      base32 secret) is returned once; existing sessions stay \
+                                      valid and the next sign-in uses the new authenticator"),
+        (status = 401, description = "No live session, or the password is wrong", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_reenrol_totp<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Json(request): Json<ReenrolTotpRequest>,
@@ -15530,11 +15641,25 @@ where
     }
 }
 
-/// `POST /admin/recovery-codes` — (re)generate the acting admin's one-time recovery codes
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Self-service, so it is
+/// (Re)generates the acting admin's one-time recovery codes.
+///
+/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Self-service, so it is
 /// gated by the session guard, not a role permission. Mints [`RECOVERY_CODE_COUNT`] codes at the
 /// edge, stores only their hashes (replacing any previous set), and returns the plaintext once.
-async fn admin_generate_recovery_codes<S, R, K, C, A, T, W>(
+#[utoipa::path(
+    post,
+    path = "/admin/recovery-codes",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "A fresh set of one-time recovery codes, returned exactly \
+                                      once. Only their hashes are stored, and any previous set is \
+                                      replaced"),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_generate_recovery_codes<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
@@ -15591,9 +15716,23 @@ where
     }
 }
 
-/// `GET /admin/recovery-codes` — how many unused recovery codes the acting admin has left (never the
-/// codes themselves), so the console can prompt a regeneration when the supply runs low.
-async fn admin_recovery_codes_status<S, R, K, C, A, T, W>(
+/// How many unused recovery codes the acting admin has left.
+///
+/// Never the codes themselves — so a console can prompt a regeneration when the supply runs low.
+#[utoipa::path(
+    get,
+    path = "/admin/recovery-codes",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "How many unused recovery codes remain — never the codes \
+                                      themselves — so a console can prompt a regeneration before \
+                                      the supply runs out"),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn admin_recovery_codes_status<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
 ) -> Response
