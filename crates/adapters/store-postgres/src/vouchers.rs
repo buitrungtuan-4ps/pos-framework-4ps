@@ -110,15 +110,68 @@ impl PostgresVouchers {
             )
             .await
             .map_err(unavailable)?;
-        Ok(rows
-            .iter()
-            .map(|row| VoucherRow {
-                voucher_id: row.get(0),
-                campaign_id: row.get(1),
-                code: row.get(2),
-                status: row.get(3),
-                created_at_ms: row.get(4),
-            })
-            .collect())
+        Ok(rows.iter().map(voucher_row).collect())
+    }
+
+    /// One page of a campaign's vouchers, newest first, with the size of the whole set.
+    ///
+    /// `COUNT(*) OVER()` rides along on the windowed `SELECT` rather than running as a second
+    /// statement: one round trip, and — the reason that matters — one snapshot, so the count cannot
+    /// disagree with the page it labels. Two statements could straddle a concurrent mint and report
+    /// a total that never held.
+    ///
+    /// The window itself is served by `vouchers_by_campaign_newest` (migration 0040), whose column
+    /// order is this query's: the two equality columns, then `created_at DESC, voucher_id DESC`. That
+    /// makes the index walk the sort, so `LIMIT` stops the scan early instead of truncating a sort
+    /// of every matching row.
+    ///
+    /// `total` is `bigint` in PostgreSQL and `u32` above the seam, so a count past `u32::MAX`
+    /// saturates. A tenant with four billion voucher codes has a different problem than a wrong
+    /// pager.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_by_campaign_page(
+        &self,
+        tenant_id: &str,
+        campaign_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<VoucherRow>, i64), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT voucher_id, campaign_id, code, status, \
+                 (extract(epoch from created_at) * 1000)::bigint, \
+                 count(*) OVER() \
+                 FROM vouchers WHERE tenant_id = $1 AND campaign_id = $2 \
+                 ORDER BY created_at DESC, voucher_id DESC \
+                 LIMIT $3 OFFSET $4",
+                &[&tenant_id, &campaign_id, &limit, &offset],
+            )
+            .await
+            .map_err(unavailable)?;
+        // Every row carries the same window count, and an empty page carries none — which is the
+        // right answer for a page past the end of a set *and* for a campaign with no codes. The
+        // caller cannot tell those apart from `total` alone, and does not need to: both mean "there
+        // is nothing here to show you".
+        let total = rows.first().map_or(0, |row| row.get::<_, i64>(5));
+        Ok((rows.iter().map(voucher_row).collect(), total))
+    }
+}
+
+/// Reads one voucher row out of a query result.
+///
+/// Shared by the paged and unpaged reads so their column order cannot drift apart: the paged query
+/// appends a sixth column and this reads the first five, so adding one at the *front* of either
+/// would break both together rather than silently mismatching one.
+fn voucher_row(row: &tokio_postgres::Row) -> VoucherRow {
+    VoucherRow {
+        voucher_id: row.get(0),
+        campaign_id: row.get(1),
+        code: row.get(2),
+        status: row.get(3),
+        created_at_ms: row.get(4),
     }
 }

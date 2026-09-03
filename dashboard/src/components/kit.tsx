@@ -37,10 +37,22 @@ export type Column<T> = {
 
 /**
  * A table over `rows` with client-side column sort and, optionally, a search box (`searchText`) and
- * pagination (`pageSize`). This is right-sized for the admin lists' volumes (tens–hundreds of rows
- * per tenant); a list large enough to need server-side push-down is a later, targeted change. Its
- * own generic controls — the search box and pager — read their labels from `t()` (every caller would
- * pass the identical strings); the columns' headers and cells are still supplied by the caller.
+ * pagination (`pageSize`).
+ *
+ * # Two paging modes, and the difference matters
+ *
+ * **Client-side** (the default): `rows` holds everything, and `pageSize` slices it here. Right-sized
+ * for the admin lists' volumes — tens to hundreds of rows per tenant, which is most of them.
+ *
+ * **Server-side**: pass `serverTotal` and `onPage` as well, and `rows` is understood to be *one page
+ * already*. The pager then renders from `serverTotal` and asks the caller for the next page; nothing
+ * is sliced or re-sorted locally, because a slice of a slice is wrong and a sort of one page is a lie
+ * about the set ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)). Handed 25 of 812 rows in
+ * client mode this component would render "1–25 of 25", which is worse than showing no pager at all
+ * — so the two modes are distinguished by a prop rather than inferred.
+ *
+ * Its own generic controls — the search box and pager — read their labels from `t()` (every caller
+ * would pass the identical strings); the columns' headers and cells are still supplied by the caller.
  */
 export function DataTable<T>(props: {
   columns: readonly Column<T>[];
@@ -48,10 +60,23 @@ export function DataTable<T>(props: {
   empty: JSX.Element;
   actions?: (row: T) => JSX.Element;
   actionsHeader?: string;
-  /** When present, a search box filters rows on this text (case-insensitive substring). */
+  /**
+   * When present, a search box filters rows on this text (case-insensitive substring).
+   *
+   * Client-side only: in server mode it would filter the page rather than the set, which is the same
+   * lie the local sort would tell. Server-side search is ADR-0098's `?q=`, and is not wired yet.
+   */
   searchText?: (row: T) => string;
   /** When greater than 0, rows are paginated at this page size, with a pager below the table. */
   pageSize?: number;
+  /**
+   * Total rows in the whole set, when the server paged it. Switches the pager to server mode.
+   *
+   * Requires `onPage`, and `pageSize` to be the limit that was asked for.
+   */
+  serverTotal?: number;
+  /** Asks the caller to load the page starting at `offset`. Server mode only. */
+  onPage?: (offset: number) => void;
 }) {
   const [sortKey, setSortKey] = createSignal<string | null>(null);
   const [ascending, setAscending] = createSignal(true);
@@ -88,20 +113,42 @@ export function DataTable<T>(props: {
     });
   });
 
+  // Server mode needs both halves: a total to count with and a way to ask for the next page. One
+  // without the other is a caller mistake, and treating it as server mode would render a pager whose
+  // buttons do nothing.
+  const serverPaged = () => props.serverTotal !== undefined && props.onPage !== undefined;
   const perPage = () => props.pageSize ?? 0;
-  const total = () => sorted().length;
+  const total = () => (serverPaged() ? (props.serverTotal ?? 0) : sorted().length);
   const pageCount = () => (perPage() > 0 ? Math.max(1, Math.ceil(total() / perPage())) : 1);
   // Clamp defensively: the row set can shrink under a page (a delete, a tighter search).
   const current = () => Math.min(page(), pageCount() - 1);
   const visible = createMemo(() => {
-    if (perPage() <= 0) {
+    // In server mode `rows` *is* the page. Slicing it again would drop rows the server already
+    // selected, and sorting it would order one page as if it were the set.
+    if (serverPaged() || perPage() <= 0) {
       return sorted();
     }
     const start = current() * perPage();
     return sorted().slice(start, start + perPage());
   });
   const from = () => (total() === 0 ? 0 : current() * perPage() + 1);
-  const to = () => Math.min(total(), (current() + 1) * perPage());
+  const to = () =>
+    serverPaged()
+      ? Math.min(total(), current() * perPage() + props.rows.length)
+      : Math.min(total(), (current() + 1) * perPage());
+
+  /**
+   * Moves the pager, and in server mode asks the caller to fetch that page.
+   *
+   * The local `page` signal advances either way, because it is what the range text and the buttons'
+   * disabled states read. What differs is whether anything is sliced locally — see `visible`.
+   */
+  const goToPage = (next: number) => {
+    setPage(next);
+    if (serverPaged()) {
+      props.onPage?.(next * perPage());
+    }
+  };
 
   const toggleSort = (column: Column<T>) => {
     if (!column.sortValue) {
@@ -187,14 +234,14 @@ export function DataTable<T>(props: {
                 <Button
                   variant="secondary"
                   disabled={current() === 0}
-                  onClick={() => setPage(current() - 1)}
+                  onClick={() => goToPage(current() - 1)}
                 >
                   {t("table.prev")}
                 </Button>
                 <Button
                   variant="secondary"
                   disabled={current() >= pageCount() - 1}
-                  onClick={() => setPage(current() + 1)}
+                  onClick={() => goToPage(current() + 1)}
                 >
                   {t("table.next")}
                 </Button>

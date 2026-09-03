@@ -67,6 +67,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A campaign's voucher codes can be read a page at a time** (#156). ADR-0098 slice B3-1: the paging
+  vocabulary, and `vouchers` — the acute case — proven through it end to end.
+
+  `MAX_VOUCHER_BATCH` is 10 000 codes per mint and batches accumulate against a campaign, so a
+  promotion with three drops holds 30 000 rows the Campaigns screen fetched in one go.
+  `GET /admin/campaigns/{id}/vouchers?limit=25` now answers `{items, total, limit, offset}` instead.
+
+  The console's own saving is larger than a page. Measured while wiring it, the screen never rendered
+  the codes at all — it rendered `existingVouchers().length`, one number — so it was pulling up to
+  30 000 rows across the wire to count them in the browser. It now asks for `?limit=1` and reads
+  `total`: the same number, one row. (ADR-0098's own measurement said the screen "fetches and
+  renders" every code; the second half was wrong and is corrected in that record.)
+
+  **Without a `limit` the route is unchanged**, and permanently so. An operator distributing a
+  promotion needs every code to print or mail, and "page four of the flyer run" is not something they
+  can ask for; more generally, a default limit is what would put a page between the menu compiler and
+  the items it compiles. So `PageRequest` cannot be built without a caller naming a limit, and at the
+  seam `list_by_campaign_page` sits beside an untouched `list_by_campaign`.
+
+  A `limit` or `offset` that is not an integer in range is a `400` naming the field, never a silent
+  clamp — and an `offset` sent **without** a `limit` is refused too, because honouring it silently
+  would answer a question nobody asked and dropping it silently would lose one somebody did.
+
+  **Migration `0040_voucher_page_index`** rides along, and is the reason the page is cheap rather than
+  merely small: `vouchers_by_campaign` is `(tenant_id, campaign_id)` while the read orders by
+  `created_at DESC, voucher_id DESC`, so PostgreSQL was fetching every matching row and sorting the
+  lot. The new index carries the sort, so the index walk *is* the ordering and `LIMIT` stops the scan
+  instead of truncating a finished one. `total` comes from `COUNT(*) OVER()` in the same statement as
+  the rows — one round trip, one snapshot, so the count cannot disagree with the page it labels.
+
+
 - **ADR-0098 — paging is a second read, not a change to the read that exists** (#155).
   Documentation only; no behaviour changes.
 
