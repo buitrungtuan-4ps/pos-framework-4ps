@@ -30,8 +30,7 @@ use std::sync::{Arc, Mutex};
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::post;
 use serde::Deserialize;
 
@@ -238,7 +237,13 @@ where
         QrDecision::Accept { .. } => {
             let order = match to_inbound_qr_order(&request, table.store_id, table.table_id) {
                 Ok(order) => order,
-                Err(reason) => return (StatusCode::BAD_REQUEST, reason).into_response(),
+                // No `details`: `to_inbound_qr_order` returns a bare `&'static str` shared with
+                // `POST /v1/orders` and the relay, so naming a field here would mean changing a
+                // converter with three callers. The sibling at `orders.rs` already answers the
+                // envelope with the same strings; this site was the last one that did not.
+                Err(reason) => {
+                    return api_error(ErrorStatus::InvalidArgument, reason);
+                }
             };
             // Count this submission only once it has passed every guardrail, so a rejected attempt
             // does not consume the table's budget.

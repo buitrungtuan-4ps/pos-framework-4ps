@@ -189,6 +189,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   carry an application-layer secret remains open.
 
 ### Changed
+- **Nine of the cloud's last plain-text `400`s join the envelope, and five that were already on it
+  named a field the caller never sent** (#150). The first half of the migration ADR-0096 deferred.
+
+  ADR-0096 left 22 plain-text `400` sites as "a migration backlog, not a missing capability" —
+  expressible with `InvalidArgument` today, so nothing blocked them. This takes the nine whose
+  handler already knows which field was wrong; the remaining thirteen need their producer changed
+  (four builders, `RollupWindow`, `parse_known_tokens`) and are the next slice.
+
+  An unknown permission id, capability flag or API-key scope now answers
+  `("permissions"|"flags"|"scopes", "INVALID_ENUM_VALUE")` — `INVALID_ENUM_VALUE` rather than
+  `UNKNOWN_REFERENCE` because these are compile-time catalogues, and the repo already reserves
+  `UNKNOWN_REFERENCE` for a reference to a stored row.
+
+  **The correction worth reading.** Five `details` entries shipped by earlier Q3b slices named
+  fields that do not exist on the wire: `("tax_rates", …)` on four refusals whose request struct
+  carries `rates`, and `("vendor_policies", …)` on one that carries `policies`. A console that marks
+  the field named in `details` would have marked a field the caller never sent — worse than no
+  detail at all, because it is confidently wrong. Both are corrected here. They were found by
+  reading the request structs rather than the neighbouring code, which is the only way this class of
+  error surfaces.
+
+  Two sites get **no** `details`, deliberately. The CSV import parser addresses a row and byte offset
+  in an opaque uploaded body, and the request's only named input is a `tenant_id` query that is not
+  what failed. The QR order converter returns a bare `&'static str` shared with `POST /v1/orders` and
+  the relay, so naming a field would mean changing a converter with three callers; that site was
+  simply the last of the three still answering raw text.
+
+  The webhook SSRF refusal gains `("url", …)` with a new reason, `FORBIDDEN_DESTINATION`, shared by
+  the two variants #147 collapsed into one message. That sharing is the point and is tested: giving
+  them distinct reasons would tell a caller apart what the message just stopped telling them, and
+  reusing `INVALID_FORMAT` would send them to fix a URL whose syntax is fine.
+
 - **Nine refusals that could not say what was wrong with them now can** (#146). ADR-0096.
 
   `ErrorStatus` mapped to 400/401/403/404/409/412/429/500/503 and nothing else, so a handler that
