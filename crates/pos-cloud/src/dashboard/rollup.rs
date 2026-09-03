@@ -246,24 +246,47 @@ impl RollupWindow {
         from: Option<String>,
         to: Option<String>,
         limit: Option<usize>,
-    ) -> Result<Self, &'static str> {
-        for bound in [from.as_deref(), to.as_deref()].into_iter().flatten() {
-            if !is_business_date(bound) {
-                return Err("from and to must be YYYY-MM-DD business dates");
-            }
+    ) -> Result<Self, WindowError> {
+        // Each bound is checked by name rather than in a loop that discards which one failed. The
+        // loop knew, and threw it away one line before the caller needed it.
+        if from
+            .as_deref()
+            .is_some_and(|bound| !is_business_date(bound))
+        {
+            return Err(WindowError::MalformedFrom);
+        }
+        if to.as_deref().is_some_and(|bound| !is_business_date(bound)) {
+            return Err(WindowError::MalformedTo);
         }
         if let (Some(lower), Some(upper)) = (from.as_deref(), to.as_deref())
             && lower > upper
         {
-            return Err("from must not be after to");
+            return Err(WindowError::Inverted);
         }
         let limit = match limit {
-            Some(0) => return Err("limit must be at least 1"),
+            Some(0) => return Err(WindowError::LimitTooSmall),
             Some(requested) => requested.min(MAX_WINDOW_DAYS),
             None => DEFAULT_WINDOW_DAYS,
         };
         Ok(Self { from, to, limit })
     }
+}
+
+/// Why a requested window is not one.
+///
+/// An enum rather than a message, so the HTTP layer can name the query parameter: this module knows
+/// *what* is wrong, and only the route knows the wire names (`from`, `to`, `limit`). Keeping the
+/// field naming there is also what stops this domain type growing an opinion about `details`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowError {
+    /// `from` is not a `YYYY-MM-DD` business date.
+    MalformedFrom,
+    /// `to` is not a `YYYY-MM-DD` business date.
+    MalformedTo,
+    /// `from` is after `to`. Neither is wrong on its own, which is why it names neither.
+    Inverted,
+    /// `limit` is zero, which selects nothing.
+    LimitTooSmall,
 }
 
 /// Filters an ascending-by-date list to the window's inclusive range and caps it to the newest
@@ -329,7 +352,7 @@ fn is_business_date(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, RollupWindow, render_window};
+    use super::{DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, RollupWindow, WindowError, render_window};
     use crate::cloud::DailyRollup;
     use std::collections::BTreeMap;
 
@@ -409,8 +432,15 @@ mod tests {
 
     #[test]
     fn a_malformed_date_is_rejected() {
-        assert!(RollupWindow::new(Some("2026-3-1".into()), None, None).is_err());
-        assert!(RollupWindow::new(None, Some("not-a-date".into()), None).is_err());
+        // Which bound, not merely that one of them was bad: the point of the split.
+        assert_eq!(
+            RollupWindow::new(Some("2026-3-1".into()), None, None).err(),
+            Some(WindowError::MalformedFrom)
+        );
+        assert_eq!(
+            RollupWindow::new(None, Some("not-a-date".into()), None).err(),
+            Some(WindowError::MalformedTo)
+        );
     }
 
     #[test]

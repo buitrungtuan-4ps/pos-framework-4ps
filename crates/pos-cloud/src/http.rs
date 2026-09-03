@@ -145,6 +145,7 @@ use crate::config_tree::{
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
+use crate::dashboard::rollup::WindowError;
 use crate::dashboard::{
     RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, revenue, xz_report,
 };
@@ -2929,15 +2930,39 @@ struct PublishTenderRequest {
 
 /// Parses each `UPPER_SNAKE_CASE` token to a known wire-enum value, refusing an unrecognised or
 /// unspecified one — authoring rejects a typo up front rather than storing a token the edge would drop.
-fn parse_known_tokens<E: WireEnum>(tokens: &[String]) -> Result<Vec<Open<E>>, String> {
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns, the shape `parse_ulid_fields` already carries this expectation for"
+)]
+fn parse_known_tokens<E: WireEnum>(
+    field: &str,
+    tokens: &[String],
+) -> Result<Vec<Open<E>>, Response> {
     let mut out = Vec::with_capacity(tokens.len());
     for token in tokens {
         match E::from_wire(token) {
             Some(known) if known != E::UNSPECIFIED => out.push(Open::from_known(known)),
-            _ => return Err(format!("{token} is not a recognised value")),
+            // One refusal for two causes — an unrecognised token, and an explicit `*_UNSPECIFIED`
+            // that parses and is still not a choice — because the answer is the same either way:
+            // here is the set you may pick from, and neither is in it. The old message
+            // (`"{token} is not a recognised value"`) named the field for neither and the set for
+            // no one.
+            _ => return Err(enum_refusal(field, accepted_tokens::<E>())),
         }
     }
     Ok(out)
+}
+
+/// The tokens a caller may actually send for `E`: every wire token except `UNSPECIFIED`.
+///
+/// `WireEnum::ALL` leads with `UNSPECIFIED`, which exists so an older client can read a newer
+/// server's value and is never a choice a caller makes. Listing it as accepted would invite one.
+fn accepted_tokens<E: WireEnum>() -> impl Iterator<Item = &'static str> {
+    E::ALL
+        .iter()
+        .copied()
+        .filter(|value| *value != E::UNSPECIFIED)
+        .map(WireEnum::as_wire)
 }
 
 /// Reads a store's current Store-layer node value by key, or `null` when it has none.
@@ -3123,9 +3148,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let enabled = match parse_known_tokens::<SalesChannel>(&request.enabled) {
+    let enabled = match parse_known_tokens::<SalesChannel>("enabled", &request.enabled) {
         Ok(tokens) => tokens,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal,
     };
     let Ok(value) = serde_json::to_value(PublishedChannels::new(enabled)) else {
         return channels_serialize_unavailable();
@@ -3205,9 +3230,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let accepted = match parse_known_tokens::<PaymentMethod>(&request.accepted) {
+    let accepted = match parse_known_tokens::<PaymentMethod>("accepted", &request.accepted) {
         Ok(tokens) => tokens,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal,
     };
     let Ok(value) = serde_json::to_value(PublishedTender::new(accepted)) else {
         return channels_serialize_unavailable();
@@ -6834,29 +6859,57 @@ where
 fn build_campaign(
     request: &CampaignRequest,
     id: CampaignId,
-) -> Result<PublishedCampaign, &'static str> {
+) -> Result<PublishedCampaign, FieldRefusal> {
     let name = request.name.trim();
     if name.is_empty() {
-        return Err("a campaign name is required");
+        return Err(FieldRefusal::new("name is required", "name", "REQUIRED"));
     }
-    if let Some(schedule) = &request.conditions.schedule
-        && (schedule.start_minute >= MINUTES_PER_DAY || schedule.end_minute >= MINUTES_PER_DAY)
-    {
-        return Err("a schedule minute is out of range (0..1440)");
+    // Split, where this used to be one `if` ORing both bounds and naming neither. The old message
+    // was the ULID-slice pathology in its worse form: not "names every field it looked at" but
+    // "names none of them", so a caller who sent both minutes could not tell which was refused.
+    if let Some(schedule) = &request.conditions.schedule {
+        if schedule.start_minute >= MINUTES_PER_DAY {
+            return Err(FieldRefusal::new(
+                "a schedule start minute must be within the day (0..1440)",
+                "conditions.schedule.start_minute",
+                "OUT_OF_RANGE",
+            ));
+        }
+        if schedule.end_minute >= MINUTES_PER_DAY {
+            return Err(FieldRefusal::new(
+                "a schedule end minute must be within the day (0..1440)",
+                "conditions.schedule.end_minute",
+                "OUT_OF_RANGE",
+            ));
+        }
     }
     if let Some(channels) = &request.conditions.channels
         && channels
             .iter()
             .any(|channel| channel.is_unrecognised() || channel.is_unspecified())
     {
-        return Err("a campaign names an unknown sales channel");
+        // The collection, not an index: no shipped detail in this file names an element position,
+        // and the tax-rate loop sets the precedent for naming the list.
+        return Err(FieldRefusal::new(
+            "a campaign names an unknown sales channel",
+            "conditions.channels",
+            "INVALID_ENUM_VALUE",
+        ));
     }
     match request.action {
         PublishedAction::Percentage { rate } if rate.numerator() < 0 => {
-            return Err("a percentage rate cannot be negative");
+            return Err(FieldRefusal::new(
+                "a percentage rate cannot be negative",
+                "action.rate",
+                "OUT_OF_RANGE",
+            ));
         }
         PublishedAction::AmountOff { amount } if amount.is_negative() => {
-            return Err("an amount off cannot be negative");
+            return Err(FieldRefusal::new(
+                "an amount off cannot be negative",
+                "action.amount",
+                "OUT_OF_RANGE",
+            ));
         }
         _ => {}
     }
@@ -6972,7 +7025,7 @@ where
     };
     let campaign = match build_campaign(&request, campaign_id) {
         Ok(campaign) => campaign,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
         Ok(()) => {
@@ -7031,7 +7084,7 @@ where
     };
     let campaign = match build_campaign(&request, campaign_id) {
         Ok(campaign) => campaign,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
         Ok(()) => {
@@ -7291,13 +7344,20 @@ where
 fn build_ingredient(
     request: &IngredientRequest,
     id: IngredientId,
-) -> Result<PublishedIngredient, &'static str> {
+) -> Result<PublishedIngredient, FieldRefusal> {
     let name = request.name.trim();
     if name.is_empty() {
-        return Err("an ingredient name is required");
+        return Err(FieldRefusal::new("name is required", "name", "REQUIRED"));
     }
     if request.unit.is_unspecified() || request.unit.is_unrecognised() {
-        return Err("an ingredient names an unknown unit of measure");
+        // `INVALID_ENUM_VALUE`, not `REQUIRED`: `unit` carries no `#[serde(default)]`, so an absent
+        // key never reaches here — what does is a present token that is unrecognised or explicitly
+        // `UNSPECIFIED`, and both are enum-value faults.
+        return Err(FieldRefusal::new(
+            "an ingredient names an unknown unit of measure",
+            "unit",
+            "INVALID_ENUM_VALUE",
+        ));
     }
     Ok(PublishedIngredient {
         id,
@@ -7310,16 +7370,24 @@ fn build_ingredient(
 fn build_recipe(
     request: &RecipeRequest,
     item: MenuItemId,
-) -> Result<PublishedRecipe, &'static str> {
+) -> Result<PublishedRecipe, FieldRefusal> {
     if request.auto_86_threshold < 0 {
-        return Err("an auto-86 threshold cannot be negative");
+        return Err(FieldRefusal::new(
+            "an auto-86 threshold cannot be negative",
+            "auto_86_threshold",
+            "OUT_OF_RANGE",
+        ));
     }
     if request
         .lines
         .iter()
         .any(|line| line.per_unit.as_milli() <= 0)
     {
-        return Err("a recipe line must consume a positive amount");
+        return Err(FieldRefusal::new(
+            "a recipe line must consume a positive amount",
+            "lines",
+            "OUT_OF_RANGE",
+        ));
     }
     Ok(PublishedRecipe {
         item,
@@ -7332,10 +7400,10 @@ fn build_recipe(
 fn build_supplier(
     request: &SupplierRequest,
     id: SupplierId,
-) -> Result<PublishedSupplier, &'static str> {
+) -> Result<PublishedSupplier, FieldRefusal> {
     let name = request.name.trim();
     if name.is_empty() {
-        return Err("a supplier name is required");
+        return Err(FieldRefusal::new("name is required", "name", "REQUIRED"));
     }
     Ok(PublishedSupplier {
         id,
@@ -7447,7 +7515,7 @@ where
     };
     let ingredient = match build_ingredient(&request, ingredient_id) {
         Ok(ingredient) => ingredient,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state
         .inventory
@@ -7514,7 +7582,7 @@ where
     };
     let ingredient = match build_ingredient(&request, ingredient_id) {
         Ok(ingredient) => ingredient,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state
         .inventory
@@ -7705,7 +7773,7 @@ where
     };
     let recipe = match build_recipe(&request, item) {
         Ok(recipe) => recipe,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state.inventory.upsert_recipe(tenant_id, &recipe).await {
         Ok(()) => {
@@ -7890,7 +7958,7 @@ where
     };
     let supplier = match build_supplier(&request, supplier_id) {
         Ok(supplier) => supplier,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state.inventory.upsert_supplier(tenant_id, &supplier).await {
         Ok(()) => {
@@ -7951,7 +8019,7 @@ where
     };
     let supplier = match build_supplier(&request, supplier_id) {
         Ok(supplier) => supplier,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(refusal) => return refusal.into_response(),
     };
     match state.inventory.upsert_supplier(tenant_id, &supplier).await {
         Ok(()) => {
@@ -13567,7 +13635,7 @@ where
     };
     let window = match window.into_window() {
         Ok(window) => window,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => return window_refusal(error),
     };
     // The tenant is the grant's, not the request's — this is the isolation boundary.
     match dashboard(&app.rollups, grant.tenant(), store_id, &window).await {
@@ -13591,7 +13659,7 @@ pub(crate) struct RollupWindowQuery {
 
 impl RollupWindowQuery {
     /// Validates the params into a [`RollupWindow`], or returns a `400` message.
-    fn into_window(self) -> Result<RollupWindow, &'static str> {
+    fn into_window(self) -> Result<RollupWindow, WindowError> {
         RollupWindow::new(self.from, self.to, self.limit)
     }
 }
@@ -13874,7 +13942,7 @@ pub(crate) const INTERNAL_KEY_HEADER: &str = "X-Pos-Internal-Key";
 /// The comparison is `constant_time_eq`, the same one `/admin/setup` uses.
 #[expect(
     clippy::result_large_err,
-    reason = "the Err is an axum Response by design — it *is* the 404 the handler returns, the same               shape `parse_ulid_fields` carries this expectation for"
+    reason = "the Err is an axum Response by design — it *is* the 404 the handler returns, the shape `parse_ulid_fields` already carries this expectation for"
 )]
 fn internal_guard(expected: Option<&InternalSecret>, headers: &HeaderMap) -> Result<(), Response> {
     // `None` is unreachable in a booted process — `CloudConfig::validate` refuses to start without
@@ -15898,7 +15966,7 @@ where
         };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => return window_refusal(error),
     };
     // The tenant is named explicitly here (the admin is global), unlike the `/v1` read where it is
     // the API key's. It is a read of the materialised rollup — event counts only, no PII.
@@ -15958,7 +16026,7 @@ where
         };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => return window_refusal(error),
     };
     match revenue(&app.rollups, tenant_id, store_id, &window).await {
         Ok(revenue) => (StatusCode::OK, Json(revenue)).into_response(),
@@ -16044,7 +16112,7 @@ where
         };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => return window_refusal(error),
     };
     let days = match dashboard(&app.rollups, tenant_id, store_id, &window).await {
         Ok(days) => days,
@@ -16103,7 +16171,7 @@ where
         };
     let window = match RollupWindow::new(query.from, query.to, query.limit) {
         Ok(window) => window,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => return window_refusal(error),
     };
     let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
         Ok(days) => days,
@@ -16661,6 +16729,70 @@ fn ulid_refusal(bad: &[&str]) -> Response {
         [] => "a field is not a ULID".to_owned(),
     };
     api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
+}
+
+/// The `400` a malformed rollup window earns, naming the query parameter at fault.
+///
+/// The mapping lives here rather than in `dashboard::rollup` because only the route knows the wire
+/// names. `Inverted` carries **no** `details`: neither `from` nor `to` is wrong on its own, and the
+/// standing rule is to name only the field that actually was — attributing it to `from` would send
+/// a caller who mistyped `to` to the wrong input. The message already names both.
+fn window_refusal(error: WindowError) -> Response {
+    match error {
+        WindowError::MalformedFrom => api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "from must be a YYYY-MM-DD business date",
+            &[("from", "INVALID_FORMAT")],
+        ),
+        WindowError::MalformedTo => api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "to must be a YYYY-MM-DD business date",
+            &[("to", "INVALID_FORMAT")],
+        ),
+        WindowError::Inverted => {
+            api_error(ErrorStatus::InvalidArgument, "from must not be after to")
+        }
+        WindowError::LimitTooSmall => api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "limit must be at least 1",
+            &[("limit", "OUT_OF_RANGE")],
+        ),
+    }
+}
+
+/// Why a request-to-record builder refused, and which field to send the caller to.
+///
+/// The four builders returned a bare `&'static str`, and their own doc comments said why: a
+/// `Result<_, Response>` trips `clippy::result_large_err`. That is a real constraint and this
+/// respects it — three `&'static str`s is 48 bytes, well under the threshold — while fixing what
+/// the bare string cost, which is that a refusal naming no field is one no console can mark.
+///
+/// `field` carries the full path for a nested value (`action.rate`, not `rate`), following
+/// ADR-0096's reasoning that a path a reader can act on beats a name they have to interpret.
+#[derive(Clone, Copy)]
+struct FieldRefusal {
+    message: &'static str,
+    field: &'static str,
+    reason: &'static str,
+}
+
+impl FieldRefusal {
+    const fn new(message: &'static str, field: &'static str, reason: &'static str) -> Self {
+        Self {
+            message,
+            field,
+            reason,
+        }
+    }
+
+    /// The `400` this refusal becomes at the handler that called the builder.
+    fn into_response(self) -> Response {
+        api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            self.message,
+            &[(self.field, self.reason)],
+        )
+    }
 }
 
 /// The refusal for a field whose value is outside a **closed set**: `INVALID_ARGUMENT`, an
@@ -17327,10 +17459,12 @@ mod closed_set_tests {
     //! its parser actually accepts — which is the half a reviewer cannot check by eye.
 
     use super::{
-        AdminRole, AdminStatus, ConfigLevel, EntityStatus, accepted_list, entity_status_refusal,
-        parse_config_level, parse_entity_status,
+        AdminRole, AdminStatus, ConfigLevel, EntityStatus, PaymentMethod, SalesChannel,
+        accepted_list, accepted_tokens, entity_status_refusal, parse_config_level,
+        parse_entity_status,
     };
     use axum::http::StatusCode;
+    use pos_proto::wire_enum::WireEnum as _;
 
     /// Every token the `status` refusal lists is one [`parse_entity_status`] accepts.
     #[test]
@@ -17430,6 +17564,41 @@ mod closed_set_tests {
             "a closed-set refusal is the caller's fault"
         );
     }
+
+    /// Every token a `parse_known_tokens` refusal offers is one that same parser accepts, and
+    /// `UNSPECIFIED` is offered by neither.
+    ///
+    /// The exclusion is the half worth pinning. `WireEnum::ALL` leads with `UNSPECIFIED`, which
+    /// exists so an older client can read a newer server's value — it is never a choice a caller
+    /// makes. Listing it as accepted would invite one, and the parser refuses it, so the refusal
+    /// would be naming a token that earns the same refusal again.
+    #[test]
+    fn unspecified_is_never_offered_as_a_choice() {
+        for accepted in [
+            accepted_tokens::<SalesChannel>().collect::<Vec<_>>(),
+            accepted_tokens::<PaymentMethod>().collect::<Vec<_>>(),
+        ] {
+            assert!(!accepted.is_empty(), "the set is not empty");
+            assert!(
+                !accepted.contains(&SalesChannel::UNSPECIFIED.as_wire())
+                    && !accepted.contains(&PaymentMethod::UNSPECIFIED.as_wire()),
+                "got {accepted:?}"
+            );
+        }
+        for token in accepted_tokens::<SalesChannel>() {
+            assert_eq!(
+                SalesChannel::from_wire(token),
+                Some(
+                    SalesChannel::ALL
+                        .iter()
+                        .copied()
+                        .find(|value| value.as_wire() == token)
+                        .expect("the token came from ALL")
+                ),
+                "{token} is listed, so it must parse"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -17440,12 +17609,18 @@ mod error_envelope_tests {
     //! path does not: a body that says one thing while the status line says another. A client reads
     //! whichever it trusts, and is then acting on an error the server did not send.
 
-    use super::{api_error, error_response, http_status};
+    use super::{
+        CampaignRequest, FieldRefusal, IngredientRequest, RecipeRequest, SalesChannel,
+        SupplierRequest, WindowError, api_error, build_campaign, build_ingredient, build_recipe,
+        build_supplier, error_response, http_status, parse_known_tokens, window_refusal,
+    };
     use axum::http::StatusCode;
     use axum::response::Response;
     use pos_ports::{PortError, PortName};
     use pos_proto::error::ErrorBody;
+    use pos_proto::ulid::Ulid;
     use pos_proto::wire_enum::WireEnum as _;
+    use pos_proto::{CampaignId, IngredientId, MenuItemId, SupplierId};
     use pos_proto::{ErrorResponse, ErrorStatus};
 
     /// Every canonical status, `Unspecified` included — a server never emits it, but if one ever
@@ -17533,5 +17708,237 @@ mod error_envelope_tests {
             );
             assert_eq!(body.status.as_wire(), status.as_wire(), "{status}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_unrecognised_token_names_the_field_and_lists_the_accepted_set() {
+        // The old refusal was `"{token} is not a recognised value"` as plain text: it named neither
+        // the field nor the set, which between them are the only two things a caller can act on.
+        let refusal = parse_known_tokens::<SalesChannel>("enabled", &["NOT_A_CHANNEL".to_owned()])
+            .expect_err("an unknown token is refused");
+        let (line, body) = read(refusal).await;
+        assert_eq!(line, StatusCode::BAD_REQUEST);
+        assert_eq!(body.status.as_wire(), "INVALID_ARGUMENT");
+        assert_eq!(
+            body.details
+                .iter()
+                .map(|detail| (detail.field.as_str(), detail.reason.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("enabled", "INVALID_ENUM_VALUE")],
+            "the field the caller sent, not the token it sent in it"
+        );
+        assert!(
+            body.message.contains("DINE_IN"),
+            "the message lists the set: {}",
+            body.message
+        );
+        assert!(
+            !body.message.contains("UNSPECIFIED"),
+            "and does not offer the token the parser refuses: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_refusal_names_the_bound_unless_neither_is_wrong_alone() {
+        // The split is the point: `RollupWindow::new` checked both bounds in one loop and threw away
+        // which had failed, one line before the caller needed it.
+        for (error, expected) in [
+            (WindowError::MalformedFrom, Some(("from", "INVALID_FORMAT"))),
+            (WindowError::MalformedTo, Some(("to", "INVALID_FORMAT"))),
+            (WindowError::LimitTooSmall, Some(("limit", "OUT_OF_RANGE"))),
+            // The exception, and the one worth stating: `from` and `to` are each fine and only their
+            // order is wrong, so naming either would send half of callers to the wrong input.
+            (WindowError::Inverted, None),
+        ] {
+            let (line, body) = read(window_refusal(error)).await;
+            assert_eq!(line, StatusCode::BAD_REQUEST, "{error:?}");
+            assert_eq!(
+                body.details
+                    .iter()
+                    .map(|detail| (detail.field.as_str(), detail.reason.as_str()))
+                    .collect::<Vec<_>>(),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// Every field a builder names is one its request struct actually deserialises, at the path a
+    /// caller would address it by.
+    ///
+    /// The request goes through `serde_json` rather than being constructed, which is the whole
+    /// point: it pins the wire name, the struct and the refusal to each other. #150 found five
+    /// shipped `details` entries naming fields no request carried (`tax_rates` where the struct has
+    /// `rates`), and every one of them looked correct beside its neighbours — a console marking
+    /// `details.field` would have marked an input the caller never sent.
+    ///
+    /// Nested values carry their **full path**, so `action.rate` rather than `rate`: the console
+    /// addresses the input the reader sees, instead of guessing which parent a leaf belongs to.
+    /// Reads a builder's refusal down to the `(field, reason)` pairs it carries.
+    async fn refusal_details(refusal: FieldRefusal) -> Vec<(String, String)> {
+        let (line, body) = read(refusal.into_response()).await;
+        assert_eq!(line, StatusCode::BAD_REQUEST);
+        body.details
+            .into_iter()
+            .map(|detail| (detail.field, detail.reason))
+            .collect()
+    }
+
+    /// Reads a JSON body into a request struct the way axum does.
+    ///
+    /// From text rather than `from_value`, because `CurrencyCode` deserialises from a borrowed
+    /// string — going through the owned tree would fail on the very field this is here to exercise.
+    fn request<T: serde::de::DeserializeOwned>(body: &serde_json::Value) -> T {
+        serde_json::from_str(&body.to_string()).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    #[tokio::test]
+    async fn the_campaign_builder_names_a_field_its_own_request_carries() {
+        let campaign_id = CampaignId::new(Ulid::from_u128(1));
+        let base = serde_json::json!({
+            "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "name": "Happy hour",
+            "kind": "bill_level",
+            "priority": 1,
+            "action": { "type": "percentage", "rate": { "numerator": 10, "denominator": 100 } },
+        });
+        let with = |patch: &serde_json::Value| -> CampaignRequest {
+            let mut body = base.clone();
+            for (key, value) in patch.as_object().unwrap_or_else(|| unreachable!()) {
+                body[key] = value.clone();
+            }
+            request(&body)
+        };
+
+        // Each schedule bound is named separately. Before this both were checked by one `if` that
+        // OR'd them and named neither, so a caller who sent both could not tell which was refused.
+        let cases = [
+            (serde_json::json!({ "name": "  " }), "name", "REQUIRED"),
+            (
+                serde_json::json!({
+                    "conditions": { "schedule": { "days": 127, "start_minute": 9999, "end_minute": 60 } },
+                }),
+                "conditions.schedule.start_minute",
+                "OUT_OF_RANGE",
+            ),
+            (
+                serde_json::json!({
+                    "conditions": { "schedule": { "days": 127, "start_minute": 60, "end_minute": 9999 } },
+                }),
+                "conditions.schedule.end_minute",
+                "OUT_OF_RANGE",
+            ),
+            (
+                serde_json::json!({ "conditions": { "channels": ["NOT_A_CHANNEL"] } }),
+                "conditions.channels",
+                "INVALID_ENUM_VALUE",
+            ),
+            (
+                serde_json::json!({
+                    "action": { "type": "percentage", "rate": { "numerator": -1, "denominator": 100 } },
+                }),
+                "action.rate",
+                "OUT_OF_RANGE",
+            ),
+            (
+                serde_json::json!({
+                    "action": {
+                        "type": "amount_off",
+                        "amount": { "currency_code": "VND", "amount_minor": -1 },
+                    },
+                }),
+                "action.amount",
+                "OUT_OF_RANGE",
+            ),
+        ];
+        for (patch, field, reason) in cases {
+            let refusal = build_campaign(&with(&patch), campaign_id)
+                .err()
+                .unwrap_or_else(|| panic!("{field} must be refused"));
+            assert_eq!(
+                refusal_details(refusal).await,
+                vec![(field.to_owned(), reason.to_owned())],
+                "{field}"
+            );
+        }
+    }
+
+    /// The inventory builders, same property. See
+    /// [`the_campaign_builder_names_a_field_its_own_request_carries`] for why it is worth pinning.
+    #[tokio::test]
+    async fn the_inventory_builders_name_a_field_their_own_requests_carry() {
+        for (body, field, reason) in [
+            (
+                serde_json::json!({
+                    "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "name": " ",
+                    "unit": "UNIT_OF_MEASURE_GRAM",
+                }),
+                "name",
+                "REQUIRED",
+            ),
+            (
+                serde_json::json!({
+                    "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "name": "Flour",
+                    "unit": "NOT_A_UNIT",
+                }),
+                "unit",
+                "INVALID_ENUM_VALUE",
+            ),
+        ] {
+            let ingredient: IngredientRequest = request(&body);
+            let refusal = build_ingredient(&ingredient, IngredientId::new(Ulid::from_u128(1)))
+                .err()
+                .unwrap_or_else(|| panic!("{field} must be refused"));
+            assert_eq!(
+                refusal_details(refusal).await,
+                vec![(field.to_owned(), reason.to_owned())],
+                "{field}"
+            );
+        }
+
+        for (body, field) in [
+            (
+                serde_json::json!({
+                    "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "auto_86_threshold": -1,
+                }),
+                "auto_86_threshold",
+            ),
+            (
+                serde_json::json!({
+                    "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "lines": [{
+                        "ingredient": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                        "per_unit": { "milli": 0 },
+                    }],
+                }),
+                "lines",
+            ),
+        ] {
+            let recipe: RecipeRequest = request(&body);
+            let refusal = build_recipe(&recipe, MenuItemId::new(Ulid::from_u128(1)))
+                .err()
+                .unwrap_or_else(|| panic!("{field} must be refused"));
+            assert_eq!(
+                refusal_details(refusal).await,
+                vec![(field.to_owned(), "OUT_OF_RANGE".to_owned())],
+                "{field}"
+            );
+        }
+
+        let supplier: SupplierRequest = request(&serde_json::json!({
+            "tenant_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "name": "\t",
+        }));
+        let refusal = build_supplier(&supplier, SupplierId::new(Ulid::from_u128(1)))
+            .err()
+            .unwrap_or_else(|| unreachable!("a blank supplier name is refused"));
+        assert_eq!(
+            refusal_details(refusal).await,
+            vec![("name".to_owned(), "REQUIRED".to_owned())]
+        );
     }
 }
