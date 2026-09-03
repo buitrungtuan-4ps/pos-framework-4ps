@@ -7611,6 +7611,82 @@ fn catalog_app(admin: FakeAdmin, catalog: FakeCatalog) -> axum::Router {
     ))
 }
 
+/// Clearing an optional id reference means "unset", on every field that has one.
+///
+/// `brand_id` on a store and `parent_menu_id` on a menu were the two fields whose parse skipped the
+/// trim and the empty filter, so an empty string was a `400` for them and "unset" for the other five
+/// optional-ULID fields on the same surface (#280). The console only avoided the refusal because
+/// every call site mapped `""` to `null` first; nothing on the server said it had to. Both routes
+/// are exercised here because the unit test on `parse_optional_ulid` cannot see a handler that stops
+/// calling it.
+#[tokio::test]
+async fn an_empty_optional_id_means_unset_on_the_routes_that_disagreed() {
+    let tenant = ulid_text(1);
+
+    // `parent_menu_id: ""` — a top-level menu, not a malformed request.
+    let catalog = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&catalog).await;
+    let created = catalog
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard", "parent_menu_id": "" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        json_body(created).await["parent_menu_id"],
+        serde_json::Value::Null,
+        "a cleared parent is no parent"
+    );
+
+    // And a present-but-malformed value is still the caller's error, naming the field.
+    let refused = catalog
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Broken", "parent_menu_id": "nope" }),
+            &cookie,
+        ))
+        .await
+        .expect("route the malformed create");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "parent_menu_id");
+
+    // `brand_id: ""` — a store with no brand.
+    let registry = registry_app(provisioned_admin(), FakeRegistry::default());
+    let cookie = admin_cookie(&registry).await;
+    let created = registry
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/stores",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Bến Thành", "brand_id": "" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create store");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        json_body(created).await["brand_id"],
+        serde_json::Value::Null,
+        "a cleared brand is no brand"
+    );
+
+    let refused = registry
+        .oneshot(post_with_cookie(
+            "/admin/stores",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Broken", "brand_id": "nope" }),
+            &cookie,
+        ))
+        .await
+        .expect("route the malformed create");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "brand_id");
+}
+
 /// A ULID string an operator never types — the routes accept it in the body/path, the fake scopes by
 /// it. Distinct constants keep the tenant, a menu, an item and a tax class from colliding.
 fn ulid_text(n: u128) -> String {
