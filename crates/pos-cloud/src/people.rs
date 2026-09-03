@@ -41,6 +41,7 @@ use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use crate::registry::EntityStatus;
+use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// An employee's identifier — a ULID minted at creation. Defined here beside the seam, like
 /// [`BrandId`](crate::registry::BrandId): an employee is a cloud-only concept, so it needs no
@@ -127,7 +128,7 @@ pub trait EmployeeStore {
     fn create(
         &self,
         employee: &NewEmployee,
-    ) -> impl Future<Output = Result<(), EmployeeStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, EmployeeStoreError>> + Send;
 
     /// Lists a tenant's employees, newest first.
     ///
@@ -137,7 +138,7 @@ pub trait EmployeeStore {
     fn list(
         &self,
         tenant: TenantId,
-    ) -> impl Future<Output = Result<Vec<Employee>, EmployeeStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<Employee>>, EmployeeStoreError>> + Send;
 
     /// Reads one employee within its tenant, or `None` if there is no such id.
     ///
@@ -148,10 +149,10 @@ pub trait EmployeeStore {
         &self,
         tenant: TenantId,
         employee_id: EmployeeId,
-    ) -> impl Future<Output = Result<Option<Employee>, EmployeeStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<Employee>>, EmployeeStoreError>> + Send;
 
-    /// Renames an employee and/or sets their status, within their tenant. Returns whether a row
-    /// changed (so a handler can answer `404` for an unknown id).
+    /// Renames an employee and/or sets their status, within their tenant. Applies only at
+    /// `expected`; the outcome tells a handler whether to answer `404` or `412`.
     ///
     /// # Errors
     ///
@@ -159,10 +160,16 @@ pub trait EmployeeStore {
     fn update(
         &self,
         employee: &EmployeeUpdate,
-    ) -> impl Future<Output = Result<bool, EmployeeStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, EmployeeStoreError>> + Send;
 
     /// Sets (or resets) an employee's sign-in PIN to the given **Argon2id PHC hash**, within their
-    /// tenant. The caller hashes; this never sees the digits. Returns whether a row changed.
+    /// tenant. The caller hashes; this never sees the digits.
+    ///
+    /// Deliberately **not** version-gated ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)):
+    /// it writes one field that no other console form edits, so there is no edit for it to clobber.
+    /// It does still *move* the row's version, because it is a write — a caller holding a version
+    /// from before it must re-read, which is what the console does after every write.
     ///
     /// # Errors
     ///
@@ -328,7 +335,7 @@ pub trait RoleTemplateStore {
     fn create(
         &self,
         template: &NewRoleTemplate,
-    ) -> impl Future<Output = Result<(), RoleTemplateStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, RoleTemplateStoreError>> + Send;
 
     /// Lists a tenant's role templates, newest first.
     ///
@@ -338,7 +345,7 @@ pub trait RoleTemplateStore {
     fn list(
         &self,
         tenant: TenantId,
-    ) -> impl Future<Output = Result<Vec<RoleTemplate>, RoleTemplateStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<RoleTemplate>>, RoleTemplateStoreError>> + Send;
 
     /// Reads one role template within its tenant, or `None`.
     ///
@@ -349,9 +356,9 @@ pub trait RoleTemplateStore {
         &self,
         tenant: TenantId,
         role_template_id: RoleTemplateId,
-    ) -> impl Future<Output = Result<Option<RoleTemplate>, RoleTemplateStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<RoleTemplate>>, RoleTemplateStoreError>> + Send;
 
-    /// Updates a role template's name, permissions, and status. Returns whether a row changed.
+    /// Updates a role template's name, permissions, and status. Applies only at `expected`.
     ///
     /// # Errors
     ///
@@ -359,7 +366,8 @@ pub trait RoleTemplateStore {
     fn update(
         &self,
         template: &RoleTemplateUpdate,
-    ) -> impl Future<Output = Result<bool, RoleTemplateStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, RoleTemplateStoreError>> + Send;
 }
 
 /// A failure of the role-template store — the database is unreachable or a write violated a constraint

@@ -2436,6 +2436,7 @@ mod audit_log {
 
 mod employees_store {
     use super::{block_on, prepared};
+    use store_postgres::RowUpdate;
 
     /// Employees insert and read back tenant-scoped and newest-first; the code is unique within a
     /// tenant but free across tenants; `has_pin` reflects `set_pin` without ever exposing the hash on
@@ -2525,17 +2526,21 @@ mod employees_store {
                 "set_pin is tenant-scoped"
             );
 
-            // Rename + archive.
+            // Rename + archive, at the version the read handed out (ADR-0094).
             assert!(
-                people
-                    .set(
-                        "tenant-a",
-                        "01EMP0000000000000000000A1",
-                        "Alice Nguyen",
-                        "archived"
-                    )
-                    .await
-                    .expect("update"),
+                matches!(
+                    people
+                        .set(
+                            "tenant-a",
+                            "01EMP0000000000000000000A1",
+                            "Alice Nguyen",
+                            "archived",
+                            &alice.version,
+                        )
+                        .await
+                        .expect("update"),
+                    RowUpdate::Updated(_)
+                ),
                 "the row changed"
             );
             let archived = people
@@ -2578,6 +2583,7 @@ mod employees_store {
 
 mod role_templates_and_assignments {
     use super::{block_on, prepared};
+    use store_postgres::RowUpdate;
 
     /// Role templates insert with a jsonb permission set that round-trips as its JSON text, read back
     /// tenant-scoped and newest-first, and update name/permissions/status. The grant is
@@ -2628,18 +2634,22 @@ mod role_templates_and_assignments {
                 ]
             );
 
-            // Update the permission set + archive.
+            // Update the permission set + archive, at the version the read handed out (ADR-0094).
             assert!(
-                people
-                    .set_role_template(
-                        "tenant-a",
-                        "01ROLE000000000000000000A1",
-                        "Cashier",
-                        r#"["sales.item.open"]"#,
-                        "archived",
-                    )
-                    .await
-                    .expect("update"),
+                matches!(
+                    people
+                        .set_role_template(
+                            "tenant-a",
+                            "01ROLE000000000000000000A1",
+                            "Cashier",
+                            r#"["sales.item.open"]"#,
+                            "archived",
+                            &cashier.version,
+                        )
+                        .await
+                        .expect("update"),
+                    RowUpdate::Updated(_)
+                ),
                 "the row changed"
             );
             let updated = people
@@ -3511,6 +3521,139 @@ mod conditional_writes {
                 .expect("the tenant is there");
             assert_eq!(row.name, "Pizza 4P's");
             assert_eq!(row.status, "active");
+            assert_eq!(row.version, second);
+        });
+    }
+
+    /// The floor family's own SQL, which the registry case cannot cover.
+    ///
+    /// Two things are specific to these tables. Each `SELECT` had `xmin::text` appended to a
+    /// hand-written column list whose mapper reads by **position**, so a column added in the wrong
+    /// place would hand back a name where a version belongs — only a real read proves the order.
+    /// And `set_station` writes a self-referencing `backup_station_id`, the most intricate of the
+    /// three conditional statements.
+    #[test]
+    fn a_floor_row_carries_the_version_it_was_read_at_and_a_stale_write_is_refused() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let floor = store.floor();
+            let tenant = "0000000000TENANTFLOORXMINA";
+            let store_id = "00000000000000STOREFLOORXA";
+            let area = "0000000000000000AREAXMINAA";
+            let station = "000000000000000STATIONXMIN";
+
+            let area_version = floor
+                .insert_area(area, tenant, store_id, "Terrace")
+                .await
+                .expect("insert the area");
+            let station_version = floor
+                .insert_station(station, tenant, store_id, "Oven", None, true)
+                .await
+                .expect("insert the station");
+
+            // The read hands back the same token the insert minted, from the right column.
+            let areas = floor
+                .fetch_areas(tenant, store_id)
+                .await
+                .expect("list the areas");
+            let row = areas.first().expect("the area is there");
+            assert_eq!(
+                row.name, "Terrace",
+                "the column order survived the addition"
+            );
+            assert_eq!(row.version, area_version);
+
+            // A stale tag is refused; the current one applies and moves the row.
+            assert_eq!(
+                floor
+                    .set_station(tenant, station, "Nope", None, false, "active", "1")
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+            let moved = match floor
+                .set_station(
+                    tenant,
+                    station,
+                    "Pizza oven",
+                    Some(station),
+                    false,
+                    "active",
+                    &station_version,
+                )
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            assert_ne!(moved, station_version, "xmin moves on every UPDATE");
+
+            let stations = floor
+                .fetch_stations(tenant, store_id)
+                .await
+                .expect("list the stations");
+            let row = stations.first().expect("the station is there");
+            assert_eq!(row.name, "Pizza oven");
+            assert_eq!(row.backup_station_id.as_deref(), Some(station));
+            assert_eq!(row.version, moved);
+        });
+    }
+
+    /// The people family's own SQL. `role_templates` stores its permissions as `jsonb`, so its
+    /// column list is the one most likely to have taken `xmin::text` in the wrong position.
+    #[test]
+    fn a_people_row_carries_the_version_it_was_read_at_and_a_stale_write_is_refused() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            let tenant = "000000000TENANTPEOPLEXMINA";
+            let role = "00000000000000000ROLEXMINA";
+
+            let first = people
+                .insert_role_template(role, tenant, "Cashier", "[\"sales.item.open\"]")
+                .await
+                .expect("insert the role template");
+
+            let rows = people
+                .fetch_role_templates(tenant)
+                .await
+                .expect("list the role templates");
+            let row = rows.first().expect("the role is there");
+            assert_eq!(
+                row.name, "Cashier",
+                "the column order survived the addition"
+            );
+            assert_eq!(row.permissions_json, "[\"sales.item.open\"]");
+            assert_eq!(row.version, first);
+
+            assert_eq!(
+                people
+                    .set_role_template(tenant, role, "Nope", "[]", "active", "not-a-transaction-id")
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+            let second = match people
+                .set_role_template(tenant, role, "Cashier", "[]", "archived", &first)
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            assert_ne!(second, first, "xmin moves on every UPDATE");
+
+            let rows = people
+                .fetch_role_templates(tenant)
+                .await
+                .expect("list the role templates");
+            let row = rows.first().expect("the role is there");
+            assert_eq!(row.status, "archived");
             assert_eq!(row.version, second);
         });
     }

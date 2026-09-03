@@ -822,6 +822,7 @@ export interface Employee {
   readonly name: string;
   readonly status: EntityStatus;
   readonly has_pin: boolean;
+  readonly etag: ETag;
 }
 
 /** A tenant's named role — a stored subset of the pos-core permission catalogue (§9, ADR-0070). */
@@ -831,6 +832,7 @@ export interface RoleTemplate {
   readonly name: string;
   readonly permissions: readonly string[];
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** An employee's assignment to a store with a role (ADR-0070) — three ids, no PII. */
@@ -865,6 +867,7 @@ export interface Area {
   readonly store_id: string;
   readonly name: string;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A floor table — belongs to an area, optionally placed on the visual editor's grid (`position` is
@@ -878,6 +881,7 @@ export interface FloorTable {
   readonly seats: number;
   readonly position: GridPosition | null;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** A kitchen station from `GET /admin/kitchen/stations` — with an optional backup (printer failover)
@@ -890,6 +894,7 @@ export interface Station {
   readonly backup_station_id: string | null;
   readonly is_default: boolean;
   readonly status: EntityStatus;
+  readonly etag: ETag;
 }
 
 /** An item→station routing rule (ADR-0072) — matches a fired line by item or by course (exactly one).

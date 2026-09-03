@@ -1038,6 +1038,18 @@ fn patch_with_etag(uri: &str, body: &serde_json::Value, cookie: &str, etag: &str
         .expect("build the request")
 }
 
+/// The version a response carried in its `ETag` header, unquoted — the token a client hands back on
+/// its next conditional write (ADR-0094). Panics if the response carried none, because every route
+/// that answers a read-one or a write of a versioned record is required to stamp one.
+fn etag_of(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(|raw| raw.trim_matches('"').to_owned())
+        .expect("the response carried an ETag")
+}
+
 /// As [`patch_with_etag`], but sending `if-match` exactly as given — for the cases where the point
 /// is that the header is *not* a well-formed strong entity-tag.
 fn patch_with_raw_if_match(
@@ -8761,6 +8773,17 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
 #[derive(Clone, Default)]
 struct FakeEmployees {
     rows: Arc<Mutex<Vec<FakeEmployeeRow>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeEmployees {
+    /// The next version, as the store-postgres adapter's `xmin::text` is: a token, not a number the
+    /// caller may reason about.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 #[derive(Clone)]
@@ -8771,23 +8794,28 @@ struct FakeEmployeeRow {
     name: String,
     status: EntityStatus,
     pin_phc: Option<String>,
+    version: Version,
 }
 
 impl FakeEmployeeRow {
-    fn view(&self) -> Employee {
-        Employee {
-            employee_id: self.employee_id,
-            tenant_id: self.tenant_id,
-            code: self.code.clone(),
-            name: self.name.clone(),
-            status: self.status,
-            has_pin: self.pin_phc.is_some(),
-        }
+    fn view(&self) -> Versioned<Employee> {
+        Versioned::new(
+            Employee {
+                employee_id: self.employee_id,
+                tenant_id: self.tenant_id,
+                code: self.code.clone(),
+                name: self.name.clone(),
+                status: self.status,
+                has_pin: self.pin_phc.is_some(),
+            },
+            self.version.clone(),
+        )
     }
 }
 
 impl EmployeeStore for FakeEmployees {
-    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+    async fn create(&self, employee: &NewEmployee) -> Result<Version, EmployeeStoreError> {
+        let version = self.mint();
         let mut rows = self.rows.lock().expect("lock");
         if rows
             .iter()
@@ -8804,12 +8832,13 @@ impl EmployeeStore for FakeEmployees {
             name: employee.name.clone(),
             status: EntityStatus::Active,
             pin_phc: None,
+            version: version.clone(),
         });
-        Ok(())
+        Ok(version)
     }
 
-    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
-        let mut rows: Vec<Employee> = self
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Versioned<Employee>>, EmployeeStoreError> {
+        let mut rows: Vec<Versioned<Employee>> = self
             .rows
             .lock()
             .expect("lock")
@@ -8825,7 +8854,7 @@ impl EmployeeStore for FakeEmployees {
         &self,
         tenant: TenantId,
         employee_id: EmployeeId,
-    ) -> Result<Option<Employee>, EmployeeStoreError> {
+    ) -> Result<Option<Versioned<Employee>>, EmployeeStoreError> {
         Ok(self
             .rows
             .lock()
@@ -8835,16 +8864,25 @@ impl EmployeeStore for FakeEmployees {
             .map(FakeEmployeeRow::view))
     }
 
-    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+    async fn update(
+        &self,
+        employee: &EmployeeUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, EmployeeStoreError> {
+        let version = self.mint();
         let mut rows = self.rows.lock().expect("lock");
         let Some(row) = rows.iter_mut().find(|row| {
             row.tenant_id == employee.tenant_id && row.employee_id == employee.employee_id
         }) else {
-            return Ok(false);
+            return Ok(UpdateOutcome::NotFound);
         };
+        if &row.version != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
         row.name.clone_from(&employee.name);
         row.status = employee.status;
-        Ok(true)
+        row.version = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 
     async fn set_pin(
@@ -8853,6 +8891,7 @@ impl EmployeeStore for FakeEmployees {
         employee_id: EmployeeId,
         pin_phc: &str,
     ) -> Result<bool, EmployeeStoreError> {
+        let version = self.mint();
         let mut rows = self.rows.lock().expect("lock");
         let Some(row) = rows
             .iter_mut()
@@ -8861,6 +8900,10 @@ impl EmployeeStore for FakeEmployees {
             return Ok(false);
         };
         row.pin_phc = Some(pin_phc.to_owned());
+        // A PIN write is a write to the row, so it moves the row's version — as the adapter's
+        // `UPDATE` moves `xmin`. A fake that left the version alone here would hide a conflict the
+        // real store reports (ADR-0094).
+        row.version = version;
         Ok(true)
     }
 
@@ -8923,25 +8966,31 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
     // Listing is tenant-scoped and a fresh employee has no PIN.
     let listed = store.list(mine).await.expect("list");
     assert_eq!(listed.len(), 1, "only this tenant's employees");
-    assert_eq!(listed[0].name, "Alice");
-    assert!(!listed[0].has_pin, "a new employee has no PIN set");
+    assert_eq!(listed[0].record.name, "Alice");
+    assert!(!listed[0].record.has_pin, "a new employee has no PIN set");
 
-    // Rename + archive.
+    // Rename + archive, at the version the listing handed out (ADR-0094).
     assert!(
-        store
-            .update(&EmployeeUpdate {
-                employee_id: alice,
-                tenant_id: mine,
-                name: "Alice Nguyen".to_owned(),
-                status: EntityStatus::Archived,
-            })
-            .await
-            .expect("update"),
-        "the row was found and changed"
+        matches!(
+            store
+                .update(
+                    &EmployeeUpdate {
+                        employee_id: alice,
+                        tenant_id: mine,
+                        name: "Alice Nguyen".to_owned(),
+                        status: EntityStatus::Archived,
+                    },
+                    &listed[0].etag,
+                )
+                .await
+                .expect("update"),
+            UpdateOutcome::Updated(_)
+        ),
+        "the row was found at the version the reader held, and changed"
     );
     let alice_view = store.get(mine, alice).await.expect("get").expect("present");
-    assert_eq!(alice_view.name, "Alice Nguyen");
-    assert_eq!(alice_view.status, EntityStatus::Archived);
+    assert_eq!(alice_view.record.name, "Alice Nguyen");
+    assert_eq!(alice_view.record.status, EntityStatus::Archived);
 
     // Setting a PIN flips has_pin and round-trips the (opaque) hash — which the read never exposes.
     assert!(
@@ -8957,6 +9006,7 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
             .await
             .expect("get")
             .expect("present")
+            .record
             .has_pin
     );
     assert_eq!(
@@ -9184,35 +9234,51 @@ async fn alerts_require_a_session() {
 /// tables are archived, never removed (Track M2, ADR-0072).
 #[derive(Clone, Default)]
 struct FakeFloor {
-    areas: Arc<Mutex<Vec<Area>>>,
-    tables: Arc<Mutex<Vec<Table>>>,
-    stations: Arc<Mutex<Vec<Station>>>,
+    areas: Arc<Mutex<Vec<Versioned<Area>>>>,
+    tables: Arc<Mutex<Vec<Versioned<Table>>>>,
+    stations: Arc<Mutex<Vec<Versioned<Station>>>>,
     rules: Arc<Mutex<Vec<RoutingRule>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeFloor {
+    /// The next version, as the store-postgres adapter's `xmin::text` is: a token, not a number the
+    /// caller may reason about. One counter across all three entities — a version is compared only
+    /// against the row it came from, so sharing the sequence proves nothing depends on it.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 impl AreaStore for FakeFloor {
-    async fn create(&self, area: &NewArea) -> Result<(), FloorStoreError> {
-        self.areas.lock().expect("lock").push(Area {
-            area_id: area.area_id,
-            tenant_id: area.tenant_id,
-            store_id: area.store_id,
-            name: area.name.clone(),
-            status: EntityStatus::Active,
-        });
-        Ok(())
+    async fn create(&self, area: &NewArea) -> Result<Version, FloorStoreError> {
+        let version = self.mint();
+        self.areas.lock().expect("lock").push(Versioned::new(
+            Area {
+                area_id: area.area_id,
+                tenant_id: area.tenant_id,
+                store_id: area.store_id,
+                name: area.name.clone(),
+                status: EntityStatus::Active,
+            },
+            version.clone(),
+        ));
+        Ok(version)
     }
 
     async fn list(
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Area>, FloorStoreError> {
-        let mut rows: Vec<Area> = self
+    ) -> Result<Vec<Versioned<Area>>, FloorStoreError> {
+        let mut rows: Vec<Versioned<Area>> = self
             .areas
             .lock()
             .expect("lock")
             .iter()
-            .filter(|area| area.tenant_id == tenant && area.store_id == store_id)
+            .filter(|area| area.record.tenant_id == tenant && area.record.store_id == store_id)
             .cloned()
             .collect();
         rows.reverse(); // stored oldest-first; the read is newest-first.
@@ -9223,56 +9289,68 @@ impl AreaStore for FakeFloor {
         &self,
         tenant: TenantId,
         area_id: AreaId,
-    ) -> Result<Option<Area>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Area>>, FloorStoreError> {
         Ok(self
             .areas
             .lock()
             .expect("lock")
             .iter()
-            .find(|area| area.tenant_id == tenant && area.area_id == area_id)
+            .find(|area| area.record.tenant_id == tenant && area.record.area_id == area_id)
             .cloned())
     }
 
-    async fn update(&self, update: &AreaUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        update: &AreaUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
+        let version = self.mint();
         let mut rows = self.areas.lock().expect("lock");
-        let Some(row) = rows
-            .iter_mut()
-            .find(|area| area.tenant_id == update.tenant_id && area.area_id == update.area_id)
-        else {
-            return Ok(false);
+        let Some(row) = rows.iter_mut().find(|area| {
+            area.record.tenant_id == update.tenant_id && area.record.area_id == update.area_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
         };
-        row.name.clone_from(&update.name);
-        row.status = update.status;
-        Ok(true)
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record.name.clone_from(&update.name);
+        row.record.status = update.status;
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
 impl TableStore for FakeFloor {
-    async fn create(&self, table: &NewTable) -> Result<(), FloorStoreError> {
-        self.tables.lock().expect("lock").push(Table {
-            table_id: table.table_id,
-            tenant_id: table.tenant_id,
-            store_id: table.store_id,
-            area_id: table.area_id,
-            label: table.label.clone(),
-            seats: table.seats,
-            position: table.position,
-            status: EntityStatus::Active,
-        });
-        Ok(())
+    async fn create(&self, table: &NewTable) -> Result<Version, FloorStoreError> {
+        let version = self.mint();
+        self.tables.lock().expect("lock").push(Versioned::new(
+            Table {
+                table_id: table.table_id,
+                tenant_id: table.tenant_id,
+                store_id: table.store_id,
+                area_id: table.area_id,
+                label: table.label.clone(),
+                seats: table.seats,
+                position: table.position,
+                status: EntityStatus::Active,
+            },
+            version.clone(),
+        ));
+        Ok(version)
     }
 
     async fn list(
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Table>, FloorStoreError> {
-        let mut rows: Vec<Table> = self
+    ) -> Result<Vec<Versioned<Table>>, FloorStoreError> {
+        let mut rows: Vec<Versioned<Table>> = self
             .tables
             .lock()
             .expect("lock")
             .iter()
-            .filter(|table| table.tenant_id == tenant && table.store_id == store_id)
+            .filter(|table| table.record.tenant_id == tenant && table.record.store_id == store_id)
             .cloned()
             .collect();
         rows.reverse();
@@ -9283,30 +9361,38 @@ impl TableStore for FakeFloor {
         &self,
         tenant: TenantId,
         table_id: TableId,
-    ) -> Result<Option<Table>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Table>>, FloorStoreError> {
         Ok(self
             .tables
             .lock()
             .expect("lock")
             .iter()
-            .find(|table| table.tenant_id == tenant && table.table_id == table_id)
+            .find(|table| table.record.tenant_id == tenant && table.record.table_id == table_id)
             .cloned())
     }
 
-    async fn update(&self, update: &TableUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        update: &TableUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
+        let version = self.mint();
         let mut rows = self.tables.lock().expect("lock");
-        let Some(row) = rows
-            .iter_mut()
-            .find(|table| table.tenant_id == update.tenant_id && table.table_id == update.table_id)
-        else {
-            return Ok(false);
+        let Some(row) = rows.iter_mut().find(|table| {
+            table.record.tenant_id == update.tenant_id && table.record.table_id == update.table_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
         };
-        row.area_id = update.area_id;
-        row.label.clone_from(&update.label);
-        row.seats = update.seats;
-        row.position = update.position;
-        row.status = update.status;
-        Ok(true)
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record.area_id = update.area_id;
+        row.record.label.clone_from(&update.label);
+        row.record.seats = update.seats;
+        row.record.position = update.position;
+        row.record.status = update.status;
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
@@ -9353,10 +9439,10 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
         .await
         .expect("list areas");
     assert_eq!(areas.len(), 1);
-    assert_eq!(areas[0].name, "Terrace");
+    assert_eq!(areas[0].record.name, "Terrace");
 
-    // Rename + archive the area.
-    assert!(
+    // Rename + archive the area, at the version the listing handed out (ADR-0094).
+    assert!(matches!(
         AreaStore::update(
             &store,
             &AreaUpdate {
@@ -9365,16 +9451,18 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
                 name: "Front terrace".to_owned(),
                 status: EntityStatus::Archived,
             },
+            &areas[0].etag,
         )
         .await
-        .expect("update area")
-    );
+        .expect("update area"),
+        UpdateOutcome::Updated(_)
+    ));
     let terrace_view = AreaStore::get(&store, mine, terrace)
         .await
         .expect("get")
         .expect("present");
-    assert_eq!(terrace_view.name, "Front terrace");
-    assert_eq!(terrace_view.status, EntityStatus::Archived);
+    assert_eq!(terrace_view.record.name, "Front terrace");
+    assert_eq!(terrace_view.record.status, EntityStatus::Archived);
 
     // A table carries an optional grid position; create one placed, then move + reseat it.
     let table_one = TableId::new(Ulid::from_u128(10));
@@ -9397,10 +9485,13 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
         .await
         .expect("list tables");
     assert_eq!(tables.len(), 1);
-    assert_eq!(tables[0].seats, 4);
-    assert_eq!(tables[0].position, Some(GridPosition { column: 0, row: 0 }));
+    assert_eq!(tables[0].record.seats, 4);
+    assert_eq!(
+        tables[0].record.position,
+        Some(GridPosition { column: 0, row: 0 })
+    );
 
-    assert!(
+    assert!(matches!(
         TableStore::update(
             &store,
             &TableUpdate {
@@ -9412,16 +9503,18 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
                 position: None,
                 status: EntityStatus::Active,
             },
+            &tables[0].etag,
         )
         .await
-        .expect("update table")
-    );
+        .expect("update table"),
+        UpdateOutcome::Updated(_)
+    ));
     let table_view = TableStore::get(&store, mine, table_one)
         .await
         .expect("get")
         .expect("present");
-    assert_eq!(table_view.seats, 6);
-    assert_eq!(table_view.position, None, "the table was unplaced");
+    assert_eq!(table_view.record.seats, 6);
+    assert_eq!(table_view.record.position, None, "the table was unplaced");
 
     // Cross-tenant/store isolation: mine's back store and the other tenant see none of mine's front.
     assert!(
@@ -9439,30 +9532,36 @@ async fn floor_store_creates_lists_updates_scoped_by_tenant_and_store() {
 }
 
 impl StationStore for FakeFloor {
-    async fn create(&self, station: &NewStation) -> Result<(), FloorStoreError> {
-        self.stations.lock().expect("lock").push(Station {
-            station_id: station.station_id,
-            tenant_id: station.tenant_id,
-            store_id: station.store_id,
-            name: station.name.clone(),
-            backup_station_id: station.backup_station_id,
-            is_default: station.is_default,
-            status: EntityStatus::Active,
-        });
-        Ok(())
+    async fn create(&self, station: &NewStation) -> Result<Version, FloorStoreError> {
+        let version = self.mint();
+        self.stations.lock().expect("lock").push(Versioned::new(
+            Station {
+                station_id: station.station_id,
+                tenant_id: station.tenant_id,
+                store_id: station.store_id,
+                name: station.name.clone(),
+                backup_station_id: station.backup_station_id,
+                is_default: station.is_default,
+                status: EntityStatus::Active,
+            },
+            version.clone(),
+        ));
+        Ok(version)
     }
 
     async fn list(
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Station>, FloorStoreError> {
-        let mut rows: Vec<Station> = self
+    ) -> Result<Vec<Versioned<Station>>, FloorStoreError> {
+        let mut rows: Vec<Versioned<Station>> = self
             .stations
             .lock()
             .expect("lock")
             .iter()
-            .filter(|station| station.tenant_id == tenant && station.store_id == store_id)
+            .filter(|station| {
+                station.record.tenant_id == tenant && station.record.store_id == store_id
+            })
             .cloned()
             .collect();
         rows.reverse();
@@ -9473,28 +9572,40 @@ impl StationStore for FakeFloor {
         &self,
         tenant: TenantId,
         station_id: StationId,
-    ) -> Result<Option<Station>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Station>>, FloorStoreError> {
         Ok(self
             .stations
             .lock()
             .expect("lock")
             .iter()
-            .find(|station| station.tenant_id == tenant && station.station_id == station_id)
+            .find(|station| {
+                station.record.tenant_id == tenant && station.record.station_id == station_id
+            })
             .cloned())
     }
 
-    async fn update(&self, update: &StationUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        update: &StationUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
+        let version = self.mint();
         let mut rows = self.stations.lock().expect("lock");
         let Some(row) = rows.iter_mut().find(|station| {
-            station.tenant_id == update.tenant_id && station.station_id == update.station_id
+            station.record.tenant_id == update.tenant_id
+                && station.record.station_id == update.station_id
         }) else {
-            return Ok(false);
+            return Ok(UpdateOutcome::NotFound);
         };
-        row.name.clone_from(&update.name);
-        row.backup_station_id = update.backup_station_id;
-        row.is_default = update.is_default;
-        row.status = update.status;
-        Ok(true)
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record.name.clone_from(&update.name);
+        row.record.backup_station_id = update.backup_station_id;
+        row.record.is_default = update.is_default;
+        row.record.status = update.status;
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
@@ -9542,11 +9653,6 @@ impl RoutingRuleStore for FakeFloor {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one end-to-end exercise of both kitchen seams (station CRUD + routing-rule create/list/\
-              remove, item and course rules) reads better as a single narrative than split fixtures"
-)]
 async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     let store = FakeFloor::default();
     let mine = tenant();
@@ -9567,16 +9673,11 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     )
     .await
     .expect("create oven");
-    assert_eq!(
-        StationStore::list(&store, mine, front)
-            .await
-            .expect("list")
-            .len(),
-        1
-    );
+    let stations = StationStore::list(&store, mine, front).await.expect("list");
+    assert_eq!(stations.len(), 1);
 
-    // Update: drop the backup, keep default off now.
-    assert!(
+    // Update: drop the backup, keep default off now — at the version the listing handed out.
+    assert!(matches!(
         StationStore::update(
             &store,
             &StationUpdate {
@@ -9587,17 +9688,19 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
                 is_default: false,
                 status: EntityStatus::Active,
             },
+            &stations[0].etag,
         )
         .await
-        .expect("update")
-    );
+        .expect("update"),
+        UpdateOutcome::Updated(_)
+    ));
     let oven_view = StationStore::get(&store, mine, oven)
         .await
         .expect("get")
         .expect("present");
-    assert_eq!(oven_view.name, "Pizza oven");
-    assert_eq!(oven_view.backup_station_id, None);
-    assert!(!oven_view.is_default);
+    assert_eq!(oven_view.record.name, "Pizza oven");
+    assert_eq!(oven_view.record.backup_station_id, None);
+    assert!(!oven_view.record.is_default);
 
     // Two routing rules — one by item, one by course — then remove one (returns false the 2nd time).
     let item_rule = RoutingRuleId::new(Ulid::from_u128(50));
@@ -9662,37 +9765,54 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
 /// tenant-scoped table. Roles are archived, never removed.
 #[derive(Clone, Default)]
 struct FakeRoleTemplates {
-    rows: Arc<Mutex<Vec<RoleTemplate>>>,
+    rows: Arc<Mutex<Vec<Versioned<RoleTemplate>>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeRoleTemplates {
+    /// The next version, as the store-postgres adapter's `xmin::text` is: a token, not a number the
+    /// caller may reason about.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 impl RoleTemplateStore for FakeRoleTemplates {
-    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<Version, RoleTemplateStoreError> {
+        let version = self.mint();
         let mut rows = self.rows.lock().expect("lock");
-        if rows
-            .iter()
-            .any(|row| row.tenant_id == template.tenant_id && row.name == template.name)
-        {
+        if rows.iter().any(|row| {
+            row.record.tenant_id == template.tenant_id && row.record.name == template.name
+        }) {
             return Err(RoleTemplateStoreError::new(
                 "duplicate role name within the tenant",
             ));
         }
-        rows.push(RoleTemplate {
-            role_template_id: template.role_template_id,
-            tenant_id: template.tenant_id,
-            name: template.name.clone(),
-            permissions: template.permissions.clone(),
-            status: EntityStatus::Active,
-        });
-        Ok(())
+        rows.push(Versioned::new(
+            RoleTemplate {
+                role_template_id: template.role_template_id,
+                tenant_id: template.tenant_id,
+                name: template.name.clone(),
+                permissions: template.permissions.clone(),
+                status: EntityStatus::Active,
+            },
+            version.clone(),
+        ));
+        Ok(version)
     }
 
-    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
-        let mut rows: Vec<RoleTemplate> = self
+    async fn list(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
+        let mut rows: Vec<Versioned<RoleTemplate>> = self
             .rows
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant)
+            .filter(|row| row.record.tenant_id == tenant)
             .cloned()
             .collect();
         rows.reverse();
@@ -9703,27 +9823,39 @@ impl RoleTemplateStore for FakeRoleTemplates {
         &self,
         tenant: TenantId,
         role_template_id: RoleTemplateId,
-    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+    ) -> Result<Option<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
         Ok(self
             .rows
             .lock()
             .expect("lock")
             .iter()
-            .find(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
+            .find(|row| {
+                row.record.tenant_id == tenant && row.record.role_template_id == role_template_id
+            })
             .cloned())
     }
 
-    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+    async fn update(
+        &self,
+        template: &RoleTemplateUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RoleTemplateStoreError> {
+        let version = self.mint();
         let mut rows = self.rows.lock().expect("lock");
         let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant_id == template.tenant_id && row.role_template_id == template.role_template_id
+            row.record.tenant_id == template.tenant_id
+                && row.record.role_template_id == template.role_template_id
         }) else {
-            return Ok(false);
+            return Ok(UpdateOutcome::NotFound);
         };
-        row.name.clone_from(&template.name);
-        row.permissions.clone_from(&template.permissions);
-        row.status = template.status;
-        Ok(true)
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record.name.clone_from(&template.name);
+        row.record.permissions.clone_from(&template.permissions);
+        row.record.status = template.status;
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
@@ -9855,28 +9987,32 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
 
     let listed = store.list(mine).await.expect("list");
     assert_eq!(listed.len(), 1, "only this tenant's roles");
-    assert_eq!(listed[0].permissions.len(), 2);
+    assert_eq!(listed[0].record.permissions.len(), 2);
 
-    // Edit the permission set and archive.
-    assert!(
+    // Edit the permission set and archive, at the version the listing handed out (ADR-0094).
+    assert!(matches!(
         store
-            .update(&RoleTemplateUpdate {
-                role_template_id: cashier,
-                tenant_id: mine,
-                name: "Cashier".to_owned(),
-                permissions: vec!["sales.item.open".to_owned()],
-                status: EntityStatus::Archived,
-            })
+            .update(
+                &RoleTemplateUpdate {
+                    role_template_id: cashier,
+                    tenant_id: mine,
+                    name: "Cashier".to_owned(),
+                    permissions: vec!["sales.item.open".to_owned()],
+                    status: EntityStatus::Archived,
+                },
+                &listed[0].etag,
+            )
             .await
-            .expect("update")
-    );
+            .expect("update"),
+        UpdateOutcome::Updated(_)
+    ));
     let view = store
         .get(mine, cashier)
         .await
         .expect("get")
         .expect("present");
-    assert_eq!(view.permissions, vec!["sales.item.open".to_owned()]);
-    assert_eq!(view.status, EntityStatus::Archived);
+    assert_eq!(view.record.permissions, vec!["sales.item.open".to_owned()]);
+    assert_eq!(view.record.status, EntityStatus::Archived);
 }
 
 #[tokio::test]
@@ -9968,21 +10104,25 @@ struct FakePeople {
 }
 
 impl EmployeeStore for FakePeople {
-    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+    async fn create(&self, employee: &NewEmployee) -> Result<Version, EmployeeStoreError> {
         self.employees.create(employee).await
     }
-    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Versioned<Employee>>, EmployeeStoreError> {
         self.employees.list(tenant).await
     }
     async fn get(
         &self,
         tenant: TenantId,
         employee_id: EmployeeId,
-    ) -> Result<Option<Employee>, EmployeeStoreError> {
+    ) -> Result<Option<Versioned<Employee>>, EmployeeStoreError> {
         self.employees.get(tenant, employee_id).await
     }
-    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
-        self.employees.update(employee).await
+    async fn update(
+        &self,
+        employee: &EmployeeUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, EmployeeStoreError> {
+        self.employees.update(employee, expected).await
     }
     async fn set_pin(
         &self,
@@ -10002,21 +10142,28 @@ impl EmployeeStore for FakePeople {
 }
 
 impl RoleTemplateStore for FakePeople {
-    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<Version, RoleTemplateStoreError> {
         self.roles.create(template).await
     }
-    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+    async fn list(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
         self.roles.list(tenant).await
     }
     async fn get(
         &self,
         tenant: TenantId,
         role_template_id: RoleTemplateId,
-    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+    ) -> Result<Option<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
         self.roles.get(tenant, role_template_id).await
     }
-    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
-        self.roles.update(template).await
+    async fn update(
+        &self,
+        template: &RoleTemplateUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RoleTemplateStoreError> {
+        self.roles.update(template, expected).await
     }
 }
 
@@ -10115,6 +10262,7 @@ async fn floor_routes_crud_lifecycle_audited() {
         .await
         .expect("route create area");
     assert_eq!(area.status(), StatusCode::CREATED);
+    let area_etag = etag_of(&area);
     let area_id = json_body(area).await["id"].as_str().expect("id").to_owned();
 
     // Create a table in that area, placed on the grid.
@@ -10213,17 +10361,51 @@ async fn floor_routes_crud_lifecycle_audited() {
         );
     }
 
-    // Archive the area.
+    // Archive the area, at the version its creation returned (ADR-0094).
     let archived = router
         .clone()
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/floor/areas/{area_id}"),
             &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Terrace", "status": "archived" }),
             &cookie,
+            &area_etag,
         ))
         .await
         .expect("route archive area");
     assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+    assert_ne!(
+        etag_of(&archived),
+        area_etag,
+        "a write moves the record to a new version, and says which"
+    );
+
+    // A second console still holding the version from before that archive is refused, and the first
+    // edit stands. Areas, tables and stations share one guard, so proving it once here proves it for
+    // the family; the per-entity wiring is what the lifecycle above exercises.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/floor/areas/{area_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Patio", "status": "active" }),
+            &cookie,
+            &area_etag,
+        ))
+        .await
+        .expect("route stale area update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+    let after = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/floor/areas/{area_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route read area back");
+    assert_eq!(
+        json_body(after).await["name"],
+        serde_json::json!("Terrace"),
+        "the refused write changed nothing"
+    );
 
     // Remove the routing rule.
     let removed = router
@@ -10382,8 +10564,9 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
     let area = AreaId::new(Ulid::from_u128(1));
     let active = TableId::new(Ulid::from_u128(0xA1));
     let archived = TableId::new(Ulid::from_u128(0xA2));
+    let mut archived_version = None;
     for (table_id, label) in [(active, "T1"), (archived, "T2")] {
-        TableStore::create(
+        let version = TableStore::create(
             &floor,
             &NewTable {
                 table_id,
@@ -10397,8 +10580,12 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
         )
         .await
         .expect("seed table");
+        if table_id == archived {
+            archived_version = Some(version);
+        }
     }
-    // Archive T2 — an archived table is not printed on the QR sheet.
+    // Archive T2 — an archived table is not printed on the QR sheet. The write is conditional on the
+    // version the create returned (ADR-0094), the same token a reader would have been handed.
     TableStore::update(
         &floor,
         &TableUpdate {
@@ -10410,6 +10597,7 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
             position: None,
             status: EntityStatus::Archived,
         },
+        &archived_version.expect("T2 was seeded"),
     )
     .await
     .expect("archive T2");
@@ -10527,19 +10715,40 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
         .await
         .expect("route get one");
     assert_eq!(one.status(), StatusCode::OK);
-    assert_eq!(json_body(one).await["has_pin"], serde_json::json!(true));
+    let employee_etag = etag_of(&one);
+    let one_body = json_body(one).await;
+    assert_eq!(one_body["has_pin"], serde_json::json!(true));
+    assert_eq!(
+        one_body["etag"], employee_etag,
+        "the header and the body name the same version"
+    );
 
-    // Rename + archive.
+    // Rename + archive, at the version the read-one handed out (ADR-0094).
     let updated = router
         .clone()
-        .oneshot(patch_with_cookie(
+        .oneshot(patch_with_etag(
             &format!("/admin/employees/{employee_id}"),
             &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
             &cookie,
+            &employee_etag,
         ))
         .await
         .expect("route update");
     assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+
+    // A second writer still holding the version from before that rename is refused, and the first
+    // edit survives.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Someone Else", "status": "active" }),
+            &cookie,
+            &employee_etag,
+        ))
+        .await
+        .expect("route stale update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
 
     // The permission catalogue is offered for the role editor.
     let catalogue = router

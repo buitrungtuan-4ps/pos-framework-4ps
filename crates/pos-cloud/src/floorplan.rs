@@ -25,6 +25,7 @@ use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, 
 use pos_proto::ulid::Ulid;
 
 use crate::registry::EntityStatus;
+use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// An area as the console reads it: a named region of one store's floor.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -134,7 +135,10 @@ pub trait AreaStore {
     /// # Errors
     ///
     /// [`FloorStoreError`] if the write fails.
-    fn create(&self, area: &NewArea) -> impl Future<Output = Result<(), FloorStoreError>> + Send;
+    fn create(
+        &self,
+        area: &NewArea,
+    ) -> impl Future<Output = Result<Version, FloorStoreError>> + Send;
 
     /// Lists a store's areas, newest first.
     ///
@@ -145,7 +149,7 @@ pub trait AreaStore {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<Area>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<Area>>, FloorStoreError>> + Send;
 
     /// Reads one area within its tenant, or `None`.
     ///
@@ -156,9 +160,9 @@ pub trait AreaStore {
         &self,
         tenant: TenantId,
         area_id: AreaId,
-    ) -> impl Future<Output = Result<Option<Area>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<Area>>, FloorStoreError>> + Send;
 
-    /// Renames an area and/or sets its status. Returns whether a row changed.
+    /// Renames an area and/or sets its status. Applies only at `expected`.
     ///
     /// # Errors
     ///
@@ -166,7 +170,8 @@ pub trait AreaStore {
     fn update(
         &self,
         area: &AreaUpdate,
-    ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, FloorStoreError>> + Send;
 }
 
 /// Persists and reads a store's floor tables. Archived, never deleted.
@@ -176,7 +181,10 @@ pub trait TableStore {
     /// # Errors
     ///
     /// [`FloorStoreError`] if the write fails.
-    fn create(&self, table: &NewTable) -> impl Future<Output = Result<(), FloorStoreError>> + Send;
+    fn create(
+        &self,
+        table: &NewTable,
+    ) -> impl Future<Output = Result<Version, FloorStoreError>> + Send;
 
     /// Lists a store's tables, newest first.
     ///
@@ -187,7 +195,7 @@ pub trait TableStore {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<Table>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<Table>>, FloorStoreError>> + Send;
 
     /// Reads one table within its tenant, or `None`.
     ///
@@ -198,9 +206,9 @@ pub trait TableStore {
         &self,
         tenant: TenantId,
         table_id: TableId,
-    ) -> impl Future<Output = Result<Option<Table>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<Table>>, FloorStoreError>> + Send;
 
-    /// Updates a table's area, label, seats, position, and status. Returns whether a row changed.
+    /// Updates a table's area, label, seats, position, and status. Applies only at `expected`.
     ///
     /// # Errors
     ///
@@ -208,7 +216,8 @@ pub trait TableStore {
     fn update(
         &self,
         table: &TableUpdate,
-    ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, FloorStoreError>> + Send;
 }
 
 // --- kitchen: stations and item→station routing rules (ADR-0072) ---
@@ -342,7 +351,7 @@ pub trait StationStore {
     fn create(
         &self,
         station: &NewStation,
-    ) -> impl Future<Output = Result<(), FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Version, FloorStoreError>> + Send;
 
     /// Lists a store's stations, newest first.
     ///
@@ -353,7 +362,7 @@ pub trait StationStore {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<Station>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<Station>>, FloorStoreError>> + Send;
 
     /// Reads one station within its tenant, or `None`.
     ///
@@ -364,9 +373,9 @@ pub trait StationStore {
         &self,
         tenant: TenantId,
         station_id: StationId,
-    ) -> impl Future<Output = Result<Option<Station>, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<Station>>, FloorStoreError>> + Send;
 
-    /// Updates a station's name, backup, default flag, and status. Returns whether a row changed.
+    /// Updates a station's name, backup, default flag, and status. Applies only at `expected`.
     ///
     /// # Errors
     ///
@@ -374,7 +383,8 @@ pub trait StationStore {
     fn update(
         &self,
         station: &StationUpdate,
-    ) -> impl Future<Output = Result<bool, FloorStoreError>> + Send;
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, FloorStoreError>> + Send;
 }
 
 /// Persists and reads a store's item→station routing rules. Unlike stations, a rule is a mapping that

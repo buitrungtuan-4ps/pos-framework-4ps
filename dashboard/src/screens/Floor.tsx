@@ -49,6 +49,8 @@ export function Floor() {
   // Table editor (a Drawer). `tableDraftId` is "" for a new table, else the table being edited.
   const [tableOpen, setTableOpen] = createSignal(false);
   const [tableDraftId, setTableDraftId] = createSignal("");
+  // The version the drawer opened on (ADR-0094). Empty for a new table, which has none yet.
+  const [tableDraftEtag, setTableDraftEtag] = createSignal("");
   const [tableArea, setTableArea] = createSignal("");
   const [tableLabel, setTableLabel] = createSignal("");
   const [tableSeats, setTableSeats] = createSignal("");
@@ -61,7 +63,17 @@ export function Floor() {
   const [qr, setQr] = createSignal<TableQrToken[] | null>(null);
   const [qrUnavailable, setQrUnavailable] = createSignal(false);
 
-  const fail = (caught: unknown) => {
+  // A `412` means somebody else saved this row while the form was open (ADR-0094). The screen
+  // reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists
+  // to prevent, and the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("floor.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -81,7 +93,7 @@ export function Floor() {
       setAreas(loadedAreas);
       setTables(loadedTables);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -107,7 +119,7 @@ export function Floor() {
       toast.ok(t("floor.areaCreated"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -121,13 +133,13 @@ export function Floor() {
     }
     setBusy(true);
     try {
-      await api.updateArea(area.area_id, tenantId(), { name, status: area.status });
+      await api.updateArea(area.area_id, tenantId(), { name, status: area.status }, area.etag);
       setEditingArea("");
       setAreaDraft("");
       toast.ok(t("floor.areaRenamed"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -140,12 +152,12 @@ export function Floor() {
   ) => {
     setBusy(true);
     try {
-      await api.updateArea(area.area_id, tenantId(), { name: area.name, status });
+      await api.updateArea(area.area_id, tenantId(), { name: area.name, status }, area.etag);
       setPendingAreaArchive(null);
       toast.ok(doneMessage);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -153,6 +165,7 @@ export function Floor() {
 
   const openNewTable = () => {
     setTableDraftId("");
+    setTableDraftEtag("");
     setTableArea(activeAreas()[0]?.area_id ?? "");
     setTableLabel("");
     setTableSeats("");
@@ -162,6 +175,7 @@ export function Floor() {
   };
   const openEditTable = (table: FloorTable) => {
     setTableDraftId(table.table_id);
+    setTableDraftEtag(table.etag);
     setTableArea(table.area_id);
     setTableLabel(table.label);
     setTableSeats(String(table.seats));
@@ -204,14 +218,19 @@ export function Floor() {
     setBusy(true);
     try {
       if (tableDraftId()) {
-        await api.updateTable(tableDraftId(), tenantId(), {
-          areaId: tableArea(),
-          name: label,
-          seats,
-          gridColumn,
-          gridRow,
-          status: "active",
-        });
+        await api.updateTable(
+          tableDraftId(),
+          tenantId(),
+          {
+            areaId: tableArea(),
+            name: label,
+            seats,
+            gridColumn,
+            gridRow,
+            status: "active",
+          },
+          tableDraftEtag(),
+        );
         toast.ok(t("floor.tableUpdated"));
       } else {
         await api.createTable(tenantId(), storeId(), {
@@ -226,7 +245,7 @@ export function Floor() {
       setTableOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -239,19 +258,24 @@ export function Floor() {
   ) => {
     setBusy(true);
     try {
-      await api.updateTable(table.table_id, tenantId(), {
-        areaId: table.area_id,
-        name: table.label,
-        seats: table.seats,
-        gridColumn: table.position?.column ?? null,
-        gridRow: table.position?.row ?? null,
-        status,
-      });
+      await api.updateTable(
+        table.table_id,
+        tenantId(),
+        {
+          areaId: table.area_id,
+          name: table.label,
+          seats: table.seats,
+          gridColumn: table.position?.column ?? null,
+          gridRow: table.position?.row ?? null,
+          status,
+        },
+        table.etag,
+      );
       setPendingTableArchive(null);
       toast.ok(doneMessage);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -263,7 +287,7 @@ export function Floor() {
       await api.publishFloor(tenantId(), storeId());
       toast.ok(t("floor.published"));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -284,7 +308,7 @@ export function Floor() {
         setQr([]);
         setQrUnavailable(true);
       } else {
-        fail(caught);
+        await fail(caught);
       }
     } finally {
       setBusy(false);

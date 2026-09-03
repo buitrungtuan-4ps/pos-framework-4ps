@@ -57,6 +57,8 @@ export function People() {
   // Role editor (a Drawer). `roleDraftId` is "" for a new role, else the role being edited.
   const [roleOpen, setRoleOpen] = createSignal(false);
   const [roleDraftId, setRoleDraftId] = createSignal("");
+  // The version the role drawer opened on (ADR-0094). Empty for a new role, which has none yet.
+  const [roleDraftEtag, setRoleDraftEtag] = createSignal("");
   const [roleName, setRoleName] = createSignal("");
   const [rolePermissions, setRolePermissions] = createSignal<string[]>([]);
 
@@ -65,7 +67,17 @@ export function People() {
   const [assignRole, setAssignRole] = createSignal("");
   const [pendingRemove, setPendingRemove] = createSignal<Assignment | null>(null);
 
-  const fail = (caught: unknown) => {
+  // A `412` means somebody else saved this person or role while the form was open (ADR-0094). The
+  // screen reloads rather than offering a retry: retrying would re-apply the overwrite the refusal
+  // exists to prevent, and the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("people.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -85,7 +97,7 @@ export function People() {
       setCatalogue(loadedCatalogue);
       await loadAssignments();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -125,7 +137,7 @@ export function People() {
       toast.ok(t("people.employeeCreated"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -149,7 +161,7 @@ export function People() {
       toast.ok(t("people.pinSet"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -162,12 +174,17 @@ export function People() {
   ) => {
     setBusy(true);
     try {
-      await api.updateEmployee(employee.employee_id, tenantId(), { name: employee.name, status });
+      await api.updateEmployee(
+        employee.employee_id,
+        tenantId(),
+        { name: employee.name, status },
+        employee.etag,
+      );
       setPendingArchive(null);
       toast.ok(doneMessage);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -175,12 +192,14 @@ export function People() {
 
   const openNewRole = () => {
     setRoleDraftId("");
+    setRoleDraftEtag("");
     setRoleName("");
     setRolePermissions([]);
     setRoleOpen(true);
   };
   const openEditRole = (role: RoleTemplate) => {
     setRoleDraftId(role.role_template_id);
+    setRoleDraftEtag(role.etag);
     setRoleName(role.name);
     setRolePermissions([...role.permissions]);
     setRoleOpen(true);
@@ -200,11 +219,16 @@ export function People() {
     setBusy(true);
     try {
       if (roleDraftId()) {
-        await api.updateRole(roleDraftId(), tenantId(), {
-          name,
-          permissions: rolePermissions(),
-          status: "active",
-        });
+        await api.updateRole(
+          roleDraftId(),
+          tenantId(),
+          {
+            name,
+            permissions: rolePermissions(),
+            status: "active",
+          },
+          roleDraftEtag(),
+        );
         toast.ok(t("people.roleUpdated"));
       } else {
         await api.createRole(tenantId(), name, rolePermissions());
@@ -213,7 +237,7 @@ export function People() {
       setRoleOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -222,15 +246,20 @@ export function People() {
   const archiveRole = async (role: RoleTemplate) => {
     setBusy(true);
     try {
-      await api.updateRole(role.role_template_id, tenantId(), {
-        name: role.name,
-        permissions: [...role.permissions],
-        status: role.status === "archived" ? "active" : "archived",
-      });
+      await api.updateRole(
+        role.role_template_id,
+        tenantId(),
+        {
+          name: role.name,
+          permissions: [...role.permissions],
+          status: role.status === "archived" ? "active" : "archived",
+        },
+        role.etag,
+      );
       toast.ok(t("people.roleUpdated"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -253,7 +282,7 @@ export function People() {
       toast.ok(t("people.assigned"));
       await loadAssignments();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -269,7 +298,7 @@ export function People() {
       await api.publishPermissions(tenantId(), storeId());
       toast.ok(t("people.published"));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -287,7 +316,7 @@ export function People() {
       toast.ok(t("people.unassigned"));
       await loadAssignments();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
