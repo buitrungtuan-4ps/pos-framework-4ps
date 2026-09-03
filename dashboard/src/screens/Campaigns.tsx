@@ -139,7 +139,11 @@ export function Campaigns() {
   // Vouchers.
   const [voucherCampaign, setVoucherCampaign] = createSignal<Campaign | null>(null);
   const [voucherCount, setVoucherCount] = createSignal("50");
-  const [existingVouchers, setExistingVouchers] = createSignal<Voucher[]>([]);
+  // How many codes this campaign has issued, not the codes themselves. The screen only ever showed
+  // the count, so fetching every row to compute `.length` in the browser meant pulling up to 30 000
+  // codes over the wire to render one number. `?limit=1` returns the count in `total` and one row
+  // (ADR-0098).
+  const [voucherTotal, setVoucherTotal] = createSignal(0);
   const [mintedVouchers, setMintedVouchers] = createSignal<Voucher[]>([]);
 
   // Publish / preview / schedule.
@@ -371,9 +375,9 @@ export function Campaigns() {
     setVoucherCampaign(campaign);
     setVoucherCount("50");
     setMintedVouchers([]);
-    setExistingVouchers([]);
+    setVoucherTotal(0);
     try {
-      setExistingVouchers(await api.listVouchers(tenantId(), campaign.id));
+      setVoucherTotal((await api.listVouchersPage(tenantId(), campaign.id, { limit: 1 })).total);
     } catch (caught) {
       fail(caught);
     }
@@ -393,7 +397,7 @@ export function Campaigns() {
     try {
       const minted = await api.generateVouchers(tenantId(), campaign.id, count);
       setMintedVouchers(minted);
-      setExistingVouchers(await api.listVouchers(tenantId(), campaign.id));
+      setVoucherTotal((await api.listVouchersPage(tenantId(), campaign.id, { limit: 1 })).total);
       toast.ok(t("campaigns.vouchersMinted", { count: String(minted.length) }));
     } catch (caught) {
       fail(caught);
@@ -891,7 +895,7 @@ export function Campaigns() {
                   </div>
                 </Show>
                 <p class="text-sm text-ink-muted">
-                  {t("campaigns.voucherTotal", { count: String(existingVouchers().length) })}
+                  {t("campaigns.voucherTotal", { count: String(voucherTotal()) })}
                 </p>
               </div>
             )}

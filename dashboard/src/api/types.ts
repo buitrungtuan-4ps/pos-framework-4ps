@@ -314,6 +314,30 @@ export interface Campaign {
 /** The authoring fields of a create/update — a `Campaign` without its server-owned id. */
 export type CampaignInput = Omit<Campaign, "id" | "etag">;
 
+/**
+ * One page of a list, and the size of the set it came from (ADR-0098).
+ *
+ * `total` counts everything that matched, not what this page holds, so a pager can say "1–25 of
+ * 812". `limit` and `offset` are echoed back so a pager can build the next request without
+ * remembering what it sent — which matters the moment a page is reloaded or a link is shared.
+ *
+ * Only routes asked for a page answer this shape. A list read **without** `limit` still returns a
+ * bare array of every row, permanently: that is the read a picker and a compiler make, and it is not
+ * a legacy form to migrate off.
+ */
+export interface Page<T> {
+  readonly items: readonly T[];
+  readonly total: number;
+  readonly limit: number;
+  readonly offset: number;
+}
+
+/** What a caller asks of a page: how many rows, from where. */
+export interface PageRequest {
+  readonly limit: number;
+  readonly offset?: number;
+}
+
 /** A voucher's lifecycle (`VoucherStatus`, snake_case on the wire). */
 export type VoucherStatus = "active" | "redeemed" | "void";
 

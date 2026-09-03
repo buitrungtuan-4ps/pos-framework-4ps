@@ -34,8 +34,14 @@ The measurement, taken across `crates/pos-cloud/src/http.rs`, the twenty-five cl
   implemented as a list-all, which is B2's problem and is noted here only because paging the method
   those nine share would break all nine.
 - **Only some lists can grow on data.** `vouchers` is the acute one: `MAX_VOUCHER_BATCH` is
-  **10 000** per mint and batches accumulate per campaign, so `Campaigns.tsx` fetches and renders
-  every code a promotion ever issued — three drops is 30 000 rows in one response. `media` grows one
+  **10 000** per mint and batches accumulate per campaign, so `Campaigns.tsx` fetches every code a
+  promotion ever issued — three drops is 30 000 rows in one response.
+
+  **Corrected during B3-1.** This bullet first said the screen "fetches and renders" every code. It
+  fetches them; it renders only `existingVouchers().length`, a single number. That makes the case for
+  paging stronger rather than weaker — 30 000 rows crossed the wire to produce one integer, and
+  `?limit=1` produces the same integer from `total` — but the original sentence was wrong about the
+  screen and is corrected here rather than left standing. `media` grows one
   row per uploaded asset, `audit` one per console write, `devices` with the fleet, `employees` with
   headcount, `items` with the chain's menu. Everything else is bounded by how much a human typed.
 - **Four lists are closed sets with no table behind them at all** — `permissions`, `capabilities`,

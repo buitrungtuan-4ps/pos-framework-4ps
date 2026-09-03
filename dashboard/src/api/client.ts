@@ -86,6 +86,8 @@ import type {
   Tenant,
   TranslationGrid,
   TranslationImportReport,
+  Page,
+  PageRequest,
   UploadedMedia,
   Voucher,
   WebhookSummary,
@@ -408,6 +410,23 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
 }
 
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
+
+/**
+ * `tenant_id` plus the paging bounds, when a caller wants a page (ADR-0098).
+ *
+ * Omitting `page` omits `limit` entirely, which is what asks for the whole set — the cloud has no
+ * default limit and will not invent one, so a picker that needs every row simply does not pass this.
+ */
+const tenantPageQuery = (tenantId: string, page?: PageRequest) => {
+  const parts = [tenantQuery(tenantId)];
+  if (page) {
+    parts.push(`limit=${encodeURIComponent(String(page.limit))}`);
+    if (page.offset) {
+      parts.push(`offset=${encodeURIComponent(String(page.offset))}`);
+    }
+  }
+  return parts.join("&");
+};
 
 /** `tenant_id` plus an optional rollup window (`from`/`to`/`limit`), as a query string. */
 const rollupWindowQuery = (
@@ -1004,10 +1023,14 @@ export const api = {
       tenant_id: tenantId,
       count,
     }),
-  listVouchers: (tenantId: string, campaignId: string) =>
-    requestJson<Voucher[]>(
+  // A page of a campaign's codes. There is deliberately no unpaged helper here: the *route* still
+  // serves the whole set without `?limit=` and always will (ADR-0098 — an operator printing a flyer
+  // run needs every code), but no console screen asks for it, and a typed helper with no caller is
+  // the shape of finding #273. Add it back the day a screen needs it.
+  listVouchersPage: (tenantId: string, campaignId: string, page: PageRequest) =>
+    requestJson<Page<Voucher>>(
       "GET",
-      `/admin/campaigns/${encodeURIComponent(campaignId)}/vouchers?${tenantQuery(tenantId)}`,
+      `/admin/campaigns/${encodeURIComponent(campaignId)}/vouchers?${tenantPageQuery(tenantId, page)}`,
     ),
   // Preview the merge patch a campaigns publish would apply (no version minted, nothing saved), then
   // publish, or schedule the snapshot to publish at a future instant (the Tết-menu case).

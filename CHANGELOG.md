@@ -71,9 +71,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   vocabulary, and `vouchers` — the acute case — proven through it end to end.
 
   `MAX_VOUCHER_BATCH` is 10 000 codes per mint and batches accumulate against a campaign, so a
-  promotion with three drops holds 30 000 rows that the Campaigns screen fetched and rendered in one
-  go. `GET /admin/campaigns/{id}/vouchers?limit=25` now answers
-  `{items, total, limit, offset}` instead.
+  promotion with three drops holds 30 000 rows the Campaigns screen fetched in one go.
+  `GET /admin/campaigns/{id}/vouchers?limit=25` now answers `{items, total, limit, offset}` instead.
+
+  The console's own saving is larger than a page. Measured while wiring it, the screen never rendered
+  the codes at all — it rendered `existingVouchers().length`, one number — so it was pulling up to
+  30 000 rows across the wire to count them in the browser. It now asks for `?limit=1` and reads
+  `total`: the same number, one row. (ADR-0098's own measurement said the screen "fetches and
+  renders" every code; the second half was wrong and is corrected in that record.)
 
   **Without a `limit` the route is unchanged**, and permanently so. An operator distributing a
   promotion needs every code to print or mail, and "page four of the flyer run" is not something they
