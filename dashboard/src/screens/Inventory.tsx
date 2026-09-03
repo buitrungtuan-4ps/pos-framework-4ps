@@ -2,8 +2,10 @@
 // tenant's ingredients (name + unit), per-item recipes (a bill of materials — ingredient lines with a
 // per-unit amount — plus an auto-86 threshold), and lightweight supplier references, then publishes
 // the composed `inventory` node to a store's config so the edge builds its RecipeBook and thresholds.
-// Recipes are keyed by the menu item they make (chosen from the tenant's catalog), so a recipe is a
-// PUT upsert; ingredients and suppliers carry a server-minted id. Publishing needs a store chosen in
+// Recipes are keyed by the menu item they make (chosen from the tenant's catalog); ingredients and
+// suppliers carry a server-minted id. Adding is a create that refuses a key already taken and
+// editing is conditional on the version the row was read at (ADR-0095), so two operators cannot
+// silently overwrite each other's work. Publishing needs a store chosen in
 // the top bar. Recipe amounts are proprietary process (T2): they live here, never in the audit trail.
 
 import { createSignal, For, Show } from "solid-js";
@@ -12,6 +14,7 @@ import { api, ApiError } from "../api/client";
 import {
   UNITS,
   type CatalogItem,
+  type ETag,
   type Ingredient,
   type IngredientInput,
   type Recipe,
@@ -72,14 +75,16 @@ export function Inventory() {
 
   // Ingredient drawer.
   const [ingOpen, setIngOpen] = createSignal(false);
-  const [ingEditingId, setIngEditingId] = createSignal<string | null>(null);
+  // Each editing target is the key *and* the version the row was read at: an update is conditional
+  // on that version (ADR-0095), so the two travel together rather than in signals that could drift.
+  const [ingEditing, setIngEditing] = createSignal<{ id: string; etag: ETag } | null>(null);
   const [ingName, setIngName] = createSignal("");
   const [ingUnit, setIngUnit] = createSignal<UnitOfMeasure>("UNIT_OF_MEASURE_GRAM");
   const [pendingIngDelete, setPendingIngDelete] = createSignal<Ingredient | null>(null);
 
   // Recipe drawer (keyed by item; the item is chosen on create, fixed on edit).
   const [recOpen, setRecOpen] = createSignal(false);
-  const [recEditingItem, setRecEditingItem] = createSignal<string | null>(null);
+  const [recEditing, setRecEditing] = createSignal<{ item: string; etag: ETag } | null>(null);
   const [recItem, setRecItem] = createSignal("");
   const [recThreshold, setRecThreshold] = createSignal("0");
   const [recLines, setRecLines] = createSignal<LineDraft[]>([]);
@@ -87,7 +92,7 @@ export function Inventory() {
 
   // Supplier drawer.
   const [supOpen, setSupOpen] = createSignal(false);
-  const [supEditingId, setSupEditingId] = createSignal<string | null>(null);
+  const [supEditing, setSupEditing] = createSignal<{ id: string; etag: ETag } | null>(null);
   const [supName, setSupName] = createSignal("");
   const [pendingSupDelete, setPendingSupDelete] = createSignal<Supplier | null>(null);
 
@@ -127,14 +132,14 @@ export function Inventory() {
   // --- Ingredients ---
 
   const openIngCreate = () => {
-    setIngEditingId(null);
+    setIngEditing(null);
     setIngName("");
     setIngUnit("UNIT_OF_MEASURE_GRAM");
     setIngOpen(true);
   };
 
   const openIngEdit = (row: Ingredient) => {
-    setIngEditingId(row.id);
+    setIngEditing({ id: row.id, etag: row.etag });
     setIngName(row.name);
     setIngUnit(row.unit);
     setIngOpen(true);
@@ -149,9 +154,9 @@ export function Inventory() {
     const input: IngredientInput = { name, unit: ingUnit() };
     setBusy(true);
     try {
-      const id = ingEditingId();
-      if (id) {
-        await api.updateIngredient(tenantId(), id, input);
+      const target = ingEditing();
+      if (target) {
+        await api.updateIngredient(tenantId(), target.id, target.etag, input);
         toast.ok(t("inventory.ingredientSaved"));
       } else {
         await api.createIngredient(tenantId(), input);
@@ -187,7 +192,7 @@ export function Inventory() {
   // --- Recipes ---
 
   const openRecCreate = () => {
-    setRecEditingItem(null);
+    setRecEditing(null);
     setRecItem(items()[0]?.menu_item_id ?? "");
     setRecThreshold("0");
     setRecLines([]);
@@ -195,7 +200,7 @@ export function Inventory() {
   };
 
   const openRecEdit = (row: Recipe) => {
-    setRecEditingItem(row.item);
+    setRecEditing({ item: row.item, etag: row.etag });
     setRecItem(row.item);
     setRecThreshold(String(row.auto_86_threshold));
     setRecLines(
@@ -234,7 +239,15 @@ export function Inventory() {
     const input: RecipeInput = { lines, auto_86_threshold: threshold };
     setBusy(true);
     try {
-      await api.upsertRecipe(tenantId(), item, input);
+      const target = recEditing();
+      if (target) {
+        await api.updateRecipe(tenantId(), target.item, target.etag, input);
+      } else {
+        // A recipe is keyed by the item it makes, and that id comes from this form — so a create for
+        // an item that already has one is refused rather than replacing its bill of materials
+        // (ADR-0095). The editor reaches the update path instead.
+        await api.createRecipe(tenantId(), item, input);
+      }
       toast.ok(t("inventory.recipeSaved"));
       setRecOpen(false);
       await load();
@@ -266,13 +279,13 @@ export function Inventory() {
   // --- Suppliers ---
 
   const openSupCreate = () => {
-    setSupEditingId(null);
+    setSupEditing(null);
     setSupName("");
     setSupOpen(true);
   };
 
   const openSupEdit = (row: Supplier) => {
-    setSupEditingId(row.id);
+    setSupEditing({ id: row.id, etag: row.etag });
     setSupName(row.name);
     setSupOpen(true);
   };
@@ -286,9 +299,9 @@ export function Inventory() {
     const input: SupplierInput = { name };
     setBusy(true);
     try {
-      const id = supEditingId();
-      if (id) {
-        await api.updateSupplier(tenantId(), id, input);
+      const target = supEditing();
+      if (target) {
+        await api.updateSupplier(tenantId(), target.id, target.etag, input);
         toast.ok(t("inventory.supplierSaved"));
       } else {
         await api.createSupplier(tenantId(), input);
@@ -566,7 +579,7 @@ export function Inventory() {
         {/* Ingredient drawer */}
         <Drawer
           open={ingOpen()}
-          title={ingEditingId() ? t("inventory.editIngredient") : t("inventory.newIngredient")}
+          title={ingEditing() ? t("inventory.editIngredient") : t("inventory.newIngredient")}
           closeLabel={t("action.close")}
           onClose={() => setIngOpen(false)}
           footer={
@@ -605,7 +618,7 @@ export function Inventory() {
         {/* Recipe drawer */}
         <Drawer
           open={recOpen()}
-          title={recEditingItem() ? t("inventory.editRecipe") : t("inventory.newRecipe")}
+          title={recEditing() ? t("inventory.editRecipe") : t("inventory.newRecipe")}
           closeLabel={t("action.close")}
           onClose={() => setRecOpen(false)}
           footer={
@@ -625,14 +638,14 @@ export function Inventory() {
               <select
                 class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-60"
                 value={recItem()}
-                disabled={recEditingItem() !== null}
+                disabled={recEditing() !== null}
                 onChange={(event) => setRecItem(event.currentTarget.value)}
               >
                 <For each={items()}>
                   {(item) => <option value={item.menu_item_id}>{item.name}</option>}
                 </For>
               </select>
-              <Show when={recEditingItem() !== null}>
+              <Show when={recEditing() !== null}>
                 <span class="mt-1 block text-sm text-ink-muted">{t("inventory.itemFixed")}</span>
               </Show>
             </label>
@@ -732,7 +745,7 @@ export function Inventory() {
         {/* Supplier drawer */}
         <Drawer
           open={supOpen()}
-          title={supEditingId() ? t("inventory.editSupplier") : t("inventory.newSupplier")}
+          title={supEditing() ? t("inventory.editSupplier") : t("inventory.newSupplier")}
           closeLabel={t("action.close")}
           onClose={() => setSupOpen(false)}
           footer={

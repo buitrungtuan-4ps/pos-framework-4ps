@@ -16,16 +16,19 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
-/// One authored inventory record as stored: its id (a ULID string) within its `(tenant, kind)`, and the
-/// record document as JSON text.
+/// One authored inventory record as stored: its id (a ULID string) within its `(tenant, kind)`, the
+/// record document as JSON text, and the row version the read saw.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InventoryRow {
     /// The record's id within its tenant and kind (a ULID string).
     pub entity_id: String,
     /// The whole authored record as JSON text, as stored in the `doc` jsonb column.
     pub doc_json: String,
+    /// `xmin` as text — the row's version (ADR-0094), carried on the read so a caller can hand it
+    /// back to [`update_at`](PostgresInventory::update_at). Opaque above this adapter.
+    pub version: String,
 }
 
 /// The inventory store over a shared pool. Built by
@@ -49,7 +52,7 @@ impl PostgresInventory {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT entity_id, doc::text FROM inventory_items \
+                "SELECT entity_id, doc::text, xmin::text FROM inventory_items \
                  WHERE tenant_id = $1 AND kind = $2 ORDER BY entity_id",
                 &[&tenant_id, &kind],
             )
@@ -60,11 +63,16 @@ impl PostgresInventory {
             .map(|row| InventoryRow {
                 entity_id: row.get(0),
                 doc_json: row.get(1),
+                version: row.get(2),
             })
             .collect())
     }
 
-    /// Creates a record, or replaces the one that already has its `(kind, entity_id)`.
+    /// Inserts a record, refusing if one already holds its `(kind, entity_id)`.
+    ///
+    /// `ON CONFLICT DO NOTHING ... RETURNING` makes this one round trip: on a conflict nothing is
+    /// written and no row comes back, so `None` *is* the "already taken" answer, with no window
+    /// between a check and the write.
     ///
     /// The `$4::text::jsonb` cast pins the bound parameter's inference to `text` before jsonb, the same
     /// reason the campaign and config-tree tables cast their bound documents.
@@ -72,25 +80,66 @@ impl PostgresInventory {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
-    pub async fn upsert(
+    pub async fn insert(
         &self,
         tenant_id: &str,
         kind: &str,
         entity_id: &str,
         doc_json: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<Option<String>, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let inserted = connection
+            .query_opt(
                 "INSERT INTO inventory_items (tenant_id, kind, entity_id, doc) \
                  VALUES ($1, $2, $3, $4::text::jsonb) \
-                 ON CONFLICT (tenant_id, kind, entity_id) \
-                 DO UPDATE SET doc = EXCLUDED.doc, updated_at = now()",
+                 ON CONFLICT (tenant_id, kind, entity_id) DO NOTHING \
+                 RETURNING xmin::text",
                 &[&tenant_id, &kind, &entity_id, &doc_json],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(inserted.map(|row| row.get(0)))
+    }
+
+    /// Replaces a record's document, only at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    pub async fn update_at(
+        &self,
+        tenant_id: &str,
+        kind: &str,
+        entity_id: &str,
+        doc_json: &str,
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let updated = connection
+            .query_opt(
+                "UPDATE inventory_items SET doc = $4::text::jsonb, updated_at = now() \
+                 WHERE tenant_id = $1 AND kind = $2 AND entity_id = $3 AND xmin::text = $5 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &kind, &entity_id, &doc_json, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM inventory_items \
+                 WHERE tenant_id = $1 AND kind = $2 AND entity_id = $3",
+                &[&tenant_id, &kind, &entity_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Removes a record by `(kind, entity_id)`. Removing one that does not exist is not an error.

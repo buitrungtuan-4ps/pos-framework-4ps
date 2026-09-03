@@ -13,6 +13,7 @@ import type {
   CatalogItem,
   ChannelPrice,
   Country,
+  ETag,
   Menu,
   MenuPlacement,
   MenuSection,
@@ -65,7 +66,9 @@ export function CatalogMenus() {
 
   // Placement editor drawer.
   const [placementOpen, setPlacementOpen] = createSignal(false);
-  const [placementEditing, setPlacementEditing] = createSignal(false);
+  // Non-null while editing a placement already on the menu, carrying the version it was read at:
+  // the update is conditional on that version (ADR-0095). `null` means the drawer is adding one.
+  const [placementEditing, setPlacementEditing] = createSignal<{ etag: ETag } | null>(null);
   const [placementItem, setPlacementItem] = createSignal("");
   const [placementCurrency, setPlacementCurrency] = createSignal("VND");
   const [placementSection, setPlacementSection] = createSignal("");
@@ -327,7 +330,7 @@ export function CatalogMenus() {
 
   const resetPlacementEditor = () => {
     setPlacementOpen(false);
-    setPlacementEditing(false);
+    setPlacementEditing(null);
     setPlacementItem("");
     setPlacementCurrency("VND");
     setPlacementSection("");
@@ -354,7 +357,7 @@ export function CatalogMenus() {
     setPlacementCurrency(currency);
     setPlacementAvailable(placement.available);
     setPriceSheet(sheet);
-    setPlacementEditing(true);
+    setPlacementEditing({ etag: placement.etag });
     setPlacementOpen(true);
   };
 
@@ -385,16 +388,33 @@ export function CatalogMenus() {
       return;
     }
     const currency = placementCurrency().trim() || "VND";
+    const prices = pricesFromSheet(priceSheet(), currency);
     setBusy(true);
     try {
-      await api.setPlacement(
-        tenantId(),
-        selectedMenu(),
-        item,
-        pricesFromSheet(priceSheet(), currency),
-        placementAvailable(),
-        placementSection() || null,
-      );
+      const editing = placementEditing();
+      if (editing) {
+        await api.updatePlacement(
+          tenantId(),
+          selectedMenu(),
+          item,
+          editing.etag,
+          prices,
+          placementAvailable(),
+          placementSection() || null,
+        );
+      } else {
+        // A placement's identity is the `(menu, item)` pair chosen here, so adding an item already
+        // on the menu is refused rather than repricing it — and since the per-channel prices are the
+        // price-change journal (ADR-0069), that overwrite left no `before` behind (ADR-0095).
+        await api.createPlacement(
+          tenantId(),
+          selectedMenu(),
+          item,
+          prices,
+          placementAvailable(),
+          placementSection() || null,
+        );
+      }
       toast.ok(t("catalog.placementSaved"));
       resetPlacementEditor();
       await loadMenuDetail(selectedMenu());
@@ -445,7 +465,7 @@ export function CatalogMenus() {
 
   // Sets one channel's price across every placement in the chosen section (or all placements when no
   // section is chosen), preserving each placement's other channel prices, section, and availability.
-  // A clear (empty amount) removes that channel's price from each in scope. N× the audited setPlacement.
+  // A clear (empty amount) removes that channel's price from each in scope. N× the audited update.
   const applyBulk = async () => {
     const rows = placements() ?? [];
     const scope = bulkSection()
@@ -472,10 +492,14 @@ export function CatalogMenus() {
                 ...others,
                 { sales_channel: channel, unit_price: { currency_code: currency, amount_minor: amount } },
               ];
-        await api.setPlacement(
+        // Each placement in scope was just read, so its reprice is conditional on the version it
+        // carried: a bulk change against a row someone else has edited is refused rather than
+        // overwriting their price (ADR-0095).
+        await api.updatePlacement(
           tenantId(),
           selectedMenu(),
           placement.menu_item_id,
+          placement.etag,
           next,
           placement.available,
           placement.menu_section_id,
@@ -895,7 +919,7 @@ export function CatalogMenus() {
             <select
               class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
               value={placementItem()}
-              disabled={placementEditing()}
+              disabled={placementEditing() !== null}
               onChange={(event) => setPlacementItem(event.currentTarget.value)}
             >
               <option value="">{t("catalog.chooseItem")}</option>

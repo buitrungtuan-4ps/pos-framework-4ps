@@ -35,7 +35,7 @@ use pos_proto::wire_enum::Open;
 
 use crate::media::MediaId;
 use crate::registry::EntityStatus;
-use crate::version::{UpdateOutcome, Version, Versioned};
+use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
 /// A menu's identifier — a ULID minted at creation. A menu is an authoring concept that never
 /// crosses the wire (the compiled [`pos_proto::MenuBook`] has no menu id), so its id is defined here
@@ -425,12 +425,14 @@ pub struct LayoutButton {
 /// version still equals the one the caller expected —
 /// [ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
 ///
-/// **Two are a different shape and deliberately keep it:** a placement is upserted by its
-/// `(menu_id, menu_item_id)` pair and a layout button by its slot, then removed by the same key.
-/// Those are assertions at a key rather than a record read and written back, and on a first write
-/// there is no prior version to name — so `If-Match` does not fit them without also introducing
-/// `If-None-Match`. They are handled with the config tree, whose whole-document save raises the same
-/// question about a *set* replaced wholesale.
+/// **Two carry a caller-supplied key** — a placement is identified by its `(menu_id, menu_item_id)`
+/// pair and a layout button by its `(sales_channel, menu_item_id)` slot — and were single upserts
+/// until [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md) split them the
+/// same way: `create_*` inserts and refuses a key already taken, `update_*` replaces only at the
+/// version the caller read. An upsert cannot tell those two intentions apart, so "add this item to
+/// the menu" silently replaced the prices of one already on it. Their `list_*` carries a version per
+/// row for the same reason the record-shaped reads do: it is the only place an editor can obtain the
+/// token `update_*` demands.
 ///
 /// All reads and writes are tenant-scoped; the `store-postgres` impl is RLS-isolated by tenant, like
 /// every other cloud table.
@@ -552,17 +554,29 @@ pub trait CatalogStore {
         expected: &Version,
     ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
 
-    /// Inserts or replaces a layout button, by its `(tenant, sales_channel, menu_item_id)` identity.
-    fn set_layout_button(
+    /// Inserts a layout button, refusing if one already holds its
+    /// `(tenant, sales_channel, menu_item_id)` identity.
+    ///
+    /// The identity is entirely caller-supplied, so the `set_layout_button` this replaced could —
+    /// and did — silently overwrite the label, grid position and sort order of a button already
+    /// placed on that channel for that item.
+    fn create_layout_button(
         &self,
         button: &LayoutButton,
-    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+    ) -> impl Future<Output = Result<CreateOutcome, CatalogStoreError>> + Send;
 
-    /// Lists a tenant's layout buttons across all channels.
+    /// Replaces a layout button's presentation, only at the version the caller read it at.
+    fn update_layout_button(
+        &self,
+        button: &LayoutButton,
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
+
+    /// Lists a tenant's layout buttons across all channels, each with the version it was read at.
     fn list_layout_buttons(
         &self,
         tenant_id: TenantId,
-    ) -> impl Future<Output = Result<Vec<LayoutButton>, CatalogStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<LayoutButton>>, CatalogStoreError>> + Send;
 
     /// Removes a layout button by its `(tenant, sales_channel, menu_item_id)` identity. Returns
     /// whether a row was found and removed.
@@ -633,18 +647,28 @@ pub trait CatalogStore {
         expected: &Version,
     ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
 
-    /// Inserts or replaces a placement, by its `(menu_id, menu_item_id)` pair.
-    fn set_placement(
+    /// Inserts a placement, refusing if its `(menu_id, menu_item_id)` pair is already on the menu.
+    ///
+    /// The pair is entirely caller-supplied, so the `set_placement` this replaced could — and did —
+    /// silently overwrite the prices, section and availability of an item already on that menu.
+    fn create_placement(
         &self,
         placement: &MenuPlacement,
-    ) -> impl Future<Output = Result<(), CatalogStoreError>> + Send;
+    ) -> impl Future<Output = Result<CreateOutcome, CatalogStoreError>> + Send;
 
-    /// Lists a menu's placements, within its tenant.
+    /// Replaces a placement's section, prices and availability, only at the version the caller read.
+    fn update_placement(
+        &self,
+        placement: &MenuPlacement,
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
+
+    /// Lists a menu's placements, within its tenant, each with the version it was read at.
     fn list_placements(
         &self,
         tenant_id: TenantId,
         menu_id: MenuId,
-    ) -> impl Future<Output = Result<Vec<MenuPlacement>, CatalogStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<MenuPlacement>>, CatalogStoreError>> + Send;
 
     /// Removes an item from a menu. Returns whether a row was found and removed.
     fn remove_placement(
@@ -685,7 +709,7 @@ mod tests {
         MenuPlacement, MenuSection, ModifierGroup, TaxClass,
     };
     use crate::registry::EntityStatus;
-    use crate::version::{UpdateOutcome, Version, Versioned};
+    use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
     /// An in-memory `CatalogStore` for the domain tests here and, later, the compiler's. Tenant-scoped
     /// like the real thing; every list filters by tenant so a test can prove isolation.
@@ -697,11 +721,11 @@ mod tests {
         subcategories: Mutex<Vec<Versioned<ItemSubcategory>>>,
         display_categories: Mutex<Vec<Versioned<DisplayCategory>>>,
         display_subcategories: Mutex<Vec<Versioned<DisplaySubcategory>>>,
-        layout_buttons: Mutex<Vec<LayoutButton>>,
+        layout_buttons: Mutex<Vec<Versioned<LayoutButton>>>,
         modifier_groups: Mutex<Vec<Versioned<ModifierGroup>>>,
         menus: Mutex<Vec<Versioned<Menu>>>,
         menu_sections: Mutex<Vec<Versioned<MenuSection>>>,
-        placements: Mutex<Vec<MenuPlacement>>,
+        placements: Mutex<Vec<Versioned<MenuPlacement>>>,
         next_version: Mutex<u64>,
     }
 
@@ -1010,30 +1034,55 @@ mod tests {
             Ok(UpdateOutcome::Updated(version))
         }
 
-        async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+        async fn create_layout_button(
+            &self,
+            button: &LayoutButton,
+        ) -> Result<CreateOutcome, CatalogStoreError> {
+            let version = self.mint();
             let mut rows = self.layout_buttons.lock().expect("lock");
-            if let Some(row) = rows.iter_mut().find(|row| {
-                row.tenant_id == button.tenant_id
-                    && row.sales_channel == button.sales_channel
-                    && row.menu_item_id == button.menu_item_id
+            if rows.iter().any(|row| {
+                row.record.tenant_id == button.tenant_id
+                    && row.record.sales_channel == button.sales_channel
+                    && row.record.menu_item_id == button.menu_item_id
             }) {
-                *row = button.clone();
-            } else {
-                rows.push(button.clone());
+                return Ok(CreateOutcome::AlreadyExists);
             }
-            Ok(())
+            rows.push(Versioned::new(button.clone(), version.clone()));
+            Ok(CreateOutcome::Created(version))
+        }
+
+        async fn update_layout_button(
+            &self,
+            button: &LayoutButton,
+            expected: &Version,
+        ) -> Result<UpdateOutcome, CatalogStoreError> {
+            let version = self.mint();
+            let mut rows = self.layout_buttons.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.record.tenant_id == button.tenant_id
+                    && row.record.sales_channel == button.sales_channel
+                    && row.record.menu_item_id == button.menu_item_id
+            }) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if &row.etag != expected {
+                return Ok(UpdateOutcome::VersionMismatch);
+            }
+            row.record = button.clone();
+            row.etag = version.clone();
+            Ok(UpdateOutcome::Updated(version))
         }
 
         async fn list_layout_buttons(
             &self,
             tenant_id: TenantId,
-        ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+        ) -> Result<Vec<Versioned<LayoutButton>>, CatalogStoreError> {
             Ok(self
                 .layout_buttons
                 .lock()
                 .expect("lock")
                 .iter()
-                .filter(|row| row.tenant_id == tenant_id)
+                .filter(|row| row.record.tenant_id == tenant_id)
                 .cloned()
                 .collect())
         }
@@ -1047,9 +1096,9 @@ mod tests {
             let mut rows = self.layout_buttons.lock().expect("lock");
             let before = rows.len();
             rows.retain(|row| {
-                !(row.tenant_id == tenant_id
-                    && row.sales_channel == sales_channel
-                    && row.menu_item_id == menu_item_id)
+                !(row.record.tenant_id == tenant_id
+                    && row.record.sales_channel == sales_channel
+                    && row.record.menu_item_id == menu_item_id)
             });
             Ok(rows.len() != before)
         }
@@ -1196,31 +1245,56 @@ mod tests {
             Ok(UpdateOutcome::Updated(version))
         }
 
-        async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+        async fn create_placement(
+            &self,
+            placement: &MenuPlacement,
+        ) -> Result<CreateOutcome, CatalogStoreError> {
+            let version = self.mint();
             let mut placements = self.placements.lock().expect("lock");
-            if let Some(row) = placements.iter_mut().find(|row| {
-                row.tenant_id == placement.tenant_id
-                    && row.menu_id == placement.menu_id
-                    && row.menu_item_id == placement.menu_item_id
+            if placements.iter().any(|row| {
+                row.record.tenant_id == placement.tenant_id
+                    && row.record.menu_id == placement.menu_id
+                    && row.record.menu_item_id == placement.menu_item_id
             }) {
-                *row = placement.clone();
-            } else {
-                placements.push(placement.clone());
+                return Ok(CreateOutcome::AlreadyExists);
             }
-            Ok(())
+            placements.push(Versioned::new(placement.clone(), version.clone()));
+            Ok(CreateOutcome::Created(version))
+        }
+
+        async fn update_placement(
+            &self,
+            placement: &MenuPlacement,
+            expected: &Version,
+        ) -> Result<UpdateOutcome, CatalogStoreError> {
+            let version = self.mint();
+            let mut placements = self.placements.lock().expect("lock");
+            let Some(row) = placements.iter_mut().find(|row| {
+                row.record.tenant_id == placement.tenant_id
+                    && row.record.menu_id == placement.menu_id
+                    && row.record.menu_item_id == placement.menu_item_id
+            }) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if &row.etag != expected {
+                return Ok(UpdateOutcome::VersionMismatch);
+            }
+            row.record = placement.clone();
+            row.etag = version.clone();
+            Ok(UpdateOutcome::Updated(version))
         }
 
         async fn list_placements(
             &self,
             tenant_id: TenantId,
             menu_id: MenuId,
-        ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+        ) -> Result<Vec<Versioned<MenuPlacement>>, CatalogStoreError> {
             Ok(self
                 .placements
                 .lock()
                 .expect("lock")
                 .iter()
-                .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+                .filter(|row| row.record.tenant_id == tenant_id && row.record.menu_id == menu_id)
                 .cloned()
                 .collect())
         }
@@ -1234,9 +1308,9 @@ mod tests {
             let mut placements = self.placements.lock().expect("lock");
             let before = placements.len();
             placements.retain(|row| {
-                !(row.tenant_id == tenant_id
-                    && row.menu_id == menu_id
-                    && row.menu_item_id == menu_item_id)
+                !(row.record.tenant_id == tenant_id
+                    && row.record.menu_id == menu_id
+                    && row.record.menu_item_id == menu_item_id)
             });
             Ok(placements.len() != before)
         }
@@ -1374,7 +1448,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_placement_is_upserted_by_its_menu_and_item_pair() {
+    async fn a_placement_create_refuses_a_pair_already_on_the_menu_and_a_reprice_needs_its_version()
+    {
         let store = FakeCatalog::default();
         let placement = |price: i64| MenuPlacement {
             tenant_id: tenant(1),
@@ -1387,25 +1462,70 @@ mod tests {
             }],
             available: true,
         };
-        store.set_placement(&placement(150_000)).await.expect("set");
-        store
-            .set_placement(&placement(160_000))
+        let first = match store
+            .create_placement(&placement(150_000))
             .await
-            .expect("re-set");
+            .expect("create")
+        {
+            CreateOutcome::Created(version) => version,
+            CreateOutcome::AlreadyExists => panic!("the pair was free"),
+        };
 
+        // A placement's identity is the caller-supplied `(menu, item)` pair, so before ADR-0095 split
+        // this seam a second "add this item to the menu" silently repriced the one already on it —
+        // and because the per-channel prices are the price-change journal (ADR-0069, G2), the
+        // overwrite was recorded as a set with no `before` to compare against. Now it is refused.
+        assert_eq!(
+            store
+                .create_placement(&placement(160_000))
+                .await
+                .expect("the comparison must not raise"),
+            CreateOutcome::AlreadyExists
+        );
         let rows = store
             .list_placements(tenant(1), menu_id(10))
             .await
             .expect("list");
-        assert_eq!(
-            rows.len(),
-            1,
-            "re-setting the same pair replaces, not appends"
-        );
+        assert_eq!(rows.len(), 1, "a refused create adds no row");
         let row = rows.first().expect("one placement");
         assert_eq!(
-            row.prices.first().expect("one price").unit_price,
+            row.record.prices.first().expect("one price").unit_price,
+            vnd(150_000),
+            "and does not reprice the placement it refused to overwrite"
+        );
+        assert_eq!(
+            row.etag, first,
+            "the list carries the version, which is where a reprice gets the token it must send"
+        );
+
+        // The reprice goes through update, at the version the read carried.
+        let repriced = match store
+            .update_placement(&placement(160_000), &first)
+            .await
+            .expect("the update")
+        {
+            UpdateOutcome::Updated(version) => version,
+            other => panic!("expected the reprice to apply, got {other:?}"),
+        };
+        let rows = store
+            .list_placements(tenant(1), menu_id(10))
+            .await
+            .expect("list again");
+        assert_eq!(rows.len(), 1, "an update does not add a row");
+        let row = rows.first().expect("one placement");
+        assert_eq!(
+            row.record.prices.first().expect("one price").unit_price,
             vnd(160_000)
+        );
+        assert_eq!(row.etag, repriced, "and the version moves with the write");
+
+        // Replaying the spent version is the lost update, refused.
+        assert_eq!(
+            store
+                .update_placement(&placement(170_000), &first)
+                .await
+                .expect("the comparison must not raise"),
+            UpdateOutcome::VersionMismatch
         );
 
         assert!(
@@ -1428,5 +1548,14 @@ mod tests {
                 .expect("remove"),
             "removing an absent placement changes nothing"
         );
+
+        // And the pair is free again, so a create at it now succeeds.
+        assert!(matches!(
+            store
+                .create_placement(&placement(150_000))
+                .await
+                .expect("create after the remove"),
+            CreateOutcome::Created(_)
+        ));
     }
 }

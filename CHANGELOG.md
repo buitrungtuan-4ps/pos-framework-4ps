@@ -16,6 +16,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The six keyed upserts on `/admin` are now a create and an update, and both are conditional**
+  (#287, ADR-0095). Campaigns, ingredients, recipes, suppliers, menu placements and layout buttons
+  each had one `upsert_*` behind them. An upsert answers the same way whether it inserted or
+  replaced, so "add this" and "replace this" were the same request — and for the four of these whose
+  key is supplied by the caller, adding something at a key another operator had just used silently
+  discarded their work. A recipe for an item that already had one lost its bill of materials; adding
+  an item to a menu repriced the one already on it, and because the per-channel prices are the
+  price-change journal (ADR-0069) that overwrite was recorded as a set with no `before` to compare
+  against.
+
+  Each seam is now `create_*` — which inserts and answers `409 ALREADY_EXISTS` when the key is taken
+  — plus `update_*`, which applies only at the version the caller read. In `store-postgres` the
+  create is `ON CONFLICT … DO NOTHING … RETURNING xmin::text`, so "the key was taken" is one round
+  trip with no window between a check and the write, and the update is the existing `AND xmin::text
+  = $n` predicate. The `409` matters beyond tidiness: these seams share one error channel that
+  collapses everything to `503 the service is unavailable`, which tells a caller the server is broken
+  and invites the retry that can never succeed — the trap #152 fixed on `set_station`.
+
+  Three `POST` routes are new, on the collection URIs that had none:
+  `POST /admin/inventory/recipes`, `POST /admin/catalog/menus/{menu_id}/placements` and
+  `POST /admin/catalog/layout-buttons`. Each names its own key in the body, because the collection
+  URI has no room for it and the matching `PUT` keeps taking it from the path.
+
+  **Upgrade note.** The six `PUT`/`PATCH` update routes now require `If-Match`; a write without one
+  is refused with `400` and `{"field": "if-match", "reason": "REQUIRED"}`. Their reads answer with
+  the version to send back: a single-resource read stamps an `ETag` header, and every `list_*` row
+  now carries an `etag` field — additive, so a reader that ignores it sees exactly the fields it saw
+  before. That last part is what makes the update reachable at all: a console edits from the list,
+  and one header cannot describe many rows. The console is updated in the same change; a
+  fork's own client needs the same two moves (send `If-Match` on an update, `POST` to the collection
+  to create).
+
 ### Added
 - **ADR-0097 gives the `/internal` routes a key of their own** (#148). Documentation only; no
   behaviour changes yet.

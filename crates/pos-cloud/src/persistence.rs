@@ -24,18 +24,18 @@ use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
-    BrandRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
-    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    DeviceRow, EmployeeRow, FleetStoreRow, MediaAssetRow, NewScheduledPublishRow, NewSessionRow,
-    NewVoucherRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin,
-    PostgresAlerts, PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory,
-    PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry,
-    PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReleaseArtifactRow, RoleTemplateRow,
-    RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow,
-    TaxRateRow, TenantRow,
+    BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
+    CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
+    CatalogTaxonomyRow, DeviceRow, EmployeeRow, FleetStoreRow, InventoryRow, MediaAssetRow,
+    NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow, PendingOrderRow,
+    PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresAudit,
+    PostgresCampaigns, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia, PostgresOrderQueue,
+    PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresReleases, PostgresRollups,
+    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
+    ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow,
+    StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
 };
 
 use pos_ports::PortError;
@@ -115,7 +115,7 @@ use crate::scheduling::{
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
-use crate::version::{UpdateOutcome, Version, Versioned};
+use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 use crate::vouchers::{NewVoucher, VoucherRecord, VoucherStatus, VoucherStore, VoucherStoreError};
 use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
@@ -1351,6 +1351,18 @@ fn update_outcome(update: RowUpdate) -> UpdateOutcome {
     }
 }
 
+/// Translates an insert's `Option<version>` into the seam's [`CreateOutcome`].
+///
+/// The `None` comes from `ON CONFLICT DO NOTHING ... RETURNING` writing nothing, which is
+/// `store-postgres`'s way of saying the key was taken. Kept beside [`update_outcome`] and for the
+/// same reason: this crate is the only place that knows both vocabularies, and one function per
+/// seam would be a copy that can drift.
+fn create_outcome(inserted: Option<String>) -> CreateOutcome {
+    inserted.map_or(CreateOutcome::AlreadyExists, |version| {
+        CreateOutcome::Created(Version::new(version))
+    })
+}
+
 impl RegistryStore for PostgresRegistry {
     async fn create_tenant(&self, tenant: &TenantRecord) -> Result<Version, RegistryStoreError> {
         self.insert_tenant(&tenant.tenant_id.to_string(), &tenant.name)
@@ -1771,40 +1783,58 @@ impl CampaignStore for PostgresCampaigns {
     async fn list_campaigns(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<PublishedCampaign>, CampaignStoreError> {
+    ) -> Result<Vec<Versioned<PublishedCampaign>>, CampaignStoreError> {
         let rows = self
             .fetch(&tenant_id.to_string())
             .await
             .map_err(|error| CampaignStoreError::new(error.to_string()))?;
-        rows.iter()
-            .map(|row| decode_campaign(&row.campaign_json))
-            .collect()
+        rows.iter().map(versioned_campaign).collect()
     }
 
     async fn get_campaign(
         &self,
         tenant_id: TenantId,
         campaign_id: CampaignId,
-    ) -> Result<Option<PublishedCampaign>, CampaignStoreError> {
+    ) -> Result<Option<Versioned<PublishedCampaign>>, CampaignStoreError> {
         let row = self
             .fetch_one(&tenant_id.to_string(), &campaign_id.to_string())
             .await
             .map_err(|error| CampaignStoreError::new(error.to_string()))?;
-        row.map(|row| decode_campaign(&row.campaign_json))
-            .transpose()
+        row.as_ref().map(versioned_campaign).transpose()
     }
 
-    async fn upsert_campaign(
+    async fn create_campaign(
         &self,
         tenant_id: TenantId,
         campaign: &PublishedCampaign,
-    ) -> Result<(), CampaignStoreError> {
+    ) -> Result<CreateOutcome, CampaignStoreError> {
         let json = serde_json::to_string(campaign).map_err(|error| {
             CampaignStoreError::new(format!("could not serialize a campaign: {error}"))
         })?;
-        self.upsert(&tenant_id.to_string(), &campaign.id.to_string(), &json)
+        self.insert(&tenant_id.to_string(), &campaign.id.to_string(), &json)
             .await
+            .map(create_outcome)
             .map_err(|error| CampaignStoreError::new(error.to_string()))
+    }
+
+    async fn update_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign: &PublishedCampaign,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CampaignStoreError> {
+        let json = serde_json::to_string(campaign).map_err(|error| {
+            CampaignStoreError::new(format!("could not serialize a campaign: {error}"))
+        })?;
+        self.update_at(
+            &tenant_id.to_string(),
+            &campaign.id.to_string(),
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| CampaignStoreError::new(error.to_string()))
     }
 
     async fn delete_campaign(
@@ -1826,6 +1856,17 @@ fn decode_campaign(json: &str) -> Result<PublishedCampaign, CampaignStoreError> 
     })
 }
 
+/// One stored campaign row as the seam returns it: the decoded campaign paired with the version the
+/// read saw, which is the token [`CampaignStore::update_campaign`] demands back (ADR-0095).
+fn versioned_campaign(
+    row: &CampaignRow,
+) -> Result<Versioned<PublishedCampaign>, CampaignStoreError> {
+    Ok(Versioned::new(
+        decode_campaign(&row.campaign_json)?,
+        Version::new(row.version.clone()),
+    ))
+}
+
 /// The `kind` discriminators the `inventory_items` table stores the three record kinds under.
 const INVENTORY_KIND_INGREDIENT: &str = "ingredient";
 const INVENTORY_KIND_RECIPE: &str = "recipe";
@@ -1839,35 +1880,67 @@ fn decode_inventory<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, Inv
     })
 }
 
+/// One stored inventory row as the seam returns it: the decoded record paired with the version the
+/// read saw, which is the token the matching `update_*` demands back (ADR-0095). Generic over the
+/// three record kinds because the row shape is one table's.
+fn versioned_inventory<T: serde::de::DeserializeOwned>(
+    row: &InventoryRow,
+) -> Result<Versioned<T>, InventoryStoreError> {
+    Ok(Versioned::new(
+        decode_inventory(&row.doc_json)?,
+        Version::new(row.version.clone()),
+    ))
+}
+
 impl InventoryStore for PostgresInventory {
     async fn list_ingredients(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<PublishedIngredient>, InventoryStoreError> {
+    ) -> Result<Vec<Versioned<PublishedIngredient>>, InventoryStoreError> {
         let rows = self
             .fetch(&tenant_id.to_string(), INVENTORY_KIND_INGREDIENT)
             .await
             .map_err(|error| InventoryStoreError::new(error.to_string()))?;
-        rows.iter()
-            .map(|row| decode_inventory(&row.doc_json))
-            .collect()
+        rows.iter().map(versioned_inventory).collect()
     }
 
-    async fn upsert_ingredient(
+    async fn create_ingredient(
         &self,
         tenant_id: TenantId,
         ingredient: &PublishedIngredient,
-    ) -> Result<(), InventoryStoreError> {
+    ) -> Result<CreateOutcome, InventoryStoreError> {
         let json = serde_json::to_string(ingredient).map_err(|error| {
             InventoryStoreError::new(format!("could not serialize an ingredient: {error}"))
         })?;
-        self.upsert(
+        self.insert(
             &tenant_id.to_string(),
             INVENTORY_KIND_INGREDIENT,
             &ingredient.id.to_string(),
             &json,
         )
         .await
+        .map(create_outcome)
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn update_ingredient(
+        &self,
+        tenant_id: TenantId,
+        ingredient: &PublishedIngredient,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let json = serde_json::to_string(ingredient).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize an ingredient: {error}"))
+        })?;
+        self.update_at(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_INGREDIENT,
+            &ingredient.id.to_string(),
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
         .map_err(|error| InventoryStoreError::new(error.to_string()))
     }
 
@@ -1888,31 +1961,51 @@ impl InventoryStore for PostgresInventory {
     async fn list_recipes(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<PublishedRecipe>, InventoryStoreError> {
+    ) -> Result<Vec<Versioned<PublishedRecipe>>, InventoryStoreError> {
         let rows = self
             .fetch(&tenant_id.to_string(), INVENTORY_KIND_RECIPE)
             .await
             .map_err(|error| InventoryStoreError::new(error.to_string()))?;
-        rows.iter()
-            .map(|row| decode_inventory(&row.doc_json))
-            .collect()
+        rows.iter().map(versioned_inventory).collect()
     }
 
-    async fn upsert_recipe(
+    async fn create_recipe(
         &self,
         tenant_id: TenantId,
         recipe: &PublishedRecipe,
-    ) -> Result<(), InventoryStoreError> {
+    ) -> Result<CreateOutcome, InventoryStoreError> {
         let json = serde_json::to_string(recipe).map_err(|error| {
             InventoryStoreError::new(format!("could not serialize a recipe: {error}"))
         })?;
-        self.upsert(
+        self.insert(
             &tenant_id.to_string(),
             INVENTORY_KIND_RECIPE,
             &recipe.item.to_string(),
             &json,
         )
         .await
+        .map(create_outcome)
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn update_recipe(
+        &self,
+        tenant_id: TenantId,
+        recipe: &PublishedRecipe,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let json = serde_json::to_string(recipe).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize a recipe: {error}"))
+        })?;
+        self.update_at(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_RECIPE,
+            &recipe.item.to_string(),
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
         .map_err(|error| InventoryStoreError::new(error.to_string()))
     }
 
@@ -1933,31 +2026,51 @@ impl InventoryStore for PostgresInventory {
     async fn list_suppliers(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<PublishedSupplier>, InventoryStoreError> {
+    ) -> Result<Vec<Versioned<PublishedSupplier>>, InventoryStoreError> {
         let rows = self
             .fetch(&tenant_id.to_string(), INVENTORY_KIND_SUPPLIER)
             .await
             .map_err(|error| InventoryStoreError::new(error.to_string()))?;
-        rows.iter()
-            .map(|row| decode_inventory(&row.doc_json))
-            .collect()
+        rows.iter().map(versioned_inventory).collect()
     }
 
-    async fn upsert_supplier(
+    async fn create_supplier(
         &self,
         tenant_id: TenantId,
         supplier: &PublishedSupplier,
-    ) -> Result<(), InventoryStoreError> {
+    ) -> Result<CreateOutcome, InventoryStoreError> {
         let json = serde_json::to_string(supplier).map_err(|error| {
             InventoryStoreError::new(format!("could not serialize a supplier: {error}"))
         })?;
-        self.upsert(
+        self.insert(
             &tenant_id.to_string(),
             INVENTORY_KIND_SUPPLIER,
             &supplier.id.to_string(),
             &json,
         )
         .await
+        .map(create_outcome)
+        .map_err(|error| InventoryStoreError::new(error.to_string()))
+    }
+
+    async fn update_supplier(
+        &self,
+        tenant_id: TenantId,
+        supplier: &PublishedSupplier,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let json = serde_json::to_string(supplier).map_err(|error| {
+            InventoryStoreError::new(format!("could not serialize a supplier: {error}"))
+        })?;
+        self.update_at(
+            &tenant_id.to_string(),
+            INVENTORY_KIND_SUPPLIER,
+            &supplier.id.to_string(),
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
         .map_err(|error| InventoryStoreError::new(error.to_string()))
     }
 
@@ -3126,7 +3239,7 @@ fn catalog_display_subcategory_record(
 
 fn catalog_layout_button_record(
     row: CatalogLayoutButtonRow,
-) -> Result<LayoutButton, CatalogStoreError> {
+) -> Result<Versioned<LayoutButton>, CatalogStoreError> {
     let display_subcategory_id = match row.display_subcategory_id {
         Some(text) => Some(parse_catalog_display_subcategory(&text)?),
         None => None,
@@ -3147,17 +3260,21 @@ fn catalog_layout_button_record(
         }
         _ => None,
     };
-    Ok(LayoutButton {
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        sales_channel: Open::<SalesChannel>::parse(&row.sales_channel),
-        display_category_id: parse_catalog_display_category(&row.display_category_id)?,
-        display_subcategory_id,
-        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
-        label: row.label,
-        position,
-        sort: row.sort,
-    })
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        LayoutButton {
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            sales_channel: Open::<SalesChannel>::parse(&row.sales_channel),
+            display_category_id: parse_catalog_display_category(&row.display_category_id)?,
+            display_subcategory_id,
+            menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+            label: row.label,
+            position,
+            sort: row.sort,
+        },
+        version,
+    ))
 }
 
 fn item_id_list_json(ids: &[MenuItemId]) -> Result<String, CatalogStoreError> {
@@ -3248,7 +3365,9 @@ fn catalog_menu_section_record(
     ))
 }
 
-fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, CatalogStoreError> {
+fn catalog_placement_record(
+    row: &CatalogPlacementRow,
+) -> Result<Versioned<MenuPlacement>, CatalogStoreError> {
     let prices: Vec<ChannelPrice> = serde_json::from_str(&row.prices_json).map_err(|error| {
         CatalogStoreError::new(format!(
             "a placement's stored prices are not valid JSON: {error}"
@@ -3258,15 +3377,18 @@ fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, 
         Some(text) => Some(parse_catalog_menu_section_id(text)?),
         None => None,
     };
-    Ok(MenuPlacement {
-        tenant_id: parse_registry_tenant(&row.tenant_id)
-            .map_err(|error| CatalogStoreError::new(error.to_string()))?,
-        menu_id: parse_catalog_menu_id(&row.menu_id)?,
-        menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
-        menu_section_id,
-        prices,
-        available: row.available,
-    })
+    Ok(Versioned::new(
+        MenuPlacement {
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            menu_id: parse_catalog_menu_id(&row.menu_id)?,
+            menu_item_id: parse_catalog_item_id(&row.menu_item_id)?,
+            menu_section_id,
+            prices,
+            available: row.available,
+        },
+        Version::new(row.version.clone()),
+    ))
 }
 
 impl CatalogStore for PostgresCatalog {
@@ -3544,9 +3666,12 @@ impl CatalogStore for PostgresCatalog {
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+    async fn create_layout_button(
+        &self,
+        button: &LayoutButton,
+    ) -> Result<CreateOutcome, CatalogStoreError> {
         let subcategory = button.display_subcategory_id.map(|id| id.to_string());
-        self.upsert_layout_button(
+        self.insert_layout_button(
             &button.tenant_id.to_string(),
             button.sales_channel.as_wire(),
             &button.display_category_id.to_string(),
@@ -3558,13 +3683,37 @@ impl CatalogStore for PostgresCatalog {
             button.sort,
         )
         .await
+        .map(create_outcome)
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn update_layout_button(
+        &self,
+        button: &LayoutButton,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let subcategory = button.display_subcategory_id.map(|id| id.to_string());
+        self.update_layout_button_at(
+            &button.tenant_id.to_string(),
+            button.sales_channel.as_wire(),
+            &button.display_category_id.to_string(),
+            subcategory.as_deref(),
+            &button.menu_item_id.to_string(),
+            &button.label,
+            button.position.map(|p| i32::from(p.column)),
+            button.position.map(|p| i32::from(p.row)),
+            button.sort,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
     async fn list_layout_buttons(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<LayoutButton>>, CatalogStoreError> {
         let rows = self
             .fetch_layout_buttons(&tenant_id.to_string())
             .await
@@ -3728,12 +3877,15 @@ impl CatalogStore for PostgresCatalog {
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
-    async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+    async fn create_placement(
+        &self,
+        placement: &MenuPlacement,
+    ) -> Result<CreateOutcome, CatalogStoreError> {
         let prices_json = serde_json::to_string(&placement.prices).map_err(|error| {
             CatalogStoreError::new(format!("could not serialise placement prices: {error}"))
         })?;
         let section = placement.menu_section_id.map(|id| id.to_string());
-        self.upsert_placement(
+        self.insert_placement(
             &placement.tenant_id.to_string(),
             &placement.menu_id.to_string(),
             &placement.menu_item_id.to_string(),
@@ -3742,6 +3894,30 @@ impl CatalogStore for PostgresCatalog {
             placement.available,
         )
         .await
+        .map(create_outcome)
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn update_placement(
+        &self,
+        placement: &MenuPlacement,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let prices_json = serde_json::to_string(&placement.prices).map_err(|error| {
+            CatalogStoreError::new(format!("could not serialise placement prices: {error}"))
+        })?;
+        let section = placement.menu_section_id.map(|id| id.to_string());
+        self.update_placement_at(
+            &placement.tenant_id.to_string(),
+            &placement.menu_id.to_string(),
+            &placement.menu_item_id.to_string(),
+            section.as_deref(),
+            &prices_json,
+            placement.available,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3749,7 +3925,7 @@ impl CatalogStore for PostgresCatalog {
         &self,
         tenant_id: TenantId,
         menu_id: MenuId,
-    ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<MenuPlacement>>, CatalogStoreError> {
         let rows = self
             .fetch_placements(&tenant_id.to_string(), &menu_id.to_string())
             .await

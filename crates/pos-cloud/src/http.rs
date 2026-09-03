@@ -185,7 +185,7 @@ use crate::scheduling::{
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
-use crate::version::{UpdateOutcome, Version, Versioned};
+use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned, records};
 use crate::vouchers::{NewVoucher, VoucherStore, VoucherStoreError, generate_code};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
@@ -6239,11 +6239,12 @@ where
         )
         .route(
             "/admin/catalog/layout-buttons",
-            get(admin_list_layout_buttons::<Cat, A, C>),
+            get(admin_list_layout_buttons::<Cat, A, C>)
+                .post(admin_create_layout_button::<Cat, A, C>),
         )
         .route(
             "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
-            axum::routing::put(admin_set_layout_button::<Cat, A, C>)
+            axum::routing::put(admin_update_layout_button::<Cat, A, C>)
                 .delete(admin_remove_layout_button::<Cat, A, C>),
         )
         .route(
@@ -6273,11 +6274,11 @@ where
         )
         .route(
             "/admin/catalog/menus/{menu_id}/placements",
-            get(admin_list_placements::<Cat, A, C>),
+            get(admin_list_placements::<Cat, A, C>).post(admin_create_placement::<Cat, A, C>),
         )
         .route(
             "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
-            axum::routing::put(admin_set_placement::<Cat, A, C>)
+            axum::routing::put(admin_update_placement::<Cat, A, C>)
                 .delete(admin_remove_placement::<Cat, A, C>),
         )
         .with_state(CatalogState {
@@ -6409,6 +6410,45 @@ struct UpdateDisplaySubcategoryRequest {
     status: String,
 }
 
+/// A `POST /admin/catalog/layout-buttons` body: a button's presentation plus the `(channel, item)`
+/// slot it goes in, which the collection URI has no room for and the `PUT` takes from its path.
+///
+/// The identity fields are spelled out here rather than `#[serde(flatten)]`-ing the update body:
+/// flatten pulls in serde's buffering `Content` enum, whose `f32`/`f64` variants `clippy.toml` bans
+/// outright (`docs/adr/0013`: money is never a float). `into_write` keeps the two shapes from
+/// drifting instead.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateLayoutButtonRequest {
+    sales_channel: String,
+    menu_item_id: String,
+    tenant_id: String,
+    display_category_id: String,
+    #[serde(default)]
+    display_subcategory_id: Option<String>,
+    label: String,
+    #[serde(default)]
+    grid_column: Option<u16>,
+    #[serde(default)]
+    grid_row: Option<u16>,
+    #[serde(default)]
+    sort: i32,
+}
+
+impl CreateLayoutButtonRequest {
+    /// The presentation half, as the shared builder takes it.
+    fn into_write(self) -> SetLayoutButtonRequest {
+        SetLayoutButtonRequest {
+            tenant_id: self.tenant_id,
+            display_category_id: self.display_category_id,
+            display_subcategory_id: self.display_subcategory_id,
+            label: self.label,
+            grid_column: self.grid_column,
+            grid_row: self.grid_row,
+            sort: self.sort,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct SetLayoutButtonRequest {
     tenant_id: String,
@@ -6483,6 +6523,34 @@ struct UpdateMenuSectionRequest {
     #[serde(default)]
     sort: i32,
     status: String,
+}
+
+/// A `POST /admin/catalog/menus/{menu_id}/placements` body: a placement plus the `(menu, item)` pair
+/// it is keyed by. The menu is also in the path; both are read from the body so this route and the
+/// `PUT` share one builder.
+///
+/// Flat rather than `#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].
+#[derive(Debug, Clone, Deserialize)]
+struct CreatePlacementRequest {
+    menu_id: String,
+    menu_item_id: String,
+    tenant_id: String,
+    #[serde(default)]
+    menu_section_id: Option<String>,
+    prices: Vec<ChannelPrice>,
+    available: bool,
+}
+
+impl CreatePlacementRequest {
+    /// The placement half, as the shared builder takes it.
+    fn into_write(self) -> SetPlacementRequest {
+        SetPlacementRequest {
+            tenant_id: self.tenant_id,
+            menu_section_id: self.menu_section_id,
+            prices: self.prices,
+            available: self.available,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7027,8 +7095,8 @@ where
         Ok(campaign) => campaign,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
-        Ok(()) => {
+    match state.campaigns.create_campaign(tenant_id, &campaign).await {
+        Ok(CreateOutcome::Created(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7041,8 +7109,12 @@ where
                 serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(campaign)).into_response()
+            versioned_created(campaign, &version)
         }
+        // Unreachable while the id is minted here rather than sent by the caller, and answered
+        // anyway: the seam cannot know that, and a route that mints its own id today may take one
+        // tomorrow. Silently overwriting is what this slice removed.
+        Ok(CreateOutcome::AlreadyExists) => already_exists("campaign"),
         Err(error) => campaign_error_response(&error),
     }
 }
@@ -7086,8 +7158,16 @@ where
         Ok(campaign) => campaign,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.campaigns.upsert_campaign(tenant_id, &campaign).await {
-        Ok(()) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .campaigns
+        .update_campaign(tenant_id, &campaign, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7096,12 +7176,14 @@ where
                 "campaign.update",
                 "campaign",
                 &campaign_id.to_string(),
-                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                serde_json::to_value(CampaignAuditSummary::of(&before.record)).ok(),
                 serde_json::to_value(CampaignAuditSummary::of(&campaign)).ok(),
             )
             .await;
-            (StatusCode::OK, Json(campaign)).into_response()
+            versioned_ok(campaign, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("campaign"),
         Err(error) => campaign_error_response(&error),
     }
 }
@@ -7155,7 +7237,7 @@ where
                 "campaign.delete",
                 "campaign",
                 &campaign_id.to_string(),
-                serde_json::to_value(CampaignAuditSummary::of(&before)).ok(),
+                serde_json::to_value(CampaignAuditSummary::of(&before.record)).ok(),
                 None,
             )
             .await;
@@ -7206,9 +7288,37 @@ struct IngredientRequest {
     unit: Open<UnitOfMeasure>,
 }
 
-/// A create-or-replace body for a recipe. The item it makes is the URL key — a recipe references an
-/// existing menu item or modifier, so its id is client-owned, unlike an ingredient's server-minted id.
-/// `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's own fields.
+/// A `POST /admin/inventory/recipes` body: a recipe plus the item it makes.
+///
+/// The item id is in the body here because the collection URI has no room for it, and the `PUT`
+/// keeps taking it from the path. A struct of its own rather than an `Option` on `RecipeRequest`,
+/// so neither route carries a field the other requires — and flat rather than
+/// `#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].
+#[derive(Debug, Clone, Deserialize)]
+struct CreateRecipeRequest {
+    item_id: String,
+    tenant_id: String,
+    #[serde(default)]
+    lines: Vec<PublishedRecipeLine>,
+    #[serde(default)]
+    auto_86_threshold: i64,
+}
+
+impl CreateRecipeRequest {
+    /// The recipe half, as the shared handler body takes it.
+    fn into_write(self) -> RecipeRequest {
+        RecipeRequest {
+            tenant_id: self.tenant_id,
+            lines: self.lines,
+            auto_86_threshold: self.auto_86_threshold,
+        }
+    }
+}
+
+/// The body of a recipe write. The item it makes is the URL key on the `PUT` — a recipe references
+/// an existing menu item or modifier, so its id is client-owned, unlike an ingredient's
+/// server-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's
+/// own fields.
 #[derive(Debug, Clone, Deserialize)]
 struct RecipeRequest {
     tenant_id: String,
@@ -7313,12 +7423,12 @@ where
         )
         .route(
             "/admin/inventory/recipes",
-            get(admin_list_recipes::<Inv, A, C>),
+            get(admin_list_recipes::<Inv, A, C>).post(admin_create_recipe::<Inv, A, C>),
         )
         .route(
             "/admin/inventory/recipes/{item_id}",
             get(admin_get_recipe::<Inv, A, C>)
-                .put(admin_upsert_recipe::<Inv, A, C>)
+                .put(admin_update_recipe::<Inv, A, C>)
                 .delete(admin_delete_recipe::<Inv, A, C>),
         )
         .route(
@@ -7474,8 +7584,11 @@ where
         Err(refusal) => return refusal,
     };
     match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => match ingredients.into_iter().find(|i| i.id == ingredient_id) {
-            Some(ingredient) => (StatusCode::OK, Json(ingredient)).into_response(),
+        Ok(ingredients) => match ingredients
+            .into_iter()
+            .find(|row| row.record.id == ingredient_id)
+        {
+            Some(row) => versioned_ok(row.record, &row.etag),
             None => not_found("ingredient"),
         },
         Err(error) => inventory_error_response(&error),
@@ -7519,10 +7632,10 @@ where
     };
     match state
         .inventory
-        .upsert_ingredient(tenant_id, &ingredient)
+        .create_ingredient(tenant_id, &ingredient)
         .await
     {
-        Ok(()) => {
+        Ok(CreateOutcome::Created(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7535,8 +7648,11 @@ where
                 serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(ingredient)).into_response()
+            versioned_created(ingredient, &version)
         }
+        // Unreachable while the id is minted here rather than sent by the caller, and answered
+        // anyway — the seam cannot know that, and silently overwriting is what this slice removed.
+        Ok(CreateOutcome::AlreadyExists) => already_exists("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -7574,7 +7690,10 @@ where
         Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
+        Ok(ingredients) => ingredients
+            .into_iter()
+            .find(|row| row.record.id == ingredient_id)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -7584,12 +7703,16 @@ where
         Ok(ingredient) => ingredient,
         Err(refusal) => return refusal.into_response(),
     };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
     match state
         .inventory
-        .upsert_ingredient(tenant_id, &ingredient)
+        .update_ingredient(tenant_id, &ingredient, &expected)
         .await
     {
-        Ok(()) => {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7602,8 +7725,10 @@ where
                 serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
             )
             .await;
-            (StatusCode::OK, Json(ingredient)).into_response()
+            versioned_ok(ingredient, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -7641,7 +7766,10 @@ where
         Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => ingredients.into_iter().find(|i| i.id == ingredient_id),
+        Ok(ingredients) => ingredients
+            .into_iter()
+            .find(|row| row.record.id == ingredient_id)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -7730,17 +7858,77 @@ where
             Err(refusal) => return refusal,
         };
     match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => match recipes.into_iter().find(|r| r.item == item) {
-            Some(recipe) => (StatusCode::OK, Json(recipe)).into_response(),
+        Ok(recipes) => match recipes.into_iter().find(|row| row.record.item == item) {
+            Some(row) => versioned_ok(row.record, &row.etag),
             None => not_found("recipe"),
         },
         Err(error) => inventory_error_response(&error),
     }
 }
 
-/// A super-admin creates or replaces the recipe for the path item (an upsert, since the item is the
-/// recipe's client-owned key). `201` when the item had no recipe before, `200` when it replaced one.
-async fn admin_upsert_recipe<Inv, A, C>(
+/// A super-admin creates the recipe for an item, refusing if that item already has one.
+///
+/// The route this replaced was a single `PUT` upsert that re-derived create-versus-update at
+/// runtime: it listed the tenant's recipes to pick between `201`/`200` and between the
+/// `create`/`update` audit action, then wrote unconditionally. That read raced its own write — a
+/// concurrent create or delete in between made *both* the status code and the audit entry wrong —
+/// and a caller asking to add a recipe silently replaced the bill of materials of one already
+/// there. [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md) §(ii).
+async fn admin_create_recipe<Inv, A, C>(
+    State(state): State<InventoryState<Inv, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateRecipeRequest>,
+) -> Response
+where
+    Inv: InventoryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageInventory,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, item) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("item_id", &request.item_id),
+    ]) {
+        Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
+        Err(refusal) => return refusal,
+    };
+    let recipe = match build_recipe(&request.into_write(), item) {
+        Ok(recipe) => recipe,
+        Err(refusal) => return refusal.into_response(),
+    };
+    match state.inventory.create_recipe(tenant_id, &recipe).await {
+        Ok(CreateOutcome::Created(version)) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "inventory.recipe.create",
+                "recipe",
+                &item.to_string(),
+                None,
+                serde_json::to_value(RecipeAuditSummary::of(&recipe)).ok(),
+            )
+            .await;
+            versioned_created(recipe, &version)
+        }
+        Ok(CreateOutcome::AlreadyExists) => already_exists("recipe"),
+        Err(error) => inventory_error_response(&error),
+    }
+}
+
+/// A super-admin replaces the recipe for the path item, only at the version they read.
+async fn admin_update_recipe<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
     Path(item_id): Path<String>,
@@ -7767,26 +7955,35 @@ where
             Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
             Err(refusal) => return refusal,
         };
+    // Read for the audit's "before" only. It no longer decides the status code or the action name:
+    // the version comparison in the write does that, so a race here can no longer mislabel either.
     let before = match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
+        Ok(recipes) => recipes
+            .into_iter()
+            .find(|row| row.record.item == item)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let recipe = match build_recipe(&request, item) {
         Ok(recipe) => recipe,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.inventory.upsert_recipe(tenant_id, &recipe).await {
-        Ok(()) => {
-            let (action, status) = match &before {
-                Some(_) => ("inventory.recipe.update", StatusCode::OK),
-                None => ("inventory.recipe.create", StatusCode::CREATED),
-            };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .inventory
+        .update_recipe(tenant_id, &recipe, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
                 &context,
                 Some(tenant_id),
-                action,
+                "inventory.recipe.update",
                 "recipe",
                 &item.to_string(),
                 before
@@ -7795,8 +7992,10 @@ where
                 serde_json::to_value(RecipeAuditSummary::of(&recipe)).ok(),
             )
             .await;
-            (status, Json(recipe)).into_response()
+            versioned_ok(recipe, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("recipe"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -7830,7 +8029,10 @@ where
             Err(refusal) => return refusal,
         };
     let before = match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => recipes.into_iter().find(|r| r.item == item),
+        Ok(recipes) => recipes
+            .into_iter()
+            .find(|row| row.record.item == item)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -7917,8 +8119,11 @@ where
         Err(refusal) => return refusal,
     };
     match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => match suppliers.into_iter().find(|s| s.id == supplier_id) {
-            Some(supplier) => (StatusCode::OK, Json(supplier)).into_response(),
+        Ok(suppliers) => match suppliers
+            .into_iter()
+            .find(|row| row.record.id == supplier_id)
+        {
+            Some(row) => versioned_ok(row.record, &row.etag),
             None => not_found("supplier"),
         },
         Err(error) => inventory_error_response(&error),
@@ -7960,8 +8165,8 @@ where
         Ok(supplier) => supplier,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.inventory.upsert_supplier(tenant_id, &supplier).await {
-        Ok(()) => {
+    match state.inventory.create_supplier(tenant_id, &supplier).await {
+        Ok(CreateOutcome::Created(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7974,8 +8179,11 @@ where
                 serde_json::to_value(SupplierAuditSummary::of(&supplier)).ok(),
             )
             .await;
-            (StatusCode::CREATED, Json(supplier)).into_response()
+            versioned_created(supplier, &version)
         }
+        // Unreachable while the id is minted here rather than sent by the caller, and answered
+        // anyway — the seam cannot know that, and silently overwriting is what this slice removed.
+        Ok(CreateOutcome::AlreadyExists) => already_exists("supplier"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -8011,7 +8219,10 @@ where
         Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
+        Ok(suppliers) => suppliers
+            .into_iter()
+            .find(|row| row.record.id == supplier_id)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -8021,8 +8232,16 @@ where
         Ok(supplier) => supplier,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.inventory.upsert_supplier(tenant_id, &supplier).await {
-        Ok(()) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .inventory
+        .update_supplier(tenant_id, &supplier, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -8035,8 +8254,10 @@ where
                 serde_json::to_value(SupplierAuditSummary::of(&supplier)).ok(),
             )
             .await;
-            (StatusCode::OK, Json(supplier)).into_response()
+            versioned_ok(supplier, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("supplier"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -8072,7 +8293,10 @@ where
         Err(refusal) => return refusal,
     };
     let before = match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => suppliers.into_iter().find(|s| s.id == supplier_id),
+        Ok(suppliers) => suppliers
+            .into_iter()
+            .find(|row| row.record.id == supplier_id)
+            .map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -8168,10 +8392,12 @@ async fn list_inventory_parts<Inv>(
 where
     Inv: InventoryStore,
 {
+    // A publish wants the records, not the versions the read saw: the node is assembled from what is
+    // authored now, and a conditional write against any one row would say nothing about the set.
     Ok((
-        inventory.list_ingredients(tenant_id).await?,
-        inventory.list_recipes(tenant_id).await?,
-        inventory.list_suppliers(tenant_id).await?,
+        records(inventory.list_ingredients(tenant_id).await?),
+        records(inventory.list_recipes(tenant_id).await?),
+        records(inventory.list_suppliers(tenant_id).await?),
     ))
 }
 
@@ -8639,7 +8865,7 @@ where
         Err(refusal) => return refusal,
     };
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
-        Ok(campaigns) => campaigns,
+        Ok(campaigns) => records(campaigns),
         Err(error) => return campaign_error_response(&error),
     };
     let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
@@ -8787,7 +9013,7 @@ where
         Err(refusal) => return refusal,
     };
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
-        Ok(campaigns) => campaigns,
+        Ok(campaigns) => records(campaigns),
         Err(error) => return campaign_error_response(&error),
     };
     let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
@@ -9360,7 +9586,7 @@ where
     // The campaign must exist and be a voucher-kind — a code only makes sense for one the engine
     // evaluates as a voucher.
     match state.campaigns.get_campaign(tenant_id, campaign_id).await {
-        Ok(Some(campaign)) if campaign.kind == PublishedCampaignKind::Voucher => {}
+        Ok(Some(campaign)) if campaign.record.kind == PublishedCampaignKind::Voucher => {}
         Ok(Some(_other)) => {
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
@@ -9595,7 +9821,7 @@ where
         );
     }
     let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
-        Ok(campaigns) => campaigns,
+        Ok(campaigns) => records(campaigns),
         Err(error) => return campaign_error_response(&error),
     };
     let Ok(node_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
@@ -11681,14 +11907,115 @@ where
         Err(refusal) => return refusal,
     };
     match state.catalog.list_layout_buttons(tenant_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<LayoutButton>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json::<Vec<Versioned<LayoutButton>>>(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
 
-/// A super-admin upserts an item's button in a channel's layout. The channel (a wire token) and item
-/// are named on the path; the display grouping, caption, grid slot and order are in the body.
-async fn admin_set_layout_button<Cat, A, C>(
+/// Assembles a [`LayoutButton`] from a request plus the channel and item that identify it.
+///
+/// Shared by the create and update routes so the record is assembled in one place: the two differ
+/// only in where the identity comes from (a body on `POST`, the path on `PUT`) and in what the
+/// write does with it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns, the shape `parse_ulid_fields` already carries this expectation for"
+)]
+fn build_layout_button(
+    request: SetLayoutButtonRequest,
+    sales_channel: &str,
+    menu_item_id: &str,
+) -> Result<LayoutButton, Response> {
+    let (tenant_id, menu_item_id, display_category_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("menu_item_id", menu_item_id),
+        ("display_category_id", &request.display_category_id),
+    ]) {
+        Ok([tenant_id, menu_item_id, display_category_id]) => (
+            TenantId::new(tenant_id),
+            MenuItemId::new(menu_item_id),
+            DisplayCategoryId::new(display_category_id),
+        ),
+        Err(refusal) => return Err(refusal),
+    };
+    let Ok(display_subcategory_id) =
+        parse_optional_display_subcategory(request.display_subcategory_id.as_deref())
+    else {
+        return Err(ulid_refusal(&["display_subcategory_id"]));
+    };
+    // A grid slot exists only when both column and row are given; otherwise the button flows by order.
+    let position = match (request.grid_column, request.grid_row) {
+        (Some(column), Some(row)) => Some(GridPosition { column, row }),
+        _ => None,
+    };
+    Ok(LayoutButton {
+        tenant_id,
+        sales_channel: Open::<SalesChannel>::parse(sales_channel),
+        display_category_id,
+        display_subcategory_id,
+        menu_item_id,
+        label: request.label,
+        position,
+        sort: request.sort,
+    })
+}
+
+/// A super-admin places an item's button on a channel's layout, refusing if it is already there.
+///
+/// The route this replaced was a single `PUT` upsert. A button's identity is entirely
+/// caller-supplied — `(tenant, channel, item)` — so "place this button" silently replaced the
+/// label, grid slot and sort order of one already on that channel, and the audit trail recorded
+/// the overwrite as a `set` with no `before`.
+async fn admin_create_layout_button<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLayoutButtonRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (sales_channel, menu_item_id) =
+        (request.sales_channel.clone(), request.menu_item_id.clone());
+    let record = match build_layout_button(request.into_write(), &sales_channel, &menu_item_id) {
+        Ok(record) => record,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.create_layout_button(&record).await {
+        Ok(CreateOutcome::Created(version)) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(record.tenant_id),
+                "layout_button.create",
+                "layout_button",
+                &record.menu_item_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_created(record, &version)
+        }
+        Ok(CreateOutcome::AlreadyExists) => already_exists("layout button"),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin changes a button's presentation on a channel, only at the version they read.
+async fn admin_update_layout_button<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
     Path((sales_channel, menu_item_id)): Path<(String, String)>,
@@ -11710,40 +12037,16 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, menu_item_id, display_category_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("menu_item_id", &menu_item_id),
-        ("display_category_id", &request.display_category_id),
-    ]) {
-        Ok([tenant_id, menu_item_id, display_category_id]) => (
-            TenantId::new(tenant_id),
-            MenuItemId::new(menu_item_id),
-            DisplayCategoryId::new(display_category_id),
-        ),
+    let record = match build_layout_button(request, &sales_channel, &menu_item_id) {
+        Ok(record) => record,
         Err(refusal) => return refusal,
     };
-    let Ok(display_subcategory_id) =
-        parse_optional_display_subcategory(request.display_subcategory_id.as_deref())
-    else {
-        return ulid_refusal(&["display_subcategory_id"]);
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
     };
-    // A grid slot exists only when both column and row are given; otherwise the button flows by order.
-    let position = match (request.grid_column, request.grid_row) {
-        (Some(column), Some(row)) => Some(GridPosition { column, row }),
-        _ => None,
-    };
-    let record = LayoutButton {
-        tenant_id,
-        sales_channel: Open::<SalesChannel>::parse(&sales_channel),
-        display_category_id,
-        display_subcategory_id,
-        menu_item_id,
-        label: request.label,
-        position,
-        sort: request.sort,
-    };
-    match state.catalog.set_layout_button(&record).await {
-        Ok(()) => {
+    match state.catalog.update_layout_button(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             // A layout button's identity is (tenant, channel, item); the item id is its entity key,
             // and the full row (channel, category, position) is recorded as `after`.
             audit_action(
@@ -11751,15 +12054,17 @@ where
                 &state.clock,
                 &context,
                 Some(record.tenant_id),
-                "layout_button.set",
+                "layout_button.update",
                 "layout_button",
                 &record.menu_item_id.to_string(),
                 None,
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("layout button"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -12355,13 +12660,105 @@ where
             Err(refusal) => return refusal,
         };
     match state.catalog.list_placements(tenant_id, menu_id).await {
-        Ok(rows) => (StatusCode::OK, Json::<Vec<MenuPlacement>>(rows)).into_response(),
+        Ok(rows) => (StatusCode::OK, Json::<Vec<Versioned<MenuPlacement>>>(rows)).into_response(),
         Err(error) => catalog_error_response(&error),
     }
 }
 
-/// A super-admin upserts an item's placement in a menu — its per-channel prices and availability.
-async fn admin_set_placement<Cat, A, C>(
+/// Assembles a [`MenuPlacement`] from a request plus the menu and item that identify it.
+///
+/// Shared by the create and update routes, for the same reason as `build_layout_button`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns, the shape `parse_ulid_fields` already carries this expectation for"
+)]
+fn build_placement(
+    request: SetPlacementRequest,
+    menu_id: &str,
+    menu_item_id: &str,
+) -> Result<MenuPlacement, Response> {
+    let (tenant_id, menu_id, menu_item_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("menu_id", menu_id),
+        ("menu_item_id", menu_item_id),
+    ]) {
+        Ok([tenant_id, menu_id, menu_item_id]) => (
+            TenantId::new(tenant_id),
+            MenuId::new(menu_id),
+            MenuItemId::new(menu_item_id),
+        ),
+        Err(refusal) => return Err(refusal),
+    };
+    let Ok(menu_section_id) = parse_optional_menu_section(request.menu_section_id.as_deref())
+    else {
+        return Err(ulid_refusal(&["menu_section_id"]));
+    };
+    Ok(MenuPlacement {
+        tenant_id,
+        menu_id,
+        menu_item_id,
+        menu_section_id,
+        prices: request.prices,
+        available: request.available,
+    })
+}
+
+/// A super-admin adds an item to a menu, refusing if it is already on it.
+///
+/// The route this replaced was a single `PUT` upsert. A placement's identity is the caller-supplied
+/// `(menu, item)` pair, so "add this item" silently replaced the prices, section and availability
+/// of one already on the menu — and because the per-channel prices are the price-change journal
+/// (ADR-0069, G2), the overwrite was recorded as a `set` with no `before` to compare against.
+async fn admin_create_placement<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreatePlacementRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (menu_id, menu_item_id) = (request.menu_id.clone(), request.menu_item_id.clone());
+    let record = match build_placement(request.into_write(), &menu_id, &menu_item_id) {
+        Ok(record) => record,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.create_placement(&record).await {
+        Ok(CreateOutcome::Created(version)) => {
+            let entity_id = format!("{}/{}", record.menu_id, record.menu_item_id);
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(record.tenant_id),
+                "placement.create",
+                "menu_placement",
+                &entity_id,
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_created(record, &version)
+        }
+        Ok(CreateOutcome::AlreadyExists) => already_exists("menu placement"),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin changes an item's prices and availability on a menu, only at the version they read.
+async fn admin_update_placement<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
     Path((menu_id, menu_item_id)): Path<(String, String)>,
@@ -12383,32 +12780,16 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, menu_id, menu_item_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("menu_id", &menu_id),
-        ("menu_item_id", &menu_item_id),
-    ]) {
-        Ok([tenant_id, menu_id, menu_item_id]) => (
-            TenantId::new(tenant_id),
-            MenuId::new(menu_id),
-            MenuItemId::new(menu_item_id),
-        ),
+    let record = match build_placement(request, &menu_id, &menu_item_id) {
+        Ok(record) => record,
         Err(refusal) => return refusal,
     };
-    let Ok(menu_section_id) = parse_optional_menu_section(request.menu_section_id.as_deref())
-    else {
-        return ulid_refusal(&["menu_section_id"]);
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
     };
-    let record = MenuPlacement {
-        tenant_id,
-        menu_id,
-        menu_item_id,
-        menu_section_id,
-        prices: request.prices,
-        available: request.available,
-    };
-    match state.catalog.set_placement(&record).await {
-        Ok(()) => {
+    match state.catalog.update_placement(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             // A placement's identity is the (menu, item) pair; its per-channel prices are the
             // price-change journal (ADR-0069, G2), recorded as `after`.
             let entity_id = format!("{}/{}", record.menu_id, record.menu_item_id);
@@ -12417,15 +12798,17 @@ where
                 &state.clock,
                 &context,
                 Some(record.tenant_id),
-                "placement.set",
+                "placement.update",
                 "menu_placement",
                 &entity_id,
                 None,
                 serde_json::to_value(&record).ok(),
             )
             .await;
-            (StatusCode::OK, Json(record)).into_response()
+            versioned_ok(record, &version)
         }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("menu placement"),
         Err(error) => catalog_error_response(&error),
     }
 }
@@ -12613,7 +12996,7 @@ where
     let mut placements = Vec::new();
     for menu in &menus {
         match state.catalog.list_placements(tenant_id, menu.menu_id).await {
-            Ok(rows) => placements.extend(rows),
+            Ok(rows) => placements.extend(records(rows)),
             Err(error) => return catalog_error_response(&error),
         }
     }
@@ -12644,7 +13027,7 @@ where
             Err(error) => return catalog_error_response(&error),
         };
     let layout_buttons = match state.catalog.list_layout_buttons(tenant_id).await {
-        Ok(rows) => rows,
+        Ok(rows) => records(rows),
         Err(error) => return catalog_error_response(&error),
     };
     let layout = compile_layout_book(&display_categories, &display_subcategories, &layout_buttons);
@@ -17002,6 +17385,20 @@ fn version_mismatch() -> Response {
     api_error(
         ErrorStatus::VersionMismatch,
         "the record changed since you read it: re-read it and try again",
+    )
+}
+
+/// The `409` a create earns when the key it asked for is taken.
+///
+/// Names the entity, because the caller's next move depends on it: edit the one that is there, or
+/// pick a different key. Before [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)
+/// split the six keyed upserts, this answer did not exist — an `upsert` overwrote instead, and the
+/// only way a duplicate could surface was as the store's own `503`, which tells a caller the server
+/// is broken and invites the retry that can never succeed.
+fn already_exists(entity: &str) -> Response {
+    api_error(
+        ErrorStatus::AlreadyExists,
+        format!("that {entity} already exists: edit it instead of creating another"),
     )
 }
 

@@ -257,6 +257,30 @@ async function requestJsonIfMatchRaw<T>(
   return (await response.json()) as T;
 }
 
+// A layout button's presentation, as the two write routes take it. Named because the create and the
+// update carry exactly the same fields — only the identity differs, and it moves from the body to
+// the path (ADR-0095).
+interface LayoutButtonFields {
+  displayCategoryId: string;
+  displaySubcategoryId: string | null;
+  label: string;
+  gridColumn: number | null;
+  gridRow: number | null;
+  sort: number;
+}
+
+// The wire body for those fields, so the two routes cannot drift on a field name.
+function layoutButtonBody(fields: LayoutButtonFields): Record<string, unknown> {
+  return {
+    display_category_id: fields.displayCategoryId,
+    display_subcategory_id: fields.displaySubcategoryId,
+    label: fields.label,
+    grid_column: fields.gridColumn,
+    grid_row: fields.gridRow,
+    sort: fields.sort,
+  };
+}
+
 // The `If-Match` a config publish, a rollback, or a whole-collection save carries: the version it was
 // read at, or `*` for a tree or collection nothing has been saved into yet. `*` is an assertion, not
 // a waiver — the server refuses it once a version exists (ADR-0095).
@@ -963,8 +987,11 @@ export const api = {
     requestJson<Campaign[]>("GET", `/admin/campaigns?${tenantQuery(tenantId)}`),
   createCampaign: (tenantId: string, input: CampaignInput) =>
     requestJson<Campaign>("POST", "/admin/campaigns", { tenant_id: tenantId, ...input }),
-  updateCampaign: (tenantId: string, id: string, input: CampaignInput) =>
-    requestJson<Campaign>("PUT", `/admin/campaigns/${encodeURIComponent(id)}`, {
+  // The update is conditional (ADR-0095): `etag` is the version the campaign was read at, and the
+  // server applies the write only if it is still the stored one — so two operators editing the same
+  // promotion cannot silently overwrite each other.
+  updateCampaign: (tenantId: string, id: string, etag: ETag, input: CampaignInput) =>
+    requestJsonIfMatch<Campaign>("PUT", `/admin/campaigns/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       ...input,
     }),
@@ -1060,7 +1087,9 @@ export const api = {
     }),
   // Inventory & suppliers (ADR-0079, Track M6). Per-record CRUD behind console.inventory.manage (read
   // behind console.data.read). An ingredient's and a supplier's id is server-owned, so create/update
-  // never send one; a recipe's key is the menu item it makes, so it is a `PUT` upsert keyed by that id.
+  // never send one; a recipe's key is the menu item it makes, so a create names that item in the body
+  // and the update takes it from the path. Every update is conditional on the version it was read at
+  // (ADR-0095), which is why each of these types carries an `etag`.
   listIngredients: (tenantId: string) =>
     requestJson<Ingredient[]>("GET", `/admin/inventory/ingredients?${tenantQuery(tenantId)}`),
   createIngredient: (tenantId: string, input: IngredientInput) =>
@@ -1068,11 +1097,13 @@ export const api = {
       tenant_id: tenantId,
       ...input,
     }),
-  updateIngredient: (tenantId: string, id: string, input: IngredientInput) =>
-    requestJson<Ingredient>("PUT", `/admin/inventory/ingredients/${encodeURIComponent(id)}`, {
-      tenant_id: tenantId,
-      ...input,
-    }),
+  updateIngredient: (tenantId: string, id: string, etag: ETag, input: IngredientInput) =>
+    requestJsonIfMatch<Ingredient>(
+      "PUT",
+      `/admin/inventory/ingredients/${encodeURIComponent(id)}`,
+      etag,
+      { tenant_id: tenantId, ...input },
+    ),
   deleteIngredient: (tenantId: string, id: string) =>
     requestVoid(
       "DELETE",
@@ -1080,12 +1111,23 @@ export const api = {
     ),
   listRecipes: (tenantId: string) =>
     requestJson<Recipe[]>("GET", `/admin/inventory/recipes?${tenantQuery(tenantId)}`),
-  // Create or replace the recipe for one item (the item is the URL key, not a body field).
-  upsertRecipe: (tenantId: string, item: string, input: RecipeInput) =>
-    requestJson<Recipe>("PUT", `/admin/inventory/recipes/${encodeURIComponent(item)}`, {
+  // Add a recipe for an item that has none. Refused with `409` if it already has one — the `PUT`
+  // this replaced was a create-or-replace, so "add a recipe" silently discarded the bill of
+  // materials already there (ADR-0095).
+  createRecipe: (tenantId: string, item: string, input: RecipeInput) =>
+    requestJson<Recipe>("POST", "/admin/inventory/recipes", {
       tenant_id: tenantId,
+      item_id: item,
       ...input,
     }),
+  // Edit an existing recipe, at the version it was read at.
+  updateRecipe: (tenantId: string, item: string, etag: ETag, input: RecipeInput) =>
+    requestJsonIfMatch<Recipe>(
+      "PUT",
+      `/admin/inventory/recipes/${encodeURIComponent(item)}`,
+      etag,
+      { tenant_id: tenantId, ...input },
+    ),
   deleteRecipe: (tenantId: string, item: string) =>
     requestVoid(
       "DELETE",
@@ -1098,11 +1140,13 @@ export const api = {
       tenant_id: tenantId,
       ...input,
     }),
-  updateSupplier: (tenantId: string, id: string, input: SupplierInput) =>
-    requestJson<Supplier>("PUT", `/admin/inventory/suppliers/${encodeURIComponent(id)}`, {
-      tenant_id: tenantId,
-      ...input,
-    }),
+  updateSupplier: (tenantId: string, id: string, etag: ETag, input: SupplierInput) =>
+    requestJsonIfMatch<Supplier>(
+      "PUT",
+      `/admin/inventory/suppliers/${encodeURIComponent(id)}`,
+      etag,
+      { tenant_id: tenantId, ...input },
+    ),
   deleteSupplier: (tenantId: string, id: string) =>
     requestVoid(
       "DELETE",
@@ -1330,7 +1374,11 @@ export const api = {
       "GET",
       `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements?${tenantQuery(tenantId)}`,
     ),
-  setPlacement: (
+  // Put an item on a menu. A placement's identity is the caller-supplied `(menu, item)` pair, so a
+  // second create at the same pair is refused with `409` rather than repricing the one already there
+  // — and because the per-channel prices are the price-change journal (ADR-0069), that overwrite was
+  // recorded as a set with no `before` to compare against (ADR-0095).
+  createPlacement: (
     tenantId: string,
     menuId: string,
     menuItemId: string,
@@ -1338,9 +1386,28 @@ export const api = {
     available: boolean,
     menuSectionId: string | null,
   ) =>
-    requestVoid(
+    requestVoid("POST", `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements`, {
+      tenant_id: tenantId,
+      menu_id: menuId,
+      menu_item_id: menuItemId,
+      menu_section_id: menuSectionId,
+      prices,
+      available,
+    }),
+  // Reprice, re-section or 86 an item already on the menu, at the version it was read at.
+  updatePlacement: (
+    tenantId: string,
+    menuId: string,
+    menuItemId: string,
+    etag: ETag,
+    prices: ChannelPrice[],
+    available: boolean,
+    menuSectionId: string | null,
+  ) =>
+    requestVoidIfMatch(
       "PUT",
       `/admin/catalog/menus/${encodeURIComponent(menuId)}/placements/${encodeURIComponent(menuItemId)}`,
+      etag,
       { tenant_id: tenantId, menu_section_id: menuSectionId, prices, available },
     ),
   deletePlacement: (tenantId: string, menuId: string, menuItemId: string) =>
@@ -1483,31 +1550,34 @@ export const api = {
     ),
   listLayoutButtons: (tenantId: string) =>
     requestJson<LayoutButton[]>("GET", `/admin/catalog/layout-buttons?${tenantQuery(tenantId)}`),
-  setLayoutButton: (
+  // Place a button. A button's identity is its `(channel, item)` slot and comes from the caller, so a
+  // second create at the same slot is refused with `409` rather than relabelling and re-positioning
+  // the button already there (ADR-0095).
+  createLayoutButton: (
     tenantId: string,
     salesChannel: SalesChannel,
     menuItemId: string,
-    fields: {
-      displayCategoryId: string;
-      displaySubcategoryId: string | null;
-      label: string;
-      gridColumn: number | null;
-      gridRow: number | null;
-      sort: number;
-    },
+    fields: LayoutButtonFields,
   ) =>
-    requestJson<LayoutButton>(
+    requestJson<LayoutButton>("POST", "/admin/catalog/layout-buttons", {
+      tenant_id: tenantId,
+      sales_channel: salesChannel,
+      menu_item_id: menuItemId,
+      ...layoutButtonBody(fields),
+    }),
+  // Relabel or move a button already on that channel, at the version it was read at.
+  updateLayoutButton: (
+    tenantId: string,
+    salesChannel: SalesChannel,
+    menuItemId: string,
+    etag: ETag,
+    fields: LayoutButtonFields,
+  ) =>
+    requestJsonIfMatch<LayoutButton>(
       "PUT",
       `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}`,
-      {
-        tenant_id: tenantId,
-        display_category_id: fields.displayCategoryId,
-        display_subcategory_id: fields.displaySubcategoryId,
-        label: fields.label,
-        grid_column: fields.gridColumn,
-        grid_row: fields.gridRow,
-        sort: fields.sort,
-      },
+      etag,
+      { tenant_id: tenantId, ...layoutButtonBody(fields) },
     ),
   removeLayoutButton: (tenantId: string, salesChannel: SalesChannel, menuItemId: string) =>
     requestVoid(
