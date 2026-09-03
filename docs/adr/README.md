@@ -100,5 +100,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0092](0092-artifact-trust-chain.md) | The edge cannot fetch an artifact without its signature, and its trusted keys come only from the build | Accepted |
 | [0093](0093-bill-keyed-on-order.md) | A bill belongs to an order, not to a table | Accepted |
 | [0094](0094-console-optimistic-concurrency.md) | The console stops losing edits: an opaque version at the seam, Postgres `xmin` beneath it | Accepted |
+| [0095](0095-conditional-writes-for-collections.md) | What ADR-0094 left: three shapes, not one, and only one of them is hard | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
