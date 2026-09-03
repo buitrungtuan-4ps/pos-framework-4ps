@@ -1013,14 +1013,16 @@ mod activation_codes {
 mod config_tree_store {
     use super::{block_on, prepared};
     use pos_proto::{StoreId, TenantId, Ulid};
+    use store_postgres::RowUpdate;
 
     fn parsed(json: &str) -> serde_json::Value {
         serde_json::from_str(json).expect("valid json")
     }
 
-    /// A tree state saves, loads back equal, upserts in place, and is scoped to its tenant.
+    /// A tree state saves, loads back at the version it was written at, and replaces in place under
+    /// that version ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
     #[test]
-    fn save_load_upsert_and_tenant_scope() {
+    fn saves_loads_and_replaces_under_the_version_it_was_read_at() {
         block_on(async {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let trees = store.config_trees();
@@ -1038,11 +1040,17 @@ mod config_tree_store {
 
             // A representative ConfigTreeState document (the adapter treats it as opaque jsonb).
             let first = r#"{"k":20,"layers":[{"currency_code":"VND"},{},{},{}],"history":[]}"#;
-            trees
-                .save_state(tenant, store_id, first)
+            let created = match trees
+                .save_state(tenant, store_id, first, None)
                 .await
-                .expect("save");
-            let loaded = trees
+                .expect("the create")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the create to apply, got {other:?}")
+                }
+            };
+            let (loaded, version) = trees
                 .load_state(tenant, store_id)
                 .await
                 .expect("load")
@@ -1052,14 +1060,28 @@ mod config_tree_store {
                 parsed(first),
                 "the stored document round-trips (compared as JSON, since jsonb reorders keys)"
             );
+            assert_eq!(
+                version, created,
+                "the version a save returns is the one the next load reads"
+            );
 
-            // Upsert in place: a second save replaces the row rather than erroring or duplicating.
+            // A second save at the current version replaces the row rather than duplicating it.
             let second = r#"{"k":20,"layers":[{"currency_code":"JPY"},{},{},{}],"history":[]}"#;
-            trees
-                .save_state(tenant, store_id, second)
+            let replaced = match trees
+                .save_state(tenant, store_id, second, Some(&version))
                 .await
-                .expect("upsert");
-            let reloaded = trees
+                .expect("the replace")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the replace to apply, got {other:?}")
+                }
+            };
+            assert_ne!(
+                replaced, version,
+                "xmin must move on every UPDATE, or the next write would be unguarded"
+            );
+            let (reloaded, _) = trees
                 .load_state(tenant, store_id)
                 .await
                 .expect("load")
@@ -1067,7 +1089,7 @@ mod config_tree_store {
             assert_eq!(
                 parsed(&reloaded),
                 parsed(second),
-                "the upsert replaced the state"
+                "the conditional save replaced the state"
             );
 
             // Another tenant with the same store id sees nothing — the (tenant, store) key isolates.
@@ -1079,6 +1101,89 @@ mod config_tree_store {
                     .expect("load")
                     .is_none(),
                 "the load is scoped to the tenant"
+            );
+        });
+    }
+
+    /// The four ways a config-tree save is refused, and the proof that none of them wrote anything.
+    ///
+    /// The **create** case is the one this table has and the record-shaped writes do not: a config
+    /// tree's first publish has no prior version to name, so `expected = None` means "there is
+    /// nothing here yet". If another publish got there first that claim is false, and the save must
+    /// be refused rather than upserted away — which is exactly what an `ON CONFLICT DO UPDATE`
+    /// would have done silently.
+    #[test]
+    fn a_stale_garbled_or_already_taken_save_is_refused_and_writes_nothing() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x00C0_FFEF));
+            let store_id = StoreId::new(Ulid::from_u128(0x570C));
+
+            let first = r#"{"k":20,"layers":[{"currency_code":"VND"},{},{},{}],"history":[]}"#;
+            let second = r#"{"k":20,"layers":[{"currency_code":"JPY"},{},{},{}],"history":[]}"#;
+            trees
+                .save_state(tenant, store_id, first, None)
+                .await
+                .expect("the create");
+            let (_, stale) = trees
+                .load_state(tenant, store_id)
+                .await
+                .expect("load")
+                .expect("present");
+            trees
+                .save_state(tenant, store_id, second, Some(&stale))
+                .await
+                .expect("the replace");
+
+            // Replaying the version read before that replace is the lost update, refused.
+            assert_eq!(
+                trees
+                    .save_state(tenant, store_id, first, Some(&stale))
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+
+            // A garbled tag is a mismatch too, not a database error — the comparison is on
+            // `xmin::text`, because casting caller text to `xid` would raise instead of refusing.
+            assert_eq!(
+                trees
+                    .save_state(tenant, store_id, first, Some("not-a-transaction-id"))
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+
+            // "Nothing here yet" about a store that has since been published to.
+            assert_eq!(
+                trees
+                    .save_state(tenant, store_id, first, None)
+                    .await
+                    .expect("the create path"),
+                RowUpdate::VersionMismatch
+            );
+
+            // A version-gated save against a store with no row at all is a NotFound, not a mismatch:
+            // the probe on the failure path is what keeps the two distinguishable.
+            let absent = StoreId::new(Ulid::from_u128(0x570D));
+            assert_eq!(
+                trees
+                    .save_state(tenant, absent, first, Some(&stale))
+                    .await
+                    .expect("the probe"),
+                RowUpdate::NotFound
+            );
+
+            let (after_refusals, _) = trees
+                .load_state(tenant, store_id)
+                .await
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                parsed(&after_refusals),
+                parsed(second),
+                "no refused save changed the stored document"
             );
         });
     }
@@ -1349,7 +1454,7 @@ mod fleet_store {
                 r#"{{"k":20,"layers":[{{}},{{}},{{}},{{}}],"history":[{{"id":"{held}","effective":{{}}}},{{"id":"{published}","effective":{{}}}}]}}"#
             );
             trees
-                .save_state(tenant, seen, &state)
+                .save_state(tenant, seen, &state, None)
                 .await
                 .expect("save the config tree");
             trees

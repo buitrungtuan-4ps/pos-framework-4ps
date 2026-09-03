@@ -16,10 +16,12 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 
 use super::ConfigTreeState;
+use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// Persists and loads a store's config-tree state, keyed by `(tenant, store)`.
 pub trait ConfigTreeStore {
-    /// Loads a store's tree state, or `None` if it has never been published to.
+    /// Loads a store's tree state with the [`Version`] it was read at, or `None` if it has never
+    /// been published to.
     ///
     /// # Errors
     ///
@@ -29,9 +31,24 @@ pub trait ConfigTreeStore {
         &self,
         tenant: TenantId,
         store: StoreId,
-    ) -> impl Future<Output = Result<Option<ConfigTreeState>, ConfigStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<ConfigTreeState>>, ConfigStoreError>> + Send;
 
-    /// Persists a store's tree state, replacing any prior one.
+    /// Persists a store's tree state, replacing the prior one **only if it is still at `expected`**
+    /// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    ///
+    /// `expected` is `None` for a store that has no row yet: the write must then *create* one, and
+    /// is refused as [`UpdateOutcome::VersionMismatch`] if another publish created it first. That
+    /// case is expressible here — unlike for the keyed upserts ADR-0095 defers — because "no row"
+    /// and "a row at some version" are distinguishable states of one document.
+    ///
+    /// # Why this is the check that matters
+    ///
+    /// A handler also compares the caller's `If-Match` against the `ConfigVersionId` it loaded, and
+    /// that comparison is what lets a refusal *name* the version an operator was editing. But it is
+    /// checked against a read that may already be stale: two publishes can both load at `v1`, both
+    /// find the caller's token matches, and both save. **A check against your own stale read is not
+    /// a check.** This precondition is evaluated by the store at write time, and it is what actually
+    /// prevents the interleave.
     ///
     /// # Errors
     ///
@@ -41,7 +58,8 @@ pub trait ConfigTreeStore {
         tenant: TenantId,
         store: StoreId,
         state: &ConfigTreeState,
-    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
+        expected: Option<&Version>,
+    ) -> impl Future<Output = Result<UpdateOutcome, ConfigStoreError>> + Send;
 
     /// Records that a store contacted the cloud on its config pull
     /// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)): the contact instant `seen_at` and the

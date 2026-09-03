@@ -214,6 +214,7 @@
   "config.current": "Current",
   "config.view": "View",
   "config.rollback": "Roll back",
+  "config.stale": "Someone else published this store's configuration while you were editing. The screen has been reloaded — please check what changed and try again.",
   "config.rolledBack": "Rolled back — published version {version}.",
   "config.noVersions": "No versions yet",
   "config.noVersionsHint": "Published versions of this store's configuration appear here.",

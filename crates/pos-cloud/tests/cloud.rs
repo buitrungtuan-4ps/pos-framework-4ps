@@ -713,12 +713,21 @@ fn admin_totp_code() -> String {
 /// instant in Unix ms — mirroring the `store_liveness` row's `(config_version_held, last_seen_at)`.
 type RecordedSeen = (Option<ConfigVersionId>, i64);
 
+/// Every store's tree state, each carrying the version this fake last wrote it at — the `state` and
+/// `xmin` columns of one `config_trees` row.
+type ConfigRows = HashMap<(TenantId, StoreId), Versioned<ConfigTreeState>>;
+
 /// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
 /// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
 struct FakeConfigTrees {
-    rows: Arc<Mutex<HashMap<(TenantId, StoreId), ConfigTreeState>>>,
+    rows: Arc<Mutex<ConfigRows>>,
     seen: Arc<Mutex<HashMap<(TenantId, StoreId), RecordedSeen>>>,
+    next_version: Arc<Mutex<u64>>,
+    /// A competing publish to land *between* the next read and its write, so a test can produce the
+    /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
+    /// would set it.
+    interpose: Arc<Mutex<Option<(String, serde_json::Value)>>>,
 }
 
 impl FakeConfigTrees {
@@ -732,18 +741,54 @@ impl FakeConfigTrees {
     }
 }
 
+impl FakeConfigTrees {
+    /// The next row version, as the adapter's `xmin::text` is: a token, not a number a caller may
+    /// reason about (ADR-0095).
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
+}
+
 impl ConfigTreeStore for FakeConfigTrees {
     async fn load(
         &self,
         tenant: TenantId,
         store: StoreId,
-    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
-        Ok(self
+    ) -> Result<Option<Versioned<ConfigTreeState>>, ConfigStoreError> {
+        let handed_out = self
             .rows
             .lock()
             .expect("lock")
             .get(&(tenant, store))
-            .cloned())
+            .cloned();
+
+        // Land the competing publish now, after this caller has its (already stale) read. Its save
+        // will find the version moved — which is precisely the interleave a node publish must
+        // survive without troubling anyone.
+        if let Some((key, value)) = self.interpose.lock().expect("lock").take() {
+            let version = self.mint();
+            let mut rows = self.rows.lock().expect("lock");
+            let mut state = rows.get(&(tenant, store)).map_or_else(
+                || ConfigTreeState {
+                    layers: [
+                        serde_json::json!({}),
+                        serde_json::json!({}),
+                        serde_json::json!({}),
+                        serde_json::json!({}),
+                    ],
+                    history: Vec::new(),
+                    k: 8,
+                },
+                |row| row.record.clone(),
+            );
+            if let serde_json::Value::Object(map) = &mut state.layers[2] {
+                map.insert(key, value);
+            }
+            rows.insert((tenant, store), Versioned::new(state, version));
+        }
+        Ok(handed_out)
     }
 
     async fn save(
@@ -751,12 +796,29 @@ impl ConfigTreeStore for FakeConfigTrees {
         tenant: TenantId,
         store: StoreId,
         state: &ConfigTreeState,
-    ) -> Result<(), ConfigStoreError> {
-        self.rows
-            .lock()
-            .expect("lock")
-            .insert((tenant, store), state.clone());
-        Ok(())
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, ConfigStoreError> {
+        let version = self.mint();
+        let mut rows = self.rows.lock().expect("lock");
+        // The same four answers `store-postgres` gives, so a test that passes here is not passing on
+        // a laxer store: a first publish must actually be first, a version-gated one needs a row to
+        // gate on, and the version it names must still be the stored one.
+        let refusal = match (rows.get(&(tenant, store)), expected) {
+            (None, None) => None,
+            (None, Some(_)) => Some(UpdateOutcome::NotFound),
+            (Some(_), None) => Some(UpdateOutcome::VersionMismatch),
+            (Some(existing), Some(expected)) => {
+                (&existing.etag != expected).then_some(UpdateOutcome::VersionMismatch)
+            }
+        };
+        if let Some(refusal) = refusal {
+            return Ok(refusal);
+        }
+        rows.insert(
+            (tenant, store),
+            Versioned::new(state.clone(), version.clone()),
+        );
+        Ok(UpdateOutcome::Updated(version))
     }
 
     async fn record_store_seen(
@@ -1004,6 +1066,55 @@ fn put_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Request
         .uri(uri)
         .header("content-type", "application/json")
         .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A POST carrying the version the caller read the tree at — the rollback's conditional write.
+fn post_config_with_etag(
+    uri: &str,
+    body: &serde_json::Value,
+    cookie: &str,
+    etag: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .header("if-match", format!("\"{etag}\""))
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A PUT of a whole authored config layer, carrying the version the caller read the tree at.
+///
+/// `If-Match: *` asserts "nothing is published here yet", which is how a store's first authored
+/// publish says so (ADR-0095). Node publishes need none of this: they set one key, they commute with
+/// the other keys, and they retry rather than refuse.
+fn put_config_with_etag(
+    uri: &str,
+    body: &serde_json::Value,
+    cookie: &str,
+    etag: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .header(
+            "if-match",
+            if etag == "*" {
+                "*".to_owned()
+            } else {
+                format!("\"{etag}\"")
+            },
+        )
         .body(Body::from(
             serde_json::to_vec(body).expect("serialise the body"),
         ))
@@ -1869,27 +1980,29 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
     let tenant_doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_config_with_etag(
             &format!("{base}/tenant?tenant_id={tenant_ulid}"),
             &tenant_doc,
             &cookie,
+            "*",
         ))
         .await
         .expect("route the publish");
     assert_eq!(published.status(), StatusCode::OK);
     let published = json_body(published).await;
-    assert!(
-        published["config_version_id"].as_str().is_some(),
-        "a successful publish returns the new version id"
-    );
+    let first_version = published["config_version_id"]
+        .as_str()
+        .expect("a successful publish returns the new version id")
+        .to_owned();
 
     let store_doc = serde_json::json!({ "tips_enabled": true });
     let published2 = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_config_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &store_doc,
             &cookie,
+            &first_version,
         ))
         .await
         .expect("route the second publish");
@@ -1909,6 +2022,132 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
         serde_json::json!({ "currency_code": "VND", "tips_enabled": true }),
         "the store layer overrode the tenant layer"
     );
+}
+
+/// A node publish survives another publish landing between its read and its write, and neither
+/// operator loses anything.
+///
+/// This is the case the retry exists for, and the one the old code got wrong: both publishes composed
+/// a whole tree from the same stale read, so whichever saved second erased the other's node entirely.
+/// The layers are a map, so writes to *different* keys have no reason to conflict — and after this
+/// both keys are present.
+#[tokio::test]
+async fn a_node_publish_survives_a_concurrent_publish_of_a_different_node() {
+    let config_trees = FakeConfigTrees::default();
+    let router = config_capabilities_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Arm a competing `locale` publish to land after the next read but before its write.
+    *config_trees.interpose.lock().expect("lock") =
+        Some(("locale".to_owned(), serde_json::json!({ "country": "VN" })));
+
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/capabilities",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "flags": { "tables_enabled": false },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the capabilities publish");
+    assert_eq!(
+        published.status(),
+        StatusCode::OK,
+        "a node publish retries past a concurrent one rather than refusing"
+    );
+
+    let stored = config_trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .cloned()
+        .expect("the tree is there");
+    let layer = &stored.record.layers[2];
+    assert!(
+        layer.get("tables_enabled").is_some(),
+        "this publish's own node landed"
+    );
+    assert!(
+        layer.get("locale").is_some(),
+        "and the concurrent publish's node was not erased — the bug this slice removes"
+    );
+}
+
+/// The authored layer publish is the other half: there a second writer really does destroy work an
+/// operator typed, so it is refused rather than retried.
+#[tokio::test]
+async fn an_authored_layer_publish_made_against_a_stale_read_is_refused() {
+    let router = http::router(app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let base = format!("/admin/stores/{store_ulid}/config");
+
+    let first = router
+        .clone()
+        .oneshot(put_config_with_etag(
+            &format!("{base}/store?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "tips_enabled": false }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the first publish");
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_version = json_body(first).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+
+    // A second writer still asserting the store had nothing published is refused.
+    let stale_wildcard = router
+        .clone()
+        .oneshot(put_config_with_etag(
+            &format!("{base}/store?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "tips_enabled": true }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the stale publish");
+    assert_eq!(stale_wildcard.status(), StatusCode::PRECONDITION_FAILED);
+
+    // And naming the version it read lets it through, moving the tree on.
+    let fresh = router
+        .clone()
+        .oneshot(put_config_with_etag(
+            &format!("{base}/store?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "tips_enabled": true }),
+            &cookie,
+            &first_version,
+        ))
+        .await
+        .expect("route the current publish");
+    assert_eq!(fresh.status(), StatusCode::OK);
+
+    // Replaying the version that just stopped being current is the lost update, refused.
+    let replayed = router
+        .oneshot(put_config_with_etag(
+            &format!("{base}/store?tenant_id={tenant_ulid}"),
+            &serde_json::json!({ "tips_enabled": false }),
+            &cookie,
+            &first_version,
+        ))
+        .await
+        .expect("route the replay");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 #[tokio::test]
@@ -1932,13 +2171,13 @@ async fn config_versions_list_read_back_and_roll_back_append_only() {
     let base = format!("/admin/stores/{store_ulid}/config");
 
     // Two published versions: v1 sets the currency, v2 overrides it at the store layer.
-    let publish = |doc: serde_json::Value, level: &'static str| {
+    let publish = |doc: serde_json::Value, level: &'static str, etag: String| {
         let router = router.clone();
         let cookie = cookie.clone();
         let uri = format!("{base}/{level}?tenant_id={tenant_ulid}");
         async move {
             let response = router
-                .oneshot(put_with_cookie(&uri, &doc, &cookie))
+                .oneshot(put_config_with_etag(&uri, &doc, &cookie, &etag))
                 .await
                 .expect("route the publish");
             assert_eq!(response.status(), StatusCode::OK);
@@ -1948,8 +2187,18 @@ async fn config_versions_list_read_back_and_roll_back_append_only() {
                 .to_owned()
         }
     };
-    let v1 = publish(serde_json::json!({ "currency_code": "VND" }), "tenant").await;
-    let _v2 = publish(serde_json::json!({ "currency_code": "SGD" }), "store").await;
+    let v1 = publish(
+        serde_json::json!({ "currency_code": "VND" }),
+        "tenant",
+        "*".to_owned(),
+    )
+    .await;
+    let v2 = publish(
+        serde_json::json!({ "currency_code": "SGD" }),
+        "store",
+        v1.clone(),
+    )
+    .await;
 
     // The history lists both, newest first, with the latest flagged current.
     let versions = router
@@ -1990,10 +2239,11 @@ async fn config_versions_list_read_back_and_roll_back_append_only() {
     // Roll back to v1: a new current version is appended, restoring v1's effective.
     let rollback = router
         .clone()
-        .oneshot(post_with_cookie(
+        .oneshot(post_config_with_etag(
             &format!("{base}/rollback?tenant_id={tenant_ulid}"),
             &serde_json::json!({ "version_id": v1 }),
             &cookie,
+            &v2,
         ))
         .await
         .expect("route the rollback");
@@ -2051,10 +2301,11 @@ async fn an_incoherent_config_is_rejected_with_violations() {
     // pay_first_enabled and tables_enabled are mutually exclusive (pos-core §10).
     let bad = serde_json::json!({ "pay_first_enabled": true, "tables_enabled": true });
     let response = router
-        .oneshot(put_with_cookie(
+        .oneshot(put_config_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &bad,
             &cookie,
+            "*",
         ))
         .await
         .expect("route the publish");
@@ -2126,10 +2377,11 @@ async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, Str
     let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_config_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &doc,
             &cookie,
+            "*",
         ))
         .await
         .expect("route the publish");
@@ -2282,10 +2534,11 @@ async fn config_sync_records_store_liveness() {
     let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_config_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &doc,
             &cookie,
+            "*",
         ))
         .await
         .expect("route the publish");
@@ -4014,7 +4267,7 @@ impl ConfigTreeStore for EmptyConfigTrees {
         &self,
         _tenant: TenantId,
         _store: StoreId,
-    ) -> Result<Option<ConfigTreeState>, ConfigStoreError> {
+    ) -> Result<Option<Versioned<ConfigTreeState>>, ConfigStoreError> {
         Ok(None)
     }
 
@@ -4023,8 +4276,9 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _tenant: TenantId,
         _store: StoreId,
         _state: &ConfigTreeState,
-    ) -> Result<(), ConfigStoreError> {
-        Ok(())
+        _expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, ConfigStoreError> {
+        Ok(UpdateOutcome::Updated(Version::new("1")))
     }
 
     async fn record_store_seen(
@@ -7391,7 +7645,7 @@ async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
         .await
         .expect("load")
         .expect("a published tree");
-    let tax = &state.layers[2]["tax"];
+    let tax = &state.record.layers[2]["tax"];
     assert!(tax.is_array(), "the tax node is the serialized rate table");
     assert_eq!(tax.as_array().expect("array").len(), 1);
 }
@@ -7586,14 +7840,25 @@ async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
         .await
         .expect("load")
         .expect("a published tree");
-    assert_eq!(state.layers[2]["fleet_update"]["target_version"], "1.4.0");
-    assert_eq!(state.layers[2]["fleet_update"]["rollout_percent"], 40);
-    assert_eq!(state.layers[3]["device_ota"]["ring"], "fleet");
-    assert_eq!(state.layers[3]["device_ota"]["canary_bucket"], 10);
+    assert_eq!(
+        state.record.layers[2]["fleet_update"]["target_version"],
+        "1.4.0"
+    );
+    assert_eq!(
+        state.record.layers[2]["fleet_update"]["rollout_percent"],
+        40
+    );
+    assert_eq!(state.record.layers[3]["device_ota"]["ring"], "fleet");
+    assert_eq!(state.record.layers[3]["device_ota"]["canary_bucket"], 10);
 
     // And both reach the *effective* document, which is what a store actually pulls — a node authored
     // onto a layer nothing merges would be invisible to the edge that has to read it.
-    let effective = &state.history.last().expect("a published version").effective;
+    let effective = &state
+        .record
+        .history
+        .last()
+        .expect("a published version")
+        .effective;
     assert_eq!(effective["fleet_update"]["min_ring"], "fleet");
     assert_eq!(effective["device_ota"]["canary_bucket"], 10);
 
@@ -7829,8 +8094,11 @@ async fn locale_publish_validates_and_writes_the_locale_node() {
         .await
         .expect("load")
         .expect("a published tree");
-    assert_eq!(state.layers[2]["locale"]["timezone"], "Asia/Ho_Chi_Minh");
-    assert_eq!(state.layers[2]["locale"]["currency_code"], "VND");
+    assert_eq!(
+        state.record.layers[2]["locale"]["timezone"],
+        "Asia/Ho_Chi_Minh"
+    );
+    assert_eq!(state.record.layers[2]["locale"]["currency_code"], "VND");
 
     // A malformed IANA timezone is a 400, validated before anything is written.
     let bad = router
@@ -11063,7 +11331,7 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
         .await
         .expect("load")
         .expect("a published tree");
-    let node = &state.layers[2]["permissions"];
+    let node = &state.record.layers[2]["permissions"];
     assert_eq!(
         node["store_id"],
         serde_json::json!(store.as_ulid().to_string())
@@ -11216,7 +11484,7 @@ async fn publishing_capability_flags_merges_the_store_layer_and_rejects_conflict
         .await
         .expect("load")
         .expect("a published tree");
-    let store_layer = &state.layers[2];
+    let store_layer = &state.record.layers[2];
     assert_eq!(
         store_layer["tables_enabled"],
         serde_json::json!(false),

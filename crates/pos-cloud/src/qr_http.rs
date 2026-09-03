@@ -283,7 +283,11 @@ async fn qr_config_for<T: ConfigTreeStore>(
     tenant: TenantId,
     store_id: StoreId,
 ) -> QrConfig {
-    let Ok(Some(state)) = config_trees.load(tenant, store_id).await else {
+    let Ok(Some(state)) = config_trees
+        .load(tenant, store_id)
+        .await
+        .map(crate::http::strip_tree_version)
+    else {
         return QrConfig::default();
     };
     let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);

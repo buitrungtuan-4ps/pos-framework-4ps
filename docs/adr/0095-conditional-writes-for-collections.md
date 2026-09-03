@@ -78,6 +78,9 @@ ADR-0094's rule that the seam never interprets a token. The config tree is the o
 *domain* version already exists and is already the thing an operator reasons about, and reusing it is
 therefore a deliberate local exception, recorded here rather than left to be discovered.
 
+> **Amended.** "`If-Match` carries the `ConfigVersionId`" holds for **2 of the 12** call sites, not
+> all 12. See *Correction, on implementation* below, written after building it.
+
 **2. Shape C — a version on the collection, keyed by tenant.**
 
 `set_tax_rates` and the translation grid each replace one tenant-scoped collection. Neither handler
@@ -118,9 +121,61 @@ diff, not a harder problem.
 them, and because (i) is genuinely cheaper if the appetite for churn is low. Recorded here so the
 choice is made deliberately; the implementing slice does not start until it is made.
 
+**Correction, on implementation: a layer is a map of nodes, and different keys commute.**
+
+Written after the slice was built. The decision above treats a config layer as a *document*, so that
+any two publishes of the same layer contend and the second must be refused. That is what the twelve
+call sites look like from the seam. It is not what they are.
+
+A layer is a JSON **object keyed by node** — `floor`, `stations`, `inventory`, `campaigns`, `tax`,
+`locale`, `channels`, `tender`, `qr`, `permissions`, `capabilities`. Ten of the twelve saves are
+*node publishes*: a route composes one or two named keys from data the operator authored on some
+other screen — the ingredient rows, the area and table rows, the campaign rows — and writes only
+those keys, leaving the rest of the layer as it found it. Two of the twelve are *authored layer
+writes*: `PUT /admin/stores/{store_id}/config/{level}`, where an operator types the JSON document
+itself, and `POST /admin/stores/{store_id}/config/rollback`, which replaces the current document with
+an earlier one.
+
+That distinction decides the mechanism, and it cuts the other way from the decision above:
+
+- **Node publishes take the storage precondition with a retry, and no `If-Match`.** Publishing the
+  menu and publishing the floor plan touch disjoint keys. They commute: whichever order they land
+  in, both survive, and neither operator has lost anything. Refusing the second one would show
+  someone "the configuration changed, try again" for an edit that never touched their key — friction
+  with no correctness behind it, on ten routes. What these writes need is the precondition at the
+  *store*, so the loser of a race notices, reloads, re-applies **its own keys** to the winner's
+  layer, and saves again. Both nodes land; nobody sees a conflict. Three attempts, then a `412`,
+  because a caller that loses three times is contending with something other than a human.
+- **The two authored writes take `If-Match`, exactly as decided above.** Here the operator *is* the
+  document. A second writer really does destroy typed work, and there is nothing to merge: the
+  request carries a whole layer composed by a person, not a delta the server can re-apply. The
+  wildcard `If-Match: *` remains how a caller asserts "this store has never been published to" — the
+  one place in this work a wildcard is accepted, because here it means *only* if nothing is there,
+  the opposite of what it means on a record.
+
+Two properties make the retry safe rather than a quiet last-write-wins:
+
+1. **The write is a delta.** `publish_config_nodes` takes `Vec<(String, Value)>` — the keys this
+   route owns — and re-applies them to whatever layer it just re-read. It never recomposes the whole
+   layer from a stale read, which is precisely the bug it would otherwise reintroduce.
+2. **Two publishes of the *same* node produce the same node.** A node is composed from stored
+   authored rows, not from request state, so two operators who both press "publish inventory"
+   compose the same document from the same rows. Same-key contention exists but has no lost update
+   in it.
+
+The background activator for scheduled publishes ([ADR-0077](0077-campaigns-and-scheduling.md)) takes the same
+storage precondition. It has no operator and no header, but it still composes on what it read, so
+losing the race leaves the row pending and the next pass retries it — a delay, not an error.
+
+What this does **not** change: the domain check still exists on the two authored routes and still
+compares `ConfigVersionId`, because an operator can read it. What it adds is the second check
+underneath, at the store, on **every** save — and that is the one that prevents the interleave. A
+check against your own stale read is not a check; it only reports what the handler already saw.
+
 **Scope.**
 
-In: the 12 config-tree saves (shape A) and the 2 collection replaces (shape C).
+In: the 12 config-tree saves (shape A) and the 2 collection replaces (shape C). Shape A landed as
+10 retried node publishes + 2 `If-Match` authored writes, per the correction above.
 
 Out, with reasons:
 
@@ -142,15 +197,18 @@ Out, with reasons:
 - **Serialising config publishes behind a per-store lock.** Rejected. It converts a lost update into a
   wait, holds a lock across an operator's thinking time if taken at read, and if taken only at write
   does not prevent the clobber it is meant to prevent.
-- **Merging concurrent config edits instead of refusing them.** Rejected for now. Two publishes to
-  *different* layers could in principle merge, but publishes to the same layer cannot, and a merge
-  that silently succeeds sometimes is harder to reason about than a refusal that always explains
-  itself. Revisit if the refusal proves noisy in practice.
+- **Merging concurrent config edits instead of refusing them.** Rejected as stated, and then
+  *partly adopted* on implementation. The rejection assumed the unit of contention is a layer. It is
+  a node, and disjoint nodes need no merge logic at all — re-applying your own keys to a re-read
+  layer is not a merge, it is a retry. Where a genuine merge would be needed — two people typing the
+  same layer — the refusal stands.
 
 **Consequences.**
 
-- A config publish can now fail with `412` where it previously always succeeded. The console reloads
-  and shows the operator what changed, as it does for every other conditional write in this work.
+- The two authored config writes can now fail with `412` where they previously always succeeded. The
+  console reloads and shows the operator what changed, as it does for every other conditional write
+  in this work. The ten node publishes keep their existing contract: they retry and succeed, and only
+  a caller that loses three races in a row sees a refusal.
 - Shape C brings the first migration in this line of work: a per-tenant version row for tax rates and
   for translations. ADR-0094's headline property — that `xmin` needs no schema change — holds for
   records and does not extend to collections.
@@ -162,3 +220,9 @@ Out, with reasons:
 
 **Delivery.** This ADR, then: shape A as its own slice (12 call sites, one seam, no migration); shape
 C as a second slice (2 seams, one additive migration); shape B once the owner has chosen (i) or (ii).
+
+Shape A is delivered. `ConfigTreeStore::load` returns a `Versioned<ConfigTreeState>` and `save` takes
+the version it was read at; `store-postgres` compares `xmin` and distinguishes a missing row from a
+stale one; the ten node publishes go through one retrying helper rather than twelve hand-rolled
+load→publish→save cycles; the two authored writes and the scheduled activator take the precondition
+directly. The correction above is the reason the shape differs from what this ADR first decided.

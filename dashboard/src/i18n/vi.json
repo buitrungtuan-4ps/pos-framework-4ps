@@ -214,6 +214,7 @@
   "config.current": "Hiện tại",
   "config.view": "Xem",
   "config.rollback": "Khôi phục",
+  "config.stale": "Ai đó vừa xuất bản cấu hình của cửa hàng này trong lúc bạn đang chỉnh sửa. Màn hình đã được tải lại — vui lòng kiểm tra thay đổi rồi thử lại.",
   "config.rolledBack": "Đã khôi phục — xuất bản phiên bản {version}.",
   "config.noVersions": "Chưa có phiên bản",
   "config.noVersionsHint": "Các phiên bản cấu hình đã xuất bản của cửa hàng này sẽ hiện ở đây.",
