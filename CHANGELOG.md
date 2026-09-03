@@ -51,6 +51,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   earlier plan of one collection version for all eight remaining seams is recorded as wrong on the
   measurement, fitting two of them.
 
+### Security
+- **The Kubernetes lane published the `/internal` routes to the internet** (#144). `pos_cloud` serves
+  three routes under `/internal/*` that authenticate **nothing**, by design — they are documented as
+  private-network-only: `/internal/ingest` (the reconciliation re-push), `/internal/reconcile` (the
+  id-diff endpoint) and `/internal/ota/report` (the fleet report). The Compose lane has closed them at
+  the proxy since the exposure was first found, and an xtask gate fails if that deny is ever removed.
+
+  The optional Kubernetes lane had no equivalent. Its `Ingress` routed `/` as a single prefix, so a
+  fork that followed `k8s/README.md` published all three, unauthenticated — event injection, an
+  id-holding oracle, and falsifiable fleet state for any tenant. Nothing caught it because nothing
+  looked at both lanes at once.
+
+  The skeleton now denies `/internal/` with 404 (not 403: a 403 confirms the route exists), and the
+  `tls-modes` gate checks **both** lanes, so they cannot drift apart again. An allow-list of public
+  prefixes would have been fail-closed and needed no annotation, but it is not available here — the
+  console is a single-page app served from the `/` catch-all, so every client-routed path must reach
+  the backend.
+
+  **Upgrade note.** If you run the Kubernetes lane, apply the updated `k8s/pos-cloud.yaml` and then
+  **verify** the deny took effect — `curl -s -o /dev/null -w '%{http_code}\n' https://YOUR_DOMAIN/internal/reconcile`
+  must print `404`. ingress-nginx ignores snippet annotations when the controller runs with
+  `allow-snippet-annotations: false` (its default since 1.9), and it does so silently, which looks
+  exactly like success. If the curl prints anything else, implement the deny with a front proxy or a
+  controller-native rule before running the lane in production. Whether these routes should *also*
+  carry an application-layer secret remains open.
+
 ### Changed
 - **Tax rates and the translation grid stop losing concurrent saves** (#143). Q3c slice 5b, ADR-0095
   shape C. Both screens load a whole grid, an operator edits one cell, and the screen `PUT`s the

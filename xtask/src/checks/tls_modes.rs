@@ -13,6 +13,14 @@
 //! from the repository: the accept-list and the directory hold the same set of modes, every mode
 //! file imports the one shared site block, and the shared block does not itself declare a site
 //! address or a TLS directive — the three things a posture is allowed to differ in.
+//!
+//! # Why the k8s lane is checked here too
+//!
+//! The `/internal` deny is the one security control both deployment lanes must carry, and for a
+//! long time only one did: the Compose lane denied it in the shared Caddy block while `k8s/` routed
+//! `/` as a single prefix and published all three routes, unauthenticated, to the internet. Nothing
+//! caught it because nothing looked at both lanes at once. This check does, so the lanes cannot
+//! drift apart again — which is the actual failure mode, not either lane being wrong on its own.
 
 use std::collections::BTreeSet;
 
@@ -27,6 +35,13 @@ const IMPORT: &str = "import /etc/caddy/Caddyfile.d/site.caddy";
 /// The `handle` block that keeps the cloud's trusted-network surface off the public one. Checked by
 /// name, because the whole point is that every posture inherits it from the one shared file.
 const INTERNAL_DENY: &str = "handle /internal/*";
+/// The optional Kubernetes lane's manifest, which must carry the same deny by a different mechanism.
+const K8S_MANIFEST: &str = "k8s/pos-cloud.yaml";
+/// What the deny looks like there: an nginx `location` block returning 404 for the prefix. Matched
+/// on the two halves rather than one exact string, so reformatting the snippet does not fail the
+/// check while deleting it does.
+const K8S_DENY_LOCATION: &str = "location ^~ /internal/";
+const K8S_DENY_RETURN: &str = "return 404;";
 
 /// Checks the mode accept-list against the committed per-mode Caddyfiles.
 pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
@@ -146,7 +161,35 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
             .with_hint("add it to tls_mode_is_valid() in deploy/bootstrap.sh, or remove the file"),
         );
     }
+
+    findings.extend(k8s_internal_deny(&root)?);
     Ok(findings)
+}
+
+/// The same `/internal` deny, in the optional Kubernetes lane.
+///
+/// A missing manifest is not a finding: `k8s/` is explicitly optional (`k8s/README.md`), and a fork
+/// that deletes it has removed the exposure rather than created one. A manifest that exists and does
+/// not deny the prefix is the finding, because that is a lane which serves the routes.
+fn k8s_internal_deny(root: &std::path::Path) -> Result<Vec<Finding>, Error> {
+    let path = root.join(K8S_MANIFEST);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path)?;
+    if text.contains(K8S_DENY_LOCATION) && text.contains(K8S_DENY_RETURN) {
+        return Ok(Vec::new());
+    }
+    Ok(vec![
+        Finding::new(
+            K8S_MANIFEST,
+            "tls-modes",
+            "the Kubernetes Ingress does not deny `/internal/*`".to_owned(),
+        )
+        .with_hint(
+            "the /internal routes authenticate nothing by design, so the proxy is what keeps them              private; the Compose lane denies them in deploy/Caddyfile.d/site.caddy and this lane              must too, or it publishes unauthenticated event injection and falsifiable fleet state              to the internet — see k8s/README.md, which also gives the curl that verifies the deny              actually took effect",
+        ),
+    ])
 }
 
 /// The posture names from `bootstrap.sh`'s `tls_mode_is_valid` accept arm.
@@ -176,6 +219,30 @@ mod tests {
         assert_eq!(modes.len(), 4);
         assert!(modes.contains("byo-cert"));
         assert!(modes.contains("external"));
+    }
+
+    #[test]
+    fn the_k8s_deny_is_recognised_only_when_both_halves_are_present() {
+        // Deleting either line re-opens the routes, so neither alone may satisfy the check.
+        let denied = "  annotations:\n    nginx.ingress.kubernetes.io/server-snippet: |\n      \
+                      location ^~ /internal/ {\n        return 404;\n      }\n";
+        assert!(
+            denied.contains(super::K8S_DENY_LOCATION) && denied.contains(super::K8S_DENY_RETURN)
+        );
+
+        let location_only = "location ^~ /internal/ {\n  proxy_pass http://pos-cloud;\n}\n";
+        assert!(
+            !(location_only.contains(super::K8S_DENY_LOCATION)
+                && location_only.contains(super::K8S_DENY_RETURN)),
+            "a location that proxies rather than denies must not pass"
+        );
+
+        let return_only = "location /health {\n  return 404;\n}\n";
+        assert!(
+            !(return_only.contains(super::K8S_DENY_LOCATION)
+                && return_only.contains(super::K8S_DENY_RETURN)),
+            "a 404 on some other path must not pass"
+        );
     }
 
     #[test]
