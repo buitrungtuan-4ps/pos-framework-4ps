@@ -60,6 +60,39 @@ pub enum SsrfRejection {
     ForbiddenAddress(IpAddr, ForbiddenReason),
 }
 
+impl SsrfRejection {
+    /// What a caller may be told, which is not everything [`Display`](fmt::Display) says.
+    ///
+    /// The first four variants describe the string the caller submitted — a bad URL, a wrong
+    /// scheme, embedded credentials, a missing host — so repeating them verbatim tells the caller
+    /// nothing they did not already know, and telling them precisely is how they fix it.
+    ///
+    /// The last two are different in kind, and this method exists for them. Both are decided by
+    /// **this server's resolver**, not by the caller's string, so their `Display` text is a report
+    /// on the cloud's own DNS view: `ForbiddenAddress` names the exact address a hostname resolved
+    /// to and its class, and `Unresolved` says the name resolved to nothing. Rendered into a
+    /// response those three outcomes — resolves publicly, resolves privately to *this* address,
+    /// does not resolve — make the register route an internal name-to-address mapper, one name per
+    /// request, and answer the exact question the SSRF block exists to refuse. So they collapse
+    /// into one sentence that says what is required without saying which way it failed, and the
+    /// detail goes to the log instead ([ADR-0032](../../../../docs/adr/0032-webhooks.md)).
+    ///
+    /// A caller who typed an IP literal learns nothing new either way, but distinguishing that case
+    /// would restore the oracle for anyone who tries a hostname first.
+    #[must_use]
+    pub const fn caller_message(&self) -> &'static str {
+        match self {
+            Self::BadUrl => "the webhook URL is not a valid URL",
+            Self::SchemeNotHttps => "the webhook URL must use https",
+            Self::CredentialsInUrl => "the webhook URL must not contain credentials",
+            Self::MissingHost => "the webhook URL has no host",
+            Self::Unresolved | Self::ForbiddenAddress(_, _) => {
+                "the webhook URL must point at a public address"
+            }
+        }
+    }
+}
+
 /// Which class of never-reachable address a destination hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForbiddenReason {
@@ -247,6 +280,58 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().expect("a valid address")
+    }
+
+    #[test]
+    fn the_resolvers_answer_never_reaches_the_caller() {
+        // The whole point: `Display` is for the log and carries the address; `caller_message` is
+        // for the response and must not. A registration route that echoed this turned itself into
+        // an internal name-to-address mapper, one name per request.
+        let refused = vet("https://internal.example/hook", resolves_to("10.4.12.7"))
+            .expect_err("a private address is refused");
+        let logged = refused.to_string();
+        assert!(logged.contains("10.4.12.7"), "the log keeps it: {logged}");
+
+        let told = refused.caller_message();
+        assert!(!told.contains("10.4.12.7"), "the caller does not: {told}");
+        assert!(
+            !told.contains("private"),
+            "nor the class, which narrows the address on its own: {told}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_does_not_resolve_is_indistinguishable_from_one_that_resolves_inward() {
+        // Three outcomes exist — resolves publicly, resolves to a forbidden address, does not
+        // resolve — and the last two must not be tellable apart, or the caller still learns whether
+        // a name exists in this server's DNS view.
+        let unresolved = SsrfRejection::Unresolved;
+        let forbidden =
+            SsrfRejection::ForbiddenAddress(ip("169.254.169.254"), ForbiddenReason::LinkLocal);
+        assert_eq!(unresolved.caller_message(), forbidden.caller_message());
+    }
+
+    #[test]
+    fn a_refusal_about_the_callers_own_string_stays_precise() {
+        // The other four describe what the caller typed, so saying exactly what is wrong tells them
+        // nothing they did not already know and is how they fix it. Coarsening these would cost
+        // usability and buy no secrecy.
+        assert_eq!(
+            SsrfRejection::SchemeNotHttps.caller_message(),
+            "the webhook URL must use https"
+        );
+        assert_eq!(
+            SsrfRejection::CredentialsInUrl.caller_message(),
+            "the webhook URL must not contain credentials"
+        );
+        assert_eq!(
+            SsrfRejection::BadUrl.caller_message(),
+            SsrfRejection::BadUrl.to_string()
+        );
+        assert_eq!(
+            SsrfRejection::MissingHost.caller_message(),
+            SsrfRejection::MissingHost.to_string()
+        );
     }
 
     #[test]

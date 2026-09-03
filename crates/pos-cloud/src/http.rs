@@ -16156,11 +16156,17 @@ where
     {
         Ok(Ok(vetted)) => vetted,
         Ok(Err(rejection)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("the webhook URL was rejected: {rejection}"),
-            )
-                .into_response();
+            // The full rejection goes to the log and a coarser sentence to the caller, because two
+            // of the six variants are decided by *this server's* resolver rather than by the URL
+            // the caller sent: rendering them told a caller which internal names resolve and to
+            // what address, one name per request, which is the reconnaissance the SSRF block exists
+            // to refuse. `SsrfRejection::caller_message` draws that line; the delivery path already
+            // logs the same way (`webhook/runner.rs`).
+            //
+            // The submitted URL is deliberately absent from the log line: a webhook URL routinely
+            // carries its own bearer token in the path or query, and this is a log.
+            tracing::warn!(reason = %rejection, "refused to register a webhook URL");
+            return (StatusCode::BAD_REQUEST, rejection.caller_message()).into_response();
         }
         Err(join_error) => {
             tracing::error!(%join_error, "the SSRF vetting task failed to join");
