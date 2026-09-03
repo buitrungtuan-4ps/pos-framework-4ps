@@ -14,7 +14,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
 /// An area as listed — identity, its store, name, and status.
 #[derive(Clone, Debug)]
@@ -29,10 +29,14 @@ pub struct AreaRow {
     pub name: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The area columns a read returns, in a stable order matching [`area_row`].
-const AREA_COLUMNS: &str = "id, tenant_id, store_id, name, status";
+const AREA_COLUMNS: &str = "id, tenant_id, store_id, name, status, xmin::text";
 
 /// A table as listed — identity, its store and area, label, seat count, optional grid position, status.
 #[derive(Clone, Debug)]
@@ -55,11 +59,15 @@ pub struct TableRow {
     pub grid_row: Option<i32>,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The table columns a read returns, in a stable order matching [`table_row`].
 const TABLE_COLUMNS: &str =
-    "id, tenant_id, store_id, area_id, label, seats, grid_column, grid_row, status";
+    "id, tenant_id, store_id, area_id, label, seats, grid_column, grid_row, status, xmin::text";
 
 /// The floor master-data store over a shared pool. Built by
 /// [`PostgresStore::floor`](crate::PostgresStore::floor).
@@ -84,16 +92,17 @@ impl PostgresFloor {
         tenant_id: &str,
         store_id: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO floor_areas (id, tenant_id, store_id, name) VALUES ($1, $2, $3, $4)",
+        let row = connection
+            .query_one(
+                "INSERT INTO floor_areas (id, tenant_id, store_id, name) VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
                 &[&id, &tenant_id, &store_id, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a store's areas, newest first.
@@ -141,7 +150,7 @@ impl PostgresFloor {
         Ok(row.as_ref().map(area_row))
     }
 
-    /// Renames an area and sets its status, within its tenant. Returns whether a row changed.
+    /// Renames an area and sets its status, within its tenant. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -152,17 +161,33 @@ impl PostgresFloor {
         id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE floor_areas SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2",
-                &[&tenant_id, &id, &name, &status],
+                 WHERE tenant_id = $1 AND id = $2 \
+                 AND xmin::text = $5 RETURNING xmin::text",
+                &[&tenant_id, &id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM floor_areas WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Inserts a table.
@@ -185,13 +210,14 @@ impl PostgresFloor {
         seats: i32,
         grid_column: Option<i32>,
         grid_row: Option<i32>,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO floor_tables \
                  (id, tenant_id, store_id, area_id, label, seats, grid_column, grid_row) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 RETURNING xmin::text",
                 &[
                     &id,
                     &tenant_id,
@@ -205,7 +231,7 @@ impl PostgresFloor {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a store's tables, newest first.
@@ -255,7 +281,7 @@ impl PostgresFloor {
         Ok(row.as_ref().map(table_row))
     }
 
-    /// Updates a table's area, label, seats, position, and status. Returns whether a row changed.
+    /// Updates a table's area, label, seats, position, and status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -275,14 +301,16 @@ impl PostgresFloor {
         grid_column: Option<i32>,
         grid_row: Option<i32>,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE floor_tables \
                  SET area_id = $3, label = $4, seats = $5, grid_column = $6, grid_row = $7, \
                      status = $8, updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2",
+                 WHERE tenant_id = $1 AND id = $2 \
+                 AND xmin::text = $9 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &id,
@@ -292,11 +320,26 @@ impl PostgresFloor {
                     &grid_column,
                     &grid_row,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM floor_tables WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 }
 
@@ -308,6 +351,7 @@ fn area_row(row: &tokio_postgres::Row) -> AreaRow {
         store_id: row.get(2),
         name: row.get(3),
         status: row.get(4),
+        version: row.get(5),
     }
 }
 
@@ -323,6 +367,7 @@ fn table_row(row: &tokio_postgres::Row) -> TableRow {
         grid_column: row.get(6),
         grid_row: row.get(7),
         status: row.get(8),
+        version: row.get(9),
     }
 }
 
@@ -343,11 +388,15 @@ pub struct StationRow {
     pub is_default: bool,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The station columns a read returns, in a stable order matching [`station_row`].
 const STATION_COLUMNS: &str =
-    "id, tenant_id, store_id, name, backup_station_id, is_default, status";
+    "id, tenant_id, store_id, name, backup_station_id, is_default, status, xmin::text";
 
 /// A routing rule as listed — identity, its store and target station, the item/course it matches, sort.
 #[derive(Clone, Debug)]
@@ -386,13 +435,14 @@ impl PostgresFloor {
         name: &str,
         backup_station_id: Option<&str>,
         is_default: bool,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO kitchen_stations \
                  (id, tenant_id, store_id, name, backup_station_id, is_default) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 RETURNING xmin::text",
                 &[
                     &id,
                     &tenant_id,
@@ -404,7 +454,7 @@ impl PostgresFloor {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a store's stations, newest first.
@@ -454,7 +504,7 @@ impl PostgresFloor {
         Ok(row.as_ref().map(station_row))
     }
 
-    /// Updates a station's name, backup, default flag, and status. Returns whether a row changed.
+    /// Updates a station's name, backup, default flag, and status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -467,14 +517,16 @@ impl PostgresFloor {
         backup_station_id: Option<&str>,
         is_default: bool,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE kitchen_stations \
                  SET name = $3, backup_station_id = $4, is_default = $5, status = $6, \
                      updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2",
+                 WHERE tenant_id = $1 AND id = $2 \
+                 AND xmin::text = $7 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &id,
@@ -482,11 +534,26 @@ impl PostgresFloor {
                     &backup_station_id,
                     &is_default,
                     &status,
+                    &expected,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM floor_stations WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Inserts a routing rule.
@@ -577,6 +644,7 @@ fn station_row(row: &tokio_postgres::Row) -> StationRow {
         backup_station_id: row.get(4),
         is_default: row.get(5),
         status: row.get(6),
+        version: row.get(7),
     }
 }
 

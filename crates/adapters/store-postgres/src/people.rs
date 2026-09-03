@@ -19,7 +19,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
 /// An employee as listed — identity, code, status, and whether a PIN is set. Never the PIN hash.
 #[derive(Clone, Debug)]
@@ -36,12 +36,16 @@ pub struct EmployeeRow {
     pub status: String,
     /// Whether a sign-in PIN is set (`pin_phc IS NOT NULL`).
     pub has_pin: bool,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The columns a read returns, in a stable order matching [`employee_row`]. `pin_phc` is deliberately
 /// absent — reads expose only `pin_phc IS NOT NULL AS has_pin`, never the hash.
 const EMPLOYEE_COLUMNS: &str =
-    "id, tenant_id, code, name, status, (pin_phc IS NOT NULL) AS has_pin";
+    "id, tenant_id, code, name, status, (pin_phc IS NOT NULL) AS has_pin, xmin::text";
 
 /// The employee store over a shared pool. Built by [`PostgresStore::people`](crate::PostgresStore::people).
 #[derive(Clone, Debug)]
@@ -66,16 +70,17 @@ impl PostgresPeople {
         tenant_id: &str,
         code: &str,
         name: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO employees (id, tenant_id, code, name) VALUES ($1, $2, $3, $4)",
+        let row = connection
+            .query_one(
+                "INSERT INTO employees (id, tenant_id, code, name) VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
                 &[&id, &tenant_id, &code, &name],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's employees, newest first.
@@ -121,7 +126,7 @@ impl PostgresPeople {
         Ok(row.as_ref().map(employee_row))
     }
 
-    /// Renames an employee and sets their status, within their tenant. Returns whether a row changed.
+    /// Renames an employee and sets their status, within their tenant. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -132,17 +137,33 @@ impl PostgresPeople {
         id: &str,
         name: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE employees SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2",
-                &[&tenant_id, &id, &name, &status],
+                 WHERE tenant_id = $1 AND id = $2 \
+                 AND xmin::text = $5 RETURNING xmin::text",
+                &[&tenant_id, &id, &name, &status, &expected],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM employees WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Sets (or resets) an employee's PIN to the given Argon2id PHC hash, within their tenant. Returns
@@ -197,6 +218,7 @@ fn employee_row(row: &tokio_postgres::Row) -> EmployeeRow {
         name: row.get(3),
         status: row.get(4),
         has_pin: row.get(5),
+        version: row.get(6),
     }
 }
 
@@ -214,10 +236,14 @@ pub struct RoleTemplateRow {
     pub permissions_json: String,
     /// `active` or `archived`.
     pub status: String,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The role-template columns a read returns; `permissions` is read as its `jsonb` text.
-const ROLE_TEMPLATE_COLUMNS: &str = "id, tenant_id, name, permissions::text, status";
+const ROLE_TEMPLATE_COLUMNS: &str = "id, tenant_id, name, permissions::text, status, xmin::text";
 
 /// An assignment as listed — identity plus the three ids it binds.
 #[derive(Clone, Debug)]
@@ -251,17 +277,18 @@ impl PostgresPeople {
         tenant_id: &str,
         name: &str,
         permissions_json: &str,
-    ) -> Result<(), PortError> {
+    ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let row = connection
+            .query_one(
                 "INSERT INTO role_templates (id, tenant_id, name, permissions) \
-                 VALUES ($1, $2, $3, $4::text::jsonb)",
+                 VALUES ($1, $2, $3, $4::text::jsonb) \
+                 RETURNING xmin::text",
                 &[&id, &tenant_id, &name, &permissions_json],
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(row.get(0))
     }
 
     /// Lists a tenant's role templates, newest first.
@@ -311,7 +338,7 @@ impl PostgresPeople {
         Ok(row.as_ref().map(role_template_row))
     }
 
-    /// Updates a role template's name, permission set, and status. Returns whether a row changed.
+    /// Updates a role template's name, permission set, and status. Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -323,18 +350,41 @@ impl PostgresPeople {
         name: &str,
         permissions_json: &str,
         status: &str,
-    ) -> Result<bool, PortError> {
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let changed = connection
-            .execute(
+        let updated = connection
+            .query_opt(
                 "UPDATE role_templates \
                  SET name = $3, permissions = $4::text::jsonb, status = $5, updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2",
-                &[&tenant_id, &id, &name, &permissions_json, &status],
+                 WHERE tenant_id = $1 AND id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
+                &[
+                    &tenant_id,
+                    &id,
+                    &name,
+                    &permissions_json,
+                    &status,
+                    &expected,
+                ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(changed == 1)
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM role_templates WHERE tenant_id = $1 AND id = $2",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Inserts an assignment binding an employee to a store with a role.
@@ -438,6 +488,7 @@ fn role_template_row(row: &tokio_postgres::Row) -> RoleTemplateRow {
         name: row.get(2),
         permissions_json: row.get(3),
         status: row.get(4),
+        version: row.get(5),
     }
 }
 

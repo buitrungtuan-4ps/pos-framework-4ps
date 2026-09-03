@@ -45,6 +45,8 @@ export function Stations() {
   // Station editor (a Drawer). `stationDraftId` is "" for a new station, else the one being edited.
   const [stationOpen, setStationOpen] = createSignal(false);
   const [stationDraftId, setStationDraftId] = createSignal("");
+  // The version the drawer opened on (ADR-0094). Empty for a new station, which has none yet.
+  const [stationDraftEtag, setStationDraftEtag] = createSignal("");
   const [stationName, setStationName] = createSignal("");
   const [stationBackup, setStationBackup] = createSignal("");
   const [stationDefault, setStationDefault] = createSignal(false);
@@ -56,7 +58,17 @@ export function Stations() {
   const [ruleSort, setRuleSort] = createSignal("");
   const [pendingRuleRemove, setPendingRuleRemove] = createSignal<RoutingRule | null>(null);
 
-  const fail = (caught: unknown) => {
+  // A `412` means somebody else saved this station while the form was open (ADR-0094). The screen
+  // reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists
+  // to prevent, and the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("stations.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -78,7 +90,7 @@ export function Stations() {
       setRules(loadedRules);
       setItems(loadedItems);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -95,6 +107,7 @@ export function Stations() {
 
   const openNewStation = () => {
     setStationDraftId("");
+    setStationDraftEtag("");
     setStationName("");
     setStationBackup("");
     setStationDefault(false);
@@ -102,6 +115,7 @@ export function Stations() {
   };
   const openEditStation = (station: Station) => {
     setStationDraftId(station.station_id);
+    setStationDraftEtag(station.etag);
     setStationName(station.name);
     setStationBackup(station.backup_station_id ?? "");
     setStationDefault(station.is_default);
@@ -118,12 +132,17 @@ export function Stations() {
     setBusy(true);
     try {
       if (stationDraftId()) {
-        await api.updateStation(stationDraftId(), tenantId(), {
-          name,
-          backupStationId: stationBackup() || null,
-          isDefault: stationDefault(),
-          status: "active",
-        });
+        await api.updateStation(
+          stationDraftId(),
+          tenantId(),
+          {
+            name,
+            backupStationId: stationBackup() || null,
+            isDefault: stationDefault(),
+            status: "active",
+          },
+          stationDraftEtag(),
+        );
         toast.ok(t("stations.stationUpdated"));
       } else {
         await api.createStation(tenantId(), storeId(), {
@@ -136,7 +155,7 @@ export function Stations() {
       setStationOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -149,17 +168,22 @@ export function Stations() {
   ) => {
     setBusy(true);
     try {
-      await api.updateStation(station.station_id, tenantId(), {
-        name: station.name,
-        backupStationId: station.backup_station_id,
-        isDefault: station.is_default,
-        status,
-      });
+      await api.updateStation(
+        station.station_id,
+        tenantId(),
+        {
+          name: station.name,
+          backupStationId: station.backup_station_id,
+          isDefault: station.is_default,
+          status,
+        },
+        station.etag,
+      );
       setPendingStationArchive(null);
       toast.ok(doneMessage);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -190,7 +214,7 @@ export function Stations() {
       toast.ok(t("stations.ruleCreated"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -208,7 +232,7 @@ export function Stations() {
       toast.ok(t("stations.ruleRemoved"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -220,7 +244,7 @@ export function Stations() {
       await api.publishFloor(tenantId(), storeId());
       toast.ok(t("stations.published"));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }

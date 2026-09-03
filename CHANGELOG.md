@@ -17,6 +17,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Changed
+- **The floor and people entities join the conditional-write mechanism** (#140). Q3c slice 4: areas,
+  tables, kitchen stations, employees and role templates — the five remaining record-shaped entities
+  in the console — go through the same `Version`/`Versioned`/`UpdateOutcome` seam and the same
+  `xmin::text` compare-and-swap as slices 2 and 3. Five `PATCH` routes now require `If-Match` and
+  answer a stale one with `412 VERSION_MISMATCH`.
+
+  **These five keep their response shapes; only the header is new.** Unlike the registry and the
+  catalog, their `PATCH` answers `204` and their `POST` answers `{"id": …}` — and their update
+  payloads do not carry every field (an `AreaUpdate` has no `store_id`), so there is no
+  representation the handler could return without inventing one. The version goes out in the `ETag`
+  header, which is where RFC 9110 puts it for exactly this response, and the five read-one routes
+  (`GET /admin/floor/areas/{id}` and its four siblings) now carry one too. A caller that wants the
+  record re-reads it; a caller that wants to keep writing already holds the token.
+
+  **Setting a PIN is deliberately not version-gated.** `PUT /admin/employees/{id}/pin` writes one
+  field no other console form edits, so there is no edit for it to clobber. It does move the row's
+  version, because it is a write — the seam's doc says so, and the in-memory fake models it, so a
+  fake never hides a conflict the real store would report.
+
+  **The console follows in the same change**: the five `update*` client methods take the version the
+  row was read at, over a new `requestVoidIfMatch`; the Floor, Stations and People screens reload on
+  a `412` rather than offering a retry, with `floor.stale`, `stations.stale` and `people.stale` in
+  `en`/`vi`.
+
+  One tidy-up rides along: `registry_outcome` and `catalog_outcome` were byte-identical, so the five
+  new seams share a single `update_outcome` instead of adding three more copies that could drift.
+
 - **The catalog's nine authoring entities join the conditional-write mechanism** (#139). Q3c slice 3:
   items, tax classes, item categories and sub-categories, display categories and sub-categories,
   modifier groups, menus and menu sections — nine `create`/`list`/`update` triples, eleven `PATCH`

@@ -1535,7 +1535,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.people.list(tenant_id).await {
-        Ok(employees) => (StatusCode::OK, Json::<Vec<Employee>>(employees)).into_response(),
+        Ok(employees) => (StatusCode::OK, Json(employees)).into_response(),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1570,7 +1570,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.people.get(tenant_id, employee_id).await {
-        Ok(Some(employee)) => (StatusCode::OK, Json(employee)).into_response(),
+        Ok(Some(employee)) => versioned_ok(employee.record, &employee.etag),
         Ok(None) => not_found("employee"),
         Err(error) => people_error_response(&error),
     }
@@ -1631,7 +1631,7 @@ where
         name: request.name,
     };
     match state.people.create(&new_employee).await {
-        Ok(()) => {
+        Ok(version) => {
             // The trail records id/code/status — never the name (ADR-0070).
             let after = serde_json::json!({
                 "id": employee_id.to_string(),
@@ -1650,11 +1650,14 @@ where
                 Some(after),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": employee_id.to_string() })),
+            with_etag(
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "id": employee_id.to_string() })),
+                )
+                    .into_response(),
+                &version,
             )
-                .into_response()
         }
         Err(error) => people_error_response(&error),
     }
@@ -1713,16 +1716,20 @@ where
         name: request.name,
         status,
     };
-    match state.people.update(&update).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.people.update(&update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let before = serde_json::json!({
                 "id": employee_id.to_string(),
-                "code": existing.code,
-                "status": existing.status.as_str(),
+                "code": existing.record.code,
+                "status": existing.record.status.as_str(),
             });
             let after = serde_json::json!({
                 "id": employee_id.to_string(),
-                "code": existing.code,
+                "code": existing.record.code,
                 "status": status.as_str(),
             });
             audit_action(
@@ -1737,9 +1744,10 @@ where
                 Some(after),
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(false) => not_found("employee"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("employee"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1835,7 +1843,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.people.list(tenant_id).await {
-        Ok(roles) => (StatusCode::OK, Json::<Vec<RoleTemplate>>(roles)).into_response(),
+        Ok(roles) => (StatusCode::OK, Json(roles)).into_response(),
         Err(error) => people_error_response(&error),
     }
 }
@@ -1868,7 +1876,7 @@ where
             Err(refusal) => return refusal,
         };
     match state.people.get(tenant_id, role_id).await {
-        Ok(Some(role)) => (StatusCode::OK, Json(role)).into_response(),
+        Ok(Some(role)) => versioned_ok(role.record, &role.etag),
         Ok(None) => not_found("role"),
         Err(error) => people_error_response(&error),
     }
@@ -1935,7 +1943,7 @@ where
         permissions: request.permissions.clone(),
     };
     match state.people.create(&new_role).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
                 "name": request.name,
@@ -1953,11 +1961,14 @@ where
                 Some(after),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": role_template_id.to_string() })),
+            with_etag(
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "id": role_template_id.to_string() })),
+                )
+                    .into_response(),
+                &version,
             )
-                .into_response()
         }
         Err(error) => people_error_response(&error),
     }
@@ -2018,8 +2029,12 @@ where
         permissions: request.permissions.clone(),
         status,
     };
-    match state.people.update(&update).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.people.update(&update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
                 "name": request.name,
@@ -2038,9 +2053,10 @@ where
                 Some(after),
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(false) => not_found("role"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("role"),
         Err(error) => people_error_response(&error),
     }
 }
@@ -3715,7 +3731,7 @@ where
         Err(response) => return response,
     };
     match AreaStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(areas) => (StatusCode::OK, Json::<Vec<Area>>(areas)).into_response(),
+        Ok(areas) => (StatusCode::OK, Json(areas)).into_response(),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -3750,7 +3766,7 @@ where
         Err(refusal) => return refusal,
     };
     match AreaStore::get(&state.floor, tenant_id, area_id).await {
-        Ok(Some(area)) => (StatusCode::OK, Json(area)).into_response(),
+        Ok(Some(area)) => versioned_ok(area.record, &area.etag),
         Ok(None) => not_found("area"),
         Err(error) => floor_error_response(&error),
     }
@@ -3802,7 +3818,7 @@ where
         name: request.name.clone(),
     };
     match AreaStore::create(&state.floor, &new_area).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::json!({
                 "id": area_id.to_string(),
                 "store_id": store_id.to_string(),
@@ -3821,11 +3837,14 @@ where
                 Some(after),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": area_id.to_string() })),
+            with_etag(
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "id": area_id.to_string() })),
+                )
+                    .into_response(),
+                &version,
             )
-                .into_response()
         }
         Err(error) => floor_error_response(&error),
     }
@@ -3874,8 +3893,12 @@ where
         name: request.name.clone(),
         status,
     };
-    match AreaStore::update(&state.floor, &update).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match AreaStore::update(&state.floor, &update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": area_id.to_string(),
                 "name": request.name,
@@ -3893,9 +3916,10 @@ where
                 Some(after),
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(false) => not_found("area"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("area"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -3925,7 +3949,7 @@ where
         Err(response) => return response,
     };
     match TableStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(tables) => (StatusCode::OK, Json::<Vec<Table>>(tables)).into_response(),
+        Ok(tables) => (StatusCode::OK, Json(tables)).into_response(),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -3960,7 +3984,7 @@ where
         Err(refusal) => return refusal,
     };
     match TableStore::get(&state.floor, tenant_id, table_id).await {
-        Ok(Some(table)) => (StatusCode::OK, Json(table)).into_response(),
+        Ok(Some(table)) => versioned_ok(table.record, &table.etag),
         Ok(None) => not_found("table"),
         Err(error) => floor_error_response(&error),
     }
@@ -4021,7 +4045,7 @@ where
         position: grid_position(request.grid_column, request.grid_row),
     };
     match TableStore::create(&state.floor, &new_table).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::json!({
                 "id": table_id.to_string(),
                 "area_id": area_id.to_string(),
@@ -4041,11 +4065,14 @@ where
                 Some(after),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": table_id.to_string() })),
+            with_etag(
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "id": table_id.to_string() })),
+                )
+                    .into_response(),
+                &version,
             )
-                .into_response()
         }
         Err(error) => floor_error_response(&error),
     }
@@ -4104,8 +4131,12 @@ where
         position: grid_position(request.grid_column, request.grid_row),
         status,
     };
-    match TableStore::update(&state.floor, &update).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match TableStore::update(&state.floor, &update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": table_id.to_string(),
                 "area_id": area_id.to_string(),
@@ -4125,9 +4156,10 @@ where
                 Some(after),
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(false) => not_found("table"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("table"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4157,7 +4189,7 @@ where
         Err(response) => return response,
     };
     match StationStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(stations) => (StatusCode::OK, Json::<Vec<Station>>(stations)).into_response(),
+        Ok(stations) => (StatusCode::OK, Json(stations)).into_response(),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4192,7 +4224,7 @@ where
         Err(refusal) => return refusal,
     };
     match StationStore::get(&state.floor, tenant_id, station_id).await {
-        Ok(Some(station)) => (StatusCode::OK, Json(station)).into_response(),
+        Ok(Some(station)) => versioned_ok(station.record, &station.etag),
         Ok(None) => not_found("station"),
         Err(error) => floor_error_response(&error),
     }
@@ -4252,7 +4284,7 @@ where
         is_default: request.is_default,
     };
     match StationStore::create(&state.floor, &new_station).await {
-        Ok(()) => {
+        Ok(version) => {
             let after = serde_json::json!({
                 "id": station_id.to_string(),
                 "name": request.name,
@@ -4271,11 +4303,14 @@ where
                 Some(after),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": station_id.to_string() })),
+            with_etag(
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "id": station_id.to_string() })),
+                )
+                    .into_response(),
+                &version,
             )
-                .into_response()
         }
         Err(error) => floor_error_response(&error),
     }
@@ -4333,8 +4368,12 @@ where
         is_default: request.is_default,
         status,
     };
-    match StationStore::update(&state.floor, &update).await {
-        Ok(true) => {
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match StationStore::update(&state.floor, &update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": station_id.to_string(),
                 "name": request.name,
@@ -4353,9 +4392,10 @@ where
                 Some(after),
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(false) => not_found("station"),
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("station"),
         Err(error) => floor_error_response(&error),
     }
 }
@@ -4628,17 +4668,19 @@ where
         Err(refusal) => return refusal,
     };
 
-    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified.
-    let areas = match AreaStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(areas) => areas,
+    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified. The
+    // version each row was read at is a writer's concern (ADR-0094); a compiled plan carries the
+    // floor, not the console's edit history, so the versions are dropped here.
+    let areas: Vec<Area> = match AreaStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(areas) => areas.into_iter().map(|area| area.record).collect(),
         Err(error) => return floor_error_response(&error),
     };
-    let tables = match TableStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(tables) => tables,
+    let tables: Vec<Table> = match TableStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(tables) => tables.into_iter().map(|table| table.record).collect(),
         Err(error) => return floor_error_response(&error),
     };
-    let stations = match StationStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(stations) => stations,
+    let stations: Vec<Station> = match StationStore::list(&state.floor, tenant_id, store_id).await {
+        Ok(stations) => stations.into_iter().map(|station| station.record).collect(),
         Err(error) => return floor_error_response(&error),
     };
     let rules = match RoutingRuleStore::list(&state.floor, tenant_id, store_id).await {
@@ -4818,8 +4860,11 @@ where
         Ok(tables) => tables,
         Err(error) => return floor_error_response(&error),
     };
+    // Minting a QR token is a read of the floor, not a write to it, so the version each row was
+    // read at (ADR-0094) is dropped rather than carried into the printable sheet.
     let tokens = tables
         .into_iter()
+        .map(|table| table.record)
         .filter(|table| table.status == EntityStatus::Active)
         .map(|table| TableQrEntry {
             token: mint_table_token(&state.secret, tenant_id, store_id, table.table_id),
@@ -12568,12 +12613,17 @@ where
             Ok(assignments) => assignments,
             Err(error) => return people_error_response(&error),
         };
-    let employees = match EmployeeStore::list(&state.people, tenant_id).await {
-        Ok(employees) => employees,
+    // As with the floor, the compiler takes the authoring records; the version each was read at is
+    // a writer's concern (ADR-0094) and has no place in a published permissions document.
+    let employees: Vec<Employee> = match EmployeeStore::list(&state.people, tenant_id).await {
+        Ok(employees) => employees
+            .into_iter()
+            .map(|employee| employee.record)
+            .collect(),
         Err(error) => return people_error_response(&error),
     };
-    let roles = match RoleTemplateStore::list(&state.people, tenant_id).await {
-        Ok(roles) => roles,
+    let roles: Vec<RoleTemplate> = match RoleTemplateStore::list(&state.people, tenant_id).await {
+        Ok(roles) => roles.into_iter().map(|role| role.record).collect(),
         Err(error) => return people_error_response(&error),
     };
     // The stored PIN hash for each assigned employee, read only here (the trusted publish path) and
@@ -16549,6 +16599,25 @@ where
         Ok(tag) => (StatusCode::CREATED, [(ETAG, tag)], body).into_response(),
         Err(_ignored) => (StatusCode::CREATED, body).into_response(),
     }
+}
+
+/// Stamps the version a write left the record at onto a response, without changing its shape.
+///
+/// Five entities — areas, tables, stations, employees, role templates — answer a write with `204`
+/// or a bare `{"id": …}`, not the record. That is not an oversight to correct here: their update
+/// payloads do not carry every field (an `AreaUpdate` has no `store_id`), so a returned
+/// "representation" would be one this handler had to invent. The header is the whole contract for
+/// them — RFC 9110 §8.8.3 puts `ETag` on exactly this response — so a caller that wants the record
+/// re-reads it, and a caller that wants to keep writing already holds the token it needs.
+///
+/// A token that cannot be a header value is the adapter's fault, not the caller's, and the write
+/// itself still succeeded; the response goes out unstamped rather than turning a completed write
+/// into a `500`.
+fn with_etag(mut response: Response, version: &Version) -> Response {
+    if let Ok(tag) = HeaderValue::from_str(&format!("\"{version}\"")) {
+        response.headers_mut().insert(ETAG, tag);
+    }
+    response
 }
 
 /// A record and the version it is now at, as `200`.

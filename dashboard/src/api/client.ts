@@ -242,6 +242,30 @@ async function requestJsonIfMatch<T>(
   return (await response.json()) as T;
 }
 
+// The same conditional write as `requestJsonIfMatch`, for the routes that answer `204` rather than
+// the updated record — areas, tables, stations, employees and role templates, whose PATCH payloads
+// do not carry every field, so the server has no representation to return that it did not invent
+// (ADR-0094). The new version comes back in the `ETag` header; every screen reloads after a write,
+// so nothing here reads it.
+async function requestVoidIfMatch(
+  method: string,
+  path: string,
+  etag: ETag,
+  body?: unknown,
+): Promise<void> {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      "if-match": `"${etag}"`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+}
+
 async function requestVoid(method: string, path: string, body?: unknown): Promise<void> {
   const response = await fetch(path, {
     method,
@@ -551,8 +575,13 @@ export const api = {
     ),
   createEmployee: (tenantId: string, code: string, name: string) =>
     requestJson<CreatedId>("POST", "/admin/employees", { tenant_id: tenantId, code, name }),
-  updateEmployee: (id: string, tenantId: string, fields: { name: string; status: EntityStatus }) =>
-    requestVoid("PATCH", `/admin/employees/${encodeURIComponent(id)}`, {
+  updateEmployee: (
+    id: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestVoidIfMatch("PATCH", `/admin/employees/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       status: fields.status,
@@ -571,8 +600,9 @@ export const api = {
     id: string,
     tenantId: string,
     fields: { name: string; permissions: string[]; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestVoid("PATCH", `/admin/roles/${encodeURIComponent(id)}`, {
+    requestVoidIfMatch("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       permissions: fields.permissions,
@@ -629,8 +659,9 @@ export const api = {
     areaId: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
+    etag: ETag,
   ) =>
-    requestVoid("PATCH", `/admin/floor/areas/${encodeURIComponent(areaId)}`, {
+    requestVoidIfMatch("PATCH", `/admin/floor/areas/${encodeURIComponent(areaId)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       status: fields.status,
@@ -671,8 +702,9 @@ export const api = {
       gridRow: number | null;
       status: EntityStatus;
     },
+    etag: ETag,
   ) =>
-    requestVoid("PATCH", `/admin/floor/tables/${encodeURIComponent(tableId)}`, {
+    requestVoidIfMatch("PATCH", `/admin/floor/tables/${encodeURIComponent(tableId)}`, etag, {
       tenant_id: tenantId,
       area_id: fields.areaId,
       name: fields.name,
@@ -707,8 +739,9 @@ export const api = {
       isDefault: boolean;
       status: EntityStatus;
     },
+    etag: ETag,
   ) =>
-    requestVoid("PATCH", `/admin/kitchen/stations/${encodeURIComponent(stationId)}`, {
+    requestVoidIfMatch("PATCH", `/admin/kitchen/stations/${encodeURIComponent(stationId)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       backup_station_id: fields.backupStationId,

@@ -1331,8 +1331,9 @@ fn device_record(row: DeviceRow) -> Result<Versioned<DeviceRecord>, RegistryStor
 /// The two types are deliberately separate rather than one shared enum: `RowUpdate` names a
 /// database row and `UpdateOutcome` names a seam's answer, and this crate is the only place that
 /// knows both. Collapsing them would put a `store-postgres` type in the seam every fork has to
-/// implement.
-fn registry_outcome(update: RowUpdate) -> UpdateOutcome {
+/// implement. One function serves every seam — the translation does not vary by entity, and a copy
+/// per store would be a copy that can drift.
+fn update_outcome(update: RowUpdate) -> UpdateOutcome {
     match update {
         RowUpdate::Updated(version) => UpdateOutcome::Updated(Version::new(version)),
         RowUpdate::VersionMismatch => UpdateOutcome::VersionMismatch,
@@ -1368,7 +1369,7 @@ impl RegistryStore for PostgresRegistry {
             expected.as_str(),
         )
         .await
-        .map(registry_outcome)
+        .map(update_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
@@ -1407,7 +1408,7 @@ impl RegistryStore for PostgresRegistry {
             expected.as_str(),
         )
         .await
-        .map(registry_outcome)
+        .map(update_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
@@ -1450,7 +1451,7 @@ impl RegistryStore for PostgresRegistry {
             expected.as_str(),
         )
         .await
-        .map(registry_outcome)
+        .map(update_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 
@@ -1493,7 +1494,7 @@ impl RegistryStore for PostgresRegistry {
             expected.as_str(),
         )
         .await
-        .map(registry_outcome)
+        .map(update_outcome)
         .map_err(|error| RegistryStoreError::new(error.to_string()))
     }
 }
@@ -2303,7 +2304,7 @@ impl AuditStore for PostgresAudit {
 
 /// Converts a stored employee row into the domain [`Employee`], parsing the ids and status. A row with
 /// an unparseable id is corruption the caller should see, not silently drop.
-fn employee_record(row: EmployeeRow) -> Result<Employee, EmployeeStoreError> {
+fn employee_record(row: EmployeeRow) -> Result<Versioned<Employee>, EmployeeStoreError> {
     let employee_id = row
         .id
         .parse::<Ulid>()
@@ -2318,18 +2319,22 @@ fn employee_record(row: EmployeeRow) -> Result<Employee, EmployeeStoreError> {
         .map_err(|error| {
             EmployeeStoreError::new(format!("stored tenant id is not a ULID: {error}"))
         })?;
-    Ok(Employee {
-        employee_id,
-        tenant_id,
-        code: row.code,
-        name: row.name,
-        status: EntityStatus::from_db(&row.status),
-        has_pin: row.has_pin,
+    let version = Version::new(row.version);
+    Ok(Versioned {
+        record: Employee {
+            employee_id,
+            tenant_id,
+            code: row.code,
+            name: row.name,
+            status: EntityStatus::from_db(&row.status),
+            has_pin: row.has_pin,
+        },
+        etag: version,
     })
 }
 
 impl EmployeeStore for PostgresPeople {
-    async fn create(&self, employee: &NewEmployee) -> Result<(), EmployeeStoreError> {
+    async fn create(&self, employee: &NewEmployee) -> Result<Version, EmployeeStoreError> {
         self.insert(
             &employee.employee_id.to_string(),
             &employee.tenant_id.to_string(),
@@ -2337,10 +2342,11 @@ impl EmployeeStore for PostgresPeople {
             &employee.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| EmployeeStoreError::new(error.to_string()))
     }
 
-    async fn list(&self, tenant: TenantId) -> Result<Vec<Employee>, EmployeeStoreError> {
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Versioned<Employee>>, EmployeeStoreError> {
         let rows = self
             .fetch(&tenant.to_string())
             .await
@@ -2352,7 +2358,7 @@ impl EmployeeStore for PostgresPeople {
         &self,
         tenant: TenantId,
         employee_id: EmployeeId,
-    ) -> Result<Option<Employee>, EmployeeStoreError> {
+    ) -> Result<Option<Versioned<Employee>>, EmployeeStoreError> {
         let row = self
             .fetch_one(&tenant.to_string(), &employee_id.to_string())
             .await
@@ -2360,14 +2366,20 @@ impl EmployeeStore for PostgresPeople {
         row.map(employee_record).transpose()
     }
 
-    async fn update(&self, employee: &EmployeeUpdate) -> Result<bool, EmployeeStoreError> {
+    async fn update(
+        &self,
+        employee: &EmployeeUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, EmployeeStoreError> {
         self.set(
             &employee.tenant_id.to_string(),
             &employee.employee_id.to_string(),
             &employee.name,
             employee.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(update_outcome)
         .map_err(|error| EmployeeStoreError::new(error.to_string()))
     }
 
@@ -2395,7 +2407,9 @@ impl EmployeeStore for PostgresPeople {
 
 /// Converts a stored role-template row into the domain [`RoleTemplate`], parsing the ids, status, and
 /// the `jsonb` permission array.
-fn role_template_record(row: RoleTemplateRow) -> Result<RoleTemplate, RoleTemplateStoreError> {
+fn role_template_record(
+    row: RoleTemplateRow,
+) -> Result<Versioned<RoleTemplate>, RoleTemplateStoreError> {
     let role_template_id = row
         .id
         .parse::<Ulid>()
@@ -2416,17 +2430,21 @@ fn role_template_record(row: RoleTemplateRow) -> Result<RoleTemplate, RoleTempla
                 "stored role-template permissions are not JSON: {error}"
             ))
         })?;
-    Ok(RoleTemplate {
-        role_template_id,
-        tenant_id,
-        name: row.name,
-        permissions,
-        status: EntityStatus::from_db(&row.status),
+    let version = Version::new(row.version);
+    Ok(Versioned {
+        record: RoleTemplate {
+            role_template_id,
+            tenant_id,
+            name: row.name,
+            permissions,
+            status: EntityStatus::from_db(&row.status),
+        },
+        etag: version,
     })
 }
 
 impl RoleTemplateStore for PostgresPeople {
-    async fn create(&self, template: &NewRoleTemplate) -> Result<(), RoleTemplateStoreError> {
+    async fn create(&self, template: &NewRoleTemplate) -> Result<Version, RoleTemplateStoreError> {
         let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
             RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
         })?;
@@ -2437,10 +2455,14 @@ impl RoleTemplateStore for PostgresPeople {
             &permissions_json,
         )
         .await
+        .map(Version::new)
         .map_err(|error| RoleTemplateStoreError::new(error.to_string()))
     }
 
-    async fn list(&self, tenant: TenantId) -> Result<Vec<RoleTemplate>, RoleTemplateStoreError> {
+    async fn list(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
         let rows = self
             .fetch_role_templates(&tenant.to_string())
             .await
@@ -2452,7 +2474,7 @@ impl RoleTemplateStore for PostgresPeople {
         &self,
         tenant: TenantId,
         role_template_id: RoleTemplateId,
-    ) -> Result<Option<RoleTemplate>, RoleTemplateStoreError> {
+    ) -> Result<Option<Versioned<RoleTemplate>>, RoleTemplateStoreError> {
         let row = self
             .fetch_role_template(&tenant.to_string(), &role_template_id.to_string())
             .await
@@ -2460,7 +2482,11 @@ impl RoleTemplateStore for PostgresPeople {
         row.map(role_template_record).transpose()
     }
 
-    async fn update(&self, template: &RoleTemplateUpdate) -> Result<bool, RoleTemplateStoreError> {
+    async fn update(
+        &self,
+        template: &RoleTemplateUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, RoleTemplateStoreError> {
         let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
             RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
         })?;
@@ -2470,8 +2496,10 @@ impl RoleTemplateStore for PostgresPeople {
             &template.name,
             &permissions_json,
             template.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(update_outcome)
         .map_err(|error| RoleTemplateStoreError::new(error.to_string()))
     }
 }
@@ -2579,19 +2607,23 @@ fn parse_floor_ulid(text: &str, what: &str) -> Result<Ulid, FloorStoreError> {
 }
 
 /// Reads one queried row into an [`Area`].
-fn area_record(row: &AreaRow) -> Result<Area, FloorStoreError> {
-    Ok(Area {
+fn area_record(row: AreaRow) -> Result<Versioned<Area>, FloorStoreError> {
+    let record = Area {
         area_id: AreaId::new(parse_floor_ulid(&row.id, "area")?),
         tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
         store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
-        name: row.name.clone(),
+        name: row.name,
         status: EntityStatus::from_db(&row.status),
+    };
+    Ok(Versioned {
+        record,
+        etag: Version::new(row.version),
     })
 }
 
 /// Reads one queried row into a [`Table`], folding the two nullable grid columns into an optional
 /// [`GridPosition`] (a table is placed only when both are set).
-fn table_record(row: &TableRow) -> Result<Table, FloorStoreError> {
+fn table_record(row: TableRow) -> Result<Versioned<Table>, FloorStoreError> {
     let position = match (row.grid_column, row.grid_row) {
         (Some(column), Some(grid_row)) => Some(GridPosition {
             column: u16::try_from(column).unwrap_or(0),
@@ -2599,20 +2631,24 @@ fn table_record(row: &TableRow) -> Result<Table, FloorStoreError> {
         }),
         _ => None,
     };
-    Ok(Table {
+    let record = Table {
         table_id: TableId::new(parse_floor_ulid(&row.id, "table")?),
         tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
         store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
         area_id: AreaId::new(parse_floor_ulid(&row.area_id, "area")?),
-        label: row.label.clone(),
+        label: row.label,
         seats: u16::try_from(row.seats).unwrap_or(0),
         position,
         status: EntityStatus::from_db(&row.status),
+    };
+    Ok(Versioned {
+        record,
+        etag: Version::new(row.version),
     })
 }
 
 impl AreaStore for PostgresFloor {
-    async fn create(&self, area: &NewArea) -> Result<(), FloorStoreError> {
+    async fn create(&self, area: &NewArea) -> Result<Version, FloorStoreError> {
         self.insert_area(
             &area.area_id.to_string(),
             &area.tenant_id.to_string(),
@@ -2620,6 +2656,7 @@ impl AreaStore for PostgresFloor {
             &area.name,
         )
         .await
+        .map(Version::new)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 
@@ -2627,40 +2664,46 @@ impl AreaStore for PostgresFloor {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Area>, FloorStoreError> {
+    ) -> Result<Vec<Versioned<Area>>, FloorStoreError> {
         let rows = self
             .fetch_areas(&tenant.to_string(), &store_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        rows.iter().map(area_record).collect()
+        rows.into_iter().map(area_record).collect()
     }
 
     async fn get(
         &self,
         tenant: TenantId,
         area_id: AreaId,
-    ) -> Result<Option<Area>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Area>>, FloorStoreError> {
         let row = self
             .fetch_area(&tenant.to_string(), &area_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        row.as_ref().map(area_record).transpose()
+        row.map(area_record).transpose()
     }
 
-    async fn update(&self, area: &AreaUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        area: &AreaUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
         self.set_area(
             &area.tenant_id.to_string(),
             &area.area_id.to_string(),
             &area.name,
             area.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(update_outcome)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 }
 
 impl TableStore for PostgresFloor {
-    async fn create(&self, table: &NewTable) -> Result<(), FloorStoreError> {
+    async fn create(&self, table: &NewTable) -> Result<Version, FloorStoreError> {
         self.insert_table(
             &table.table_id.to_string(),
             &table.tenant_id.to_string(),
@@ -2672,6 +2715,7 @@ impl TableStore for PostgresFloor {
             table.position.map(|position| i32::from(position.row)),
         )
         .await
+        .map(Version::new)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 
@@ -2679,27 +2723,31 @@ impl TableStore for PostgresFloor {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Table>, FloorStoreError> {
+    ) -> Result<Vec<Versioned<Table>>, FloorStoreError> {
         let rows = self
             .fetch_tables(&tenant.to_string(), &store_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        rows.iter().map(table_record).collect()
+        rows.into_iter().map(table_record).collect()
     }
 
     async fn get(
         &self,
         tenant: TenantId,
         table_id: TableId,
-    ) -> Result<Option<Table>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Table>>, FloorStoreError> {
         let row = self
             .fetch_table(&tenant.to_string(), &table_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        row.as_ref().map(table_record).transpose()
+        row.map(table_record).transpose()
     }
 
-    async fn update(&self, table: &TableUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        table: &TableUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
         self.set_table(
             &table.tenant_id.to_string(),
             &table.table_id.to_string(),
@@ -2709,27 +2757,33 @@ impl TableStore for PostgresFloor {
             table.position.map(|position| i32::from(position.column)),
             table.position.map(|position| i32::from(position.row)),
             table.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(update_outcome)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 }
 
 /// Reads one queried row into a [`Station`].
-fn station_record(row: &StationRow) -> Result<Station, FloorStoreError> {
+fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError> {
     let backup_station_id = row
         .backup_station_id
         .as_deref()
         .map(|text| parse_floor_ulid(text, "backup station").map(StationId::new))
         .transpose()?;
-    Ok(Station {
+    let record = Station {
         station_id: StationId::new(parse_floor_ulid(&row.id, "station")?),
         tenant_id: TenantId::new(parse_floor_ulid(&row.tenant_id, "tenant")?),
         store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
-        name: row.name.clone(),
+        name: row.name,
         backup_station_id,
         is_default: row.is_default,
         status: EntityStatus::from_db(&row.status),
+    };
+    Ok(Versioned {
+        record,
+        etag: Version::new(row.version),
     })
 }
 
@@ -2757,7 +2811,7 @@ fn routing_rule_record(row: &RoutingRuleRow) -> Result<RoutingRule, FloorStoreEr
 }
 
 impl StationStore for PostgresFloor {
-    async fn create(&self, station: &NewStation) -> Result<(), FloorStoreError> {
+    async fn create(&self, station: &NewStation) -> Result<Version, FloorStoreError> {
         let backup = station.backup_station_id.map(|id| id.to_string());
         self.insert_station(
             &station.station_id.to_string(),
@@ -2768,6 +2822,7 @@ impl StationStore for PostgresFloor {
             station.is_default,
         )
         .await
+        .map(Version::new)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 
@@ -2775,27 +2830,31 @@ impl StationStore for PostgresFloor {
         &self,
         tenant: TenantId,
         store_id: StoreId,
-    ) -> Result<Vec<Station>, FloorStoreError> {
+    ) -> Result<Vec<Versioned<Station>>, FloorStoreError> {
         let rows = self
             .fetch_stations(&tenant.to_string(), &store_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        rows.iter().map(station_record).collect()
+        rows.into_iter().map(station_record).collect()
     }
 
     async fn get(
         &self,
         tenant: TenantId,
         station_id: StationId,
-    ) -> Result<Option<Station>, FloorStoreError> {
+    ) -> Result<Option<Versioned<Station>>, FloorStoreError> {
         let row = self
             .fetch_station(&tenant.to_string(), &station_id.to_string())
             .await
             .map_err(|error| FloorStoreError::new(error.to_string()))?;
-        row.as_ref().map(station_record).transpose()
+        row.map(station_record).transpose()
     }
 
-    async fn update(&self, station: &StationUpdate) -> Result<bool, FloorStoreError> {
+    async fn update(
+        &self,
+        station: &StationUpdate,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, FloorStoreError> {
         let backup = station.backup_station_id.map(|id| id.to_string());
         self.set_station(
             &station.tenant_id.to_string(),
@@ -2804,8 +2863,10 @@ impl StationStore for PostgresFloor {
             backup.as_deref(),
             station.is_default,
             station.status.as_str(),
+            expected.as_str(),
         )
         .await
+        .map(update_outcome)
         .map_err(|error| FloorStoreError::new(error.to_string()))
     }
 }
@@ -3194,16 +3255,6 @@ fn catalog_placement_record(row: &CatalogPlacementRow) -> Result<MenuPlacement, 
     })
 }
 
-/// Carries the catalog adapter's conditional-write result across the seam (ADR-0094), exactly as
-/// [`registry_outcome`] does for the registry.
-fn catalog_outcome(update: RowUpdate) -> UpdateOutcome {
-    match update {
-        RowUpdate::Updated(version) => UpdateOutcome::Updated(Version::new(version)),
-        RowUpdate::VersionMismatch => UpdateOutcome::VersionMismatch,
-        RowUpdate::NotFound => UpdateOutcome::NotFound,
-    }
-}
-
 impl CatalogStore for PostgresCatalog {
     async fn create_item(&self, item: &CatalogItem) -> Result<Version, CatalogStoreError> {
         let category = item.item_category_id.map(|id| id.to_string());
@@ -3260,7 +3311,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3299,7 +3350,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3341,7 +3392,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3385,7 +3436,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3429,7 +3480,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3475,7 +3526,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3570,7 +3621,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3613,7 +3664,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
@@ -3659,7 +3710,7 @@ impl CatalogStore for PostgresCatalog {
             expected.as_str(),
         )
         .await
-        .map(catalog_outcome)
+        .map(update_outcome)
         .map_err(|error| CatalogStoreError::new(error.to_string()))
     }
 
