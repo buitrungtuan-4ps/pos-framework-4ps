@@ -1,6 +1,11 @@
 # ADR-0094 — The console stops losing edits: an opaque version at the seam, Postgres `xmin` beneath it
 
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-02
+**Amended by** [ADR-0095](0095-conditional-writes-for-collections.md) — splits the remaining scope
+(the config tree's whole-document save, the keyed upserts, and the collection replaces) into three
+shapes with three different answers, and withdraws the `If-None-Match` exclusion below for keyed
+upserts, where the create-versus-overwrite distinction is a correctness question rather than a
+bandwidth one.
 **Relates to** [ADR-0016](0016-postgres-access.md) (the adapter this lands in) · [ADR-0017](0017-migrations.md) (the migration this deliberately does not need) · [ADR-0033](0033-config-tree.md) (the whole-document save that is the worst case) · [ADR-0060](0060-cloud-back-office-dashboard.md) (the console that will send the header) · [ADR-0065](0065-cloud-org-registry.md) · [ADR-0066](0066-cloud-catalog.md) (the two entity families that go first) · [ADR-0069](0069-audit-trail.md) (the trail that records the winner but not the loser) · `docs/naming-and-api.md` §4 (the canonical status list this adds to) · `docs/roadmap-v3.md` **Q3c**
 
 **Context.** **Every master-data edit in the console is last-write-wins, silently.**

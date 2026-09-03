@@ -16,6 +16,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **ADR-0095 splits what ADR-0094 left into three shapes** (#141). Documentation only; no behaviour
+  changes.
+
+  ADR-0094 described its remaining scope in one line — "the `PUT` routes that replace a record in
+  place … plus the config tree's whole-document save" — which reads as one homogeneous group.
+  Measured on the seams it is three, needing three different answers, and this record decides two of
+  them and names the third as the owner's call.
+
+  **The config tree writes conditionally on the `ConfigVersionId` it already has.** There are twelve
+  `ConfigTreeStore::save` call sites, every one reconstructing the tree from a freshly loaded state
+  and replacing the whole four-layer document plus its history — so two concurrent publishes lose one
+  of them entirely. But `ConfigTree::current_version()` already exists, is already carried to the
+  edge, already recorded in the audit trail and already listed by the history routes the Config
+  screen renders. No new token, no new column, and — unlike every other entity here — a `412` that
+  can name a version the operator recognises.
+
+  **Tax rates and the translation grid get a version on the collection, keyed by tenant.** These are
+  the only two genuine whole-collection replaces. Neither handler reads before it writes: the
+  read-modify-write is the *console's*, which is the same lost update with an operator's thinking
+  time in the middle rather than a request's. This shape brings the first migration in this line of
+  work — ADR-0094's "no schema change" property holds for records and does not extend to collections.
+
+  **Six keyed upserts are deferred, deliberately.** `upsert_ingredient`, `upsert_recipe`,
+  `upsert_supplier`, `upsert_campaign`, `set_placement` and `set_layout_button` are create-or-replace
+  at a key, not collection replaces as an earlier scoping note had them. `If-Match` alone cannot
+  separate a create from a blind overwrite, so this needs either a second conditional header
+  (`If-None-Match: *`) or a split of each seam into an explicit create and update. The record
+  recommends the split and leaves the choice to the owner, because it changes six route shapes.
+
+  Two corrections ride along: ADR-0094's exclusion of `If-None-Match` as "bandwidth, not correctness"
+  is withdrawn for keyed upserts, where it is exactly a correctness question; and this work's own
+  earlier plan of one collection version for all eight remaining seams is recorded as wrong on the
+  measurement, fitting two of them.
+
 ### Changed
 - **The floor and people entities join the conditional-write mechanism** (#140). Q3c slice 4: areas,
   tables, kitchen stations, employees and role templates — the five remaining record-shaped entities
