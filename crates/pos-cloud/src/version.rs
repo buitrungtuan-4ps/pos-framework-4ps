@@ -80,6 +80,18 @@ impl<T> Versioned<T> {
     }
 }
 
+/// Drops the per-row versions from a list read, keeping the records in order.
+///
+/// A `list_*` carries a [`Version`] per row because an editor needs one to write back
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)). Not every caller is an
+/// editor: a publish reads a tenant's whole authored set and assembles a config node from it, and a
+/// compiler reads items, menus and placements to build a price book. For those the token is noise —
+/// there is no row to write back to — so they take the records and leave the versions here.
+#[must_use]
+pub fn records<T>(rows: Vec<Versioned<T>>) -> Vec<T> {
+    rows.into_iter().map(|row| row.record).collect()
+}
+
 /// What a conditional write did.
 ///
 /// The three answers are distinct because the caller must do three different things: carry
@@ -95,6 +107,28 @@ pub enum UpdateOutcome {
     VersionMismatch,
     /// No such row. Answers `404`.
     NotFound,
+}
+
+/// What a create did.
+///
+/// The counterpart to [`UpdateOutcome`], for the six seams that were one `upsert_*` until
+/// [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md) split them. An upsert
+/// answers the same way whether it inserted or overwrote, so a caller asking to *add* something
+/// could silently replace what was already at that key — a recipe for an item that already had one,
+/// a layout button already placed on that channel — and neither the response nor the audit trail
+/// said so.
+///
+/// `AlreadyExists` is a separate variant rather than a store error because a duplicate key is the
+/// **caller's** fault and is recoverable by editing instead: it answers `409 ALREADY_EXISTS`, where
+/// the error channel these seams share collapses everything to `503 the service is unavailable`.
+/// That distinction is not cosmetic — a caller told `503` retries the same losing request, which is
+/// exactly the trap [#152] fixed on `set_station`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CreateOutcome {
+    /// The row was inserted. Carries the version it was created at, for the `ETag` on the `201`.
+    Created(Version),
+    /// A row already holds that key. Answers `409`; the caller wants `update_*` instead.
+    AlreadyExists,
 }
 
 #[cfg(test)]

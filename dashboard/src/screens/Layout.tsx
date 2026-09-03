@@ -16,6 +16,7 @@ import type {
   CatalogItem,
   DisplayCategory,
   DisplaySubcategory,
+  ETag,
   LayoutButton,
   SalesChannel,
 } from "../api/types";
@@ -52,7 +53,9 @@ export function Layout() {
 
   // Button editor drawer.
   const [buttonOpen, setButtonOpen] = createSignal(false);
-  const [buttonEditing, setButtonEditing] = createSignal(false);
+  // Non-null while editing an existing button, carrying the version it was read at: the update is
+  // conditional on that version (ADR-0095). `null` means the drawer is placing a new one.
+  const [buttonEditing, setButtonEditing] = createSignal<{ etag: ETag } | null>(null);
   const [buttonItem, setButtonItem] = createSignal("");
   const [buttonCategory, setButtonCategory] = createSignal("");
   const [buttonSubcategory, setButtonSubcategory] = createSignal("");
@@ -177,7 +180,7 @@ export function Layout() {
   // --- button editor ---
 
   const openAddButton = () => {
-    setButtonEditing(false);
+    setButtonEditing(null);
     setButtonItem("");
     setButtonCategory("");
     setButtonSubcategory("");
@@ -189,7 +192,7 @@ export function Layout() {
   };
 
   const openEditButton = (button: LayoutButton) => {
-    setButtonEditing(true);
+    setButtonEditing({ etag: button.etag });
     setButtonItem(button.menu_item_id);
     setButtonCategory(button.display_category_id);
     setButtonSubcategory(button.display_subcategory_id ?? "");
@@ -229,16 +232,24 @@ export function Layout() {
       gridColumn = column;
       gridRow = row;
     }
+    const fields = {
+      displayCategoryId: buttonCategory(),
+      displaySubcategoryId: buttonSubcategory() || null,
+      label,
+      gridColumn,
+      gridRow,
+      sort: buttonSort(),
+    };
     setBusy(true);
     try {
-      await api.setLayoutButton(tenantId(), channel(), buttonItem(), {
-        displayCategoryId: buttonCategory(),
-        displaySubcategoryId: buttonSubcategory() || null,
-        label,
-        gridColumn,
-        gridRow,
-        sort: buttonSort(),
-      });
+      const editing = buttonEditing();
+      if (editing) {
+        await api.updateLayoutButton(tenantId(), channel(), buttonItem(), editing.etag, fields);
+      } else {
+        // A button's slot is its `(channel, item)` pair, supplied here — so placing one where a
+        // button already sits is refused rather than relabelling and re-positioning it (ADR-0095).
+        await api.createLayoutButton(tenantId(), channel(), buttonItem(), fields);
+      }
       toast.ok(t("layout.buttonSaved"));
       setButtonOpen(false);
       await reloadButtons();
@@ -285,14 +296,22 @@ export function Layout() {
     try {
       for (const [index, button] of next.entries()) {
         if (button.sort !== index) {
-          await api.setLayoutButton(tenantId(), channel(), button.menu_item_id, {
-            displayCategoryId: button.display_category_id,
-            displaySubcategoryId: button.display_subcategory_id,
-            label: button.label,
-            gridColumn: null,
-            gridRow: null,
-            sort: index,
-          });
+          // Every button here was just read, so each write is conditional on the version it carried:
+          // a reorder against a layout someone else has edited is refused, not merged blindly.
+          await api.updateLayoutButton(
+            tenantId(),
+            channel(),
+            button.menu_item_id,
+            button.etag,
+            {
+              displayCategoryId: button.display_category_id,
+              displaySubcategoryId: button.display_subcategory_id,
+              label: button.label,
+              gridColumn: null,
+              gridRow: null,
+              sort: index,
+            },
+          );
         }
       }
       await reloadButtons();
@@ -311,17 +330,38 @@ export function Layout() {
       return;
     }
     const source = channelButtons();
+    // What the target channel already has, by item. A copy still overwrites — that is what the
+    // confirmation promises — but each overwrite now goes through the update at the version the row
+    // was read at, so a button someone edited since this page loaded refuses the write instead of
+    // losing their change (ADR-0095).
+    const onTarget = new Map(
+      (buttons() ?? [])
+        .filter((button) => button.sales_channel === target)
+        .map((button) => [button.menu_item_id, button] as const),
+    );
     setBusy(true);
     try {
       for (const button of source) {
-        await api.setLayoutButton(tenantId(), target, button.menu_item_id, {
+        const fields = {
           displayCategoryId: button.display_category_id,
           displaySubcategoryId: button.display_subcategory_id,
           label: button.label,
           gridColumn: button.position?.column ?? null,
           gridRow: button.position?.row ?? null,
           sort: button.sort,
-        });
+        };
+        const already = onTarget.get(button.menu_item_id);
+        if (already) {
+          await api.updateLayoutButton(
+            tenantId(),
+            target,
+            button.menu_item_id,
+            already.etag,
+            fields,
+          );
+        } else {
+          await api.createLayoutButton(tenantId(), target, button.menu_item_id, fields);
+        }
       }
       toast.ok(t("layout.copied", { count: source.length, channel: t(CHANNEL_LABEL[target]) }));
       setCopyConfirm(false);
@@ -790,7 +830,7 @@ export function Layout() {
           onClose={() => setButtonOpen(false)}
           footer={
             <>
-              <Show when={buttonEditing()}>
+              <Show when={buttonEditing() !== null}>
                 <Button
                   variant="danger"
                   disabled={busy()}
@@ -820,7 +860,7 @@ export function Layout() {
               <select
                 class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
                 value={buttonItem()}
-                disabled={buttonEditing()}
+                disabled={buttonEditing() !== null}
                 onChange={(event) => setButtonItem(event.currentTarget.value)}
               >
                 <option value="">{t("layout.chooseItem")}</option>

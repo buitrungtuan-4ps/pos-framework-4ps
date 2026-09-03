@@ -18,6 +18,7 @@ import {
   type CampaignInput,
   type CampaignKind,
   type CampaignPreview,
+  type ETag,
   type SalesChannel,
   type ScheduledPublish,
   type Voucher,
@@ -112,7 +113,10 @@ export function Campaigns() {
 
   // The authoring drawer.
   const [formOpen, setFormOpen] = createSignal(false);
-  const [editingId, setEditingId] = createSignal<string | null>(null);
+  // The campaign being edited, as the id *and* the version it was read at: an update is conditional
+  // on that version (ADR-0095), so the two travel together rather than in separate signals that
+  // could drift apart.
+  const [editing, setEditing] = createSignal<{ id: string; etag: ETag } | null>(null);
   const [fName, setFName] = createSignal("");
   const [fKind, setFKind] = createSignal<CampaignKind>("bill_level");
   const [fPriority, setFPriority] = createSignal("0");
@@ -167,7 +171,7 @@ export function Campaigns() {
   onScopedContext("tenant", () => void load());
 
   const openCreate = () => {
-    setEditingId(null);
+    setEditing(null);
     setFName("");
     setFKind("bill_level");
     setFPriority("0");
@@ -187,7 +191,7 @@ export function Campaigns() {
   };
 
   const openEdit = (campaign: Campaign) => {
-    setEditingId(campaign.id);
+    setEditing({ id: campaign.id, etag: campaign.etag });
     setFName(campaign.name);
     setFKind(campaign.kind);
     setFPriority(String(campaign.priority));
@@ -328,9 +332,9 @@ export function Campaigns() {
     }
     setBusy(true);
     try {
-      const id = editingId();
-      if (id) {
-        await api.updateCampaign(tenantId(), id, input);
+      const target = editing();
+      if (target) {
+        await api.updateCampaign(tenantId(), target.id, target.etag, input);
         toast.ok(t("campaigns.updated"));
       } else {
         await api.createCampaign(tenantId(), input);
@@ -649,7 +653,7 @@ export function Campaigns() {
         {/* Authoring drawer */}
         <Drawer
           open={formOpen()}
-          title={editingId() ? t("campaigns.editTitle") : t("campaigns.newTitle")}
+          title={editing() ? t("campaigns.editTitle") : t("campaigns.newTitle")}
           closeLabel={t("action.close")}
           onClose={() => setFormOpen(false)}
           footer={

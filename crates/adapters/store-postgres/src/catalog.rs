@@ -106,6 +106,10 @@ pub struct CatalogLayoutButtonRow {
     pub grid_row: Option<i32>,
     /// The display order within its group.
     pub sort: i32,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// A modifier group as listed — a selection rule plus its members and attachments as JSON arrays.
@@ -188,6 +192,10 @@ pub struct CatalogPlacementRow {
     pub prices_json: String,
     /// Whether the item is for sale in this menu right now (the published-availability floor).
     pub available: bool,
+    /// The version the row was read at, for a conditional write
+    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// `xmin::text`, and nothing above this crate may assume that.
+    pub version: String,
 }
 
 /// The catalog authoring store over a shared pool. Built by
@@ -865,13 +873,23 @@ impl PostgresCatalog {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    /// Inserts a layout button, refusing if one already holds its
+    /// `(tenant, sales_channel, menu_item_id)` identity.
+    ///
+    /// `ON CONFLICT DO NOTHING ... RETURNING` makes the refusal one round trip: no row back means
+    /// the key was taken. Before this the statement was an upsert, so placing a button on a channel
+    /// where that item already had one silently replaced its label, grid position and sort order.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
     #[expect(
         clippy::too_many_arguments,
         reason = "a layout button is a flat row of presentation columns (channel, category, \
                   optional sub-category, item, label, optional grid column/row, sort); a params \
                   struct would only move the list up one level"
     )]
-    pub async fn upsert_layout_button(
+    pub async fn insert_layout_button(
         &self,
         tenant_id: &str,
         sales_channel: &str,
@@ -882,17 +900,16 @@ impl PostgresCatalog {
         grid_column: Option<i32>,
         grid_row: Option<i32>,
         sort: i32,
-    ) -> Result<(), PortError> {
+    ) -> Result<Option<String>, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let inserted = connection
+            .query_opt(
                 "INSERT INTO catalog_layout_buttons \
                  (tenant_id, sales_channel, display_category_id, display_subcategory_id, \
                   menu_item_id, label, grid_column, grid_row, sort) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-                 ON CONFLICT (tenant_id, sales_channel, menu_item_id) DO UPDATE SET \
-                  display_category_id = $3, display_subcategory_id = $4, label = $6, \
-                  grid_column = $7, grid_row = $8, sort = $9, updated_at = now()",
+                 ON CONFLICT (tenant_id, sales_channel, menu_item_id) DO NOTHING \
+                 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &sales_channel,
@@ -907,7 +924,70 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(inserted.map(|row| row.get(0)))
+    }
+
+    /// Replaces a layout button's presentation columns, only at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the same flat row as `insert_layout_button`, plus the version to compare"
+    )]
+    pub async fn update_layout_button_at(
+        &self,
+        tenant_id: &str,
+        sales_channel: &str,
+        display_category_id: &str,
+        display_subcategory_id: Option<&str>,
+        menu_item_id: &str,
+        label: &str,
+        grid_column: Option<i32>,
+        grid_row: Option<i32>,
+        sort: i32,
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let updated = connection
+            .query_opt(
+                "UPDATE catalog_layout_buttons SET \
+                  display_category_id = $3, display_subcategory_id = $4, label = $6, \
+                  grid_column = $7, grid_row = $8, sort = $9, updated_at = now() \
+                 WHERE tenant_id = $1 AND sales_channel = $2 AND menu_item_id = $5 \
+                 AND xmin::text = $10 RETURNING xmin::text",
+                &[
+                    &tenant_id,
+                    &sales_channel,
+                    &display_category_id,
+                    &display_subcategory_id,
+                    &menu_item_id,
+                    &label,
+                    &grid_column,
+                    &grid_row,
+                    &sort,
+                    &expected,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_layout_buttons \
+                 WHERE tenant_id = $1 AND sales_channel = $2 AND menu_item_id = $3",
+                &[&tenant_id, &sales_channel, &menu_item_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Lists a tenant's layout buttons across all channels, by channel then display order.
@@ -923,7 +1003,7 @@ impl PostgresCatalog {
         let rows = connection
             .query(
                 "SELECT tenant_id, sales_channel, display_category_id, display_subcategory_id, \
-                 menu_item_id, label, grid_column, grid_row, sort \
+                 menu_item_id, label, grid_column, grid_row, sort, xmin::text \
                  FROM catalog_layout_buttons WHERE tenant_id = $1 \
                  ORDER BY sales_channel, sort",
                 &[&tenant_id],
@@ -942,6 +1022,7 @@ impl PostgresCatalog {
                 grid_column: row.get(6),
                 grid_row: row.get(7),
                 sort: row.get(8),
+                version: row.get(9),
             })
             .collect())
     }
@@ -1318,13 +1399,17 @@ impl PostgresCatalog {
 
     // --- placements (tenant-scoped, keyed by (menu_id, menu_item_id)) ---
 
-    /// Inserts or replaces a placement by its `(menu_id, menu_item_id)` pair. `prices_json` is the
-    /// price list as JSON text, cast into the `jsonb` column.
+    /// Inserts a placement, refusing if one already holds its `(menu_id, menu_item_id)` pair.
+    /// `prices_json` is the price list as JSON text, cast into the `jsonb` column.
+    ///
+    /// `ON CONFLICT DO NOTHING ... RETURNING` makes the refusal one round trip: no row back means
+    /// the pair was taken. Before this the statement was an upsert, so adding an item already on a
+    /// menu silently replaced its prices, section and availability.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
-    pub async fn upsert_placement(
+    pub async fn insert_placement(
         &self,
         tenant_id: &str,
         menu_id: &str,
@@ -1332,16 +1417,15 @@ impl PostgresCatalog {
         menu_section_id: Option<&str>,
         prices_json: &str,
         available: bool,
-    ) -> Result<(), PortError> {
+    ) -> Result<Option<String>, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        connection
-            .execute(
+        let inserted = connection
+            .query_opt(
                 "INSERT INTO catalog_placements \
                  (tenant_id, menu_id, menu_item_id, menu_section_id, prices, available) \
                  VALUES ($1, $2, $3, $4, $5::text::jsonb, $6) \
-                 ON CONFLICT (menu_id, menu_item_id) \
-                 DO UPDATE SET menu_section_id = $4, prices = $5::text::jsonb, available = $6, \
-                 updated_at = now()",
+                 ON CONFLICT (menu_id, menu_item_id) DO NOTHING \
+                 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &menu_id,
@@ -1353,7 +1437,60 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        Ok(())
+        Ok(inserted.map(|row| row.get(0)))
+    }
+
+    /// Replaces a placement's section, prices and availability, only at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    pub async fn update_placement_at(
+        &self,
+        tenant_id: &str,
+        menu_id: &str,
+        menu_item_id: &str,
+        menu_section_id: Option<&str>,
+        prices_json: &str,
+        available: bool,
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let updated = connection
+            .query_opt(
+                "UPDATE catalog_placements SET \
+                  menu_section_id = $4, prices = $5::text::jsonb, available = $6, \
+                  updated_at = now() \
+                 WHERE tenant_id = $1 AND menu_id = $2 AND menu_item_id = $3 \
+                 AND xmin::text = $7 RETURNING xmin::text",
+                &[
+                    &tenant_id,
+                    &menu_id,
+                    &menu_item_id,
+                    &menu_section_id,
+                    &prices_json,
+                    &available,
+                    &expected,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_placements \
+                 WHERE tenant_id = $1 AND menu_id = $2 AND menu_item_id = $3",
+                &[&tenant_id, &menu_id, &menu_item_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
     }
 
     /// Lists a menu's placements within a tenant, newest first.
@@ -1369,7 +1506,8 @@ impl PostgresCatalog {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT tenant_id, menu_id, menu_item_id, menu_section_id, prices::text, available \
+                "SELECT tenant_id, menu_id, menu_item_id, menu_section_id, prices::text, \
+                 available, xmin::text \
                  FROM catalog_placements WHERE tenant_id = $1 AND menu_id = $2 \
                  ORDER BY created_at DESC",
                 &[&tenant_id, &menu_id],
@@ -1385,6 +1523,7 @@ impl PostgresCatalog {
                 menu_section_id: row.get(3),
                 prices_json: row.get(4),
                 available: row.get(5),
+                version: row.get(6),
             })
             .collect())
     }

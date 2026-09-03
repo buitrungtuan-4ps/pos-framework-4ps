@@ -308,10 +308,11 @@ export interface Campaign {
   readonly action: CampaignAction;
   readonly conditions: CampaignConditions;
   readonly quota_remaining?: number;
+  readonly etag: ETag;
 }
 
 /** The authoring fields of a create/update — a `Campaign` without its server-owned id. */
-export type CampaignInput = Omit<Campaign, "id">;
+export type CampaignInput = Omit<Campaign, "id" | "etag">;
 
 /** A voucher's lifecycle (`VoucherStatus`, snake_case on the wire). */
 export type VoucherStatus = "active" | "redeemed" | "void";
@@ -368,10 +369,14 @@ export interface Ingredient {
   readonly id: string;
   readonly name: string;
   readonly unit: UnitOfMeasure;
+  readonly etag: ETag;
 }
 
-/** The authoring fields of an ingredient create/update — an `Ingredient` without its server-owned id. */
-export type IngredientInput = Omit<Ingredient, "id">;
+/**
+ * The authoring fields of an ingredient create/update — an `Ingredient` without its server-owned id
+ * or the version it was read at (a write sends that as `If-Match`, not in the body).
+ */
+export type IngredientInput = Omit<Ingredient, "id" | "etag">;
 
 /** One bill-of-materials line (`PublishedRecipeLine`) — an ingredient and the amount one unit consumes. */
 export interface RecipeLine {
@@ -387,19 +392,21 @@ export interface Recipe {
   readonly item: string;
   readonly lines: RecipeLine[];
   readonly auto_86_threshold: number;
+  readonly etag: ETag;
 }
 
-/** The authoring fields of a recipe upsert — the BOM and threshold; the item is the URL key. */
-export type RecipeInput = Omit<Recipe, "item">;
+/** The authoring fields of a recipe write — the BOM and threshold; the item is the URL key. */
+export type RecipeInput = Omit<Recipe, "item" | "etag">;
 
 /** A supplier reference (`PublishedSupplier`) — id and name only; purchasing lives in the ERP (§19). */
 export interface Supplier {
   readonly id: string;
   readonly name: string;
+  readonly etag: ETag;
 }
 
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
-export type SupplierInput = Omit<Supplier, "id">;
+export type SupplierInput = Omit<Supplier, "id" | "etag">;
 
 /** A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree. */
 export interface QrGuardrails {
@@ -518,6 +525,7 @@ export interface LayoutButton {
   readonly label: string;
   readonly position: GridPosition | null;
   readonly sort: number;
+  readonly etag: ETag;
 }
 
 /** A modifier group — a min/max selection rule with member modifiers, attached to items (ADR-0066 4/5). */
@@ -615,6 +623,7 @@ export interface MenuPlacement {
   readonly menu_section_id: string | null;
   readonly prices: ChannelPrice[];
   readonly available: boolean;
+  readonly etag: ETag;
 }
 
 /** A console admin's least-privilege tier (ADR-0067). `owner` manages other admins; `viewer` is read-only. */

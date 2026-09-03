@@ -2071,68 +2071,81 @@ mod translations {
 }
 
 // ---------------------------------------------------------------------------
-// Campaign authoring: jsonb upsert/list/get/delete, id ordering, tenant isolation (ADR-0077).
+// Campaign authoring: jsonb insert/list/get/update-at/delete, id ordering, tenant isolation
+// (ADR-0077, ADR-0095).
 // ---------------------------------------------------------------------------
 
 mod campaigns {
+    use store_postgres::RowUpdate;
+
     use super::{TENANT_A, TENANT_B, block_on, prepared};
 
     fn doc(name: &str) -> String {
         format!("{{\"name\":\"{name}\"}}")
     }
 
-    /// Per-campaign upsert/get/delete over the jsonb column: rows read back id-ordered, an upsert of an
-    /// existing id replaces rather than appends, a tenant cannot read another's campaign by id, and a
-    /// neighbour tenant's rows are never touched.
+    /// Per-campaign insert/get/delete over the jsonb column: rows read back id-ordered and carrying
+    /// the version they are at, an insert at a taken id writes nothing, a tenant cannot read
+    /// another's campaign by id, and a neighbour tenant's rows are never touched.
+    ///
+    /// The insert/update split is [ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md):
+    /// what this asserted before was the `ON CONFLICT DO UPDATE` that made "add a campaign" and
+    /// "replace a campaign" the same statement, so a second admin creating at an id another had
+    /// just used silently replaced their document.
     #[test]
-    fn upsert_get_delete_stay_tenant_scoped() {
+    fn an_insert_writes_nothing_when_the_id_is_taken_and_reads_stay_tenant_scoped() {
         block_on(async {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let campaigns = store.campaigns();
 
             // A neighbour's campaign must survive our writes.
             campaigns
-                .upsert(TENANT_B, "camp-z", &doc("Neighbour"))
+                .insert(TENANT_B, "camp-z", &doc("Neighbour"))
                 .await
-                .expect("neighbour");
+                .expect("neighbour")
+                .expect("the neighbour's id was free");
 
             // Insert out of id order to prove the read sorts.
             campaigns
-                .upsert(TENANT_A, "camp-2", &doc("Dinner"))
+                .insert(TENANT_A, "camp-2", &doc("Dinner"))
                 .await
-                .expect("create 2");
-            campaigns
-                .upsert(TENANT_A, "camp-1", &doc("Lunch"))
+                .expect("create 2")
+                .expect("free");
+            let at_create = campaigns
+                .insert(TENANT_A, "camp-1", &doc("Lunch"))
                 .await
-                .expect("create 1");
+                .expect("create 1")
+                .expect("free");
             let listed = campaigns.fetch(TENANT_A).await.expect("fetch ours");
             assert_eq!(listed.len(), 2);
+            let first = listed.first().expect("first row");
+            assert_eq!(first.campaign_id, "camp-1", "rows read back id-ordered");
             assert_eq!(
-                listed.first().expect("first row").campaign_id,
-                "camp-1",
-                "rows read back id-ordered"
+                first.version, at_create,
+                "the read carries the version the insert minted, which is the only way a caller \
+                 that did not perform the insert can obtain it"
             );
 
-            // Upsert of an existing id replaces the document rather than adding a row.
-            campaigns
-                .upsert(TENANT_A, "camp-1", &doc("Lunch (renamed)"))
-                .await
-                .expect("update");
-            let after = campaigns.fetch(TENANT_A).await.expect("fetch again");
-            assert_eq!(
-                after.len(),
-                2,
-                "upsert of an existing id does not add a row"
+            // An insert at a taken id writes nothing and says so by returning no version — one round
+            // trip, so there is no window between a check and the write.
+            assert!(
+                campaigns
+                    .insert(TENANT_A, "camp-1", &doc("Lunch (renamed)"))
+                    .await
+                    .expect("the conflict must not raise")
+                    .is_none(),
+                "the id is taken"
             );
-            let one = campaigns
+            let unchanged = campaigns
                 .fetch_one(TENANT_A, "camp-1")
                 .await
                 .expect("fetch one")
                 .expect("present");
             assert!(
-                one.campaign_json.contains("Lunch (renamed)"),
-                "the replaced document is what reads back"
+                unchanged.campaign_json.contains("Lunch"),
+                "and the document it refused to overwrite is untouched"
             );
+            assert!(!unchanged.campaign_json.contains("renamed"));
 
             // A tenant cannot read another tenant's campaign by id.
             assert!(
@@ -2153,15 +2166,80 @@ mod campaigns {
                     .len(),
                 1
             );
-
-            // The neighbour is untouched throughout.
+            // The id is free again, so an insert at it succeeds.
+            assert!(
+                campaigns
+                    .insert(TENANT_A, "camp-1", &doc("Lunch again"))
+                    .await
+                    .expect("insert after the delete")
+                    .is_some()
+            );
             assert_eq!(
                 campaigns
                     .fetch(TENANT_B)
                     .await
                     .expect("fetch neighbour")
                     .len(),
-                1
+                1,
+                "the neighbour is untouched throughout"
+            );
+        });
+    }
+
+    /// A rename applies at the version the read carried, refuses a spent one, and answers `NotFound`
+    /// for an id that is not there — three answers, because the caller's next move differs for each.
+    #[test]
+    fn an_update_applies_only_at_the_version_the_read_carried() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let campaigns = store.campaigns();
+            let at_create = campaigns
+                .insert(TENANT_A, "camp-1", &doc("Lunch"))
+                .await
+                .expect("create")
+                .expect("the id was free");
+
+            let at_update = match campaigns
+                .update_at(TENANT_A, "camp-1", &doc("Lunch (renamed)"), &at_create)
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            assert_ne!(at_update, at_create, "the version moves on every write");
+            let one = campaigns
+                .fetch_one(TENANT_A, "camp-1")
+                .await
+                .expect("fetch one")
+                .expect("present");
+            assert!(
+                one.campaign_json.contains("Lunch (renamed)"),
+                "the replaced document is what reads back"
+            );
+            assert_eq!(one.version, at_update);
+            assert_eq!(
+                campaigns.fetch(TENANT_A).await.expect("fetch").len(),
+                1,
+                "an update does not add a row"
+            );
+
+            assert_eq!(
+                campaigns
+                    .update_at(TENANT_A, "camp-1", &doc("Lunch (again)"), &at_create)
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch,
+                "replaying a spent version is the lost update"
+            );
+            assert_eq!(
+                campaigns
+                    .update_at(TENANT_A, "camp-none", &doc("Ghost"), &at_update)
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::NotFound
             );
         });
     }
@@ -3654,7 +3732,7 @@ mod inventory_authoring {
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use pos_proto::wire_enum::Open;
-    use store_postgres::PostgresInventory;
+    use store_postgres::{PostgresInventory, RowUpdate};
 
     fn ingredient(n: u128, name: &str) -> PublishedIngredient {
         PublishedIngredient {
@@ -3664,8 +3742,9 @@ mod inventory_authoring {
         }
     }
 
-    /// Upsert a wire record (already a JSON value) under `(tenant, kind, id)` — collapses the repeated
-    /// serialize-then-upsert at every call site. Takes a `serde_json::Value` so the helper needs no
+    /// Insert a wire record (already a JSON value) under `(tenant, kind, id)`, asserting the key was
+    /// free and handing back the version the row starts at — collapses the repeated
+    /// serialize-then-insert at every call site. Takes a `serde_json::Value` so the helper needs no
     /// `serde::Serialize` bound (the test crate depends only on `serde_json`).
     async fn put(
         inventory: &PostgresInventory,
@@ -3673,11 +3752,12 @@ mod inventory_authoring {
         kind: &str,
         id: &str,
         record: serde_json::Value,
-    ) {
+    ) -> String {
         inventory
-            .upsert(tenant, kind, id, &record.to_string())
+            .insert(tenant, kind, id, &record.to_string())
             .await
-            .expect("upsert");
+            .expect("insert")
+            .expect("the key was free")
     }
 
     async fn count(inventory: &PostgresInventory, tenant: &str, kind: &str) -> usize {
@@ -3701,8 +3781,9 @@ mod inventory_authoring {
             )
             .await;
 
-            // Create then replace one ingredient — upsert is by (kind, entity_id), not append.
-            put(
+            // Create one ingredient, then rename it through the update at the version the insert
+            // minted. The insert/update split itself is asserted below, in its own test.
+            let at_create = put(
                 &inventory,
                 TENANT_A,
                 "ingredient",
@@ -3710,14 +3791,16 @@ mod inventory_authoring {
                 serde_json::to_value(ingredient(10, "Dough")).expect("json"),
             )
             .await;
-            put(
-                &inventory,
-                TENANT_A,
-                "ingredient",
-                &ing_id,
-                serde_json::to_value(ingredient(10, "Dough (renamed)")).expect("json"),
-            )
-            .await;
+            let renamed = serde_json::to_value(ingredient(10, "Dough (renamed)"))
+                .expect("json")
+                .to_string();
+            assert!(matches!(
+                inventory
+                    .update_at(TENANT_A, "ingredient", &ing_id, &renamed, &at_create)
+                    .await
+                    .expect("the rename"),
+                RowUpdate::Updated(_)
+            ));
 
             // A recipe and a supplier share the table under other kinds.
             let recipe = PublishedRecipe {
@@ -3749,12 +3832,16 @@ mod inventory_authoring {
             )
             .await;
 
-            // The kind filter keeps the three apart; the ingredient upsert replaced, not appended.
+            // The kind filter keeps the three apart, and the rename replaced in place.
             let ingredients = inventory.fetch(TENANT_A, "ingredient").await.expect("ings");
-            assert_eq!(ingredients.len(), 1, "upsert replaces by (kind, id)");
-            let decoded: PublishedIngredient =
-                serde_json::from_str(&ingredients.first().expect("one").doc_json).expect("decode");
+            assert_eq!(ingredients.len(), 1, "an update adds no row");
+            let row = ingredients.first().expect("one");
+            let decoded: PublishedIngredient = serde_json::from_str(&row.doc_json).expect("decode");
             assert_eq!(decoded.name, DisplayName::new("Dough (renamed)"));
+            assert_ne!(
+                row.version, at_create,
+                "and the read carries the version the update left the row at, not the insert's"
+            );
             assert_eq!(count(&inventory, TENANT_A, "recipe").await, 1);
             assert_eq!(count(&inventory, TENANT_A, "supplier").await, 1);
 
@@ -3774,6 +3861,75 @@ mod inventory_authoring {
             assert_eq!(count(&inventory, TENANT_A, "ingredient").await, 0);
             assert_eq!(count(&inventory, TENANT_A, "recipe").await, 1);
             assert_eq!(count(&inventory, TENANT_A, "supplier").await, 1);
+        });
+    }
+
+    /// A record's key is `(tenant, kind, entity_id)` and it comes from the caller, so a second
+    /// insert at a taken key writes nothing and returns no version — where the `upsert` this
+    /// replaced replaced the document (ADR-0095). A stale update is refused, an absent one is
+    /// `NotFound`, and the two answers are distinct because the caller's next move differs.
+    #[test]
+    fn an_insert_writes_nothing_when_the_key_is_taken_and_an_update_needs_the_version_read() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let inventory = store.inventory();
+            let ing_id = Ulid::from_u128(10).to_string();
+            let renamed = serde_json::to_value(ingredient(10, "Dough (renamed)"))
+                .expect("json")
+                .to_string();
+
+            let at_create = put(
+                &inventory,
+                TENANT_A,
+                "ingredient",
+                &ing_id,
+                serde_json::to_value(ingredient(10, "Dough")).expect("json"),
+            )
+            .await;
+            assert!(
+                inventory
+                    .insert(TENANT_A, "ingredient", &ing_id, &renamed)
+                    .await
+                    .expect("the conflict must not raise")
+                    .is_none(),
+                "the (kind, id) is taken"
+            );
+            let row = inventory
+                .fetch(TENANT_A, "ingredient")
+                .await
+                .expect("fetch")
+                .pop()
+                .expect("one");
+            let decoded: PublishedIngredient = serde_json::from_str(&row.doc_json).expect("decode");
+            assert_eq!(
+                decoded.name,
+                DisplayName::new("Dough"),
+                "and does not rename the record it refused to overwrite"
+            );
+            assert_eq!(row.version, at_create);
+
+            assert!(matches!(
+                inventory
+                    .update_at(TENANT_A, "ingredient", &ing_id, &renamed, &at_create)
+                    .await
+                    .expect("the rename"),
+                RowUpdate::Updated(_)
+            ));
+            assert_eq!(
+                inventory
+                    .update_at(TENANT_A, "ingredient", &ing_id, &renamed, &at_create)
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch,
+                "replaying a spent version is the lost update"
+            );
+            assert_eq!(
+                inventory
+                    .update_at(TENANT_A, "ingredient", "none", &renamed, &at_create)
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::NotFound
+            );
         });
     }
 }
@@ -4018,6 +4174,295 @@ mod conditional_writes {
                     .set_tenant("0000000000TENANTGONEAAAAAA", "Nope", "active", "1")
                     .await
                     .expect("the update"),
+                RowUpdate::NotFound
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Catalog placements and layout buttons: the two caller-keyed rows, on the insert/update-at split
+// (ADR-0095). Both were single upserts, and both have their whole write path here for the first
+// time — the class of defect #152 fixed (a presence probe naming the wrong table) is invisible to
+// every test that does not run the SQL.
+// ---------------------------------------------------------------------------
+
+mod catalog_keyed_rows {
+    use store_postgres::{PostgresCatalog, RowUpdate};
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    const MENU: &str = "menu-1";
+    const ITEM: &str = "item-1";
+    const CHANNEL: &str = "SALES_CHANNEL_DINE_IN";
+    const CATEGORY: &str = "cat-1";
+
+    fn prices(amount: i64) -> String {
+        format!(
+            "[{{\"sales_channel\":\"SALES_CHANNEL_DINE_IN\",\
+               \"unit_price\":{{\"currency_code\":\"VND\",\"amount_minor\":{amount}}}}}]"
+        )
+    }
+
+    /// The version an applied write left the row at, or `None` when it was refused. `Option` rather
+    /// than a panic because this is a plain helper, not a `#[test]` fn — the caller unwraps it, where
+    /// `clippy.toml`'s test allowances apply.
+    fn applied(outcome: RowUpdate) -> Option<String> {
+        match outcome {
+            RowUpdate::Updated(version) => Some(version),
+            RowUpdate::VersionMismatch | RowUpdate::NotFound => None,
+        }
+    }
+
+    /// Puts an item on a menu at `amount`, answering the version the row starts at (or `None` when
+    /// the `(menu, item)` pair is already taken).
+    async fn place(
+        catalog: &PostgresCatalog,
+        tenant: &str,
+        menu: &str,
+        item: &str,
+        amount: i64,
+    ) -> Option<String> {
+        catalog
+            .insert_placement(tenant, menu, item, None, &prices(amount), true)
+            .await
+            .expect("the insert must not raise")
+    }
+
+    /// Reprices that placement, only at `expected`.
+    async fn reprice(
+        catalog: &PostgresCatalog,
+        tenant: &str,
+        item: &str,
+        amount: i64,
+        expected: &str,
+    ) -> RowUpdate {
+        catalog
+            .update_placement_at(tenant, MENU, item, None, &prices(amount), true, expected)
+            .await
+            .expect("the comparison must not raise")
+    }
+
+    /// Places a button in the `(channel, item)` slot, answering the version it starts at (or `None`
+    /// when the slot is taken).
+    async fn press(
+        catalog: &PostgresCatalog,
+        tenant: &str,
+        item: &str,
+        label: &str,
+    ) -> Option<String> {
+        catalog
+            .insert_layout_button(tenant, CHANNEL, CATEGORY, None, item, label, None, None, 0)
+            .await
+            .expect("the insert must not raise")
+    }
+
+    /// Relabels and re-sorts that button, only at `expected`.
+    async fn relabel(
+        catalog: &PostgresCatalog,
+        tenant: &str,
+        item: &str,
+        label: &str,
+        sort: i32,
+        expected: &str,
+    ) -> RowUpdate {
+        catalog
+            .update_layout_button_at(
+                tenant, CHANNEL, CATEGORY, None, item, label, None, None, sort, expected,
+            )
+            .await
+            .expect("the comparison must not raise")
+    }
+
+    /// A placement's identity is the caller's `(menu, item)` pair, so a second insert at the same
+    /// pair writes nothing rather than repricing what is already on the menu. The per-channel prices
+    /// are the price-change journal (ADR-0069), so that overwrite was recorded as a set with no
+    /// `before` to compare against — which is why ADR-0095 split this seam.
+    #[test]
+    fn a_placement_insert_writes_nothing_when_the_pair_is_already_on_the_menu() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+
+            // A neighbour's placement on its own menu must survive our writes.
+            place(&catalog, TENANT_B, "menu-z", ITEM, 99_000)
+                .await
+                .expect("free");
+            let at_create = place(&catalog, TENANT_A, MENU, ITEM, 150_000)
+                .await
+                .expect("the pair was free");
+
+            assert!(
+                place(&catalog, TENANT_A, MENU, ITEM, 160_000)
+                    .await
+                    .is_none(),
+                "the pair is taken"
+            );
+            let rows = catalog
+                .fetch_placements(TENANT_A, MENU)
+                .await
+                .expect("fetch");
+            assert_eq!(rows.len(), 1, "a refused insert adds no row");
+            let row = rows.first().expect("one");
+            assert!(
+                row.prices_json.contains("150000"),
+                "and does not reprice the placement it refused to overwrite"
+            );
+            assert_eq!(
+                row.version, at_create,
+                "the read carries the version the insert minted, which is the only way a caller \
+                 that did not perform the insert can obtain it"
+            );
+
+            // Removing frees the pair again, and the neighbour is untouched throughout.
+            assert!(
+                catalog
+                    .delete_placement(TENANT_A, MENU, ITEM)
+                    .await
+                    .expect("remove")
+            );
+            assert!(
+                place(&catalog, TENANT_A, MENU, ITEM, 150_000)
+                    .await
+                    .is_some(),
+                "the pair is free after the remove"
+            );
+            assert_eq!(
+                catalog
+                    .fetch_placements(TENANT_B, "menu-z")
+                    .await
+                    .expect("fetch neighbour")
+                    .len(),
+                1
+            );
+        });
+    }
+
+    /// A reprice applies at the version the read carried, refuses a spent one, and answers `NotFound`
+    /// for a pair that is not on the menu — the probe on that failure path is what separates a `412`
+    /// from a `404`, and it has to name the same table the update did (the defect #152 fixed).
+    #[test]
+    fn a_placement_reprice_applies_only_at_the_version_the_read_carried() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            let at_create = place(&catalog, TENANT_A, MENU, ITEM, 150_000)
+                .await
+                .expect("the pair was free");
+
+            let at_update = applied(reprice(&catalog, TENANT_A, ITEM, 160_000, &at_create).await)
+                .expect("the reprice applies at the version the read carried");
+            assert_ne!(at_update, at_create, "the version moves on every write");
+            let rows = catalog
+                .fetch_placements(TENANT_A, MENU)
+                .await
+                .expect("fetch");
+            assert_eq!(rows.len(), 1, "an update does not add a row");
+            assert!(rows.first().expect("one").prices_json.contains("160000"));
+
+            assert_eq!(
+                reprice(&catalog, TENANT_A, ITEM, 170_000, &at_create).await,
+                RowUpdate::VersionMismatch,
+                "replaying a spent version is the lost update"
+            );
+            assert_eq!(
+                reprice(&catalog, TENANT_A, "item-none", 170_000, &at_update).await,
+                RowUpdate::NotFound,
+                "and an absent pair is a different answer, because the caller's next move differs"
+            );
+        });
+    }
+
+    /// A layout button's identity is the caller's `(channel, item)` slot, and it behaves the same way.
+    #[test]
+    fn a_layout_button_insert_writes_nothing_when_the_slot_is_taken() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+
+            press(&catalog, TENANT_B, ITEM, "Neighbour")
+                .await
+                .expect("free");
+            let at_create = press(&catalog, TENANT_A, ITEM, "Margherita")
+                .await
+                .expect("the slot was free");
+
+            assert!(
+                press(&catalog, TENANT_A, ITEM, "Margherita (classic)")
+                    .await
+                    .is_none(),
+                "the slot is taken"
+            );
+            let rows = catalog.fetch_layout_buttons(TENANT_A).await.expect("fetch");
+            assert_eq!(rows.len(), 1, "a refused insert adds no row");
+            let row = rows.first().expect("one");
+            assert_eq!(
+                row.label, "Margherita",
+                "and does not relabel the button it refused to overwrite"
+            );
+            assert_eq!(row.version, at_create);
+
+            assert!(
+                catalog
+                    .delete_layout_button(TENANT_A, CHANNEL, ITEM)
+                    .await
+                    .expect("remove")
+            );
+            assert_eq!(
+                catalog
+                    .fetch_layout_buttons(TENANT_B)
+                    .await
+                    .expect("fetch neighbour")
+                    .len(),
+                1,
+                "the neighbour's button is untouched throughout"
+            );
+        });
+    }
+
+    /// And a relabel is conditional the same way, with the same two distinct refusals.
+    #[test]
+    fn a_layout_button_relabel_applies_only_at_the_version_the_read_carried() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            let at_create = press(&catalog, TENANT_A, ITEM, "Margherita")
+                .await
+                .expect("the slot was free");
+
+            let at_update = applied(
+                relabel(
+                    &catalog,
+                    TENANT_A,
+                    ITEM,
+                    "Margherita (classic)",
+                    3,
+                    &at_create,
+                )
+                .await,
+            )
+            .expect("the relabel applies at the version the read carried");
+            assert_ne!(at_update, at_create);
+            let rows = catalog.fetch_layout_buttons(TENANT_A).await.expect("fetch");
+            assert_eq!(rows.len(), 1);
+            let row = rows.first().expect("one");
+            assert_eq!(row.label, "Margherita (classic)");
+            assert_eq!(row.sort, 3);
+
+            assert_eq!(
+                relabel(
+                    &catalog,
+                    TENANT_A,
+                    ITEM,
+                    "Margherita (again)",
+                    0,
+                    &at_create
+                )
+                .await,
+                RowUpdate::VersionMismatch
+            );
+            assert_eq!(
+                relabel(&catalog, TENANT_A, "item-none", "Ghost", 0, &at_update).await,
                 RowUpdate::NotFound
             );
         });

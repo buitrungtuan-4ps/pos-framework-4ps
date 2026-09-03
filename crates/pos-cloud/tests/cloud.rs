@@ -57,6 +57,7 @@ use pos_cloud::floorplan::{
 };
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
+use pos_cloud::inventory::{InventoryStore, InventoryStoreError};
 use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
@@ -81,7 +82,7 @@ use pos_cloud::relay::{
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
-use pos_cloud::version::{UpdateOutcome, Version, Versioned};
+use pos_cloud::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
@@ -96,9 +97,10 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, MenuItemId, StationId, StoreId,
-    SubjectId, TableId, TaxClassId, TenantId,
+    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId, StationId,
+    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -6991,11 +6993,11 @@ struct FakeCatalog {
     subcategories: Arc<Mutex<Vec<Versioned<ItemSubcategory>>>>,
     display_categories: Arc<Mutex<Vec<Versioned<DisplayCategory>>>>,
     display_subcategories: Arc<Mutex<Vec<Versioned<DisplaySubcategory>>>>,
-    layout_buttons: Arc<Mutex<Vec<LayoutButton>>>,
+    layout_buttons: Arc<Mutex<Vec<Versioned<LayoutButton>>>>,
     modifier_groups: Arc<Mutex<Vec<Versioned<ModifierGroup>>>>,
     menus: Arc<Mutex<Vec<Versioned<Menu>>>>,
     menu_sections: Arc<Mutex<Vec<Versioned<MenuSection>>>>,
-    placements: Arc<Mutex<Vec<MenuPlacement>>>,
+    placements: Arc<Mutex<Vec<Versioned<MenuPlacement>>>>,
     next_version: Arc<Mutex<u64>>,
 }
 
@@ -7307,30 +7309,55 @@ impl CatalogStore for FakeCatalog {
         Ok(UpdateOutcome::NotFound)
     }
 
-    async fn set_layout_button(&self, button: &LayoutButton) -> Result<(), CatalogStoreError> {
+    async fn create_layout_button(
+        &self,
+        button: &LayoutButton,
+    ) -> Result<CreateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.layout_buttons.lock().expect("lock");
-        if let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant_id == button.tenant_id
-                && row.sales_channel == button.sales_channel
-                && row.menu_item_id == button.menu_item_id
+        if rows.iter().any(|row| {
+            row.record.tenant_id == button.tenant_id
+                && row.record.sales_channel == button.sales_channel
+                && row.record.menu_item_id == button.menu_item_id
         }) {
-            *row = button.clone();
-        } else {
-            rows.push(button.clone());
+            return Ok(CreateOutcome::AlreadyExists);
         }
-        Ok(())
+        rows.push(Versioned::new(button.clone(), version.clone()));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update_layout_button(
+        &self,
+        button: &LayoutButton,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
+        let mut rows = self.layout_buttons.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.record.tenant_id == button.tenant_id
+                && row.record.sales_channel == button.sales_channel
+                && row.record.menu_item_id == button.menu_item_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = button.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 
     async fn list_layout_buttons(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<LayoutButton>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<LayoutButton>>, CatalogStoreError> {
         Ok(self
             .layout_buttons
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id)
+            .filter(|row| row.record.tenant_id == tenant_id)
             .cloned()
             .collect())
     }
@@ -7344,9 +7371,9 @@ impl CatalogStore for FakeCatalog {
         let mut rows = self.layout_buttons.lock().expect("lock");
         let before = rows.len();
         rows.retain(|row| {
-            !(row.tenant_id == tenant_id
-                && row.sales_channel == sales_channel
-                && row.menu_item_id == menu_item_id)
+            !(row.record.tenant_id == tenant_id
+                && row.record.sales_channel == sales_channel
+                && row.record.menu_item_id == menu_item_id)
         });
         Ok(rows.len() != before)
     }
@@ -7495,31 +7522,56 @@ impl CatalogStore for FakeCatalog {
         Ok(UpdateOutcome::NotFound)
     }
 
-    async fn set_placement(&self, placement: &MenuPlacement) -> Result<(), CatalogStoreError> {
+    async fn create_placement(
+        &self,
+        placement: &MenuPlacement,
+    ) -> Result<CreateOutcome, CatalogStoreError> {
+        let version = self.mint();
         let mut rows = self.placements.lock().expect("lock");
-        if let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant_id == placement.tenant_id
-                && row.menu_id == placement.menu_id
-                && row.menu_item_id == placement.menu_item_id
+        if rows.iter().any(|row| {
+            row.record.tenant_id == placement.tenant_id
+                && row.record.menu_id == placement.menu_id
+                && row.record.menu_item_id == placement.menu_item_id
         }) {
-            *row = placement.clone();
-        } else {
-            rows.push(placement.clone());
+            return Ok(CreateOutcome::AlreadyExists);
         }
-        Ok(())
+        rows.push(Versioned::new(placement.clone(), version.clone()));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update_placement(
+        &self,
+        placement: &MenuPlacement,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
+        let mut rows = self.placements.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.record.tenant_id == placement.tenant_id
+                && row.record.menu_id == placement.menu_id
+                && row.record.menu_item_id == placement.menu_item_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = placement.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 
     async fn list_placements(
         &self,
         tenant_id: TenantId,
         menu_id: MenuId,
-    ) -> Result<Vec<MenuPlacement>, CatalogStoreError> {
+    ) -> Result<Vec<Versioned<MenuPlacement>>, CatalogStoreError> {
         Ok(self
             .placements
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant_id && row.menu_id == menu_id)
+            .filter(|row| row.record.tenant_id == tenant_id && row.record.menu_id == menu_id)
             .cloned()
             .collect())
     }
@@ -7533,9 +7585,9 @@ impl CatalogStore for FakeCatalog {
         let mut rows = self.placements.lock().expect("lock");
         let before = rows.len();
         rows.retain(|row| {
-            !(row.tenant_id == tenant_id
-                && row.menu_id == menu_id
-                && row.menu_item_id == menu_item_id)
+            !(row.record.tenant_id == tenant_id
+                && row.record.menu_id == menu_id
+                && row.record.menu_item_id == menu_item_id)
         });
         Ok(rows.len() != before)
     }
@@ -8938,6 +8990,112 @@ async fn catalog_item_taxonomy_categories_subcategories_and_item_linkage() {
     );
 }
 
+/// A layout button's slot is the caller-supplied `(channel, item)` pair, so a second create at the
+/// same slot is refused rather than relabelling and re-positioning the button already there, and a
+/// relabel applies only at the version the list carried (ADR-0095).
+///
+/// The button needs a display category to sit under, which the round-trip test above creates; this
+/// one takes the shortcut of an id that need not exist, because the layout compiler is forgiving of
+/// a stale reference and these routes never resolve it.
+#[tokio::test]
+async fn a_layout_button_is_placed_once_and_relabelled_at_the_version_the_list_carried() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let item = ulid_text(500);
+    let category = ulid_text(700);
+    let row = format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}");
+    let button = |label: &str| {
+        serde_json::json!({
+            "sales_channel": "SALES_CHANNEL_DINE_IN",
+            "menu_item_id": item,
+            "tenant_id": tenant,
+            "display_category_id": category,
+            "label": label,
+            "grid_column": 0,
+            "grid_row": 0,
+            "sort": 0,
+        })
+    };
+
+    let placed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/layout-buttons",
+            &button("Margherita"),
+            &cookie,
+        ))
+        .await
+        .expect("route create layout button");
+    assert_eq!(placed.status(), StatusCode::CREATED);
+    let at_create = etag_of(&placed);
+
+    let again = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/layout-buttons",
+            &button("Margherita (classic)"),
+            &cookie,
+        ))
+        .await
+        .expect("route the duplicate create");
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/layout-buttons?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list layout buttons");
+    let rows = json_body(listed).await;
+    assert_eq!(rows.as_array().expect("array").len(), 1);
+    assert_eq!(
+        rows[0]["label"], "Margherita",
+        "a refused create leaves the label it refused to overwrite alone"
+    );
+    assert_eq!(
+        rows[0]["etag"].as_str().expect("the row carries an etag"),
+        at_create,
+        "and the list row carries the version a relabel has to send back"
+    );
+
+    let unconditional = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &row,
+            &button("Margherita (classic)"),
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional relabel");
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+
+    let relabelled = router
+        .clone()
+        .oneshot(put_with_etag(
+            &row,
+            &button("Margherita (classic)"),
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route relabel layout button");
+    assert_eq!(relabelled.status(), StatusCode::OK);
+
+    let replayed = router
+        .oneshot(put_with_etag(
+            &row,
+            &button("Margherita (again)"),
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route the stale relabel");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
+}
+
 #[tokio::test]
 async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());
@@ -8974,9 +9132,11 @@ async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
     let item = ulid_text(500);
     let placed = router
         .clone()
-        .oneshot(put_with_cookie(
-            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+        .oneshot(post_with_cookie(
+            "/admin/catalog/layout-buttons",
             &serde_json::json!({
+                "sales_channel": "SALES_CHANNEL_DINE_IN",
+                "menu_item_id": item,
                 "tenant_id": tenant,
                 "display_category_id": category_id,
                 "label": "Margherita",
@@ -8987,8 +9147,8 @@ async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
             &cookie,
         ))
         .await
-        .expect("route set layout button");
-    assert_eq!(placed.status(), StatusCode::OK);
+        .expect("route create layout button");
+    assert_eq!(placed.status(), StatusCode::CREATED);
 
     let listed = router
         .clone()
@@ -9118,8 +9278,27 @@ async fn catalog_modifier_groups_round_trip_with_members_and_attachments() {
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
 }
 
+/// The `(menu, item)` pair a placement is keyed by, and the two bodies the routes take: a `POST` to
+/// the collection names the pair, a `PUT` to the row takes it from the path.
+fn placement_bodies(
+    tenant: &str,
+    menu: &str,
+    item: &str,
+    price: i64,
+) -> (serde_json::Value, serde_json::Value) {
+    let write = serde_json::json!({
+        "tenant_id": tenant,
+        "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": price } }],
+        "available": true,
+    });
+    let mut create = write.clone();
+    create["menu_id"] = serde_json::Value::String(menu.to_owned());
+    create["menu_item_id"] = serde_json::Value::String(item.to_owned());
+    (create, write)
+}
+
 #[tokio::test]
-async fn catalog_upserts_lists_and_removes_a_placement() {
+async fn adding_an_item_already_on_a_menu_is_refused_rather_than_repricing_it() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());
     let cookie = admin_cookie(&router).await;
     let tenant = ulid_text(1);
@@ -9127,28 +9306,35 @@ async fn catalog_upserts_lists_and_removes_a_placement() {
     let item = ulid_text(500);
     let base = format!("/admin/catalog/menus/{menu}/placements");
 
-    let set = |price: i64| {
-        serde_json::json!({
-            "tenant_id": tenant,
-            "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": price } }],
-            "available": true,
-        })
-    };
+    // Adding an item to a menu is a POST to the collection, and it answers with the version the row
+    // starts at.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &base,
+            &placement_bodies(&tenant, &menu, &item, 150_000).0,
+            &cookie,
+        ))
+        .await
+        .expect("route create placement");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let at_create = etag_of(&created);
 
-    // Upsert the placement, then upsert it again with a new price — the pair is replaced, not doubled.
-    for price in [150_000, 160_000] {
-        let put = router
-            .clone()
-            .oneshot(put_with_cookie(
-                &format!("{base}/{item}"),
-                &set(price),
-                &cookie,
-            ))
-            .await
-            .expect("route upsert placement");
-        assert_eq!(put.status(), StatusCode::OK);
-    }
+    // A second create at the same pair is refused rather than repricing the one already there —
+    // the overwrite this route used to perform silently (ADR-0095). Because the per-channel prices
+    // are the price-change journal (ADR-0069), that overwrite left no `before` behind.
+    let again = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &base,
+            &placement_bodies(&tenant, &menu, &item, 160_000).0,
+            &cookie,
+        ))
+        .await
+        .expect("route the duplicate create");
+    assert_eq!(again.status(), StatusCode::CONFLICT);
 
+    // The list carries a version per row, which is where a reprice gets the token it must send.
     let listed = router
         .clone()
         .oneshot(get_with_cookie(
@@ -9161,9 +9347,17 @@ async fn catalog_upserts_lists_and_removes_a_placement() {
     assert_eq!(
         rows.as_array().expect("array").len(),
         1,
-        "the pair replaces, not appends"
+        "a refused create adds no row"
     );
-    assert_eq!(rows[0]["prices"][0]["unit_price"]["amount_minor"], 160_000);
+    assert_eq!(
+        rows[0]["prices"][0]["unit_price"]["amount_minor"], 150_000,
+        "and does not reprice the placement it refused to overwrite"
+    );
+    assert_eq!(
+        rows[0]["etag"].as_str().expect("the row carries an etag"),
+        at_create,
+        "byte-identical to the token the create answered with"
+    );
 
     // Remove it, then removing it again is a 404.
     let removed = router
@@ -9184,6 +9378,86 @@ async fn catalog_upserts_lists_and_removes_a_placement() {
         .await
         .expect("route remove missing");
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_reprice_needs_the_version_the_list_carried() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let item = ulid_text(500);
+    let base = format!("/admin/catalog/menus/{menu}/placements");
+    let row = format!("{base}/{item}");
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &base,
+            &placement_bodies(&tenant, &menu, &item, 150_000).0,
+            &cookie,
+        ))
+        .await
+        .expect("route create placement");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let at_create = etag_of(&created);
+
+    // A reprice without the version is refused outright, then applies with it.
+    let unconditional = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &row,
+            &placement_bodies(&tenant, &menu, &item, 160_000).1,
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional reprice");
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+
+    let repriced = router
+        .clone()
+        .oneshot(put_with_etag(
+            &row,
+            &placement_bodies(&tenant, &menu, &item, 160_000).1,
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route reprice placement");
+    assert_eq!(repriced.status(), StatusCode::OK);
+
+    // And replaying the version just spent is the lost update, refused.
+    let replayed = router
+        .clone()
+        .oneshot(put_with_etag(
+            &row,
+            &placement_bodies(&tenant, &menu, &item, 170_000).1,
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route the stale reprice");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("{base}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list placements");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows.as_array().expect("array").len(),
+        1,
+        "an update does not add a row"
+    );
+    assert_eq!(rows[0]["prices"][0]["unit_price"]["amount_minor"], 160_000);
+    assert_ne!(
+        rows[0]["etag"].as_str().expect("an etag"),
+        at_create,
+        "and the version moves with the write"
+    );
 }
 
 #[tokio::test]
@@ -9243,9 +9517,11 @@ async fn catalog_menu_sections_group_placements_within_a_menu() {
     // A placement can name the section it sits under, and the listing carries it back.
     let placement = router
         .clone()
-        .oneshot(put_with_cookie(
-            &format!("/admin/catalog/menus/{menu}/placements/{item}"),
+        .oneshot(post_with_cookie(
+            &format!("/admin/catalog/menus/{menu}/placements"),
             &serde_json::json!({
+                "menu_id": menu,
+                "menu_item_id": item,
                 "tenant_id": tenant,
                 "menu_section_id": section_id,
                 "prices": [{ "sales_channel": "DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
@@ -9254,8 +9530,8 @@ async fn catalog_menu_sections_group_placements_within_a_menu() {
             &cookie,
         ))
         .await
-        .expect("route set placement in section");
-    assert_eq!(placement.status(), StatusCode::OK);
+        .expect("route create placement in section");
+    assert_eq!(placement.status(), StatusCode::CREATED);
 
     let placements = router
         .oneshot(get_with_cookie(
@@ -9356,9 +9632,11 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
 
     let placed = router
         .clone()
-        .oneshot(put_with_cookie(
-            &format!("/admin/catalog/menus/{menu_id}/placements/{item_id}"),
+        .oneshot(post_with_cookie(
+            &format!("/admin/catalog/menus/{menu_id}/placements"),
             &serde_json::json!({
+                "menu_id": menu_id,
+                "menu_item_id": item_id,
                 "tenant_id": tenant,
                 "prices": [{ "sales_channel": "SALES_CHANNEL_DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": 150_000 } }],
                 "available": true,
@@ -9367,7 +9645,7 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
         ))
         .await
         .expect("route place item");
-    assert_eq!(placed.status(), StatusCode::OK);
+    assert_eq!(placed.status(), StatusCode::CREATED);
 
     // Publish the menu to the store.
     let published = router
@@ -9463,9 +9741,11 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
     let item = ulid_text(500);
     let placed = router
         .clone()
-        .oneshot(put_with_cookie(
-            &format!("/admin/catalog/layout-buttons/SALES_CHANNEL_DINE_IN/{item}"),
+        .oneshot(post_with_cookie(
+            "/admin/catalog/layout-buttons",
             &serde_json::json!({
+                "sales_channel": "SALES_CHANNEL_DINE_IN",
+                "menu_item_id": item,
                 "tenant_id": tenant,
                 "display_category_id": category_id,
                 "label": "Margherita",
@@ -9476,8 +9756,8 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
             &cookie,
         ))
         .await
-        .expect("route set layout button");
-    assert_eq!(placed.status(), StatusCode::OK);
+        .expect("route create layout button");
+    assert_eq!(placed.status(), StatusCode::CREATED);
 
     // Publish the menu; the layout rides along on the same publish.
     let published = router
@@ -12580,4 +12860,363 @@ async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mi
     assert_eq!(body["error"]["details"][0]["field"], "store_id");
     assert_eq!(body["error"]["details"][0]["reason"], "MUTUALLY_EXCLUSIVE");
     assert_eq!(body["error"]["details"][1]["field"], "employee_id");
+}
+
+// --- Inventory authoring admin routes (ADR-0079, ADR-0095) --------------------------------------
+
+/// An in-memory `InventoryStore` for the route tests.
+///
+/// Tenant-scoped and version-carrying like the real thing, because that is exactly what the routes
+/// under test depend on: a create refuses a taken key, an update applies only at the version a read
+/// handed back, and the list is where a caller obtains it.
+#[derive(Default, Clone)]
+struct FakeInventory {
+    ingredients: Arc<Mutex<Vec<Versioned<PublishedIngredient>>>>,
+    recipes: Arc<Mutex<Vec<Versioned<PublishedRecipe>>>>,
+    suppliers: Arc<Mutex<Vec<Versioned<PublishedSupplier>>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeInventory {
+    /// The fake's stand-in for `xmin` (ADR-0094): a token that changes on every successful write.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
+}
+
+impl InventoryStore for FakeInventory {
+    async fn list_ingredients(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<PublishedIngredient>>, InventoryStoreError> {
+        Ok(self.ingredients.lock().expect("lock").clone())
+    }
+
+    async fn create_ingredient(
+        &self,
+        _tenant_id: TenantId,
+        ingredient: &PublishedIngredient,
+    ) -> Result<CreateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.ingredients.lock().expect("lock");
+        if rows.iter().any(|row| row.record.id == ingredient.id) {
+            return Ok(CreateOutcome::AlreadyExists);
+        }
+        rows.push(Versioned::new(ingredient.clone(), version.clone()));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update_ingredient(
+        &self,
+        _tenant_id: TenantId,
+        ingredient: &PublishedIngredient,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.ingredients.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| row.record.id == ingredient.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = ingredient.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn delete_ingredient(
+        &self,
+        _tenant_id: TenantId,
+        ingredient_id: IngredientId,
+    ) -> Result<(), InventoryStoreError> {
+        self.ingredients
+            .lock()
+            .expect("lock")
+            .retain(|row| row.record.id != ingredient_id);
+        Ok(())
+    }
+
+    async fn list_recipes(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<PublishedRecipe>>, InventoryStoreError> {
+        Ok(self.recipes.lock().expect("lock").clone())
+    }
+
+    async fn create_recipe(
+        &self,
+        _tenant_id: TenantId,
+        recipe: &PublishedRecipe,
+    ) -> Result<CreateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.recipes.lock().expect("lock");
+        if rows.iter().any(|row| row.record.item == recipe.item) {
+            return Ok(CreateOutcome::AlreadyExists);
+        }
+        rows.push(Versioned::new(recipe.clone(), version.clone()));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update_recipe(
+        &self,
+        _tenant_id: TenantId,
+        recipe: &PublishedRecipe,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.recipes.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| row.record.item == recipe.item) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = recipe.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn delete_recipe(
+        &self,
+        _tenant_id: TenantId,
+        item: MenuItemId,
+    ) -> Result<(), InventoryStoreError> {
+        self.recipes
+            .lock()
+            .expect("lock")
+            .retain(|row| row.record.item != item);
+        Ok(())
+    }
+
+    async fn list_suppliers(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<PublishedSupplier>>, InventoryStoreError> {
+        Ok(self.suppliers.lock().expect("lock").clone())
+    }
+
+    async fn create_supplier(
+        &self,
+        _tenant_id: TenantId,
+        supplier: &PublishedSupplier,
+    ) -> Result<CreateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.suppliers.lock().expect("lock");
+        if rows.iter().any(|row| row.record.id == supplier.id) {
+            return Ok(CreateOutcome::AlreadyExists);
+        }
+        rows.push(Versioned::new(supplier.clone(), version.clone()));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update_supplier(
+        &self,
+        _tenant_id: TenantId,
+        supplier: &PublishedSupplier,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, InventoryStoreError> {
+        let version = self.mint();
+        let mut rows = self.suppliers.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| row.record.id == supplier.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = supplier.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn delete_supplier(
+        &self,
+        _tenant_id: TenantId,
+        supplier_id: SupplierId,
+    ) -> Result<(), InventoryStoreError> {
+        self.suppliers
+            .lock()
+            .expect("lock")
+            .retain(|row| row.record.id != supplier_id);
+        Ok(())
+    }
+}
+
+/// The admin surface plus the inventory router, on fakes.
+fn inventory_app(admin: FakeAdmin, inventory: FakeInventory) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::inventory_router(
+        inventory,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// A recipe write body, and the `POST` variant that also names the item it makes.
+fn recipe_bodies(
+    tenant: &str,
+    item: &str,
+    threshold: i64,
+) -> (serde_json::Value, serde_json::Value) {
+    let write =
+        serde_json::json!({ "tenant_id": tenant, "lines": [], "auto_86_threshold": threshold });
+    let mut create = write.clone();
+    create["item_id"] = serde_json::Value::String(item.to_owned());
+    (create, write)
+}
+
+/// A recipe's key is the item it makes, and that id comes from the caller — so this was the seam
+/// that lost data: the `PUT` was a create-or-replace, and "add a recipe" for an item that already
+/// had one silently discarded its bill of materials (ADR-0095).
+#[tokio::test]
+async fn adding_a_recipe_for_an_item_that_has_one_is_refused_rather_than_replacing_it() {
+    let router = inventory_app(provisioned_admin(), FakeInventory::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let item = ulid_text(500);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/inventory/recipes",
+            &recipe_bodies(&tenant, &item, 2).0,
+            &cookie,
+        ))
+        .await
+        .expect("route create recipe");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let at_create = etag_of(&created);
+
+    let again = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/inventory/recipes",
+            &recipe_bodies(&tenant, &item, 9).0,
+            &cookie,
+        ))
+        .await
+        .expect("route the duplicate create");
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+
+    // The read-one carries the version as an `ETag` and as an `etag` field, and the threshold the
+    // refused create did not get to overwrite.
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/inventory/recipes/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route read recipe");
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(etag_of(&read), at_create);
+    let fetched = json_body(read).await;
+    assert_eq!(fetched["auto_86_threshold"], 2);
+    assert_eq!(fetched["etag"].as_str().expect("an etag field"), at_create);
+
+    // Deleting frees the item, so a create at it succeeds again.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!("/admin/inventory/recipes/{item}?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route delete recipe");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let recreated = router
+        .oneshot(post_with_cookie(
+            "/admin/inventory/recipes",
+            &recipe_bodies(&tenant, &item, 2).0,
+            &cookie,
+        ))
+        .await
+        .expect("route create after delete");
+    assert_eq!(recreated.status(), StatusCode::CREATED);
+}
+
+/// Editing a recipe needs the version it was read at: unconditional is refused, the right one
+/// applies, and a spent one is a `412`.
+#[tokio::test]
+async fn editing_a_recipe_needs_the_version_the_read_carried() {
+    let router = inventory_app(provisioned_admin(), FakeInventory::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let item = ulid_text(500);
+    let row = format!("/admin/inventory/recipes/{item}");
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/inventory/recipes",
+            &recipe_bodies(&tenant, &item, 2).0,
+            &cookie,
+        ))
+        .await
+        .expect("route create recipe");
+    let at_create = etag_of(&created);
+
+    let unconditional = router
+        .clone()
+        .oneshot(put_with_cookie(
+            &row,
+            &recipe_bodies(&tenant, &item, 5).1,
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional edit");
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+
+    let edited = router
+        .clone()
+        .oneshot(put_with_etag(
+            &row,
+            &recipe_bodies(&tenant, &item, 5).1,
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route edit recipe");
+    assert_eq!(edited.status(), StatusCode::OK);
+    let at_edit = etag_of(&edited);
+    assert_ne!(at_edit, at_create, "an applied edit moves the version");
+
+    let replayed = router
+        .clone()
+        .oneshot(put_with_etag(
+            &row,
+            &recipe_bodies(&tenant, &item, 7).1,
+            &cookie,
+            &at_create,
+        ))
+        .await
+        .expect("route the stale edit");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/inventory/recipes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list recipes");
+    let rows = json_body(listed).await;
+    assert_eq!(
+        rows.as_array().expect("array").len(),
+        1,
+        "neither the refused edit nor the applied one added a row"
+    );
+    assert_eq!(rows[0]["auto_86_threshold"], 5);
+    assert_eq!(rows[0]["etag"].as_str().expect("a row etag"), at_edit);
 }

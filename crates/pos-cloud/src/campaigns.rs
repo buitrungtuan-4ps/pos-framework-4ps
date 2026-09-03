@@ -19,32 +19,52 @@ use core::future::Future;
 use pos_proto::campaign::{PublishedCampaign, PublishedCampaigns};
 use pos_proto::ids::{CampaignId, TenantId};
 
+use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
+
 /// Persists and reads a tenant's authored campaigns.
 ///
-/// All four methods are tenant-scoped; the `store-postgres` impl is RLS-isolated by tenant like every
-/// other cloud table. `upsert_campaign` creates or replaces one campaign by its id; `delete_campaign`
-/// removes one.
+/// All methods are tenant-scoped; the `store-postgres` impl is RLS-isolated by tenant like every
+/// other cloud table. `create_campaign` inserts one and refuses a taken id; `update_campaign`
+/// replaces one only at the version the caller read ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md));
+/// `delete_campaign` removes one.
 pub trait CampaignStore {
     /// Every campaign a tenant has authored, oldest first (campaign ids are ULIDs, so id order is
     /// creation order — a stable read for a diff).
+    ///
+    /// Each row carries the version it was read at, because that is the only place an editor can get
+    /// the token [`update_campaign`](Self::update_campaign) demands: a campaign is edited from the
+    /// list, and a header can carry one version for the whole response but not one per row.
     fn list_campaigns(
         &self,
         tenant_id: TenantId,
-    ) -> impl Future<Output = Result<Vec<PublishedCampaign>, CampaignStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Versioned<PublishedCampaign>>, CampaignStoreError>> + Send;
 
-    /// One campaign by id, or `None` if the tenant has none with that id.
+    /// One campaign by id and the version it was read at, or `None` if the tenant has none with that id.
     fn get_campaign(
         &self,
         tenant_id: TenantId,
         campaign_id: CampaignId,
-    ) -> impl Future<Output = Result<Option<PublishedCampaign>, CampaignStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Versioned<PublishedCampaign>>, CampaignStoreError>> + Send;
 
-    /// Creates a campaign, or replaces the one that already has its id.
-    fn upsert_campaign(
+    /// Inserts a campaign, refusing if one already holds its id.
+    fn create_campaign(
         &self,
         tenant_id: TenantId,
         campaign: &PublishedCampaign,
-    ) -> impl Future<Output = Result<(), CampaignStoreError>> + Send;
+    ) -> impl Future<Output = Result<CreateOutcome, CampaignStoreError>> + Send;
+
+    /// Replaces a campaign, only at the version the caller read it at.
+    ///
+    /// This is the half the old `upsert_campaign` could not express. The update route reads the
+    /// campaign, builds the new one, then wrote unconditionally — so a second admin's save between
+    /// those two steps was silently overwritten, and a delete between them silently resurrected the
+    /// row. The prior `get` proved the campaign existed a moment ago, never that it had not changed.
+    fn update_campaign(
+        &self,
+        tenant_id: TenantId,
+        campaign: &PublishedCampaign,
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, CampaignStoreError>> + Send;
 
     /// Removes a campaign by id. Removing one that does not exist is not an error.
     fn delete_campaign(
@@ -89,27 +109,39 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{CampaignStore, CampaignStoreError, to_node};
+    use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
     /// An in-memory `CampaignStore` for the seam's tests. Tenant-scoped exactly like the real thing;
     /// an upsert touches one campaign for one tenant and leaves other tenants alone, so a test can
     /// prove isolation.
     #[derive(Default)]
     struct FakeCampaigns {
-        rows: Mutex<Vec<(TenantId, PublishedCampaign)>>,
+        rows: Mutex<Vec<(TenantId, PublishedCampaign, Version)>>,
+        next_version: Mutex<u64>,
+    }
+
+    impl FakeCampaigns {
+        /// The fake's stand-in for `xmin` (ADR-0094): a token that changes on every successful
+        /// write, which is the only property the seam contract needs.
+        fn mint(&self) -> Version {
+            let mut next = self.next_version.lock().expect("lock");
+            *next += 1;
+            Version::new(next.to_string())
+        }
     }
 
     impl CampaignStore for FakeCampaigns {
         async fn list_campaigns(
             &self,
             tenant_id: TenantId,
-        ) -> Result<Vec<PublishedCampaign>, CampaignStoreError> {
+        ) -> Result<Vec<Versioned<PublishedCampaign>>, CampaignStoreError> {
             Ok(self
                 .rows
                 .lock()
                 .expect("lock")
                 .iter()
-                .filter(|(owner, _campaign)| *owner == tenant_id)
-                .map(|(_owner, campaign)| campaign.clone())
+                .filter(|(owner, _campaign, _at)| *owner == tenant_id)
+                .map(|(_owner, campaign, at)| Versioned::new(campaign.clone(), at.clone()))
                 .collect())
         }
 
@@ -117,25 +149,53 @@ mod tests {
             &self,
             tenant_id: TenantId,
             campaign_id: CampaignId,
-        ) -> Result<Option<PublishedCampaign>, CampaignStoreError> {
+        ) -> Result<Option<Versioned<PublishedCampaign>>, CampaignStoreError> {
             Ok(self
                 .rows
                 .lock()
                 .expect("lock")
                 .iter()
-                .find(|(owner, campaign)| *owner == tenant_id && campaign.id == campaign_id)
-                .map(|(_owner, campaign)| campaign.clone()))
+                .find(|(owner, campaign, _at)| *owner == tenant_id && campaign.id == campaign_id)
+                .map(|(_owner, campaign, at)| Versioned::new(campaign.clone(), at.clone())))
         }
 
-        async fn upsert_campaign(
+        async fn create_campaign(
             &self,
             tenant_id: TenantId,
             campaign: &PublishedCampaign,
-        ) -> Result<(), CampaignStoreError> {
+        ) -> Result<CreateOutcome, CampaignStoreError> {
             let mut rows = self.rows.lock().expect("lock");
-            rows.retain(|(owner, existing)| !(*owner == tenant_id && existing.id == campaign.id));
-            rows.push((tenant_id, campaign.clone()));
-            Ok(())
+            if rows
+                .iter()
+                .any(|(owner, existing, _at)| *owner == tenant_id && existing.id == campaign.id)
+            {
+                return Ok(CreateOutcome::AlreadyExists);
+            }
+            let version = self.mint();
+            rows.push((tenant_id, campaign.clone(), version.clone()));
+            Ok(CreateOutcome::Created(version))
+        }
+
+        async fn update_campaign(
+            &self,
+            tenant_id: TenantId,
+            campaign: &PublishedCampaign,
+            expected: &Version,
+        ) -> Result<UpdateOutcome, CampaignStoreError> {
+            let version = self.mint();
+            let mut rows = self.rows.lock().expect("lock");
+            let Some(row) = rows
+                .iter_mut()
+                .find(|(owner, existing, _at)| *owner == tenant_id && existing.id == campaign.id)
+            else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if &row.2 != expected {
+                return Ok(UpdateOutcome::VersionMismatch);
+            }
+            row.1 = campaign.clone();
+            row.2 = version.clone();
+            Ok(UpdateOutcome::Updated(version))
         }
 
         async fn delete_campaign(
@@ -146,7 +206,9 @@ mod tests {
             self.rows
                 .lock()
                 .expect("lock")
-                .retain(|(owner, campaign)| !(*owner == tenant_id && campaign.id == campaign_id));
+                .retain(|(owner, campaign, _at)| {
+                    !(*owner == tenant_id && campaign.id == campaign_id)
+                });
             Ok(())
         }
     }
@@ -175,43 +237,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_get_delete_stay_tenant_scoped() {
+    async fn create_refuses_a_taken_id_and_update_needs_the_version_read() {
         let store = FakeCampaigns::default();
 
         // A neighbour's campaign must survive our writes.
         store
-            .upsert_campaign(other_tenant(), &campaign(99, "Neighbour"))
+            .create_campaign(other_tenant(), &campaign(99, "Neighbour"))
             .await
             .expect("neighbour");
 
-        store
-            .upsert_campaign(tenant(), &campaign(10, "Lunch"))
+        let first = match store
+            .create_campaign(tenant(), &campaign(10, "Lunch"))
             .await
-            .expect("create");
+            .expect("create")
+        {
+            CreateOutcome::Created(version) => version,
+            CreateOutcome::AlreadyExists => panic!("the id was free"),
+        };
         store
-            .upsert_campaign(tenant(), &campaign(11, "Dinner"))
+            .create_campaign(tenant(), &campaign(11, "Dinner"))
             .await
             .expect("create 2");
         assert_eq!(store.list_campaigns(tenant()).await.expect("list").len(), 2);
 
-        // Upsert replaces by id rather than appending.
-        store
-            .upsert_campaign(tenant(), &campaign(10, "Lunch (renamed)"))
-            .await
-            .expect("update");
-        let listed = store.list_campaigns(tenant()).await.expect("list again");
+        // A second create at a taken id is refused, and changes nothing. Before ADR-0095 split the
+        // seam this was an upsert, so the rename below arrived through the *create* path and
+        // silently replaced the row — the case this assertion now forbids.
         assert_eq!(
-            listed.len(),
-            2,
-            "upsert of an existing id does not add a row"
+            store
+                .create_campaign(tenant(), &campaign(10, "Lunch (renamed)"))
+                .await
+                .expect("the comparison must not raise"),
+            CreateOutcome::AlreadyExists
         );
-
         let fetched = store
             .get_campaign(tenant(), CampaignId::new(Ulid::from_u128(10)))
             .await
             .expect("get")
             .expect("present");
-        assert_eq!(fetched.name, DisplayName::new("Lunch (renamed)"));
+        assert_eq!(
+            fetched.record.name,
+            DisplayName::new("Lunch"),
+            "a refused create leaves the row it refused to overwrite alone"
+        );
+        // A read carries the version, and it is the one the create minted. Without this an editor
+        // that loaded the list has no token to send back, so `update_campaign` would be unreachable
+        // from anywhere but the response to a create it made itself.
+        assert_eq!(
+            fetched.etag, first,
+            "a read hands back the version the row is at"
+        );
+        let listed = store.list_campaigns(tenant()).await.expect("list");
+        assert_eq!(
+            listed
+                .iter()
+                .find(|row| row.record.id == CampaignId::new(Ulid::from_u128(10)))
+                .map(|row| row.etag.clone()),
+            Some(first.clone()),
+            "and so does every row of a list, which is where the console edits from"
+        );
+
+        // The rename goes through update, at the version the create minted.
+        let renamed = match store
+            .update_campaign(tenant(), &campaign(10, "Lunch (renamed)"), &first)
+            .await
+            .expect("the update")
+        {
+            UpdateOutcome::Updated(version) => version,
+            other => panic!("expected the update to apply, got {other:?}"),
+        };
+        assert_ne!(renamed, first, "the version moves on every write");
+        let listed = store.list_campaigns(tenant()).await.expect("list again");
+        assert_eq!(listed.len(), 2, "an update does not add a row");
+        let fetched = store
+            .get_campaign(tenant(), CampaignId::new(Ulid::from_u128(10)))
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(fetched.record.name, DisplayName::new("Lunch (renamed)"));
+        assert_eq!(
+            fetched.etag, renamed,
+            "and the version a read carries moves with the write"
+        );
+
+        // And the version the caller already used is now stale.
+        assert_eq!(
+            store
+                .update_campaign(tenant(), &campaign(10, "Lunch (again)"), &first)
+                .await
+                .expect("the comparison must not raise"),
+            UpdateOutcome::VersionMismatch
+        );
 
         store
             .delete_campaign(tenant(), CampaignId::new(Ulid::from_u128(10)))
