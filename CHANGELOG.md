@@ -16,6 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **An empty optional id means "unset" on every field, not two of them** (#280). Seven typed
+  wrappers sat on `parse_optional_ulid`, and two — `brand_id` on a store, `parent_menu_id` on a menu
+  — matched on `Some(text)` without trimming or filtering. So `""` meant "malformed, `400`" for
+  those two fields and "unset" for the other five optional-ULID fields on the same surface, with
+  nothing in the types to notice and nothing in the API description to warn a caller. Clearing a
+  select box sends `""`; the console only avoided the refusal because every call site happened to map
+  it to `null` first, so one screen forgetting that would have produced a `400` an operator could not
+  act on.
+
+  The seven wrappers are gone. Every caller passes its own constructor (`BrandId::new`,
+  `MenuId::new`, …) to the one helper, which is now the only place the rule is written: absent, empty
+  or whitespace is `None`; anything else must be a ULID. Three unit tests pin the rule across id
+  types, and a route test exercises the two fields that disagreed — because a unit test cannot see a
+  handler that stops calling the helper.
+
 ### Changed
 - **The six keyed upserts on `/admin` are now a create and an update, and both are conditional**
   (#287, ADR-0095). Campaigns, ingredients, recipes, suppliers, menu placements and layout buttons

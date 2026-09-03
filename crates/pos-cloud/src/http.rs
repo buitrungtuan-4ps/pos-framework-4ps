@@ -3618,7 +3618,18 @@ fn floor_entropy_unavailable() -> Response {
     api_error(ErrorStatus::Unavailable, "the floor service is unavailable")
 }
 
-/// Parses an optional id field: `None`/empty → `Ok(None)`; a present value must be a ULID.
+/// Parses an optional id field: an absent field, an empty string, or whitespace is `Ok(None)`; a
+/// present value must be a ULID or the caller gets a `400` naming the field.
+///
+/// **The only place that rule is written.** There were seven typed wrappers around this, and two of
+/// them — `brand_id` on a store and `parent_menu_id` on a menu — matched on `Some(text)` without
+/// trimming or filtering, so an empty string meant "malformed" for those two fields and "unset" for
+/// the other five. Whether `""` clears an optional reference is not a per-field question, and a
+/// caller cannot be expected to know which of two identical-looking fields it is asking. Clearing a
+/// select box sends `""`, and the console only avoided the `400` because every call site happened to
+/// map it to `null` first — one screen forgetting that would have produced a refusal an operator
+/// could not act on. So the wrappers are gone and every caller passes its own constructor
+/// (`BrandId::new`, `MenuId::new`, …) here.
 fn parse_optional_ulid<T>(value: Option<&str>, wrap: impl Fn(Ulid) -> T) -> Result<Option<T>, ()> {
     match value.map(str::trim).filter(|text| !text.is_empty()) {
         None => Ok(None),
@@ -5832,18 +5843,6 @@ where
     }
 }
 
-/// Parses an optional brand id from a request; `Err` marks a present-but-malformed value.
-fn parse_optional_brand(brand_id: Option<&str>) -> Result<Option<BrandId>, ()> {
-    match brand_id {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(BrandId::new)
-            .map(Some)
-            .map_err(|_ignored| ()),
-        None => Ok(None),
-    }
-}
-
 /// A super-admin creates a store under a tenant, with an optional brand.
 async fn admin_create_store<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -5870,7 +5869,7 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
+    let Ok(brand_id) = parse_optional_ulid(request.brand_id.as_deref(), BrandId::new) else {
         return ulid_refusal(&["brand_id"]);
     };
     let Some(store_id) =
@@ -5934,7 +5933,7 @@ where
             Ok([store_id, tenant_id]) => (StoreId::new(store_id), TenantId::new(tenant_id)),
             Err(refusal) => return refusal,
         };
-    let Ok(brand_id) = parse_optional_brand(request.brand_id.as_deref()) else {
+    let Ok(brand_id) = parse_optional_ulid(request.brand_id.as_deref(), BrandId::new) else {
         return ulid_refusal(&["brand_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
@@ -10725,79 +10724,6 @@ where
     (StatusCode::OK, Json(state.locales.as_ref().clone())).into_response()
 }
 
-/// Parses an optional parent-menu id from a request body; `Err` for a present-but-malformed value.
-fn parse_optional_menu(value: Option<&str>) -> Result<Option<MenuId>, ()> {
-    match value {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(MenuId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
-/// Parses an optional item-category id; an absent field or an empty string is "unclassified" (`None`),
-/// a present-but-malformed value is `Err` (a `400`).
-fn parse_optional_category(value: Option<&str>) -> Result<Option<ItemCategoryId>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(ItemCategoryId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
-/// Parses an optional media id (an item's/brand's `image_ref`, ADR-0075), with the same
-/// empty-is-`None` rule as [`parse_optional_category`].
-fn parse_optional_media(value: Option<&str>) -> Result<Option<MediaId>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(MediaId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
-/// Parses an optional item-sub-category id, with the same empty-is-`None` rule as
-/// [`parse_optional_category`].
-fn parse_optional_subcategory(value: Option<&str>) -> Result<Option<ItemSubcategoryId>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(ItemSubcategoryId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
-/// Parses an optional display-sub-category id, with the same empty-is-`None` rule as
-/// [`parse_optional_category`] — a layout button may sit directly under a display category.
-fn parse_optional_display_subcategory(
-    value: Option<&str>,
-) -> Result<Option<DisplaySubcategoryId>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(DisplaySubcategoryId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
-/// Parses an optional menu-section id, with the same empty-is-`None` rule as
-/// [`parse_optional_category`] — a placement may sit in a menu without a section.
-fn parse_optional_menu_section(value: Option<&str>) -> Result<Option<MenuSectionId>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(MenuSectionId::new(ulid)))
-            .map_err(|_| ()),
-        None => Ok(None),
-    }
-}
-
 /// Parses a list of item ids from a request body; `Err` if any entry is not a ULID.
 fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, ()> {
     values
@@ -10939,15 +10865,18 @@ where
         Ok([tenant_id, tax_class_id]) => (TenantId::new(tenant_id), TaxClassId::new(tax_class_id)),
         Err(refusal) => return refusal,
     };
-    let Ok(item_category_id) = parse_optional_category(request.item_category_id.as_deref()) else {
+    let Ok(item_category_id) =
+        parse_optional_ulid(request.item_category_id.as_deref(), ItemCategoryId::new)
+    else {
         return ulid_refusal(&["item_category_id"]);
     };
-    let Ok(item_subcategory_id) =
-        parse_optional_subcategory(request.item_subcategory_id.as_deref())
-    else {
+    let Ok(item_subcategory_id) = parse_optional_ulid(
+        request.item_subcategory_id.as_deref(),
+        ItemSubcategoryId::new,
+    ) else {
         return ulid_refusal(&["item_subcategory_id"]);
     };
-    let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
+    let Ok(image_ref) = parse_optional_ulid(request.image_ref.as_deref(), MediaId::new) else {
         return ulid_refusal(&["image_ref"]);
     };
     let Some(menu_item_id) =
@@ -11024,15 +10953,18 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
-    let Ok(item_category_id) = parse_optional_category(request.item_category_id.as_deref()) else {
+    let Ok(item_category_id) =
+        parse_optional_ulid(request.item_category_id.as_deref(), ItemCategoryId::new)
+    else {
         return ulid_refusal(&["item_category_id"]);
     };
-    let Ok(item_subcategory_id) =
-        parse_optional_subcategory(request.item_subcategory_id.as_deref())
-    else {
+    let Ok(item_subcategory_id) = parse_optional_ulid(
+        request.item_subcategory_id.as_deref(),
+        ItemSubcategoryId::new,
+    ) else {
         return ulid_refusal(&["item_subcategory_id"]);
     };
-    let Ok(image_ref) = parse_optional_media(request.image_ref.as_deref()) else {
+    let Ok(image_ref) = parse_optional_ulid(request.image_ref.as_deref(), MediaId::new) else {
         return ulid_refusal(&["image_ref"]);
     };
     let record = CatalogItem {
@@ -11938,9 +11870,10 @@ fn build_layout_button(
         ),
         Err(refusal) => return Err(refusal),
     };
-    let Ok(display_subcategory_id) =
-        parse_optional_display_subcategory(request.display_subcategory_id.as_deref())
-    else {
+    let Ok(display_subcategory_id) = parse_optional_ulid(
+        request.display_subcategory_id.as_deref(),
+        DisplaySubcategoryId::new,
+    ) else {
         return Err(ulid_refusal(&["display_subcategory_id"]));
     };
     // A grid slot exists only when both column and row are given; otherwise the button flows by order.
@@ -12365,7 +12298,8 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
+    let Ok(parent_menu_id) = parse_optional_ulid(request.parent_menu_id.as_deref(), MenuId::new)
+    else {
         return ulid_refusal(&["parent_menu_id"]);
     };
     let Some(menu_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuId::new)
@@ -12427,7 +12361,8 @@ where
             Ok([menu_id, tenant_id]) => (MenuId::new(menu_id), TenantId::new(tenant_id)),
             Err(refusal) => return refusal,
         };
-    let Ok(parent_menu_id) = parse_optional_menu(request.parent_menu_id.as_deref()) else {
+    let Ok(parent_menu_id) = parse_optional_ulid(request.parent_menu_id.as_deref(), MenuId::new)
+    else {
         return ulid_refusal(&["parent_menu_id"]);
     };
     let Some(status) = parse_entity_status(&request.status) else {
@@ -12689,7 +12624,8 @@ fn build_placement(
         ),
         Err(refusal) => return Err(refusal),
     };
-    let Ok(menu_section_id) = parse_optional_menu_section(request.menu_section_id.as_deref())
+    let Ok(menu_section_id) =
+        parse_optional_ulid(request.menu_section_id.as_deref(), MenuSectionId::new)
     else {
         return Err(ulid_refusal(&["menu_section_id"]));
     };
@@ -17995,6 +17931,77 @@ mod closed_set_tests {
                 "{token} is listed, so it must parse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod optional_ulid_tests {
+    //! The one rule for an optional id field, pinned so it cannot fork per field again.
+    //!
+    //! Seven typed wrappers used to sit on `parse_optional_ulid`, and two of them skipped the trim
+    //! and the empty filter — so `""` meant "unset" for five fields and "malformed" for two, on the
+    //! same surface, with nothing in the types to notice. This test is what a re-introduced wrapper
+    //! has to get past.
+
+    use super::parse_optional_ulid;
+    use crate::catalog::{MenuId, MenuSectionId};
+    use pos_proto::ids::BrandId;
+    use pos_proto::ulid::Ulid;
+
+    /// A ULID an operator never types, in the Crockford alphabet the parser accepts.
+    const ID: &str = "01JAAAAAAAAAAAAAAAAAAAAAAA";
+
+    #[test]
+    fn absent_blank_and_whitespace_all_mean_unset() {
+        // The three ways a client says "no value": the field is missing, cleared to an empty string
+        // (what a select box sends), or whitespace a form left behind. All three are the same
+        // answer, because a caller cannot be expected to know which spelling a given field wants.
+        for value in [None, Some(""), Some("   "), Some("\t")] {
+            assert_eq!(
+                parse_optional_ulid(value, BrandId::new),
+                Ok(None),
+                "{value:?} must read as unset"
+            );
+        }
+    }
+
+    #[test]
+    fn a_present_value_must_be_a_ulid_and_is_trimmed() {
+        assert_eq!(
+            parse_optional_ulid(Some(ID), BrandId::new),
+            Ok(Some(BrandId::new(ID.parse::<Ulid>().expect("a ULID")))),
+            "a present value parses"
+        );
+        assert_eq!(
+            parse_optional_ulid(Some(&format!("  {ID}  ")), BrandId::new),
+            Ok(Some(BrandId::new(ID.parse::<Ulid>().expect("a ULID")))),
+            "and surrounding whitespace is not the caller's mistake to pay for"
+        );
+        // A present-but-malformed value is the caller's error, and stays one: `Err` is what the
+        // handlers turn into the `400` that names the field.
+        for value in ["not-a-ulid", "01JAAAA", "01JAAAAAAAAAAAAAAAAAAAAAAI"] {
+            assert_eq!(
+                parse_optional_ulid(Some(value), BrandId::new),
+                Err(()),
+                "{value:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rule_does_not_depend_on_which_id_type_is_being_parsed() {
+        // The two fields that disagreed were `brand_id` on a store and `parent_menu_id` on a menu.
+        // They are checked here against a third that always agreed, because the property under test
+        // is that the id type is irrelevant — one function, one rule.
+        assert_eq!(parse_optional_ulid(Some(""), BrandId::new), Ok(None));
+        assert_eq!(parse_optional_ulid(Some(""), MenuId::new), Ok(None));
+        assert_eq!(parse_optional_ulid(Some(""), MenuSectionId::new), Ok(None));
+        assert_eq!(parse_optional_ulid(Some("nope"), BrandId::new), Err(()));
+        assert_eq!(parse_optional_ulid(Some("nope"), MenuId::new), Err(()));
+        assert_eq!(
+            parse_optional_ulid(Some("nope"), MenuSectionId::new),
+            Err(())
+        );
     }
 }
 
