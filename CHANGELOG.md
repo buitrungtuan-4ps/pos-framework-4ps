@@ -66,6 +66,49 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   to create).
 
 ### Added
+
+- **ADR-0098 — paging is a second read, not a change to the read that exists** (#155).
+  Documentation only; no behaviour changes.
+
+  F2's plan booked one line for this: `?limit=&offset=&q=&sort=&order=` on the `admin_list_*`
+  handlers, `{items, total}` in reply, threaded through the store seams. Measured, that shape would
+  have broken working screens. `GET /admin/items` has six console consumers and only **one** is a
+  table — the other five read the whole set to fill an item picker or resolve an id to a name — and
+  inside `http.rs` another 29 list-call sites across 22 functions are not a list route at all: the
+  menu compiler makes six of them, the publish and export paths more, and nine are `GET`/`PATCH`/
+  `DELETE` handlers on one ingredient, recipe or supplier that list the whole table to find their one
+  row. Give `limit` a default and a menu compiles without the items on page two, with nothing raised
+  anywhere.
+
+  **So the unpaged read stays, permanently.** `?limit=` absent returns today's array of every row;
+  `?limit=` present returns `{items, total, limit, offset}`. Two supported forms, not a migration
+  with a deprecated side: a caller asking for every item so it can offer them in a dropdown is a
+  correct caller, not a laggard. At the seam the existing `list_*` is untouched and a second
+  `list_*_page` is added beside it, so the fifteen whole-set callers churn not at all —
+  the shape `AuditStore` already has, with `query(filter)` beside `list_recent(limit)`.
+
+  **Six lists get paging, thirty-three do not, and four never will.** The criterion is both halves:
+  a screen renders the whole set into the DOM *and* the row count grows on data rather than on
+  someone typing. That selects `vouchers` (10 000 codes per mint, batches accumulating — three drops
+  is 30 000 rows in one response the Campaigns screen renders), `media`, `audit`, `items`,
+  `employees`, `devices`. Menus, sections, placements, tax classes, ingredients, suppliers, stores
+  and the rest are bounded by authoring effort; `permissions`, `capabilities`, `countries` and
+  `locales` are compile-time registries where a pager is pure ceremony.
+
+  Four smaller decisions, each with a reason the plan did not have: `?q=` works **without** `limit`,
+  because a dropdown over 3 000 items wants type-ahead and not page four; `sort` is a per-route
+  whitelist refused by name when unknown, because an arbitrary identifier reaching `ORDER BY` is an
+  injection surface no parameter binding covers *and* an unindexed sort is the problem paging was
+  meant to solve; a `limit` or `offset` out of range is a `400`, never a silent clamp, since clamping
+  lets a client believe it read a tail it never reached; and `total` comes from `COUNT(*) OVER()` in
+  the same statement as the rows, because an estimate makes the pager lie about a set an admin is
+  actively editing.
+
+  `DataTable` gains optional server-paging props and, when given them, stops sorting and slicing
+  locally — handed 25 of 812 rows it currently renders "1–25 of 25", which is worse than no pager at
+  all. Delivery is three slices: the vocabulary plus `vouchers` proven end to end, then the remaining
+  five lists, then `q`/`sort`/`order`.
+
 - **ADR-0097 gives the `/internal` routes a key of their own** (#148). Documentation only; no
   behaviour changes yet.
 
