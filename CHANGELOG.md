@@ -52,6 +52,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   measurement, fitting two of them.
 
 ### Security
+- **A refused webhook registration reported what the cloud's own DNS resolver saw** (#147).
+
+  `POST /admin/webhooks` vets a URL against SSRF before storing it (ADR-0032), and the refusal was
+  `format!("the webhook URL was rejected: {rejection}")` — the `Display` of `SsrfRejection`, rendered
+  straight into the response body. Four of that enum's six variants describe the caller's own string
+  and are harmless. The other two are decided by **this server's resolver**:
+
+  - `ForbiddenAddress(IpAddr, ForbiddenReason)` interpolates the address the host resolved to and its
+    class, so `url=https://internal-thing.corp.example/` answered
+    `the webhook host resolves to a forbidden address (10.4.12.7): private network`;
+  - `Unresolved` answered `the webhook host did not resolve`.
+
+  Between those two and a success, a caller could tell three outcomes apart — resolves publicly,
+  resolves privately *to this address*, does not resolve — which turns the register route into an
+  internal name-to-address mapper, one name per request. The request was correctly never made, and
+  then the refusal handed over exactly the reconnaissance the block exists to deny. The route is
+  behind `ConsolePermission::ManageWebhooks`, which `Ops` holds as well as `Owner` and `Admin`, so a
+  day-to-day console operator is not obviously the right audience for the cloud's network topology.
+
+  **The fix.** `SsrfRejection::caller_message` draws the line the type did not have: the four
+  caller-string variants keep their exact wording, and the two resolver-decided ones collapse into
+  one sentence — *"the webhook URL must point at a public address"* — that says what is required
+  without saying which way it failed. `Display` is unchanged, and the full rejection now goes to
+  `tracing::warn` instead, the same "coarse to the caller, full to the log" shape the delivery path
+  in `webhook/runner.rs` already used. The submitted URL is deliberately **not** logged: a webhook
+  URL routinely carries its own bearer token in the path or query, and this is a log.
+
+  Collapsing rather than merely dropping the address is the point — keeping the two messages
+  distinct would still separate "exists in internal DNS" from "does not resolve", which is most of
+  the oracle. Three tests pin it, all mutation-checked: `Display` keeps the address while
+  `caller_message` drops both it and the class; `Unresolved` and `ForbiddenAddress` are byte-equal to
+  a caller; and the HTTP-level refusal body carries neither the address nor the class.
+
+  **What this costs.** An operator registering a webhook no longer sees which address the name
+  resolved to; it is in the server log. Nothing else changes — the vetting policy, the status code
+  and the four precise messages are identical, and no stored endpoint is affected.
+
 - **The Kubernetes lane published the `/internal` routes to the internet** (#144). `pos_cloud` serves
   three routes under `/internal/*` that authenticate **nothing**, by design — they are documented as
   private-network-only: `/internal/ingest` (the reconciliation re-push), `/internal/reconcile` (the

@@ -3755,6 +3755,20 @@ async fn webhook_register_requires_a_session_and_refuses_ssrf() {
         StatusCode::BAD_REQUEST,
         "a loopback destination is refused before anything is stored"
     );
+    // And the refusal does not repeat the address back. With an IP literal the caller already knows
+    // it, but the same body renders a *resolved* address when the host is a name, and this is the
+    // assertion that catches the day someone reinstates it.
+    let body = String::from_utf8(
+        axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .expect("read the refusal body")
+            .to_vec(),
+    )
+    .expect("the refusal body is text");
+    assert!(
+        !body.contains("127.0.0.1") && !body.contains("loopback"),
+        "the refusal must not report what the address was: {body}"
+    );
 
     // Plaintext http is refused even to a public address.
     let plaintext = serde_json::json!({
