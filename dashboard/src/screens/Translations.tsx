@@ -34,7 +34,20 @@ export function Translations() {
   const [importReport, setImportReport] = createSignal<TranslationImportReport | null>(null);
   const [importFile, setImportFile] = createSignal<File | null>(null);
 
-  const fail = (caught: unknown) => {
+  // The version the grid was read at, or `null` for a tenant that has authored none yet (ADR-0095).
+  const [version, setVersion] = createSignal<string | null>(null);
+
+  // A `412` means somebody else saved the grid while this one was open. The screen reloads rather
+  // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
+  // the operator needs to see what actually changed before deciding again.
+  const fail = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.isStale) {
+      const message = t("translations.stale");
+      setError(message);
+      toast.error(message);
+      await load();
+      return;
+    }
     const message = caught instanceof ApiError ? caught.message : String(caught);
     setError(message);
     toast.error(message);
@@ -48,11 +61,12 @@ export function Translations() {
         api.getTranslations(tenantId()),
         api.listLocales(),
       ]);
-      setGrid(loadedGrid);
+      setGrid(loadedGrid.value);
+      setVersion(loadedGrid.etag);
       setCatalogue(locales);
       setLoaded(true);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -117,10 +131,13 @@ export function Translations() {
     }
     setBusy(true);
     try {
-      await api.putTranslations(tenantId(), grid());
+      await api.putTranslations(tenantId(), grid(), version());
+      // Re-read rather than trusting the save's own `ETag`: the next edit has to be made against
+      // what is stored, and the reload is one request either way.
+      await load();
       toast.ok(t("translations.saved"));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -130,7 +147,7 @@ export function Translations() {
     try {
       await api.exportTranslationsCsv(tenantId());
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     }
   };
 
@@ -143,7 +160,7 @@ export function Translations() {
       setImportFile(file);
       setImportReport(report);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -172,7 +189,7 @@ export function Translations() {
       closeImport();
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }

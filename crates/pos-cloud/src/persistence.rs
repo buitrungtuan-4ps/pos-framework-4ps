@@ -1080,15 +1080,17 @@ impl TranslationStore for PostgresTranslations {
     async fn load(
         &self,
         tenant: TenantId,
-    ) -> Result<Option<TranslationGrid>, TranslationStoreError> {
-        let json = self
+    ) -> Result<Option<Versioned<TranslationGrid>>, TranslationStoreError> {
+        let row = self
             .load_grid(&tenant.to_string())
             .await
             .map_err(|error| TranslationStoreError::new(error.to_string()))?;
-        match json {
-            Some(text) => serde_json::from_str(&text).map(Some).map_err(|error| {
-                TranslationStoreError::new(format!("decoding the stored grid failed: {error}"))
-            }),
+        match row {
+            Some((text, version)) => serde_json::from_str(&text)
+                .map(|grid| Some(Versioned::new(grid, Version::new(version))))
+                .map_err(|error| {
+                    TranslationStoreError::new(format!("decoding the stored grid failed: {error}"))
+                }),
             None => Ok(None),
         }
     }
@@ -1097,12 +1099,14 @@ impl TranslationStore for PostgresTranslations {
         &self,
         tenant: TenantId,
         grid: &TranslationGrid,
-    ) -> Result<(), TranslationStoreError> {
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, TranslationStoreError> {
         let json = serde_json::to_string(grid).map_err(|error| {
             TranslationStoreError::new(format!("encoding the grid failed: {error}"))
         })?;
-        self.save_grid(&tenant.to_string(), &json)
+        self.save_grid(&tenant.to_string(), &json, expected.map(Version::as_str))
             .await
+            .map(update_outcome)
             .map_err(|error| TranslationStoreError::new(error.to_string()))
     }
 }
@@ -1730,21 +1734,24 @@ impl TaxRateStore for PostgresTaxRates {
     async fn list_tax_rates(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<TaxRateEntry>, TaxRateStoreError> {
-        let rows = self
+    ) -> Result<(Vec<TaxRateEntry>, Option<Version>), TaxRateStoreError> {
+        let (rows, version) = self
             .fetch(&tenant_id.to_string())
             .await
             .map_err(|error| TaxRateStoreError::new(error.to_string()))?;
-        rows.iter()
+        let entries: Vec<TaxRateEntry> = rows
+            .iter()
             .filter_map(|row| tax_rate_entry(row).transpose())
-            .collect()
+            .collect::<Result<_, _>>()?;
+        Ok((entries, version.map(Version::new)))
     }
 
     async fn set_tax_rates(
         &self,
         tenant_id: TenantId,
         entries: &[TaxRateEntry],
-    ) -> Result<(), TaxRateStoreError> {
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, TaxRateStoreError> {
         let rows: Vec<TaxRateRow> = entries
             .iter()
             .map(|entry| TaxRateRow {
@@ -1753,8 +1760,9 @@ impl TaxRateStore for PostgresTaxRates {
                 rate_bps: i32::try_from(entry.rate.basis_points()).unwrap_or(i32::MAX),
             })
             .collect();
-        self.replace(&tenant_id.to_string(), &rows)
+        self.replace(&tenant_id.to_string(), &rows, expected.map(Version::as_str))
             .await
+            .map(update_outcome)
             .map_err(|error| TaxRateStoreError::new(error.to_string()))
     }
 }

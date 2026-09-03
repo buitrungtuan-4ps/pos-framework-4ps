@@ -1784,65 +1784,277 @@ mod alerts {
 // ---------------------------------------------------------------------------
 
 mod tax_rates {
-    use store_postgres::TaxRateRow;
+    use store_postgres::{RowUpdate, TaxRateRow};
 
     use super::{TENANT_A, TENANT_B, block_on, prepared};
 
+    fn row(channel: &str, rate_bps: i32) -> TaxRateRow {
+        TaxRateRow {
+            tax_class_id: "class-standard".to_owned(),
+            sales_channel: channel.to_owned(),
+            rate_bps,
+        }
+    }
+
+    /// The version an applied save left the table at, or `None` if the store refused it — so a call
+    /// site can `.expect` inside its own test, where the lint config allows it.
+    fn applied(outcome: RowUpdate) -> Option<String> {
+        match outcome {
+            RowUpdate::Updated(version) => Some(version),
+            RowUpdate::VersionMismatch | RowUpdate::NotFound => None,
+        }
+    }
+
     /// A save replaces the tenant's whole table (not append), reads back class-then-channel ordered,
-    /// and never touches a neighbour tenant's rows.
+    /// carries the version it was saved at, and never touches a neighbour tenant's rows.
     #[test]
-    fn replaces_wholesale_and_stays_tenant_scoped() {
+    fn replaces_wholesale_under_its_version_and_stays_tenant_scoped() {
         block_on(async {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let rates = store.tax_rates();
 
-            let neighbour = vec![TaxRateRow {
-                tax_class_id: "class-standard".to_owned(),
-                sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
-                rate_bps: 500,
-            }];
-            rates
-                .replace(TENANT_B, &neighbour)
-                .await
-                .expect("set neighbour");
+            assert!(
+                rates
+                    .fetch(TENANT_A)
+                    .await
+                    .expect("fetch before any save")
+                    .1
+                    .is_none(),
+                "a tenant that has never saved rates has no version"
+            );
+
+            let neighbour = vec![row("SALES_CHANNEL_DINE_IN", 500)];
+            applied(
+                rates
+                    .replace(TENANT_B, &neighbour, None)
+                    .await
+                    .expect("set neighbour"),
+            )
+            .expect("the save applies");
 
             let first = vec![
-                TaxRateRow {
-                    tax_class_id: "class-standard".to_owned(),
-                    sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
-                    rate_bps: 1000,
-                },
-                TaxRateRow {
-                    tax_class_id: "class-standard".to_owned(),
-                    sales_channel: "SALES_CHANNEL_TAKEAWAY".to_owned(),
-                    rate_bps: 800,
-                },
+                row("SALES_CHANNEL_DINE_IN", 1000),
+                row("SALES_CHANNEL_TAKEAWAY", 800),
             ];
-            rates.replace(TENANT_A, &first).await.expect("set ours");
-            let listed = rates.fetch(TENANT_A).await.expect("fetch ours");
+            let created = applied(
+                rates
+                    .replace(TENANT_A, &first, None)
+                    .await
+                    .expect("set ours"),
+            )
+            .expect("the save applies");
+            let (listed, version) = rates.fetch(TENANT_A).await.expect("fetch ours");
             assert_eq!(listed.len(), 2);
             assert_eq!(
                 listed.first().expect("first row").sales_channel,
                 "SALES_CHANNEL_DINE_IN",
                 "rows read back class-then-channel ordered"
             );
+            let version = version.expect("a saved table has a version");
+            assert_eq!(
+                version, created,
+                "the version a save returns is the one the next fetch reads"
+            );
 
-            // A second save replaces rather than appends.
-            let second = vec![TaxRateRow {
-                tax_class_id: "class-standard".to_owned(),
-                sales_channel: "SALES_CHANNEL_DINE_IN".to_owned(),
-                rate_bps: 1000,
-            }];
-            rates
-                .replace(TENANT_A, &second)
-                .await
-                .expect("replace ours");
-            let replaced = rates.fetch(TENANT_A).await.expect("fetch replaced");
+            // A second save at that version replaces rather than appends, and moves the version.
+            let second = vec![row("SALES_CHANNEL_DINE_IN", 1000)];
+            let moved = applied(
+                rates
+                    .replace(TENANT_A, &second, Some(&version))
+                    .await
+                    .expect("replace ours"),
+            )
+            .expect("the save applies");
+            let (replaced, _) = rates.fetch(TENANT_A).await.expect("fetch replaced");
             assert_eq!(replaced, second, "the whole table is replaced");
+            assert_ne!(
+                moved, version,
+                "xmin on the version row must move, or the next save would be unguarded"
+            );
 
-            // The neighbour is untouched.
-            let neighbour_after = rates.fetch(TENANT_B).await.expect("fetch neighbour");
+            // The neighbour is untouched — the version is per tenant, like the rows it guards.
+            let (neighbour_after, _) = rates.fetch(TENANT_B).await.expect("fetch neighbour");
             assert_eq!(neighbour_after, neighbour);
+        });
+    }
+
+    /// The four ways a save is refused, and the proof that none of them touched the rate rows.
+    ///
+    /// This is the case the `xmin`-on-the-row scheme cannot cover, and the reason migration 0039
+    /// exists: a replace deletes and reinserts every rate row, so no rate row's version survives one
+    /// to be compared against. The version row is what does.
+    #[test]
+    fn a_stale_garbled_or_already_taken_save_is_refused_and_writes_nothing() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let rates = store.tax_rates();
+            let kept = vec![row("SALES_CHANNEL_DINE_IN", 1000)];
+            let clobber = vec![row("SALES_CHANNEL_DINE_IN", 9900)];
+
+            // Naming a version for a tenant that has never saved is an absence, not a conflict.
+            assert_eq!(
+                rates
+                    .replace(TENANT_A, &clobber, Some("1"))
+                    .await
+                    .expect("the probe"),
+                RowUpdate::NotFound
+            );
+
+            let stale = applied(
+                rates
+                    .replace(TENANT_A, &kept, None)
+                    .await
+                    .expect("the first save"),
+            )
+            .expect("the save applies");
+            applied(
+                rates
+                    .replace(TENANT_A, &kept, Some(&stale))
+                    .await
+                    .expect("a second save"),
+            )
+            .expect("the save applies");
+
+            // Replaying a version the table has moved past is the lost update this refuses.
+            assert_eq!(
+                rates
+                    .replace(TENANT_A, &clobber, Some(&stale))
+                    .await
+                    .expect("the stale save"),
+                RowUpdate::VersionMismatch
+            );
+
+            // A garbled tag is a mismatch too, not a database error — the comparison is on
+            // `xmin::text`, because casting caller text to `xid` would raise instead of refusing.
+            assert_eq!(
+                rates
+                    .replace(TENANT_A, &clobber, Some("not-a-transaction-id"))
+                    .await
+                    .expect("the comparison must not raise"),
+                RowUpdate::VersionMismatch
+            );
+
+            // Claiming "nothing saved yet" about a table that has been saved: refused, not upserted.
+            assert_eq!(
+                rates
+                    .replace(TENANT_A, &clobber, None)
+                    .await
+                    .expect("the create path"),
+                RowUpdate::VersionMismatch
+            );
+
+            let (survived, _) = rates
+                .fetch(TENANT_A)
+                .await
+                .expect("fetch after the refusals");
+            assert_eq!(
+                survived, kept,
+                "no refused save deleted or reinserted a rate row"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The translation grid: one jsonb row per tenant, versioned by its own xmin (ADR-0095).
+// ---------------------------------------------------------------------------
+
+mod translations {
+    use store_postgres::RowUpdate;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// The grid saves under its version and refuses a save made against a version it has moved past.
+    ///
+    /// The counterpart to the tax-rate case above, and the reason that one needed a migration and
+    /// this one did not: the grid is *one row*, so a save updates it in place and its own `xmin`
+    /// moves. ADR-0095 had booked both as needing a version table; measuring the schema showed only
+    /// one does.
+    #[test]
+    fn the_grid_saves_under_its_version_and_refuses_a_stale_one() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let grids = store.translations();
+            let first = r#"{"menu.pho":{"en":"Pho"}}"#;
+            let second = r#"{"menu.pho":{"en":"Pho noodles"}}"#;
+            let clobber = r#"{"menu.pho":{"en":"Clobbered"}}"#;
+
+            assert!(
+                grids
+                    .load_grid(TENANT_A)
+                    .await
+                    .expect("load before any save")
+                    .is_none(),
+                "no row before the first save"
+            );
+
+            let created = match grids
+                .save_grid(TENANT_A, first, None)
+                .await
+                .expect("the create")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the create to apply, got {other:?}")
+                }
+            };
+            let (loaded, version) = grids
+                .load_grid(TENANT_A)
+                .await
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&loaded).expect("valid json"),
+                serde_json::from_str::<serde_json::Value>(first).expect("valid json"),
+                "the grid round-trips (compared as JSON, since jsonb reorders keys)"
+            );
+            assert_eq!(version, created);
+
+            let moved = match grids
+                .save_grid(TENANT_A, second, Some(&version))
+                .await
+                .expect("the replace")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the replace to apply, got {other:?}")
+                }
+            };
+            assert_ne!(moved, version, "xmin must move on every UPDATE");
+
+            // Replaying the old version, a garbled tag, and a false "nothing here yet" are all
+            // refused; a version-gated save against a tenant with no row at all is a NotFound.
+            for (expected, outcome) in [
+                (Some(version.as_str()), RowUpdate::VersionMismatch),
+                (Some("not-a-transaction-id"), RowUpdate::VersionMismatch),
+                (None, RowUpdate::VersionMismatch),
+            ] {
+                assert_eq!(
+                    grids
+                        .save_grid(TENANT_A, clobber, expected)
+                        .await
+                        .expect("the comparison must not raise"),
+                    outcome
+                );
+            }
+            assert_eq!(
+                grids
+                    .save_grid(TENANT_B, clobber, Some(&version))
+                    .await
+                    .expect("the probe"),
+                RowUpdate::NotFound
+            );
+
+            let (survived, _) = grids
+                .load_grid(TENANT_A)
+                .await
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&survived).expect("valid json"),
+                serde_json::from_str::<serde_json::Value>(second).expect("valid json"),
+                "no refused save changed the stored grid"
+            );
         });
     }
 }

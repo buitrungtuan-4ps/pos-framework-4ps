@@ -256,11 +256,46 @@ async function requestJsonIfMatchRaw<T>(
   return (await response.json()) as T;
 }
 
-// The `If-Match` a config publish or rollback carries: the version the tree was read at, or `*` for
-// a store with no published version yet. `*` is an assertion, not a waiver — the server refuses it
-// once a version exists.
-function configPrecondition(version: string | null): string {
+// The `If-Match` a config publish, a rollback, or a whole-collection save carries: the version it was
+// read at, or `*` for a tree or collection nothing has been saved into yet. `*` is an assertion, not
+// a waiver — the server refuses it once a version exists (ADR-0095).
+function precondition(version: string | null): string {
   return version === null ? "*" : `"${version}"`;
+}
+
+// A read that also hands back the `ETag` the response carried. Collections put their version in the
+// header rather than the body, because a JSON array has nowhere to put a field (ADR-0095); `null`
+// means nothing has been saved yet, which is what the next write asserts with `*`.
+async function requestJsonWithEtag<T>(path: string): Promise<{ value: T; etag: string | null }> {
+  const response = await fetch(path, { headers: { accept: "application/json" } });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  const raw = response.headers.get("etag");
+  return {
+    value: (await response.json()) as T,
+    etag: raw === null ? null : raw.replace(/^"|"$/g, ""),
+  };
+}
+
+// The `requestJsonIfMatchRaw` shape for a route that answers `204`.
+async function requestVoidIfMatchRaw(
+  method: string,
+  path: string,
+  ifMatch: string,
+  body?: unknown,
+): Promise<void> {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      "if-match": ifMatch,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
 }
 
 // The same conditional write as `requestJsonIfMatch`, for the routes that answer `204` rather than
@@ -450,7 +485,7 @@ export const api = {
     requestJsonIfMatchRaw<PublishedConfig>(
       "PUT",
       `/admin/stores/${encodeURIComponent(storeId)}/config/${level}?${tenantQuery(tenantId)}`,
-      configPrecondition(version),
+      precondition(version),
       document,
     ),
   // Config version history (ADR-0069 G2): list the append-only versions, read one's effective
@@ -472,7 +507,7 @@ export const api = {
     requestJsonIfMatchRaw<PublishedConfig>(
       "POST",
       `/admin/stores/${encodeURIComponent(storeId)}/config/rollback?${tenantQuery(tenantId)}`,
-      configPrecondition(version),
+      precondition(version),
       { version_id: versionId },
     ),
 
@@ -586,10 +621,18 @@ export const api = {
     requestVoid("POST", `/admin/webhooks/${encodeURIComponent(id)}/enable?${tenantQuery(tenantId)}`),
 
   // --- translations (ADR-0043) ---
+  // The grid is one collection the console edits whole, so its version rides on the `ETag` of the
+  // read and comes back as `If-Match` on the save (ADR-0095). `etag: null` means this tenant has
+  // authored no grid yet. The CSV import needs no version: it merges, so the server retries it.
   getTranslations: (tenantId: string) =>
-    requestJson<TranslationGrid>("GET", `/admin/translations?${tenantQuery(tenantId)}`),
-  putTranslations: (tenantId: string, grid: TranslationGrid) =>
-    requestVoid("PUT", `/admin/translations?${tenantQuery(tenantId)}`, grid),
+    requestJsonWithEtag<TranslationGrid>(`/admin/translations?${tenantQuery(tenantId)}`),
+  putTranslations: (tenantId: string, grid: TranslationGrid, version: string | null) =>
+    requestVoidIfMatchRaw(
+      "PUT",
+      `/admin/translations?${tenantQuery(tenantId)}`,
+      precondition(version),
+      grid,
+    ),
 
   // --- activation codes (ADR-0050) ---
   issueActivation: (tenantId: string, storeId: string, deviceId: string) =>
@@ -894,10 +937,16 @@ export const api = {
   // Tax rates (ADR-0074, Track M4): the per-(tax class × channel) rate the edge applies. `set`
   // replaces the tenant's whole table (behind console.catalog.manage); the read is behind
   // console.data.read.
+  // The whole class × channel grid is one collection: the read carries its version as an `ETag` and
+  // the save carries it back as `If-Match`, so two operators editing different cells cannot silently
+  // lose one of the edits (ADR-0095). `etag: null` means this tenant has never saved rates.
   listTaxRates: (tenantId: string) =>
-    requestJson<TaxRate[]>("GET", `/admin/catalog/tax-rates?${tenantQuery(tenantId)}`),
-  setTaxRates: (tenantId: string, rates: readonly TaxRate[]) =>
-    requestJson<TaxRate[]>("PUT", "/admin/catalog/tax-rates", { tenant_id: tenantId, rates }),
+    requestJsonWithEtag<TaxRate[]>(`/admin/catalog/tax-rates?${tenantQuery(tenantId)}`),
+  setTaxRates: (tenantId: string, rates: readonly TaxRate[], version: string | null) =>
+    requestJsonIfMatchRaw<TaxRate[]>("PUT", "/admin/catalog/tax-rates", precondition(version), {
+      tenant_id: tenantId,
+      rates,
+    }),
   // Publish the tenant's authored tax rates to one store's `tax` config node (ADR-0074), behind
   // console.config.publish; the edge applies it to its session's rate table.
   publishTax: (tenantId: string, storeId: string) =>

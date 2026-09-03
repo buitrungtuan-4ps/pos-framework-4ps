@@ -52,6 +52,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   measurement, fitting two of them.
 
 ### Changed
+- **Tax rates and the translation grid stop losing concurrent saves** (#143). Q3c slice 5b, ADR-0095
+  shape C. Both screens load a whole grid, an operator edits one cell, and the screen `PUT`s the
+  whole grid back — a read-modify-write with a human thinking in the middle, so two operators editing
+  different cells kept only the second, and the first operator's edit was gone with nothing to notice
+  it by. The read now carries the version it was taken at as an `ETag` and the save carries it back
+  as `If-Match`; a save against a version the collection no longer holds is `412 VERSION_MISMATCH`,
+  and the console reloads and says what happened. `If-Match: *` asserts "nothing saved here yet" and
+  is refused once a version exists.
+
+  The two collections version themselves differently, and the difference is about the *write*, not
+  the entity. The translation grid is one `jsonb` row per tenant, so a save updates it in place and
+  its own `xmin` versions it — **no migration**. The tax-rate table is many rows and a save deletes
+  and reinserts all of them, destroying every `xmin`, so it gets a per-tenant version row (migration
+  `0039_tax_rate_versions`) claimed inside the same transaction as the replace. ADR-0095 had booked
+  both as needing a version table; measuring the schema showed only one does.
+
+  The CSV translation import (`POST /admin/translations/import/apply`) is the exception on the third
+  write: it **merges** its rows into whatever grid is stored rather than replacing it, so losing a
+  race is a stale read, not a lost update. It retries — reload, re-apply its own keys, save again —
+  three attempts before a `412`, the same shape as the config node publishes in #142.
+
+  **Upgrade note.** Two console routes change contract: `PUT /admin/catalog/tax-rates` and `PUT
+  /admin/translations` without an `If-Match` header are now refused with `400 INVALID_ARGUMENT`. One
+  additive migration (`0039_tax_rate_versions`), applied idempotently on boot, greenfield with no
+  backfill. The CSV import routes are unchanged on the wire.
 - **The config tree stops losing concurrent publishes** (#142). Q3c slice 5a, ADR-0095 shape A. Every
   one of the twelve `ConfigTreeStore::save` call sites used to reconstruct the whole four-layer
   document from a freshly loaded state and write it back unconditionally, so two publishes that

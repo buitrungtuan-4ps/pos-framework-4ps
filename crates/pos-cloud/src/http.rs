@@ -2617,8 +2617,10 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
+    // A read, not a write: the publish composes the `tax` node from whatever the table holds now, so
+    // the version it was read at is nothing this path can use.
     let entries = match state.tax_rates.list_tax_rates(tenant_id).await {
-        Ok(entries) => entries,
+        Ok((entries, _version)) => entries,
         Err(error) => return tax_rate_error_response(&error),
     };
     let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
@@ -6549,9 +6551,17 @@ where
         Err(refusal) => return refusal,
     };
     match state.tax_rates.list_tax_rates(tenant_id).await {
-        Ok(rows) => {
+        Ok((rows, version)) => {
             let view: Vec<TaxRateView> = rows.iter().map(tax_rate_view).collect();
-            (StatusCode::OK, Json(view)).into_response()
+            let response = (StatusCode::OK, Json(view)).into_response();
+            // The collection is the entity, so its version rides on the response's `ETag` rather
+            // than inside the body — the body is a JSON array, which has nowhere to put a field
+            // ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)). A tenant
+            // that has never saved rates has no version, and sends `If-Match: *` to say so.
+            match version {
+                Some(version) => with_etag(response, &version),
+                None => response,
+            }
         }
         Err(error) => tax_rate_error_response(&error),
     }
@@ -6586,6 +6596,12 @@ where
     };
     let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
         Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    // The version the console read the grid at, or `None` from `If-Match: *` for a tenant that has
+    // never saved rates ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    let expected = match if_match_collection(&headers) {
+        Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
     let known: BTreeSet<TaxClassId> = match state.catalog.list_tax_classes(tenant_id).await {
@@ -6636,8 +6652,17 @@ where
             rate: TaxRate::from_basis_points(row.rate_bps),
         });
     }
-    match state.tax_rates.set_tax_rates(tenant_id, &entries).await {
-        Ok(()) => {
+    match state
+        .tax_rates
+        .set_tax_rates(tenant_id, &entries, expected.as_ref())
+        .await
+    {
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        // No rate table for this tenant to replace, and the caller named a version for one. There is
+        // no other edit to have lost, so a `412` telling them to reload would send them looking for
+        // a conflict nobody caused.
+        Ok(UpdateOutcome::NotFound) => not_found("tax rate table"),
+        Ok(UpdateOutcome::Updated(version)) => {
             let view: Vec<TaxRateView> = entries.iter().map(tax_rate_view).collect();
             audit_action(
                 &state.audit,
@@ -6651,7 +6676,7 @@ where
                 serde_json::to_value(&view).ok(),
             )
             .await;
-            (StatusCode::OK, Json(view)).into_response()
+            with_etag((StatusCode::OK, Json(view)).into_response(), &version)
         }
         Err(error) => tax_rate_error_response(&error),
     }
@@ -8116,6 +8141,14 @@ where
     }
 }
 
+/// How many times a write that composes on a read will re-read and re-apply before giving up.
+///
+/// Bounded so a pathological hot store cannot spin. Three is far beyond what a console's publish
+/// rate can lose; exhausting them means the caller is contending with something other than a racing
+/// operator, and a `412` is then the honest answer
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+const CONDITIONAL_WRITE_ATTEMPTS: u8 = 3;
+
 /// Sets `nodes` on a store's tree at `level` and saves it, retrying if another publish lands first.
 ///
 /// Twelve routes used to hand-roll the load→compose→publish→save cycle, and each copy was a place
@@ -8154,12 +8187,8 @@ where
     Cfg: ConfigTreeStore,
     C: ClockSource,
 {
-    // Bounded so a pathological hot store cannot spin. Three attempts is far beyond what a console's
-    // publish rate can lose; exhausting them means something other than a racing operator.
-    const ATTEMPTS: u8 = 3;
-
     let mut last_conflict = false;
-    for _ in 0..ATTEMPTS {
+    for _ in 0..CONDITIONAL_WRITE_ATTEMPTS {
         let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
         let layer = layer_with_nodes(loaded.state.as_ref(), level, &nodes);
         let mut tree = match loaded.state {
@@ -8193,7 +8222,9 @@ where
         }
     }
     if last_conflict {
-        tracing::warn!("a config publish lost {ATTEMPTS} races in a row and gave up");
+        tracing::warn!(
+            "a config publish lost {CONDITIONAL_WRITE_ATTEMPTS} races in a row and gave up"
+        );
     }
     Err(version_mismatch())
 }
@@ -13121,8 +13152,13 @@ where
         Err(refusal) => return refusal,
     };
     match state.translations.load(tenant_id).await {
-        // A tenant with no grid yet is an empty grid to edit, not a 404.
-        Ok(grid) => (StatusCode::OK, Json(grid.unwrap_or_default())).into_response(),
+        // A tenant with no grid yet is an empty grid to edit, not a 404 — and no `ETag`, because
+        // there is no version yet. That absence is what the console turns into `If-Match: *`.
+        Ok(None) => (StatusCode::OK, Json(TranslationGrid::default())).into_response(),
+        Ok(Some(loaded)) => {
+            let response = (StatusCode::OK, Json(loaded.record)).into_response();
+            with_etag(response, &loaded.etag)
+        }
         Err(error) => translation_error_response(&error),
     }
 }
@@ -13155,6 +13191,14 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
+    // The version the console read the grid at, or `None` from `If-Match: *` for a tenant that has
+    // authored no grid yet ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    // This route replaces a grid an operator edited cell by cell, so a second writer really does
+    // destroy their work — unlike the CSV import below, which merges and can retry.
+    let expected = match if_match_collection(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
     let missing = grid.keys_missing_fallback();
     if !missing.is_empty() {
         return (
@@ -13165,8 +13209,15 @@ where
         )
             .into_response();
     }
-    match state.translations.save(tenant_id, &grid).await {
-        Ok(()) => {
+    match state
+        .translations
+        .save(tenant_id, &grid, expected.as_ref())
+        .await
+    {
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        // No grid to replace, and the caller named a version for one: an absence, not a conflict.
+        Ok(UpdateOutcome::NotFound) => not_found("translation grid"),
+        Ok(UpdateOutcome::Updated(version)) => {
             // A whole-grid replace: the entity is the tenant's grid, keyed by the tenant id. The grid
             // is business copy (menu/UI strings), not personal data, so it is recorded as `after`.
             let after = serde_json::to_value(&grid).ok();
@@ -13182,7 +13233,7 @@ where
                 after,
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
         Err(error) => translation_error_response(&error),
     }
@@ -13218,7 +13269,7 @@ where
         Err(refusal) => return refusal,
     };
     let grid = match state.translations.load(tenant_id).await {
-        Ok(grid) => grid.unwrap_or_default(),
+        Ok(grid) => grid.map(|loaded| loaded.record).unwrap_or_default(),
         Err(error) => return translation_error_response(&error),
     };
     let Ok(body) = export::translations_csv(&grid) else {
@@ -13273,7 +13324,7 @@ where
         Err(refusal) => return refusal,
     };
     let existing = match state.translations.load(tenant_id).await {
-        Ok(grid) => grid.unwrap_or_default(),
+        Ok(grid) => grid.map(|loaded| loaded.record).unwrap_or_default(),
         Err(error) => return translation_error_response(&error),
     };
     match import::parse_translations_csv(&body, &existing) {
@@ -13313,16 +13364,46 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let existing = match state.translations.load(tenant_id).await {
-        Ok(grid) => grid.unwrap_or_default(),
-        Err(error) => return translation_error_response(&error),
+    // An import **merges** its rows into whatever grid is stored: the keys in the CSV are set, every
+    // other key is left alone. That makes it a delta, not a replace, so losing a race to another
+    // writer is not a lost update — it is a stale read, and re-reading fixes it. Retrying is the
+    // right answer where refusing would be for `PUT /admin/translations`, because there is no
+    // operator holding a version to be told about, and the rows to apply are in the request
+    // ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    let mut applied = None;
+    for _ in 0..CONDITIONAL_WRITE_ATTEMPTS {
+        let loaded = match state.translations.load(tenant_id).await {
+            Ok(loaded) => loaded,
+            Err(error) => return translation_error_response(&error),
+        };
+        let (existing, expected) = loaded.map_or_else(
+            || (TranslationGrid::default(), None),
+            |loaded| (loaded.record, Some(loaded.etag)),
+        );
+        // Re-parsed against the grid this attempt actually read, so the report counts creates and
+        // updates relative to the winner's grid rather than to one that no longer exists.
+        let (merged, report) = match import::parse_translations_csv(&body, &existing) {
+            Ok(parsed) => parsed,
+            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        };
+        match state
+            .translations
+            .save(tenant_id, &merged, expected.as_ref())
+            .await
+        {
+            Ok(UpdateOutcome::Updated(version)) => {
+                applied = Some((report, version));
+                break;
+            }
+            Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => {}
+            Err(error) => return translation_error_response(&error),
+        }
+    }
+    let Some((report, version)) = applied else {
+        return version_mismatch();
     };
-    let (merged, report) = match import::parse_translations_csv(&body, &existing) {
-        Ok(parsed) => parsed,
-        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-    };
-    match state.translations.save(tenant_id, &merged).await {
-        Ok(()) => {
+    {
+        {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -13339,9 +13420,8 @@ where
                 })),
             )
             .await;
-            (StatusCode::OK, Json(report)).into_response()
+            with_etag((StatusCode::OK, Json(report)).into_response(), &version)
         }
-        Err(error) => translation_error_response(&error),
     }
 }
 
@@ -16613,6 +16693,38 @@ fn if_match(headers: &HeaderMap) -> Result<Version, Response> {
         return Err(entity_tag_refusal(EntityTagRefusal::Malformed));
     };
     parse_entity_tag(text).map_err(entity_tag_refusal)
+}
+
+/// The `If-Match` a **collection** write must carry
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+///
+/// Same requirement as [`if_match`] and one difference: a wildcard is accepted, and means something
+/// the record routes have no use for. A record is created by a `POST` that names no version; a
+/// collection is not created at all — the tenant's tax table and translation grid are always
+/// *there*, conceptually, and the only question is whether anything has been saved into them yet.
+/// `If-Match: *` is how a caller says "nothing has", and `Ok(None)` carries that down to the store,
+/// which is the only party that can tell whether it is still true. It is an assertion, not a waiver:
+/// a store that has been saved to refuses it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
+)]
+fn if_match_collection(headers: &HeaderMap) -> Result<Option<Version>, Response> {
+    let Some(raw) = headers.get(IF_MATCH) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match is required: send the etag the collection was read at, or * if it has never been saved",
+            &[("if-match", "REQUIRED")],
+        ));
+    };
+    let Ok(text) = raw.to_str() else {
+        return Err(entity_tag_refusal(EntityTagRefusal::Malformed));
+    };
+    match parse_entity_tag(text) {
+        Ok(version) => Ok(Some(version)),
+        Err(EntityTagRefusal::Wildcard) => Ok(None),
+        Err(refusal @ EntityTagRefusal::Malformed) => Err(entity_tag_refusal(refusal)),
+    }
 }
 
 /// The refusal for an `If-Match` this surface will not act on.

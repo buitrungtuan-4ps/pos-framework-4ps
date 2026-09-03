@@ -1091,17 +1091,13 @@ fn post_config_with_etag(
         .expect("build the request")
 }
 
-/// A PUT of a whole authored config layer, carrying the version the caller read the tree at.
+/// A JSON PUT carrying the version the caller read at — an authored config layer, a tax-rate grid,
+/// a translation grid.
 ///
 /// `If-Match: *` asserts "nothing is published here yet", which is how a store's first authored
 /// publish says so (ADR-0095). Node publishes need none of this: they set one key, they commute with
 /// the other keys, and they retry rather than refuse.
-fn put_config_with_etag(
-    uri: &str,
-    body: &serde_json::Value,
-    cookie: &str,
-    etag: &str,
-) -> Request<Body> {
+fn put_with_etag(uri: &str, body: &serde_json::Value, cookie: &str, etag: &str) -> Request<Body> {
     Request::builder()
         .method("PUT")
         .uri(uri)
@@ -1980,7 +1976,7 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
     let tenant_doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/tenant?tenant_id={tenant_ulid}"),
             &tenant_doc,
             &cookie,
@@ -1998,7 +1994,7 @@ async fn config_publish_composes_validates_and_reads_back_effective() {
     let store_doc = serde_json::json!({ "tips_enabled": true });
     let published2 = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &store_doc,
             &cookie,
@@ -2097,7 +2093,7 @@ async fn an_authored_layer_publish_made_against_a_stale_read_is_refused() {
 
     let first = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &serde_json::json!({ "tips_enabled": false }),
             &cookie,
@@ -2114,7 +2110,7 @@ async fn an_authored_layer_publish_made_against_a_stale_read_is_refused() {
     // A second writer still asserting the store had nothing published is refused.
     let stale_wildcard = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &serde_json::json!({ "tips_enabled": true }),
             &cookie,
@@ -2127,7 +2123,7 @@ async fn an_authored_layer_publish_made_against_a_stale_read_is_refused() {
     // And naming the version it read lets it through, moving the tree on.
     let fresh = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &serde_json::json!({ "tips_enabled": true }),
             &cookie,
@@ -2139,7 +2135,7 @@ async fn an_authored_layer_publish_made_against_a_stale_read_is_refused() {
 
     // Replaying the version that just stopped being current is the lost update, refused.
     let replayed = router
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("{base}/store?tenant_id={tenant_ulid}"),
             &serde_json::json!({ "tips_enabled": false }),
             &cookie,
@@ -2177,7 +2173,7 @@ async fn config_versions_list_read_back_and_roll_back_append_only() {
         let uri = format!("{base}/{level}?tenant_id={tenant_ulid}");
         async move {
             let response = router
-                .oneshot(put_config_with_etag(&uri, &doc, &cookie, &etag))
+                .oneshot(put_with_etag(&uri, &doc, &cookie, &etag))
                 .await
                 .expect("route the publish");
             assert_eq!(response.status(), StatusCode::OK);
@@ -2301,7 +2297,7 @@ async fn an_incoherent_config_is_rejected_with_violations() {
     // pay_first_enabled and tables_enabled are mutually exclusive (pos-core §10).
     let bad = serde_json::json!({ "pay_first_enabled": true, "tables_enabled": true });
     let response = router
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &bad,
             &cookie,
@@ -2377,7 +2373,7 @@ async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, Str
     let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &doc,
             &cookie,
@@ -2534,7 +2530,7 @@ async fn config_sync_records_store_liveness() {
     let doc = serde_json::json!({ "currency_code": "VND", "tips_enabled": false });
     let published = router
         .clone()
-        .oneshot(put_config_with_etag(
+        .oneshot(put_with_etag(
             &format!("/admin/stores/{store_ulid}/config/store?tenant_id={tenant_ulid}"),
             &doc,
             &cookie,
@@ -3236,27 +3232,72 @@ async fn device_routes_enforce_their_scopes_and_the_session() {
 
 // --- Translation grid (`/admin/translations`, behind the session guard) -------------------------
 
-/// The translation store, one grid per tenant.
+/// The translation store, one grid per tenant, each carrying the version it was last written at —
+/// the `grid` and `xmin` of one `translations` row ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 #[derive(Clone, Default)]
 struct FakeTranslations {
-    rows: Arc<Mutex<HashMap<TenantId, TranslationGrid>>>,
+    rows: Arc<Mutex<HashMap<TenantId, Versioned<TranslationGrid>>>>,
+    next_version: Arc<Mutex<u64>>,
+    /// A competing save to land *between* the next read and its write, so a test can produce the
+    /// race the CSV import's retry exists for. `(key, locale, value)` is merged into the grid.
+    interpose: Arc<Mutex<Option<(String, String, String)>>>,
+}
+
+impl FakeTranslations {
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(format!("tg{next}"))
+    }
 }
 
 impl TranslationStore for FakeTranslations {
     async fn load(
         &self,
         tenant: TenantId,
-    ) -> Result<Option<TranslationGrid>, TranslationStoreError> {
-        Ok(self.rows.lock().expect("lock").get(&tenant).cloned())
+    ) -> Result<Option<Versioned<TranslationGrid>>, TranslationStoreError> {
+        let handed_out = self.rows.lock().expect("lock").get(&tenant).cloned();
+        // The competing save lands after this read has been taken but before the caller can write,
+        // which is exactly the interleave a retry has to survive.
+        if let Some((key, locale, value)) = self.interpose.lock().expect("lock").take() {
+            let version = self.mint();
+            let mut rows = self.rows.lock().expect("lock");
+            let mut entries = rows
+                .get(&tenant)
+                .map(|loaded| loaded.record.as_map().clone())
+                .unwrap_or_default();
+            entries.entry(key).or_default().insert(locale, value);
+            rows.insert(
+                tenant,
+                Versioned::new(TranslationGrid::new(entries), version),
+            );
+        }
+        Ok(handed_out)
     }
 
     async fn save(
         &self,
         tenant: TenantId,
         grid: &TranslationGrid,
-    ) -> Result<(), TranslationStoreError> {
-        self.rows.lock().expect("lock").insert(tenant, grid.clone());
-        Ok(())
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, TranslationStoreError> {
+        let version = self.mint();
+        let mut rows = self.rows.lock().expect("lock");
+        // The same four answers `store-postgres` gives, so a test passing here is not passing on a
+        // laxer store.
+        let refusal = match (rows.get(&tenant), expected) {
+            (None, None) => None,
+            (None, Some(_)) => Some(UpdateOutcome::NotFound),
+            (Some(_), None) => Some(UpdateOutcome::VersionMismatch),
+            (Some(stored), Some(expected)) => {
+                (&stored.etag != expected).then_some(UpdateOutcome::VersionMismatch)
+            }
+        };
+        if let Some(refusal) = refusal {
+            return Ok(refusal);
+        }
+        rows.insert(tenant, Versioned::new(grid.clone(), version.clone()));
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
@@ -3285,14 +3326,15 @@ async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
     let tenant_ulid = tenant().as_ulid().to_string();
     let uri = format!("/admin/translations?tenant_id={tenant_ulid}");
 
-    // A grid with en on every key publishes and round-trips through GET.
+    // A grid with en on every key publishes and round-trips through GET. `If-Match: *` is how a
+    // tenant that has authored nothing yet says so (ADR-0095).
     let good = serde_json::json!({
         "menu.pho": { "en": "Pho", "vi": "Phở" },
         "menu.tea": { "en": "Tea" },
     });
     let put = router
         .clone()
-        .oneshot(put_with_cookie(&uri, &good, &cookie))
+        .oneshot(put_with_etag(&uri, &good, &cookie, "*"))
         .await
         .expect("route the publish");
     assert_eq!(put.status(), StatusCode::NO_CONTENT);
@@ -3302,13 +3344,14 @@ async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
         .await
         .expect("route the read");
     assert_eq!(got.status(), StatusCode::OK);
+    let current = etag_of(&got);
     assert_eq!(json_body(got).await, good, "the grid round-trips");
 
     // A grid missing en on a key is a 422 naming it, and does not overwrite the good grid.
     let bad = serde_json::json!({ "menu.rice": { "vi": "Cơm" } });
     let rejected = router
         .clone()
-        .oneshot(put_with_cookie(&uri, &bad, &cookie))
+        .oneshot(put_with_etag(&uri, &bad, &cookie, &current))
         .await
         .expect("route the bad publish");
     assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -3318,6 +3361,7 @@ async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
         "the rejection names the key lacking an en fallback"
     );
     let unchanged = router
+        .clone()
         .oneshot(get_with_cookie(&uri, &cookie))
         .await
         .expect("route the re-read");
@@ -3326,6 +3370,103 @@ async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
         good,
         "a rejected publish left the last good grid current"
     );
+
+    // Replaying `*` after the grid exists is the claim "nothing is saved here", and it is false.
+    let stale_wildcard = router
+        .clone()
+        .oneshot(put_with_etag(&uri, &good, &cookie, "*"))
+        .await
+        .expect("route the stale publish");
+    assert_eq!(
+        stale_wildcard.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "a wildcard is an assertion about an empty grid, not a waiver"
+    );
+
+    // A save at the current version applies and moves it; replaying that version is then the lost
+    // update this exists to refuse.
+    let second = serde_json::json!({ "menu.pho": { "en": "Pho noodles" } });
+    let applied = router
+        .clone()
+        .oneshot(put_with_etag(&uri, &second, &cookie, &current))
+        .await
+        .expect("route the second publish");
+    assert_eq!(applied.status(), StatusCode::NO_CONTENT);
+    let replayed = router
+        .clone()
+        .oneshot(put_with_etag(&uri, &good, &cookie, &current))
+        .await
+        .expect("route the replay");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
+    let survived = router
+        .oneshot(get_with_cookie(&uri, &cookie))
+        .await
+        .expect("route the final read");
+    assert_eq!(
+        json_body(survived).await,
+        second,
+        "the refused replay did not overwrite the edit that won"
+    );
+}
+
+/// A CSV import merges, so it retries around a competing save instead of refusing it (ADR-0095).
+///
+/// The two writers touch different keys. The import composes its rows onto whatever grid it read, so
+/// when it loses the race the fix is to re-read and re-apply — not to hand an operator a conflict
+/// about a key their CSV never mentioned. This is the same reasoning as the ten config node
+/// publishes, and the opposite of `PUT /admin/translations`, which replaces a grid a human typed.
+#[tokio::test]
+async fn a_csv_import_survives_a_concurrent_save_of_a_different_key() {
+    let translations = FakeTranslations::default();
+    let router = translation_app(provisioned_admin(), translations.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let grid_uri = format!("/admin/translations?tenant_id={tenant_ulid}");
+
+    let base = serde_json::json!({ "menu.pho": { "en": "Pho" } });
+    let seeded = router
+        .clone()
+        .oneshot(put_with_etag(&grid_uri, &base, &cookie, "*"))
+        .await
+        .expect("route the seed");
+    assert_eq!(seeded.status(), StatusCode::NO_CONTENT);
+
+    // Somebody else saves `menu.rice` between this import's read and its write.
+    *translations.interpose.lock().expect("lock") =
+        Some(("menu.rice".to_owned(), "en".to_owned(), "Rice".to_owned()));
+
+    let apply = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/translations/import/apply?tenant_id={tenant_ulid}"),
+            b"key,en\nmenu.tea,Tea\n".to_vec(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the apply");
+    assert_eq!(
+        apply.status(),
+        StatusCode::OK,
+        "an import that lost a race retries rather than refusing"
+    );
+
+    let merged = json_body(
+        router
+            .oneshot(get_with_cookie(&grid_uri, &cookie))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(
+        merged["menu.tea"]["en"], "Tea",
+        "the import's own key landed"
+    );
+    assert_eq!(
+        merged["menu.rice"]["en"], "Rice",
+        "and it did not clobber the save that beat it"
+    );
+    assert_eq!(merged["menu.pho"]["en"], "Pho", "nor the key already there");
 }
 
 #[tokio::test]
@@ -3356,10 +3497,11 @@ async fn translation_export_streams_csv_and_needs_a_session() {
     });
     let put = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_with_etag(
             &format!("/admin/translations?tenant_id={tenant_ulid}"),
             &grid,
             &cookie,
+            "*",
         ))
         .await
         .expect("route the publish");
@@ -3406,7 +3548,7 @@ async fn translation_import_dry_runs_then_applies() {
     let base = serde_json::json!({ "menu.pho": { "en": "Pho" } });
     let put = router
         .clone()
-        .oneshot(put_with_cookie(&grid_uri, &base, &cookie))
+        .oneshot(put_with_etag(&grid_uri, &base, &cookie, "*"))
         .await
         .expect("route the publish");
     assert_eq!(put.status(), StatusCode::NO_CONTENT);
@@ -7219,35 +7361,66 @@ fn ulid_text(n: u128) -> String {
 
 /// An in-memory `TaxRateStore` for the route tests (ADR-0074, Track M4), tenant-scoped like the real
 /// adapter; `set` replaces the tenant's rows and leaves other tenants alone.
+///
+/// `versions` mirrors the `catalog_tax_rate_versions` row (migration 0039): one token per tenant,
+/// moved by every applied save, because the rate rows themselves are deleted and reinserted and so
+/// have no version that survives one ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 #[derive(Clone, Default)]
 struct FakeTaxRates {
     rows: Arc<Mutex<Vec<(TenantId, TaxRateEntry)>>>,
+    versions: Arc<Mutex<HashMap<TenantId, Version>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeTaxRates {
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(format!("tx{next}"))
+    }
 }
 
 impl TaxRateStore for FakeTaxRates {
     async fn list_tax_rates(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<TaxRateEntry>, TaxRateStoreError> {
-        Ok(self
+    ) -> Result<(Vec<TaxRateEntry>, Option<Version>), TaxRateStoreError> {
+        let entries = self
             .rows
             .lock()
             .expect("lock")
             .iter()
             .filter(|(owner, _entry)| *owner == tenant_id)
             .map(|(_owner, entry)| *entry)
-            .collect())
+            .collect();
+        let version = self.versions.lock().expect("lock").get(&tenant_id).cloned();
+        Ok((entries, version))
     }
 
     async fn set_tax_rates(
         &self,
         tenant_id: TenantId,
         entries: &[TaxRateEntry],
-    ) -> Result<(), TaxRateStoreError> {
+        expected: Option<&Version>,
+    ) -> Result<UpdateOutcome, TaxRateStoreError> {
+        let version = self.mint();
+        let mut versions = self.versions.lock().expect("lock");
+        let refusal = match (versions.get(&tenant_id), expected) {
+            (None, None) => None,
+            (None, Some(_)) => Some(UpdateOutcome::NotFound),
+            (Some(_), None) => Some(UpdateOutcome::VersionMismatch),
+            (Some(stored), Some(expected)) => {
+                (stored != expected).then_some(UpdateOutcome::VersionMismatch)
+            }
+        };
+        if let Some(refusal) = refusal {
+            return Ok(refusal);
+        }
+        versions.insert(tenant_id, version.clone());
         let mut rows = self.rows.lock().expect("lock");
         rows.retain(|(owner, _entry)| *owner != tenant_id);
         rows.extend(entries.iter().map(|entry| (tenant_id, *entry)));
-        Ok(())
+        Ok(UpdateOutcome::Updated(version))
     }
 }
 
@@ -7514,22 +7687,25 @@ async fn tax_rates_set_lists_and_validates() {
     let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
     let cookie = admin_cookie(&router).await;
 
-    // PUT the tenant's table: one class taxed 10% dine-in and 8% takeaway.
+    // PUT the tenant's table: one class taxed 10% dine-in and 8% takeaway. `If-Match: *` is how a
+    // tenant that has never saved rates says so (ADR-0095); the response carries the new version.
     let set = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_with_etag(
             "/admin/catalog/tax-rates",
             &serde_json::json!({ "tenant_id": tenant, "rates": [
                 { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
                 { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_TAKEAWAY", "rate_bps": 800 },
             ] }),
             &cookie,
+            "*",
         ))
         .await
         .expect("route set tax rates");
     assert_eq!(set.status(), StatusCode::OK);
+    let after_set = etag_of(&set);
 
-    // GET reads them back.
+    // GET reads them back, and hands out the same version the save returned.
     let listed = router
         .clone()
         .oneshot(get_with_cookie(
@@ -7539,18 +7715,24 @@ async fn tax_rates_set_lists_and_validates() {
         .await
         .expect("route list tax rates");
     assert_eq!(listed.status(), StatusCode::OK);
+    let current = etag_of(&listed);
+    assert_eq!(
+        current, after_set,
+        "the version a save returns is the one the next read hands out"
+    );
     let rows = json_body(listed).await;
     assert_eq!(rows.as_array().expect("array").len(), 2);
 
     // A rate naming an unknown class is a 400, not a store error.
     let bad_class = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_with_etag(
             "/admin/catalog/tax-rates",
             &serde_json::json!({ "tenant_id": tenant, "rates": [
                 { "tax_class_id": ulid_text(99), "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
             ] }),
             &cookie,
+            &current,
         ))
         .await
         .expect("route unknown class");
@@ -7559,16 +7741,102 @@ async fn tax_rates_set_lists_and_validates() {
     // A rate above 100% is a 400.
     let bad_rate = router
         .clone()
-        .oneshot(put_with_cookie(
+        .oneshot(put_with_etag(
             "/admin/catalog/tax-rates",
             &serde_json::json!({ "tenant_id": tenant, "rates": [
                 { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 10_001 },
             ] }),
             &cookie,
+            &current,
         ))
         .await
         .expect("route bad rate");
     assert_eq!(bad_rate.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A save against a version the grid no longer holds is refused, and changes nothing (ADR-0095).
+#[tokio::test]
+async fn a_tax_rate_save_against_a_stale_version_is_refused() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Standard");
+    let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
+    let cookie = admin_cookie(&router).await;
+
+    let seeded = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+            ] }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the first save");
+    assert_eq!(seeded.status(), StatusCode::OK);
+    let current = etag_of(&seeded);
+
+    // A save at the current version applies; replaying that version afterwards is the lost update
+    // the collection version exists to refuse, and the winning grid survives it.
+    let winner = serde_json::json!({ "tenant_id": tenant, "rates": [
+        { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 500 },
+    ] });
+    let applied = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &winner,
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the winning save");
+    assert_eq!(applied.status(), StatusCode::OK);
+
+    let replayed = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 9_900 },
+            ] }),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the stale save");
+    assert_eq!(replayed.status(), StatusCode::PRECONDITION_FAILED);
+
+    // And `*` after the table exists is the same false claim the config tree refuses.
+    let stale_wildcard = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &winner,
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the wildcard save");
+    assert_eq!(stale_wildcard.status(), StatusCode::PRECONDITION_FAILED);
+
+    let survived = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the final read");
+    let final_rows = json_body(survived).await;
+    assert_eq!(
+        final_rows.as_array().expect("array").len(),
+        1,
+        "no refused save changed the table"
+    );
+    assert_eq!(final_rows[0]["rate_bps"], 500);
 }
 
 #[tokio::test]
