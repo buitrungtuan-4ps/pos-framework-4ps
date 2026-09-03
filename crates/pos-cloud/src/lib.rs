@@ -79,6 +79,7 @@ pub mod inventory;
 pub mod media;
 pub mod metrics;
 mod openapi;
+mod openapi_admin;
 pub mod orders;
 pub mod ota;
 pub mod paging;

@@ -10,8 +10,11 @@
 //! does. Changing the API therefore means regenerating the document in the same pull request
 //! (`POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-cloud openapi`).
 //!
-//! Internal routes (`/health`, `/internal/*`) are deliberately absent: the document is the external
-//! contract, and those are not part of it.
+//! Internal routes (`/health`, `/internal/*`) are deliberately absent: this document is the
+//! *integrator* contract — what an outside system calls with a scoped API key — and those are not
+//! part of it. The `/admin` console surface is absent for the same reason, and has a generated
+//! document of its own ([`crate::openapi_admin`], roadmap v3 B5): folding a hundred and
+//! thirty-seven console routes in here would bury the three an integrator came for.
 
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};

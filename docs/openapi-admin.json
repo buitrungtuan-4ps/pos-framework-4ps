@@ -1,0 +1,432 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pizza 4P's POS Console API",
+    "description": "The `/admin` surface the back-office console is built on. Generated from the handlers; see ADR-0019. Requests, parameters and outcomes are documented; success bodies are described in prose rather than as schemas (the module docstring explains why). Every failure carries the AIP-193 `ErrorResponse` envelope.",
+    "license": {
+      "name": "LicenseRef-Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/admin/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs a super-admin in: a two-factor login that, on success, sets a host-only session cookie.",
+        "description": "The session token is minted here — a 256-bit CSPRNG value, at the binary edge — and passed to\n[`login`], which stores only its hash ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)); the\nbrowser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a\nstore outage is a `503`. Described in the console document (`/admin/openapi.json`), not the\nintegrator one.",
+        "operationId": "admin_login",
+        "requestBody": {
+          "description": "Email, password, and the six-digit TOTP code",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Signed in. The session cookie is set; the body is empty"
+          },
+          "401": {
+            "description": "One generic refusal for every credential failure — wrong email, wrong password, wrong or reused TOTP code — so a caller cannot tell which",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts; `Retry-After` names the wait",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs a super-admin out: revokes the session server-side and clears the client cookie.",
+        "description": "Idempotent — a request with no session, or one the store cannot reach, still clears the client\ncookie, so the browser is always logged out even if the server-side row lingers to its TTL.",
+        "operationId": "admin_logout",
+        "responses": {
+          "204": {
+            "description": "Signed out, and idempotent: a request with no session, or one whose store is unreachable, still clears the client cookie"
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/recovery-codes": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "How many unused recovery codes the acting admin has left.",
+        "description": "Never the codes themselves — so a console can prompt a regeneration when the supply runs low.",
+        "operationId": "admin_recovery_codes_status",
+        "responses": {
+          "200": {
+            "description": "How many unused recovery codes remain — never the codes themselves — so a console can prompt a regeneration before the supply runs out"
+          },
+          "401": {
+            "description": "No live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "(Re)generates the acting admin's one-time recovery codes.",
+        "description": "[ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Self-service, so it is\ngated by the session guard, not a role permission. Mints [`RECOVERY_CODE_COUNT`] codes at the\nedge, stores only their hashes (replacing any previous set), and returns the plaintext once.",
+        "operationId": "admin_generate_recovery_codes",
+        "responses": {
+          "200": {
+            "description": "A fresh set of one-time recovery codes, returned exactly once. Only their hashes are stored, and any previous set is replaced"
+          },
+          "401": {
+            "description": "No live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirms the caller holds a live super-admin session.",
+        "description": "The guard every other `/admin` route stands behind, exposed here as a `204`/`401` \"am I signed\nin?\" check for the admin UI.",
+        "operationId": "admin_session",
+        "responses": {
+          "204": {
+            "description": "The session is live. The guard every other /admin route stands behind, exposed as an \"am I signed in?\" check"
+          },
+          "401": {
+            "description": "No session cookie, or it names no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The session store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "First-boot super-admin enrolment.",
+        "description": "[ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md).\n\nToken-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch\n(compared in constant time), `400` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],\n`409` once an administrator is already enrolled, and on success `201` with the one-time TOTP\nenrolment. The password is hashed with Argon2id under a fresh CSPRNG salt and never stored in the\nclear; the TOTP secret is generated here and returned exactly once.",
+        "operationId": "admin_setup",
+        "requestBody": {
+          "description": "The enrolment token from the server's environment, and the first administrator's chosen email and password",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Enrolled. The body carries the one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again"
+          },
+          "400": {
+            "description": "The password is shorter than the minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The enrolment token is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An administrator is already enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/totp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "A signed-in admin re-enrols their authenticator.",
+        "description": "[ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Re-confirms the current\npassword (the knowledge factor) before rotating the TOTP secret (the possession factor), so a\nsession-only attacker — one holding the cookie but not the password — cannot lock the owner out by\nre-enrolling. On success the new one-time enrolment (QR + base32 secret) is returned once; existing\nsessions stay valid, and the next sign-in uses the new authenticator.",
+        "operationId": "admin_reenrol_totp",
+        "requestBody": {
+          "description": "The acting administrator's current password — re-asked so a session-only attacker cannot rotate the second factor and lock the owner out",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Re-enrolled. The new one-time enrolment (QR payload and base32 secret) is returned once; existing sessions stay valid and the next sign-in uses the new authenticator"
+          },
+          "401": {
+            "description": "No live session, or the password is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/whoami": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The acting admin's own identity — id, email, name, role, status.",
+        "description": "So a console can label the signed-in operator and show only the areas their role grants\n([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available\nto any authenticated admin regardless of role, so it is gated by the plain session guard rather\nthan a [`ConsolePermission`]. It returns the same credential-free [`AdminUser`] shape the roster\nlists — never a password hash or a TOTP secret — and role gating in the console is only a UX\nconvenience; the server re-checks every route's required permission regardless.",
+        "operationId": "admin_whoami",
+        "responses": {
+          "200": {
+            "description": "The acting administrator — id, email, role, status — never a password hash or a TOTP secret. Role gating in a console is a convenience only: the server re-checks every route's required permission regardless"
+          },
+          "401": {
+            "description": "No live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "The error body — the schema mirror of [`pos_proto::error::ErrorBody`].",
+        "required": [
+          "code",
+          "status",
+          "message",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code, repeated here so a body is self-describing once logged.",
+            "minimum": 0
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "description": "Field-level detail. Absent when the failure is not about a particular field."
+          },
+          "message": {
+            "type": "string",
+            "description": "A human-readable explanation. Never contains personal data, because responses are logged."
+          },
+          "status": {
+            "type": "string",
+            "description": "The canonical status, e.g. `INVALID_ARGUMENT`, `NOT_FOUND`, `FAILED_PRECONDITION`."
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "description": "One reason a request failed, tied to the field responsible — the schema mirror of\n[`pos_proto::error::ErrorDetail`].",
+        "required": [
+          "field",
+          "reason"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The offending field, in the same `snake_case` name the request used. For a whole-request\nfault this can be a header name (`if-match`) rather than a body field."
+          },
+          "reason": {
+            "type": "string",
+            "description": "A stable, machine-readable reason such as `MUST_BE_POSITIVE` or `INVALID_ENUM_VALUE`. Stable\nso a client can branch on it; `message` is for people and may be reworded at any time."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "The envelope every `/admin` failure carries — the schema mirror of\n[`pos_proto::error::ErrorResponse`].\n\nOne level of nesting so a response is unambiguous at the top level: a success body is the record,\na failure body is `{\"error\": …}`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody",
+            "description": "The error."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "session_cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-pos_admin_session",
+        "description": "The session cookie `POST /admin/login` sets: host-only, `HttpOnly`, `Secure`, `SameSite=Strict`, with a sliding idle TTL. A client does not read it — the browser presents it."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Two-factor sign-in, the session it issues, and the second-factor levers (ADR-0034, ADR-0060). Everything else on this surface stands behind the session these routes establish."
+    }
+  ]
+}
