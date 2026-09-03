@@ -709,8 +709,22 @@ export const api = {
   // Reads need only console.data.read; every write needs console.people.manage (Owner/Admin) — the
   // server re-checks, the console only hides what a role cannot do. A PIN is set/reset, never read: it
   // is hashed server-side and this client never sees the digits back (only whether one is set).
+  // The whole roster, unpaged — what the publish path needs: the permission node is compiled from
+  // every employee, and a node built from a page would be missing whoever fell off it (ADR-0098).
   listEmployees: (tenantId: string) =>
     requestJson<Employee[]>("GET", `/admin/employees?${tenantQuery(tenantId)}`),
+  // One page of the roster. This is T1 personal data either way (ADR-0070) — paging does not change
+  // the fields or the gate, it sends fewer rows per response than the read above it.
+  //
+  // No console screen calls this yet, and that is measured rather than pending: the People screen
+  // needs the whole roster for its assign picker and to render a name against an assignment row, so
+  // paging only its table would add a request instead of removing data. See the comment on that
+  // table for what would have to change first.
+  listEmployeesPage: (tenantId: string, page: PageRequest) =>
+    requestJson<Page<Employee>>(
+      "GET",
+      `/admin/employees?${tenantPageQuery(tenantId, page)}`,
+    ),
   getEmployee: (tenantId: string, id: string) =>
     requestJson<Employee>(
       "GET",

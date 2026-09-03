@@ -10644,6 +10644,24 @@ impl EmployeeStore for FakeEmployees {
         Ok(rows)
     }
 
+    async fn list_page(
+        &self,
+        tenant: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
+        // The whole matching roster first, then the window over it — the order the adapter's
+        // `ORDER BY … LIMIT … OFFSET` applies. Windowing before ordering would flip a page's rows
+        // in place and leave every page holding the rows it already held.
+        let roster = self.list(tenant).await?;
+        let total = u32::try_from(roster.len()).unwrap_or(u32::MAX);
+        let items = roster
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
+    }
+
     async fn get(
         &self,
         tenant: TenantId,
@@ -10817,6 +10835,82 @@ async fn employee_store_creates_lists_updates_and_sets_pin_scoped_by_tenant() {
             .await
             .expect("set pin across tenant"),
         "a PIN set is scoped to the tenant — no row matched"
+    );
+}
+
+#[tokio::test]
+async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whole_headcount() {
+    let store = FakeEmployees::default();
+    let mine = tenant();
+    let other = TenantId::new(Ulid::from_u128(0xB0B));
+    for index in 1..=5_u128 {
+        store
+            .create(&NewEmployee {
+                employee_id: EmployeeId::new(Ulid::from_u128(index)),
+                tenant_id: mine,
+                code: format!("A{index:02}"),
+                name: format!("Person {index}"),
+            })
+            .await
+            .expect("create in my tenant");
+    }
+    // One in another tenant, so a headcount that ignored the scope would read 6 instead of 5.
+    store
+        .create(&NewEmployee {
+            employee_id: EmployeeId::new(Ulid::from_u128(0xFF)),
+            tenant_id: other,
+            code: "A01".to_owned(),
+            name: "Elsewhere".to_owned(),
+        })
+        .await
+        .expect("create in the other tenant");
+
+    let roster = store.list(mine).await.expect("the unpaged roster");
+    assert_eq!(roster.len(), 5, "the unpaged read is unchanged by paging");
+
+    // Three pages of two stitch back into the roster, in order and without a repeat or a gap — the
+    // property the total order exists for (ADR-0098 decision 9).
+    let mut stitched = Vec::new();
+    for offset in [0, 2, 4] {
+        let page = store
+            .list_page(mine, PageRequest::new(2, offset).expect("bounds"))
+            .await
+            .expect("a page");
+        assert_eq!(
+            page.total, 5,
+            "every page reports the tenant's headcount, not the window's size"
+        );
+        stitched.extend(page.items);
+    }
+    assert_eq!(
+        stitched
+            .iter()
+            .map(|row| row.record.employee_id)
+            .collect::<Vec<_>>(),
+        roster
+            .iter()
+            .map(|row| row.record.employee_id)
+            .collect::<Vec<_>>(),
+        "the pages partition the roster the unpaged read returns"
+    );
+
+    // A page past the end is empty and still counts the roster — not an error, and not a zero total.
+    let beyond = store
+        .list_page(mine, PageRequest::new(10, 50).expect("bounds"))
+        .await
+        .expect("a page past the end");
+    assert!(beyond.items.is_empty());
+    assert_eq!(beyond.total, 5);
+
+    // No page carries a PIN hash, the same as the unpaged read: paging changes how much of the
+    // roster crosses the wire, never which fields do (ADR-0070).
+    let page = store
+        .list_page(mine, PageRequest::new(5, 0).expect("bounds"))
+        .await
+        .expect("the whole roster as one page");
+    assert!(
+        page.items.iter().all(|row| !row.record.has_pin),
+        "the view carries whether a PIN exists, never the hash"
     );
 }
 
@@ -11904,6 +11998,13 @@ impl EmployeeStore for FakePeople {
     async fn list(&self, tenant: TenantId) -> Result<Vec<Versioned<Employee>>, EmployeeStoreError> {
         self.employees.list(tenant).await
     }
+    async fn list_page(
+        &self,
+        tenant: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
+        self.employees.list_page(tenant, page).await
+    }
     async fn get(
         &self,
         tenant: TenantId,
@@ -12697,6 +12798,136 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
     );
     // The employee.create entry does record the code (id/code/status), just not the name.
     assert!(dump.contains("C01"), "the staff code is recorded");
+}
+
+#[tokio::test]
+async fn the_roster_read_returns_the_whole_tenant_unpaged_and_a_page_when_a_limit_is_named() {
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    for index in 1..=3_u32 {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/employees",
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "code": format!("C{index:02}"),
+                    "name": format!("Person {index}"),
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route create employee");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    // No limit is the whole roster as a bare array — the read the permission-node publish makes,
+    // which a page would leave incomplete (ADR-0098).
+    let whole = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the whole roster");
+    assert_eq!(whole.status(), StatusCode::OK);
+    let whole = json_body(whole).await;
+    assert_eq!(
+        whole
+            .as_array()
+            .expect("a bare array, not an envelope")
+            .len(),
+        3,
+    );
+
+    // Naming a limit asks for a page: the window, plus the tenant's headcount.
+    let paged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}&limit=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the paged roster");
+    assert_eq!(paged.status(), StatusCode::OK);
+    let paged = json_body(paged).await;
+    assert_eq!(paged["items"].as_array().expect("the window").len(), 2);
+    assert_eq!(paged["total"], 3, "the headcount, not the window's size");
+    assert_eq!(paged["limit"], 2, "the bounds used are echoed back");
+    assert_eq!(paged["offset"], 0);
+    assert!(
+        paged["items"][0]["etag"].is_string(),
+        "a paged row keeps the per-row etag ADR-0094 put on it",
+    );
+    assert_eq!(
+        paged["items"][0]["has_pin"],
+        serde_json::json!(false),
+        "the page carries whether a PIN exists — never the hash (ADR-0070)",
+    );
+
+    // The second page holds the remainder, and the two windows do not overlap.
+    let rest = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}&limit=2&offset=2"),
+            &cookie,
+        ))
+        .await
+        .expect("route the second page");
+    let rest = json_body(rest).await;
+    assert_eq!(rest["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(rest["total"], 3);
+    assert_ne!(
+        rest["items"][0]["employee_id"], paged["items"][0]["employee_id"],
+        "the pages partition the roster rather than repeating it"
+    );
+}
+
+/// Bounds outside the accepted range are refused by field, and an offset without a limit is refused
+/// rather than read as a page of some default size — there is no default size (ADR-0098).
+///
+/// Its own test rather than a tail on the read above, because a refusal happens before any read: it
+/// needs no roster at all, and asserting it against an empty tenant is what proves that.
+#[tokio::test]
+async fn the_paged_roster_refuses_a_bound_outside_the_range_and_an_offset_without_a_limit() {
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    for (bound, field) in [
+        ("limit=100000", "limit"),
+        ("limit=0", "limit"),
+        ("offset=1", "offset"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/employees?tenant_id={tenant_ulid}&{bound}"),
+                &cookie,
+            ))
+            .await
+            .expect("route a bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{bound} is refused"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "{bound} names {field}"
+        );
+    }
 }
 
 #[tokio::test]
