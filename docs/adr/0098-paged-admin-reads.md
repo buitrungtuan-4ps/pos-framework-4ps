@@ -355,3 +355,39 @@ by inheritance from the query that was already there, not by design.
    its docstring said otherwise, which the Audit screen made reachable. Server-mode sorting is now
    gated on the column naming a server field *and* the caller offering `onSort`; headers are inert
    otherwise rather than quietly ordering a window.
+4. **B3-4** — `employees`, the item held back in B3-2 for the owner's T1 call.
+
+   **The owner did not object, so it was built** — and building it settled the T1 question by
+   measurement rather than argument. The paged read carries the same `EMPLOYEE_COLUMNS` as the
+   unpaged one, `pin_phc` absent from both, behind the same `console.people.manage` gate; a page is
+   strictly less of the same data. Migration 0045 adds `employees_by_tenant_newest (tenant_id,
+   created_at DESC, id DESC)` and the order gains the `id` tiebreaker decision 9 requires — a staff
+   CSV import writes a whole roster in one transaction, and `now()` is transaction time, so this is
+   the table where the tie is the normal case rather than the corner one.
+
+   Two things this slice found, both of which changed what shipped:
+
+   - **The console screen does not move, and this is not deferral for its own sake.** `People.tsx`
+     reads the roster three times over: the employees table, the assign picker, and `employeeLabel`,
+     which turns an assignment's `employee_id` into a name. Only the first wants a page. Serving the
+     table a page while the other two still read the set would send *more* data than today, not
+     less; serving all three a page would make the picker offer only whoever landed on it and render
+     a bare ULID for any assignment held by someone off-page — the exact regression slice 3c
+     existed to kill. What has to come first is a searching picker over a server-side employee
+     search and a name resolvable from the assignment row; both carry a UX decision. So this is the
+     third entry in the pattern B3-2's `items` note started: **the API and the screen are separate
+     slices whenever the screen's other consumers of the same read are not tables.** That is now
+     three for three, and worth reading as the rule rather than the exception.
+
+   - **`count(*) OVER()` reports `0` for an empty window, and every route test in the cohort
+     asserts otherwise.** The window count rides on the returned rows, so a page past the end — or a
+     page-four pager over a roster that shrank — has no row to read it off, and the adapters fall
+     back to `0`. That is not "nothing to show": it tells the caller the tenant has no staff, and
+     the pager on the other side sizes itself from that number. The fakes compute the total from the
+     whole set instead, so they return the truth, which means the route tests for *all five* paged
+     reads assert a behaviour production does not have. `employees` is fixed here — an empty window
+     takes a second `count(*)`, one extra round trip only on the path that returned nothing — and
+     the other four are left as they are, recorded rather than propagated, because changing them is
+     four adapters and four tests in a slice about employees. Noting the shape of the mistake: the
+     divergence survived four slices because the fake was *better* than the adapter, so no test ever
+     disagreed with itself.

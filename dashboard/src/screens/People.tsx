@@ -430,6 +430,19 @@ export function People() {
               fallback={<p class="text-sm text-ink-muted">{t("people.loadHint")}</p>}
             >
               {(loaded) => (
+                // Paged here, not by the server, and that is a measurement rather than an oversight.
+                // `GET /admin/employees?limit=` exists (ADR-0098) and `api.listEmployeesPage` calls
+                // it — but this screen reads the roster three times over: this table, the assign
+                // picker below, and `employeeLabel`, which turns an assignment's `employee_id` into
+                // a name. Serving this table a page would leave the other two with a page as well:
+                // the picker would offer only whoever landed on it, and an assignment held by
+                // anyone off-page would render as a bare ULID, which is the regression slice 3c
+                // existed to kill. Keeping the roster read and paging the table locally sends the
+                // same T1 data as before; swapping in the paged read *beside* it would send more.
+                //
+                // What would have to change first: a searching picker over a server-side employee
+                // search, and a name on the assignment row (or another way to resolve one) so the
+                // labels stop needing the set. Both are their own slice, with a UX call in them.
                 <DataTable
                   columns={employeeColumns()}
                   rows={loaded()}

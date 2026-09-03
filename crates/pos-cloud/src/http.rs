@@ -1375,6 +1375,25 @@ struct PeopleTenantQuery {
     tenant_id: String,
 }
 
+/// `GET /admin/people/employees`: the tenant, plus the optional paging bounds.
+///
+/// Separate from [`PeopleTenantQuery`] rather than adding the two fields to it, because that struct
+/// is shared by five routes and only this one reads a page. A `?limit=` on the other four would be
+/// accepted and ignored — a query string that looks honoured and is not.
+///
+/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
+#[derive(Debug, Clone, Deserialize)]
+struct EmployeeListQuery {
+    /// The tenant whose employees to list (a 26-character ULID).
+    tenant_id: String,
+    /// How many employees to return. **Absent means unpaged**: the whole roster, as an array.
+    #[serde(default)]
+    limit: Option<String>,
+    /// How many employees to skip. Only meaningful with `limit`.
+    #[serde(default)]
+    offset: Option<String>,
+}
+
 /// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
 /// store) or `employee_id` (every store a person works at).
 #[derive(Debug, Clone, Deserialize)]
@@ -1570,7 +1589,7 @@ where
 async fn admin_list_employees<P, A, C>(
     State(state): State<PeopleState<P, A, C>>,
     headers: HeaderMap,
-    Query(query): Query<PeopleTenantQuery>,
+    Query(query): Query<EmployeeListQuery>,
 ) -> Response
 where
     P: EmployeeStore + Clone + Send + Sync + 'static,
@@ -1591,8 +1610,22 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.people.list(tenant_id).await {
-        Ok(employees) => (StatusCode::OK, Json(employees)).into_response(),
+    // Two reads, chosen by whether the caller named a limit. The unpaged one is not legacy: the
+    // permission node is compiled from the whole roster, and a node built from a page would be
+    // missing whoever fell off it (ADR-0098). The console's table is what wants a page — and gets
+    // strictly less T1 data per response than the read beside it (ADR-0070).
+    let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        return match state.people.list(tenant_id).await {
+            Ok(employees) => (StatusCode::OK, Json(employees)).into_response(),
+            Err(error) => people_error_response(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.people.list_page(tenant_id, page).await {
+        Ok(read) => paged_ok(read, page),
         Err(error) => people_error_response(&error),
     }
 }

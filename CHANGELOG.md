@@ -17,6 +17,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **The employee roster can be read a page at a time** (roadmap v3 B3-4, ADR-0098). `GET
+  /admin/employees?limit=&offset=` returns `{ items, total, limit, offset }`; naming no limit still
+  returns the whole roster as an array, which is what the permission-node publish needs — a node
+  compiled from a page would be missing whoever fell off it. This is the last of the five reads
+  ADR-0098 identified.
+
+  **This is T1 personal data either way, and paging does not change that** (ADR-0070). The page
+  carries the same fields as the read beside it — the PIN hash is absent from both — behind the same
+  `console.people.manage` gate. What changes is only how much of a roster crosses the wire at once:
+  strictly less per response, never a new field, and nothing new reaching a log.
+
+  The read's order gains a tiebreaker, `created_at DESC, id DESC`. That is not tidying: a staff CSV
+  import writes a whole roster in one transaction and PostgreSQL's `now()` is transaction time, so
+  those rows share one timestamp exactly. `created_at` alone does not order them, and a window over
+  a non-total order can return the same person on two pages or on none.
+
+  **The People console screen deliberately does not use it yet.** That screen reads the roster three
+  times — the table, the assign picker, and the lookup that turns an assignment into a name — and
+  only the first wants a page. Paging just the table would add a request rather than remove data;
+  paging all three would make the picker offer only whoever is on the current page and show a raw id
+  for anyone off it. The screen moves once it has a searching picker and a name it can resolve
+  without the whole set.
+
+  **Upgrade note** Migration `0045_employee_page_index.sql` adds `employees_by_tenant_newest
+  (tenant_id, created_at DESC, id DESC)`; additive, `IF NOT EXISTS`, and the existing
+  `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
+
+### Fixed
+- **A page past the end of the employee roster no longer reports a headcount of zero.** The window
+  count rides on the returned rows, so an empty window — a page past the end, or a pager sitting on
+  page four of a roster that has since shrunk — had no row to read it from and answered `0`. That
+  reads as "this tenant has no staff", and the console's pager sizes itself from that number. The
+  count is now taken properly when the window comes back empty. The four other paged reads
+  (`vouchers`, `media`, `audit`, `items`) still have this behaviour and are tracked separately.
+
+### Added
 - **The console surface has a generated API document** (roadmap v3 B5, ADR-0019 amended).
   `GET /admin/openapi.json` serves it and `docs/openapi-admin.json` commits it — a second document
   beside `/v1`'s, because the two have different audiences: `/v1` is what an integrator calls with a

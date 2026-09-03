@@ -3562,7 +3562,9 @@ mod audit_log {
 // ---------------------------------------------------------------------------
 
 mod employees_store {
-    use super::{block_on, prepared};
+    use core::fmt::Write as _;
+
+    use super::{TENANT_A, block_on, prepared};
     use store_postgres::RowUpdate;
 
     /// Employees insert and read back tenant-scoped and newest-first; the code is unique within a
@@ -3699,6 +3701,164 @@ mod employees_store {
             assert!(
                 can_update,
                 "app_tenant may UPDATE (rename / archive / set PIN)"
+            );
+        });
+    }
+
+    /// A page is a window onto the sequence the unpaged roster read returns: the pages partition it,
+    /// every page reports the tenant's headcount rather than its own size, a page past the end is
+    /// empty and still counts, and another tenant's staff are in neither ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+    ///
+    /// The whole roster is inserted in one transaction on purpose. `created_at` defaults to `now()`,
+    /// which is *transaction* time, so those rows share one timestamp exactly — the case decision 9
+    /// is about, and the case a `created_at DESC` order without the primary-key tiebreaker cannot
+    /// partition. A CSV staff import is exactly this shape.
+    #[test]
+    fn the_roster_pages_partition_the_unpaged_read_even_when_a_batch_shares_one_timestamp() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            // Six of ours and one elsewhere, all in one transaction.
+            let mut inserts = String::new();
+            for index in 0..6 {
+                write!(
+                    inserts,
+                    "INSERT INTO employees (id, tenant_id, code, name) \
+                     VALUES ('01EMPPAGE000000000000000{index:02}', '{TENANT_A}', 'P{index:02}', \
+                     'Person {index}');"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            inserts.push_str(
+                "INSERT INTO employees (id, tenant_id, code, name) \
+                 VALUES ('01EMPPAGE000000000000000FF', 'tenant-b', 'P00', 'Elsewhere');",
+            );
+            admin
+                .batch_execute(&format!("BEGIN; {inserts} COMMIT;"))
+                .await
+                .expect("write the batch in one transaction");
+
+            let distinct: i64 = admin
+                .query_one(
+                    "SELECT count(DISTINCT created_at) FROM employees WHERE tenant_id = $1",
+                    &[&TENANT_A],
+                )
+                .await
+                .expect("count the distinct timestamps")
+                .get(0);
+            assert_eq!(
+                distinct, 1,
+                "six rows in one transaction carry one created_at, not six close ones — \
+                 which is why the read's ORDER BY needs id as a tiebreaker"
+            );
+
+            let roster = people.fetch(TENANT_A).await.expect("the unpaged roster");
+            assert_eq!(roster.len(), 6, "the unpaged read is unchanged by paging");
+
+            let mut stitched = Vec::new();
+            for offset in [0, 2, 4] {
+                let (page, total) = people
+                    .fetch_page(TENANT_A, 2, offset)
+                    .await
+                    .expect("page over the tied batch");
+                assert_eq!(
+                    total, 6,
+                    "every page reports the tenant's headcount, not the window's size"
+                );
+                assert!(
+                    page.iter().all(|row| !row.has_pin),
+                    "a page carries whether a PIN exists, never the hash (ADR-0070)"
+                );
+                stitched.extend(page.into_iter().map(|row| row.id));
+            }
+            assert_eq!(
+                stitched,
+                roster.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+                "three pages of two partition the roster in the unpaged read's own order"
+            );
+
+            // A page past the end is empty and still counts the roster — not an error, not zero.
+            let (beyond, beyond_total) = people
+                .fetch_page(TENANT_A, 10, 50)
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 6);
+
+            // The other tenant's page sees only its own row, and counts only its own.
+            let (theirs, their_total) = people
+                .fetch_page("tenant-b", 10, 0)
+                .await
+                .expect("the other tenant's page");
+            assert_eq!(their_total, 1, "a headcount is per tenant");
+            assert_eq!(
+                theirs.first().expect("a row").name,
+                "Elsewhere",
+                "and the page is too"
+            );
+        });
+    }
+
+    /// The index migration 0045 added covers this query's `ORDER BY`, so `LIMIT` stops the scan
+    /// instead of truncating a completed sort of the tenant's whole roster.
+    ///
+    /// Asserted through `EXPLAIN` rather than by timing: on 30 rows a timing test would pass either
+    /// way. What this catches is the migration being dropped, or `EMPLOYEE_ORDER` drifting away from
+    /// the index built for it — including the `id` tiebreaker, whose absence from the index is what
+    /// would put a `Sort` node back above the scan.
+    #[test]
+    fn the_paged_roster_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            for index in 0..30 {
+                people
+                    .insert(
+                        &format!("01EMPSCAN00000000000000{index:03}"),
+                        TENANT_A,
+                        &format!("Q{index:03}"),
+                        "Planned",
+                    )
+                    .await
+                    .expect("insert");
+            }
+            // Without statistics the planner picks a sequential scan on a table this small whatever
+            // indexes exist, so the assertion would be about row count rather than about the index.
+            admin
+                .batch_execute("ANALYZE employees")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT id FROM employees WHERE tenant_id = $1 \
+                         ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("employees_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
             );
         });
     }

@@ -40,6 +40,7 @@ use pos_core::permission::Permission;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
+use crate::paging::{Page, PageRequest};
 use crate::registry::EntityStatus;
 use crate::version::{UpdateOutcome, Version, Versioned};
 
@@ -139,6 +140,31 @@ pub trait EmployeeStore {
         &self,
         tenant: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<Employee>>, EmployeeStoreError>> + Send;
+
+    /// One page of a tenant's employees, newest first, with the headcount.
+    ///
+    /// Beside [`list`](Self::list) rather than replacing it, for the reason
+    /// [ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) gives: the publish path compiles the
+    /// permission node from the whole roster and a node built from a page would be missing whoever
+    /// fell off it. The console's table is the caller that wants a page.
+    ///
+    /// **This is T1 personal data and paging does not change that** ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+    /// It changes only *how much of the roster crosses the wire at once* — the same fields behind the
+    /// same `console.people.manage` gate, and strictly less data per response than the read it sits
+    /// beside. No field is added, and nothing new reaches a log.
+    ///
+    /// The order is `created_at DESC, id DESC` — total, because `id` is the primary key. It has to
+    /// be: an import writes a whole roster in one transaction, and PostgreSQL's `now()` is
+    /// transaction time, so `created_at` alone does not order those rows (decision 9).
+    ///
+    /// # Errors
+    ///
+    /// [`EmployeeStoreError`] if the read fails.
+    fn list_page(
+        &self,
+        tenant: TenantId,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<Versioned<Employee>>, EmployeeStoreError>> + Send;
 
     /// Reads one employee within its tenant, or `None` if there is no such id.
     ///

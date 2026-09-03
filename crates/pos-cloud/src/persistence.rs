@@ -2625,6 +2625,29 @@ impl EmployeeStore for PostgresPeople {
         rows.into_iter().map(employee_record).collect()
     }
 
+    async fn list_page(
+        &self,
+        tenant: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
+        let (rows, total) = self
+            .fetch_page(
+                &tenant.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| EmployeeStoreError::new(error.to_string()))?;
+        let employees: Vec<Versioned<Employee>> = rows
+            .into_iter()
+            .map(employee_record)
+            .collect::<Result<_, _>>()?;
+        Ok(Page::new(
+            employees,
+            u32::try_from(total).unwrap_or(u32::MAX),
+        ))
+    }
+
     async fn get(
         &self,
         tenant: TenantId,

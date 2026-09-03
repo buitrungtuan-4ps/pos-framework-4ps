@@ -47,6 +47,19 @@ pub struct EmployeeRow {
 const EMPLOYEE_COLUMNS: &str =
     "id, tenant_id, code, name, status, (pin_phc IS NOT NULL) AS has_pin, xmin::text";
 
+/// The order every employee read imposes, newest first — and *total*, because it ends in `id`, the
+/// table's primary key.
+///
+/// The tiebreaker is what the paged read needs and what this order was missing. PostgreSQL's `now()`
+/// is **transaction** time, so every row one transaction inserts carries the identical `created_at`
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9): a CSV import of a hundred
+/// staff gives a hundred rows one instant, `created_at DESC` alone does not order them, and a
+/// `LIMIT`/`OFFSET` window over a non-total order can return a row on two pages or on neither.
+///
+/// One const rather than a literal per query, so the unpaged read and the page cannot drift onto
+/// different sequences — which would make "page 2" name rows from an order nothing else uses.
+const EMPLOYEE_ORDER: &str = "ORDER BY created_at DESC, id DESC";
+
 /// The employee store over a shared pool. Built by [`PostgresStore::people`](crate::PostgresStore::people).
 #[derive(Clone, Debug)]
 pub struct PostgresPeople {
@@ -94,13 +107,69 @@ impl PostgresPeople {
             .query(
                 &format!(
                     "SELECT {EMPLOYEE_COLUMNS} FROM employees \
-                     WHERE tenant_id = $1 ORDER BY created_at DESC"
+                     WHERE tenant_id = $1 {EMPLOYEE_ORDER}"
                 ),
                 &[&tenant_id],
             )
             .await
             .map_err(unavailable)?;
         Ok(rows.iter().map(employee_row).collect())
+    }
+
+    /// One page of a tenant's employees, newest first, with how many the tenant has.
+    ///
+    /// The same columns and the same order as [`fetch`](Self::fetch), so a page is a window onto the
+    /// sequence that read returns — including the same deliberate absence of `pin_phc`. Paging
+    /// changes how much of a tenant's roster crosses the wire at once; it changes no field
+    /// ([ADR-0070](../../../docs/adr/0070-people-and-access.md) is what decides which fields a read
+    /// exposes, and this does not touch it).
+    ///
+    /// `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one snapshot, so the count
+    /// cannot disagree with the page it labels. `employees_by_tenant_newest` (migration 0045) carries
+    /// the whole order, so neither the window nor the count needs a sort above the scan.
+    ///
+    /// The one case that needs a second statement is an *empty* window — a page past the end, or a
+    /// roster that shrank under a pager sitting on page four. `count(*) OVER()` has no row to ride
+    /// on there, and reporting `0` would tell the caller the tenant has no staff. The other paged
+    /// reads in this adapter still do report `0` on that path; see the `total` binding below.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_page(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<EmployeeRow>, i64), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {EMPLOYEE_COLUMNS}, count(*) OVER() FROM employees \
+                     WHERE tenant_id = $1 {EMPLOYEE_ORDER} LIMIT $2 OFFSET $3"
+                ),
+                &[&tenant_id, &limit, &offset],
+            )
+            .await
+            .map_err(unavailable)?;
+        // Every row carries the same headcount — but an empty window carries no row to read it off,
+        // and `0` is then a wrong answer rather than a missing one: it says the tenant has nobody,
+        // when what happened is that the caller asked past the end of a roster that does have
+        // people. The pager on the other side reads this number to decide how many pages exist, so
+        // it gets counted properly. One extra round trip, only on the path that returned nothing.
+        let total = match rows.first() {
+            Some(row) => row.get::<_, i64>(7),
+            None => connection
+                .query_one(
+                    "SELECT count(*) FROM employees WHERE tenant_id = $1",
+                    &[&tenant_id],
+                )
+                .await
+                .map_err(unavailable)?
+                .get(0),
+        };
+        Ok((rows.iter().map(employee_row).collect(), total))
     }
 
     /// Reads one employee within its tenant, or `None` if there is no such id.
@@ -500,5 +569,48 @@ fn assignment_row(row: &tokio_postgres::Row) -> AssignmentRow {
         employee_id: row.get(2),
         store_id: row.get(3),
         role_template_id: row.get(4),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EMPLOYEE_COLUMNS, EMPLOYEE_ORDER};
+
+    /// The roster order is *total*, because it ends in the primary key.
+    ///
+    /// This test exists because nothing else in the tree can see it. The integration suite's
+    /// `EXPLAIN` guard asserts the plan of a query *it* writes, so it catches migration 0045 being
+    /// dropped — but if this adapter's `ORDER BY` lost its tiebreaker the guard would keep passing,
+    /// and so would the page-partition tests: with the index present, the index walk supplies the
+    /// missing order for free. The same blind spot was found by mutation on the catalog fragments.
+    #[test]
+    fn the_roster_order_ends_in_the_primary_key_so_a_window_over_it_is_unambiguous() {
+        assert!(
+            EMPLOYEE_ORDER.ends_with("id DESC"),
+            "the roster order must break ties on the primary key, or LIMIT/OFFSET over it can \
+             repeat or skip a row when a transaction inserted several staff at once; got \
+             {EMPLOYEE_ORDER:?}",
+        );
+        assert!(
+            EMPLOYEE_ORDER.contains("created_at DESC"),
+            "newest-first is still the order the roster is read in; got {EMPLOYEE_ORDER:?}",
+        );
+    }
+
+    /// The read exposes `has_pin`, never the PIN hash.
+    ///
+    /// [ADR-0070](../../../docs/adr/0070-people-and-access.md)'s rule, asserted here rather than
+    /// trusted to a docstring: `pin_phc` reaches the API through no read, and the paged read added
+    /// beside `fetch` shares this one column list precisely so it cannot acquire a field of its own.
+    #[test]
+    fn no_read_exposes_the_pin_hash() {
+        assert!(
+            EMPLOYEE_COLUMNS.contains("(pin_phc IS NOT NULL) AS has_pin"),
+            "a read tells a caller whether a PIN is set; got {EMPLOYEE_COLUMNS:?}",
+        );
+        assert!(
+            !EMPLOYEE_COLUMNS.contains("pin_phc,") && !EMPLOYEE_COLUMNS.ends_with("pin_phc"),
+            "no read selects the hash itself; got {EMPLOYEE_COLUMNS:?}",
+        );
     }
 }
