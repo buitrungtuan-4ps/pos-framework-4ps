@@ -1726,7 +1726,9 @@ async fn setup_with_a_wrong_token_is_401_and_provisions_nothing() {
 }
 
 #[tokio::test]
-async fn setup_with_a_short_password_is_422() {
+async fn setup_with_a_short_password_names_the_field_it_is_about() {
+    // A single field out of range is a `400`, not the `422` this answered before ADR-0096: there is
+    // a field to go and fix, and the refusal has to say which one.
     let (router, admin) = setup_router(Some(SETUP_TOKEN));
     let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": "short" });
     let response = router
@@ -1735,9 +1737,13 @@ async fn setup_with_a_short_password_is_422() {
         .expect("route the setup");
     assert_eq!(
         response.status(),
-        StatusCode::UNPROCESSABLE_ENTITY,
+        StatusCode::BAD_REQUEST,
         "too short a password is refused before anything is written"
     );
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["details"][0]["field"], "password");
+    assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
     assert!(
         admin.load_credential().await.expect("load").is_none(),
         "a refused setup provisions nothing"
@@ -2307,12 +2313,16 @@ async fn an_incoherent_config_is_rejected_with_violations() {
         .expect("route the publish");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = json_body(response).await;
+    assert_eq!(body["error"]["status"], "UNPROCESSABLE", "got {body}");
     assert!(
-        !body["violations"]
-            .as_array()
-            .expect("violations array")
-            .is_empty(),
-        "the rejection names the violated rule(s)"
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "the rejection names the violated rule(s): {body}"
+    );
+    assert!(
+        body["error"]["details"].is_null(),
+        "prose violations carry no field, so no `details` is invented for them: {body}"
     );
 }
 
@@ -3355,10 +3365,24 @@ async fn translation_grid_round_trips_and_enforces_the_en_fallback() {
         .await
         .expect("route the bad publish");
     assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let refusal = json_body(rejected).await;
+    assert_eq!(refusal["error"]["status"], "UNPROCESSABLE", "got {refusal}");
+    // The whole point of ADR-0096 for this route: the offending key reaches the console as a field
+    // it can mark, not as a raw `{"missing_fallback":[…]}` body nothing there reads.
     assert_eq!(
-        json_body(rejected).await["missing_fallback"],
-        serde_json::json!(["menu.rice"]),
-        "the rejection names the key lacking an en fallback"
+        refusal["error"]["details"][0]["field"], "menu.rice.en",
+        "the rejection names the key lacking an en fallback: {refusal}"
+    );
+    assert_eq!(refusal["error"]["details"][0]["reason"], "REQUIRED");
+    assert!(
+        refusal["error"]["details"][1].is_null(),
+        "one detail per offending key, and only one key is bad: {refusal}"
+    );
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("menu.rice")),
+        "and the sentence a person reads names it too: {refusal}"
     );
     let unchanged = router
         .clone()
@@ -6706,7 +6730,14 @@ async fn accept_rejects_a_bad_token_and_a_short_password() {
         ))
         .await
         .expect("route accept");
-    assert_eq!(short_password.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // ADR-0096: one field out of range is a `400` naming it, not a `422`.
+    assert_eq!(short_password.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(short_password).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "password",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
 }
 
 #[tokio::test]
@@ -8192,19 +8223,16 @@ async fn an_unplaced_store_reads_null_and_an_illegal_placement_is_refused_with_r
         .expect("route the placement publish");
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let violations = json_body(refused).await;
-    let listed = violations["violations"]
-        .as_array()
-        .expect("the violations are a list");
+    assert_eq!(violations["error"]["status"], "UNPROCESSABLE");
+    let listed = violations["error"]["message"]
+        .as_str()
+        .expect("the violations join into the message");
     assert!(
-        listed.iter().any(|v| v
-            .as_str()
-            .is_some_and(|text| text.contains("device_ota.ring"))),
+        listed.contains("device_ota.ring"),
         "the bad ring is named: {listed:?}"
     );
     assert!(
-        listed.iter().any(|v| v
-            .as_str()
-            .is_some_and(|text| text.contains("device_ota.canary_bucket"))),
+        listed.contains("device_ota.canary_bucket"),
         "the bad bucket is named: {listed:?}"
     );
 
@@ -11773,12 +11801,12 @@ async fn publishing_capability_flags_merges_the_store_layer_and_rejects_conflict
             .expect("route conflict");
     assert_eq!(conflict.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let violations = json_body(conflict).await;
+    assert_eq!(violations["error"]["status"], "UNPROCESSABLE");
     assert!(
-        !violations["violations"]
-            .as_array()
-            .expect("violations")
-            .is_empty(),
-        "the inter-flag rule is reported"
+        violations["error"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "the inter-flag rule is reported: {violations}"
     );
 }
 

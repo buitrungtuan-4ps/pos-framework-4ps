@@ -15,7 +15,7 @@
 //! One shape means a client writes one error path rather than one per endpoint, and a
 //! store's status bar can render any failure without knowing what produced it.
 //!
-//! # Two deliberate deviations, and why they are safe
+//! # Three deliberate deviations, and why they are safe
 //!
 //! **`UNSPECIFIED`.** The canonical AIP statuses carry no prefix and AIP defines no
 //! `*_UNSPECIFIED` member, which sits awkwardly beside the naming standard's rule that
@@ -35,6 +35,13 @@
 //! waiting to be written by someone reading quickly. It is safe for the same reason
 //! `UNSPECIFIED` is: a client built before it reads it as unrecognised and still gets an
 //! intact `code`, `message` and `details`.
+//!
+//! **`UNPROCESSABLE`.** A request whose every field is individually valid and whose
+//! *combination* is not owes `422`, and no canonical status carries it
+//! ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)). Without it a handler
+//! that wanted to say "well-formed and still wrong" had nothing to say it with, and nine
+//! of them invented a body of their own instead. Safe for the same reason the other two
+//! are.
 
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +80,14 @@ pub enum ErrorStatus {
     /// Not retryable as sent: the same stale token would fail again. The caller re-reads,
     /// shows the reader what changed, and writes against the version it got back.
     VersionMismatch,
+    /// Every field is valid on its own and the request they make together is not
+    /// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+    ///
+    /// A routing rule naming a station that does not exist, a capability flag that
+    /// contradicts another, a translation key missing its `en` fallback. Distinct from
+    /// [`InvalidArgument`](ErrorStatus::InvalidArgument), which names the one field to go
+    /// and fix; here there is no such field, and the reader has to look elsewhere.
+    Unprocessable,
 }
 
 impl WireEnum for ErrorStatus {
@@ -90,6 +105,7 @@ impl WireEnum for ErrorStatus {
         Self::Unavailable,
         Self::Internal,
         Self::VersionMismatch,
+        Self::Unprocessable,
     ];
 
     fn as_wire(self) -> &'static str {
@@ -105,6 +121,7 @@ impl WireEnum for ErrorStatus {
             Self::Unavailable => "UNAVAILABLE",
             Self::Internal => "INTERNAL",
             Self::VersionMismatch => "VERSION_MISMATCH",
+            Self::Unprocessable => "UNPROCESSABLE",
         }
     }
 
@@ -130,6 +147,7 @@ impl ErrorStatus {
             Self::NotFound => 404,
             Self::AlreadyExists | Self::FailedPrecondition => 409,
             Self::VersionMismatch => 412,
+            Self::Unprocessable => 422,
             Self::ResourceExhausted => 429,
             // An unrecognised status is a server-side problem by elimination.
             Self::Unspecified | Self::Internal => 500,
@@ -266,10 +284,34 @@ mod tests {
         }
         assert_eq!(
             ErrorStatus::ALL.len(),
-            11,
-            "nine canonical statuses plus the two documented deviations, UNSPECIFIED and \
-             VERSION_MISMATCH"
+            12,
+            "nine canonical statuses plus the three documented deviations, UNSPECIFIED, \
+             VERSION_MISMATCH and UNPROCESSABLE"
         );
+    }
+
+    #[test]
+    fn a_well_formed_but_inconsistent_request_is_the_only_422_and_is_not_the_400() {
+        // The pair worth keeping apart here is UNPROCESSABLE and INVALID_ARGUMENT, because
+        // the cheap version of ADR-0096 was to call every one of these 400 and add nothing.
+        // The difference is what the reader is told to do: 400 names a field to go and fix,
+        // 422 says every field is fine and the document they make together is not.
+        assert_eq!(ErrorStatus::Unprocessable.http_code(), 422);
+        assert_eq!(ErrorStatus::InvalidArgument.http_code(), 400);
+        assert_eq!(ErrorStatus::Unprocessable.as_wire(), "UNPROCESSABLE");
+        assert_eq!(
+            ErrorStatus::from_wire("UNPROCESSABLE_ENTITY"),
+            None,
+            "RFC 9110 renamed the reason phrase to `Unprocessable Content`; neither spelling \
+             of the old one is a token we answer to"
+        );
+    }
+
+    #[test]
+    fn an_inconsistent_document_does_not_invite_a_retry() {
+        // Resending the same configuration produces the same inconsistency. A caller told
+        // to back off would spin; it has to change the document first.
+        assert!(!ErrorStatus::Unprocessable.is_retryable());
     }
 
     #[test]
@@ -305,6 +347,7 @@ mod tests {
         assert_eq!(ErrorStatus::NotFound.http_code(), 404);
         assert_eq!(ErrorStatus::AlreadyExists.http_code(), 409);
         assert_eq!(ErrorStatus::FailedPrecondition.http_code(), 409);
+        assert_eq!(ErrorStatus::Unprocessable.http_code(), 422);
         assert_eq!(ErrorStatus::ResourceExhausted.http_code(), 429);
         assert_eq!(ErrorStatus::Internal.http_code(), 500);
         assert_eq!(ErrorStatus::Unavailable.http_code(), 503);
