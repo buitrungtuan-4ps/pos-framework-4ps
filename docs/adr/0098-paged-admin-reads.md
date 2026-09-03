@@ -50,6 +50,19 @@ The measurement, taken across `crates/pos-cloud/src/http.rs`, the twenty-five cl
   `ReconcileHistoryQuery` and the `/v1` and `/admin` rollup windows — from ADR-0081 and ADR-0069.
   None carries `offset` or `total`, and `ScheduledListQuery` and `OtaRolloutQuery` carry neither
   despite being history reads.
+
+  **Corrected during B3-2.** This bullet is accurate and this ADR then failed to draw its own
+  consequence: one of those five reads, `audit`, is in the paged cohort, and on it `?limit=` was
+  already *defined* — "the most recent this many", defaulted to 200 and clamped at 500 — and the
+  console sends it today. Decision 3 below keys the paged form on `limit` being present, which on
+  that route would change the response shape of a request already in flight: exactly what this ADR
+  exists to prevent. So `/admin/audit` keys its paged form on **`offset`** instead, and `limit` alone
+  answers as it always has. The trigger is therefore per-route, and the rule is: where `limit` was
+  free, naming it asks for a page; where `limit` already meant something, naming an `offset` does.
+  Nothing else in the cohort has a pre-existing `limit`, so nothing else is affected. This is the
+  fourth place this ADR's prose ran ahead of its own measurements, and the pattern is now the point:
+  the numbers were collected before the decisions were written, and the decisions did not go back to
+  check them.
 - **`DataTable` paginates client-side today.** Its `perPage` prop slices `sorted()`, and `total` is
   `sorted().length`. F2's plan called these "reserved server-paging props"; they do not exist.
 - **Three of the five lists that need paging have an index that finds their rows but cannot serve
@@ -252,8 +265,26 @@ by inheritance from the query that was already there, not by design.
    SQL with `COUNT(*) OVER()`, fake, route, typed client, `DataTable` server props, and
    `Campaigns.tsx` actually passing a limit. One acute case proven all the way through before the
    mechanical cohort.
-2. **B3-2** — `media`, `audit`, `items` and `employees` on the vocabulary B3-1 fixed. Each gains the
-   total order decision 9 requires and an index covering it: a tiebreaker plus a new index for
-   `media_assets`, `catalog_items` and `employees`; for `audit_log`, whose order is already total,
-   only the widened index.
+2. **B3-2** — `media`, `audit` and `items` on the vocabulary B3-1 fixed, with `employees` held back
+   (see below). Each gains the total order decision 9 requires and an index covering it: a tiebreaker
+   plus a new index for `media_assets` (migration 0041) and `catalog_items` (0043); for `audit_log`,
+   whose order is already total, only the widened index (0042).
+
+   **Delivered.** Three notes on what the slice actually found:
+
+   - **`audit`'s trigger is `offset`, not `limit`** — see the correction under the fifth measurement
+     bullet above.
+   - **`employees` is held, not dropped.** It qualifies on headcount, but it is T1 personal data and
+     that call is the owner's, not this ADR's. Nothing about the paged read would change which fields
+     leave the server or what reaches a log — the gate is the same `console.people.manage`, and a
+     page carries *less* data than the whole-set read it sits beside — but the criterion in this ADR
+     produced one confidently wrong answer already (`devices`), so the question was asked rather than
+     assumed. Until it is answered, `GET /admin/employees` is unchanged.
+   - **`items` gains the API but not the screen.** The Items sub-screen finds a row with a
+     client-side search box over the whole item master; server-paging it before `?q=` exists would
+     leave an operator managing thousands of items with only prev/next. So the seam, adapter, index
+     and route land here and the screen moves in B3-3, in the same change as the search that has to
+     move with it. The Audit screen *did* move, because its three server-side filter fields already
+     search the whole trail — its client-side box only ever saw the newest 200 rows, so removing it
+     is a fix rather than a loss.
 3. **B3-3** — `q`/`sort`/`order` across the paged cohort, each route declaring its own fields.

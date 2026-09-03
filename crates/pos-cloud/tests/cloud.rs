@@ -7151,6 +7151,17 @@ impl FakeCatalog {
         *next += 1;
         Version::new(next.to_string())
     }
+
+    /// The tenant's items, in insertion order — shared by the whole-set and paged reads.
+    fn tenant_items(&self, tenant_id: TenantId) -> Vec<Versioned<CatalogItem>> {
+        self.items
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|item| item.record.tenant_id == tenant_id)
+            .cloned()
+            .collect()
+    }
 }
 
 impl CatalogStore for FakeCatalog {
@@ -7167,14 +7178,22 @@ impl CatalogStore for FakeCatalog {
         &self,
         tenant_id: TenantId,
     ) -> Result<Vec<Versioned<CatalogItem>>, CatalogStoreError> {
-        Ok(self
-            .items
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|item| item.record.tenant_id == tenant_id)
-            .cloned()
-            .collect())
+        Ok(self.tenant_items(tenant_id))
+    }
+
+    async fn list_items_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+        let matching = self.tenant_items(tenant_id);
+        let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+        let items = matching
+            .into_iter()
+            .skip(page.offset() as usize)
+            .take(page.limit() as usize)
+            .collect();
+        Ok(Page::new(items, total))
     }
 
     async fn update_item(
@@ -9100,6 +9119,109 @@ async fn catalog_creates_and_lists_an_item_and_a_menu() {
         .await
         .expect("route list menus");
     assert_eq!(json_body(listed).await.as_array().expect("array").len(), 1);
+}
+
+#[tokio::test]
+async fn the_item_list_returns_the_whole_master_unpaged_and_a_page_when_a_limit_is_named() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": ulid_text(7),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let item_id = json_body(created).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    // An absent limit is the whole item master as a bare array, which the menu compiler and the
+    // item pickers depend on — five of the six console consumers of this read are not tables.
+    let whole = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the whole-set list");
+    assert_eq!(
+        json_body(whole)
+            .await
+            .as_array()
+            .expect("a bare array, not an envelope")
+            .len(),
+        1,
+    );
+
+    // Naming a limit asks for a page instead (ADR-0098): the window, plus the size of the master.
+    let paged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}&limit=1"),
+            &cookie,
+        ))
+        .await
+        .expect("route the paged list");
+    assert_eq!(paged.status(), StatusCode::OK);
+    let paged = json_body(paged).await;
+    assert_eq!(paged["items"].as_array().expect("the window").len(), 1);
+    assert_eq!(paged["items"][0]["menu_item_id"], item_id);
+    assert_eq!(paged["total"], 1, "one item in the master");
+    assert_eq!(paged["limit"], 1, "the bounds used are echoed back");
+    assert_eq!(paged["offset"], 0);
+    assert!(
+        paged["items"][0]["etag"].is_string(),
+        "a paged row keeps the per-row etag ADR-0095 put on it",
+    );
+
+    // A page past the end is empty and not an error, and still reports the master's size.
+    let beyond = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/items?tenant_id={tenant}&limit=10&offset=50"),
+            &cookie,
+        ))
+        .await
+        .expect("route the page past the end");
+    let beyond = json_body(beyond).await;
+    assert!(beyond["items"].as_array().expect("the window").is_empty());
+    assert_eq!(beyond["total"], 1);
+
+    for (bound, field) in [
+        ("limit=100000", "limit"),
+        ("limit=0", "limit"),
+        ("offset=1", "offset"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/catalog/items?tenant_id={tenant}&{bound}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the bad bound");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "`{bound}` is a client mistake, not a page",
+        );
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            field,
+            "`{bound}` names the parameter that was wrong",
+        );
+    }
 }
 
 #[tokio::test]

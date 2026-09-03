@@ -3508,6 +3508,26 @@ impl CatalogStore for PostgresCatalog {
         rows.into_iter().map(catalog_item_record).collect()
     }
 
+    async fn list_items_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+        let (rows, total) = self
+            .fetch_items_page(
+                &tenant_id.to_string(),
+                i64::from(page.limit()),
+                i64::from(page.offset()),
+            )
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let items: Vec<Versioned<CatalogItem>> = rows
+            .into_iter()
+            .map(catalog_item_record)
+            .collect::<Result<_, _>>()?;
+        Ok(Page::new(items, u32::try_from(total).unwrap_or(u32::MAX)))
+    }
+
     async fn update_item(
         &self,
         item: &CatalogItem,

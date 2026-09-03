@@ -5456,6 +5456,22 @@ struct VoucherListQuery {
     offset: Option<String>,
 }
 
+/// `GET /admin/catalog/items`: the tenant, plus the optional paging bounds.
+///
+/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
+#[derive(Debug, Clone, Deserialize)]
+struct ItemListQuery {
+    /// The tenant whose items to list (a 26-character ULID).
+    tenant_id: String,
+    /// How many items to return. **Absent means unpaged**: the whole item master, as an array —
+    /// which is what the menu compiler and five of the six console pickers ask for.
+    #[serde(default)]
+    limit: Option<String>,
+    /// How many items to skip. Only meaningful with `limit`.
+    #[serde(default)]
+    offset: Option<String>,
+}
+
 /// `GET /admin/media`: the tenant, plus the optional paging bounds.
 ///
 /// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
@@ -10809,7 +10825,7 @@ fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, ()> {
 async fn admin_list_items<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
-    Query(query): Query<RegistryTenantQuery>,
+    Query(query): Query<ItemListQuery>,
 ) -> Response
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
@@ -10830,8 +10846,22 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.catalog.list_items(tenant_id).await {
-        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+    // Two reads, chosen by whether the caller named a limit (ADR-0098). This route has the most
+    // consumers of any list in the console and only one of them is a table: the menu compiler and
+    // the item pickers need every item, or a menu compiles without whatever fell off the page. That
+    // is the reason an absent `?limit=` can never come to mean a default page size.
+    let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        return match state.catalog.list_items(tenant_id).await {
+            Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+            Err(error) => catalog_error_response(&error),
+        };
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.list_items_page(tenant_id, page).await {
+        Ok(read) => paged_ok(read, page),
         Err(error) => catalog_error_response(&error),
     }
 }

@@ -4777,6 +4777,293 @@ mod conditional_writes {
 // every test that does not run the SQL.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The item master, paged: window, total, order and the index that carries it (ADR-0098).
+// ---------------------------------------------------------------------------
+
+mod catalog_item_pages {
+    use core::fmt::Write as _;
+
+    use store_postgres::PostgresCatalog;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    /// Inserts `count` items for one tenant. The id carries the tenant because `menu_item_id` is the
+    /// primary key across every tenant: two calls with the same index range would collide.
+    async fn stock(catalog: &PostgresCatalog, tenant: &str, count: u32) {
+        for index in 0..count {
+            catalog
+                .insert_item(
+                    &format!("{tenant}-item-{index:04}"),
+                    tenant,
+                    &format!("Item {index:04}"),
+                    "{}",
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("insert an item");
+        }
+    }
+
+    /// An item's per-locale names survive a create and an update against real PostgreSQL.
+    ///
+    /// This is a regression guard for a bug these paging tests found, not a paging test. Both writes
+    /// bind `name_translations` as text into a `jsonb` column, and they cast it `$N::text::jsonb`
+    /// rather than `$N::jsonb`. The difference is not cosmetic: PostgreSQL infers a bare `$N::jsonb`
+    /// parameter *as* `jsonb`, and `tokio-postgres` then refuses to send a Rust `&str` for it — so
+    /// both statements failed at the driver, and every item create and rename answered `503`.
+    ///
+    /// It shipped because nothing in this suite had ever called `insert_item`: the console tests run
+    /// against the fake, which has no parameter types to get wrong, and this file only exercised
+    /// placements. Every other `jsonb` parameter in the tree already carried the double cast; these
+    /// two, added with the per-locale names column (migration 0029), did not.
+    #[test]
+    fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+
+            let version = catalog
+                .insert_item(
+                    "item-jsonb",
+                    TENANT_A,
+                    "Margherita",
+                    r#"{"vi":"Bánh Margherita"}"#,
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("a create must reach the database, not fail at the driver");
+
+            let stored = catalog.fetch_items(TENANT_A).await.expect("read back");
+            let row = stored.first().expect("the item");
+            assert_eq!(row.name, "Margherita");
+            assert!(
+                row.name_translations.contains("Bánh Margherita"),
+                "the per-locale name round-trips through the jsonb column; got {:?}",
+                row.name_translations,
+            );
+
+            let outcome = catalog
+                .set_item(
+                    TENANT_A,
+                    "item-jsonb",
+                    "Margherita Classic",
+                    r#"{"vi":"Bánh Margherita cổ điển"}"#,
+                    "tax-standard",
+                    None,
+                    None,
+                    None,
+                    "active",
+                    &version,
+                )
+                .await
+                .expect("an update must reach the database too");
+            assert!(
+                matches!(outcome, store_postgres::RowUpdate::Updated(_)),
+                "the update applies at the version the create returned",
+            );
+
+            let stored = catalog
+                .fetch_items(TENANT_A)
+                .await
+                .expect("read back again");
+            let row = stored.first().expect("the item");
+            assert_eq!(row.name, "Margherita Classic");
+            assert!(row.name_translations.contains("cổ điển"));
+        });
+    }
+
+    /// A page carries its own window and the size of the whole item master, and consecutive pages
+    /// partition it without overlap or gaps (ADR-0098 slice B3-2).
+    #[test]
+    fn a_page_of_the_item_master_carries_the_window_and_the_total() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 25).await;
+            // A neighbour's items must reach neither the page nor the count.
+            stock(&catalog, TENANT_B, 7).await;
+
+            let (first, total) = catalog
+                .fetch_items_page(TENANT_A, 10, 0)
+                .await
+                .expect("first page");
+            assert_eq!(first.len(), 10, "the window is the limit");
+            assert_eq!(total, 25, "the total is the master, not the window");
+
+            let mut seen: Vec<String> = first.into_iter().map(|row| row.menu_item_id).collect();
+            for offset in [10, 20] {
+                let (page, page_total) = catalog
+                    .fetch_items_page(TENANT_A, 10, offset)
+                    .await
+                    .expect("later page");
+                assert_eq!(page_total, 25, "the total does not change as pages advance");
+                seen.extend(page.into_iter().map(|row| row.menu_item_id));
+            }
+            assert_eq!(seen.len(), 25, "three pages of ten cover twenty-five items");
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), 25, "no item appears on two pages");
+            assert!(
+                unique.iter().all(|id| id.starts_with(TENANT_A)),
+                "no neighbour's item reached the pages",
+            );
+        });
+    }
+
+    /// The paged read returns the same rows in the same order as the whole-set read, and a page past
+    /// the end is empty rather than an error.
+    #[test]
+    fn the_paged_item_master_agrees_with_the_whole_set_read() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 6).await;
+            stock(&catalog, TENANT_B, 4).await;
+
+            let whole: Vec<String> = catalog
+                .fetch_items(TENANT_A)
+                .await
+                .expect("whole set")
+                .into_iter()
+                .map(|row| row.menu_item_id)
+                .collect();
+            assert_eq!(whole.len(), 6, "only this tenant's items");
+
+            let (paged, total) = catalog
+                .fetch_items_page(TENANT_A, 6, 0)
+                .await
+                .expect("paged");
+            assert_eq!(total, 6, "the count is tenant-scoped too");
+            let paged: Vec<String> = paged.into_iter().map(|row| row.menu_item_id).collect();
+            assert_eq!(
+                paged, whole,
+                "a full-width page is the whole-set read, in the same order"
+            );
+
+            let (beyond, beyond_total) = catalog
+                .fetch_items_page(TENANT_A, 10, 100)
+                .await
+                .expect("a page past the end still reads");
+            assert!(beyond.is_empty());
+            assert_eq!(beyond_total, 0);
+        });
+    }
+
+    /// A batch written in one transaction shares one `created_at`, which is why the read needs the
+    /// `menu_item_id` tiebreaker — the premise of ADR-0098 decision 9, measured rather than trusted.
+    ///
+    /// A CSV import of a menu is exactly this shape. The tie assertion is deterministic; the
+    /// partition check below it is the property that follows, and the `EXPLAIN` guard is what
+    /// actually catches the tiebreaker going missing.
+    #[test]
+    fn an_imported_batch_shares_one_timestamp_and_still_pages() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            let mut inserts = String::new();
+            for index in 0..6 {
+                write!(
+                    inserts,
+                    "INSERT INTO catalog_items \
+                     (menu_item_id, tenant_id, name, tax_class_id) \
+                     VALUES ('import-{index:04}', '{TENANT_A}', 'Imported {index}', 'tax-standard');"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            admin
+                .batch_execute(&format!("BEGIN; {inserts} COMMIT;"))
+                .await
+                .expect("write the import in one transaction");
+
+            let distinct: i64 = admin
+                .query_one(
+                    "SELECT count(DISTINCT created_at) FROM catalog_items WHERE tenant_id = $1",
+                    &[&TENANT_A],
+                )
+                .await
+                .expect("count the distinct timestamps")
+                .get(0);
+            assert_eq!(
+                distinct, 1,
+                "six items imported in one transaction carry one created_at, not six close ones — \
+                 which is why the read's ORDER BY needs menu_item_id as a tiebreaker"
+            );
+
+            let mut seen = Vec::new();
+            for offset in [0, 2, 4] {
+                let (page, total) = catalog
+                    .fetch_items_page(TENANT_A, 2, offset)
+                    .await
+                    .expect("page over the imported batch");
+                assert_eq!(total, 6);
+                seen.extend(page.into_iter().map(|row| row.menu_item_id));
+            }
+            let mut unique = seen.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                6,
+                "three pages of two cover the batch exactly once each; got {seen:?}"
+            );
+        });
+    }
+
+    /// Migration 0043's index carries the read's whole order, so `LIMIT` stops the scan instead of
+    /// truncating a sort of every item a chain sells.
+    #[test]
+    fn the_paged_item_query_is_served_by_the_index_and_not_by_a_sort() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let catalog = store.catalog();
+            stock(&catalog, TENANT_A, 40).await;
+            admin
+                .batch_execute("ANALYZE catalog_items")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT menu_item_id FROM catalog_items WHERE tenant_id = $1 \
+                         ORDER BY created_at DESC, menu_item_id DESC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("catalog_items_by_tenant_newest"),
+                "the page should be served by the sort-carrying index; plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Sort Key"),
+                "an index that carries the order needs no sort step; plan was:\n{plan}"
+            );
+        });
+    }
+}
+
 mod catalog_keyed_rows {
     use store_postgres::{PostgresCatalog, RowUpdate};
 

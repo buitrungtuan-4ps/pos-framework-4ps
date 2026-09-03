@@ -34,6 +34,7 @@ use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 
 use crate::media::MediaId;
+use crate::paging::{Page, PageRequest};
 use crate::registry::EntityStatus;
 use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
@@ -444,10 +445,30 @@ pub trait CatalogStore {
     ) -> impl Future<Output = Result<Version, CatalogStoreError>> + Send;
 
     /// Lists a tenant's items.
+    ///
+    /// Every item, unpaged, and permanently so
+    /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)): five of the six console consumers
+    /// of `GET /admin/items` fill a picker rather than a table, and the menu compiler needs the whole
+    /// item master or it compiles a menu missing whatever fell off the page.
     fn list_items(
         &self,
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<CatalogItem>>, CatalogStoreError>> + Send;
+
+    /// One page of a tenant's items, newest first, with how many the tenant has.
+    ///
+    /// Beside [`list_items`](Self::list_items), not replacing it: the item master runs to thousands
+    /// for a chain, and the Items table is the one consumer that wants a window rather than the set.
+    ///
+    /// The order is `created_at DESC, menu_item_id DESC` — total, per ADR-0098 decision 9.
+    /// `created_at` alone is not: it defaults to `now()`, which is *transaction* time, so items
+    /// imported in one transaction share it exactly and a window over the tie could return a row on
+    /// two pages or on neither.
+    fn list_items_page(
+        &self,
+        tenant_id: TenantId,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<Versioned<CatalogItem>>, CatalogStoreError>> + Send;
 
     /// Renames an item, sets its tax class, and/or sets its status, within its tenant. Returns
     /// whether a row was found and changed.
@@ -708,6 +729,7 @@ mod tests {
         DisplaySubcategory, ItemCategory, ItemSubcategory, LayoutButton, Menu, MenuId,
         MenuPlacement, MenuSection, ModifierGroup, TaxClass,
     };
+    use crate::paging::{Page, PageRequest};
     use crate::registry::EntityStatus;
     use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
@@ -737,6 +759,20 @@ mod tests {
             *next += 1;
             Version::new(next.to_string())
         }
+
+        /// The tenant's items, in insertion order.
+        ///
+        /// Shared by the whole-set and paged reads so the page cannot filter differently from the
+        /// set it claims to be a window onto.
+        fn tenant_items(&self, tenant_id: TenantId) -> Vec<Versioned<CatalogItem>> {
+            self.items
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|item| item.record.tenant_id == tenant_id)
+                .cloned()
+                .collect()
+        }
     }
 
     impl CatalogStore for FakeCatalog {
@@ -753,14 +789,22 @@ mod tests {
             &self,
             tenant_id: TenantId,
         ) -> Result<Vec<Versioned<CatalogItem>>, CatalogStoreError> {
-            Ok(self
-                .items
-                .lock()
-                .expect("lock")
-                .iter()
-                .filter(|item| item.record.tenant_id == tenant_id)
-                .cloned()
-                .collect())
+            Ok(self.tenant_items(tenant_id))
+        }
+
+        async fn list_items_page(
+            &self,
+            tenant_id: TenantId,
+            page: PageRequest,
+        ) -> Result<Page<Versioned<CatalogItem>>, CatalogStoreError> {
+            let matching = self.tenant_items(tenant_id);
+            let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+            let items = matching
+                .into_iter()
+                .skip(page.offset() as usize)
+                .take(page.limit() as usize)
+                .collect();
+            Ok(Page::new(items, total))
         }
 
         async fn update_item(
