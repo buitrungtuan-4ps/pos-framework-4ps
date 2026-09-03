@@ -67,6 +67,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **ADR-0098's paged cohort is five lists, not six, and its criterion says what it meant** (#157).
+  Documentation only; no behaviour changes.
+
+  Two corrections found by going to build B3-2 and reading what the routes actually do.
+
+  **`devices` is out.** The record justified paging it with "fleet size", but
+  `GET /admin/stores/{store_id}/devices` lists **one store's** devices — a few terminals, a KDS, a
+  printer or two. The count is bounded by what someone installs in one shop and fleet size never
+  enters it. It is authoring-bounded like `areas` and `tables`, so it joins the thirty-four lists that
+  keep exactly what they have.
+
+  **The criterion is reworded.** Its second half read "the row count is driven by data volume or fleet
+  size rather than by a human authoring each row" — a cleaner-sounding line that is wrong twice. It
+  reads as a binary when what matters is magnitude: a chain's `items` and a company's `employees` are
+  each authored by a human *and* number in the thousands, so the wording excluded two lists it was
+  written to include. It now reads "the row count can plausibly reach a size one response should not
+  carry", which is the question that was always being asked.
+
+  Nothing shipped on the old wording: `vouchers` (#156) is in the cohort under either reading.
+
+
 - **A campaign's voucher codes can be read a page at a time** (#156). ADR-0098 slice B3-1: the paging
   vocabulary, and `vouchers` — the acute case — proven through it end to end.
 
