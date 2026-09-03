@@ -983,7 +983,10 @@ fn app_all(
     config_trees: FakeConfigTrees,
     webhooks: FakeWebhooks,
 ) -> FakeApp {
+    // Every test app carries the `/internal` secret, because `CloudConfig::validate` means a booted
+    // process always does (ADR-0097). The refusal path is exercised deliberately, not by default.
     CloudApp::new(cloud, rollups, keys, clock(), admin, config_trees, webhooks)
+        .with_internal_shared_secret(Some(internal_secret()))
 }
 
 /// A GET request for `uri`, optionally carrying a `Bearer` token.
@@ -1322,6 +1325,7 @@ async fn the_ingest_endpoint_accepts_a_batch_and_health_answers() {
             .method("POST")
             .uri("/internal/ingest")
             .header("content-type", "application/json")
+            .header("X-Pos-Internal-Key", internal_secret().expose())
             .body(Body::from(body))
             .expect("build the request"),
     )
@@ -2741,6 +2745,114 @@ async fn rollups_reset_clears_the_cursor_so_the_projector_replays() {
     );
 }
 
+// --- The `/internal` shared secret (ADR-0097) ---------------------------------------------------
+
+/// A `POST` to an `/internal` route with a wrong key, or none at all.
+fn post_internal_with(uri: &str, body: &serde_json::Value, key: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(key) = key {
+        builder = builder.header("X-Pos-Internal-Key", key);
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .expect("build the request")
+}
+
+#[tokio::test]
+async fn the_internal_routes_refuse_a_request_without_the_shared_secret() {
+    // All three, because the guard is threaded per handler rather than applied as one layer, so
+    // "the other two are covered" is not something the type system says here.
+    let reconcile_body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "event_ids": [event_ulid(1)],
+    });
+    let cases: Vec<(&str, serde_json::Value, axum::Router)> = vec![
+        (
+            "/internal/reconcile",
+            reconcile_body,
+            http::reconcile_router(
+                FakeReconcile::with_present(HashSet::new()),
+                provisioned_admin(),
+                clock(),
+                Some(internal_secret()),
+            ),
+        ),
+        (
+            "/internal/ota/report",
+            report_body(None),
+            ota_report_app(FakeOtaReports::default()),
+        ),
+    ];
+
+    for (uri, body, router) in cases {
+        for key in [None, Some("not-the-secret"), Some("")] {
+            let response = router
+                .clone()
+                .oneshot(post_internal_with(uri, &body, key))
+                .await
+                .expect("route the request");
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{uri} with key {key:?} must be refused"
+            );
+            // A `404`, and the same one every time: `403` would confirm the route is there, which is
+            // what the proxy denies and ADR-0050's activation refusal both decline to confirm.
+            let envelope = json_body(response).await;
+            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "got {envelope}");
+            assert_eq!(envelope["error"]["message"], "no such route");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_admin_reconcile_read_does_not_want_the_internal_key() {
+    // `/admin/reconcile` shares a router with `/internal/reconcile`, which is exactly why the guard
+    // is on the handler and not the router: a console read behind a permission must not start
+    // demanding a secret only the cloud operator holds.
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let router = http::reconcile_router(
+        FakeReconcile::with_present(HashSet::new()),
+        admin,
+        clock(),
+        Some(internal_secret()),
+    );
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/reconcile?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the console read is reached without any `X-Pos-Internal-Key`"
+    );
+}
+
+#[tokio::test]
+async fn an_internal_route_with_no_secret_configured_refuses_rather_than_admits() {
+    // `CloudConfig::validate` means a booted process always has one, so this is the fork-that-wires-
+    // the-router-by-hand case. It must land closed.
+    let router = http::ota_report_router(FakeOtaReports::default(), clock(), None);
+    let response = router
+        .oneshot(post_internal("/internal/ota/report", &report_body(None)))
+        .await
+        .expect("route the report");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "an unconfigured secret closes the route, it does not open it"
+    );
+}
+
 // --- Reconciliation diff (`POST /internal/reconcile`) -------------------------------------------
 
 /// A reconciliation store that "has" a fixed set of ids; the missing ones are the complement. It also
@@ -2818,7 +2930,29 @@ fn reconcile_app(admin: FakeAdmin, store: FakeReconcile) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::reconcile_router(store, admin, clock()))
+    http::router(app).merge(http::reconcile_router(
+        store,
+        admin,
+        clock(),
+        Some(internal_secret()),
+    ))
+}
+
+/// The `/internal` shared secret the test routers are built with
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+fn internal_secret() -> pos_cloud::config::InternalSecret {
+    pos_cloud::config::InternalSecret::new("test-internal-shared-secret-0123456789abcdef")
+}
+
+/// A `POST` to an `/internal` route, carrying the shared secret the test routers expect.
+fn post_internal(uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("X-Pos-Internal-Key", internal_secret().expose())
+        .body(Body::from(body.to_string()))
+        .expect("build the request")
 }
 
 /// An event id ULID string for the small integer `n`.
@@ -2834,14 +2968,19 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
         .map(|n| EventId::new(Ulid::from_u128(n)))
         .collect();
     let store = FakeReconcile::with_present(present);
-    let router = http::reconcile_router(store.clone(), provisioned_admin(), clock());
+    let router = http::reconcile_router(
+        store.clone(),
+        provisioned_admin(),
+        clock(),
+        Some(internal_secret()),
+    );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
         "store_id": store_id().as_ulid().to_string(),
         "event_ids": [event_ulid(1), event_ulid(2), event_ulid(3), event_ulid(4)],
     });
     let response = router
-        .oneshot(post_json("/internal/reconcile", &body))
+        .oneshot(post_internal("/internal/reconcile", &body))
         .await
         .expect("route the reconcile");
     assert_eq!(response.status(), StatusCode::OK);
@@ -2869,14 +3008,19 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
 #[tokio::test]
 async fn reconcile_rejects_a_malformed_id() {
     let store = FakeReconcile::default();
-    let router = http::reconcile_router(store.clone(), provisioned_admin(), clock());
+    let router = http::reconcile_router(
+        store.clone(),
+        provisioned_admin(),
+        clock(),
+        Some(internal_secret()),
+    );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
         "store_id": store_id().as_ulid().to_string(),
         "event_ids": ["not-a-ulid"],
     });
     let response = router
-        .oneshot(post_json("/internal/reconcile", &body))
+        .oneshot(post_internal("/internal/reconcile", &body))
         .await
         .expect("route the reconcile");
     assert_eq!(
@@ -2906,7 +3050,7 @@ async fn reconcile_history_lists_the_runs_a_diff_recorded() {
     });
     let diff = router
         .clone()
-        .oneshot(post_json("/internal/reconcile", &body))
+        .oneshot(post_internal("/internal/reconcile", &body))
         .await
         .expect("route the reconcile");
     assert_eq!(diff.status(), StatusCode::OK);
@@ -8001,7 +8145,11 @@ fn ota_report_app(reports: FakeOtaReports) -> axum::Router {
         FakeRollups::default(),
         FakeKeys::default(),
     );
-    http::router(app).merge(http::ota_report_router(reports, clock()))
+    http::router(app).merge(http::ota_report_router(
+        reports,
+        clock(),
+        Some(internal_secret()),
+    ))
 }
 
 /// The body an edge posts, with `self_test_passed` supplied by the caller so each case can choose
@@ -8025,7 +8173,7 @@ async fn an_ota_report_records_all_three_self_test_states() {
     // absent rather than as a pass or a failure it never earned.
     let reports = FakeOtaReports::default();
     let accepted = ota_report_app(reports.clone())
-        .oneshot(post_json("/internal/ota/report", &report_body(None)))
+        .oneshot(post_internal("/internal/ota/report", &report_body(None)))
         .await
         .expect("route the report");
     assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
@@ -8041,7 +8189,7 @@ async fn an_ota_report_records_all_three_self_test_states() {
     for passed in [true, false] {
         let reports = FakeOtaReports::default();
         let accepted = ota_report_app(reports.clone())
-            .oneshot(post_json(
+            .oneshot(post_internal(
                 "/internal/ota/report",
                 &report_body(Some(passed)),
             ))
@@ -8066,7 +8214,7 @@ async fn a_malformed_ota_report_is_refused_and_records_nothing() {
     bad_id["store_id"] = serde_json::json!("not-a-ulid");
     let refused = router
         .clone()
-        .oneshot(post_json("/internal/ota/report", &bad_id))
+        .oneshot(post_internal("/internal/ota/report", &bad_id))
         .await
         .expect("route the report");
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
@@ -8075,7 +8223,7 @@ async fn a_malformed_ota_report_is_refused_and_records_nothing() {
     let mut blank = report_body(Some(true));
     blank["installed"] = serde_json::json!("   ");
     let refused = router
-        .oneshot(post_json("/internal/ota/report", &blank))
+        .oneshot(post_internal("/internal/ota/report", &blank))
         .await
         .expect("route the report");
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);

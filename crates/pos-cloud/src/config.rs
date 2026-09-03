@@ -209,6 +209,20 @@ pub struct CloudConfig {
     /// same way it mints the admin setup token; it never leaves the server.
     #[serde(default)]
     pub table_token_secret: Option<String>,
+    /// The shared secret the three `/internal/*` routes require in `X-Pos-Internal-Key`
+    /// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+    ///
+    /// **Required**, unlike the two secrets above: [`validate`](CloudConfig::validate) refuses to
+    /// start without it. Absence cannot mean "authentication off" here, because this struct is not
+    /// `#[serde(deny_unknown_fields)]` — so `internal_shared_secet`, one transposed letter, would
+    /// deserialise to `None` and leave a mode-0600 file that reads as armed in front of an open
+    /// surface. A boot refusal is the only way that typo is loud.
+    ///
+    /// `bootstrap.sh` mints it into this file. It is cloud-side only and never reaches a store box:
+    /// one transport serves both `/activate` and `/internal/*`, so an edge that attached it
+    /// unconditionally would send it to an unauthenticated pre-activation endpoint.
+    #[serde(default)]
+    pub internal_shared_secret: Option<InternalSecret>,
     /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
     /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
     /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of
@@ -319,13 +333,120 @@ impl CloudConfig {
                     .to_owned(),
             );
         }
+        match &self.internal_shared_secret {
+            None => {
+                return Err(format!(
+                    "internal_shared_secret is required: the /internal routes refuse every request \
+                     without it, and this file is not checked for unknown keys, so a misspelled key \
+                     name would look set and be absent. Generate one with `openssl rand -hex 32` \
+                     (at least {MIN_INTERNAL_SECRET_LEN} characters) — ADR-0097"
+                ));
+            }
+            Some(secret) if secret.expose().len() < MIN_INTERNAL_SECRET_LEN => {
+                // The length, not the value: a refusal that quoted the secret would put it in a log.
+                return Err(format!(
+                    "internal_shared_secret must be at least {MIN_INTERNAL_SECRET_LEN} characters \
+                     (got {}) — ADR-0097",
+                    secret.expose().len()
+                ));
+            }
+            Some(_) => {}
+        }
         Ok(())
+    }
+}
+
+/// The shortest `internal_shared_secret` that boots: 32 hex characters, what `openssl rand -hex 16`
+/// gives. `bootstrap.sh` mints twice that; this is the floor below which a hand-set value is refused
+/// rather than the length anyone should choose.
+pub const MIN_INTERNAL_SECRET_LEN: usize = 32;
+
+/// The `/internal` shared secret, redacted from [`fmt::Debug`]
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+///
+/// [`CloudConfig`] derives `Debug` and already carries three plaintext secrets; this one does not
+/// join them. Shaped after `webhook::sign::SigningSecret` — private field, hand-written `Debug`, and
+/// an accessor named to be conspicuous at every call site that reads the raw value.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct InternalSecret(String);
+
+impl InternalSecret {
+    /// Wraps a secret string.
+    #[must_use]
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(secret.into())
+    }
+
+    /// The raw secret, for the one comparison that needs it. Named to be conspicuous in a diff.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for InternalSecret {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("InternalSecret(redacted)")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CloudConfig;
+    use super::{CloudConfig, InternalSecret, MIN_INTERNAL_SECRET_LEN};
+
+    /// The shortest config that parses — the same two keys `parses_a_minimal_config` uses.
+    const MINIMAL_TOML: &str =
+        "bind = \"127.0.0.1:8443\"\ndatabase_url = \"host=localhost user=pos dbname=poscloud\"\n";
+
+    /// A config that validates, so a test about one field is not also a test about the others.
+    fn valid() -> CloudConfig {
+        let mut config = CloudConfig::from_toml(MINIMAL_TOML).expect("the minimal config parses");
+        config.internal_shared_secret =
+            Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
+        config
+    }
+
+    #[test]
+    fn a_missing_internal_secret_refuses_the_boot_and_names_the_field() {
+        // Fail closed, and loudly. `CloudConfig` is not `deny_unknown_fields`, so a misspelled key
+        // deserialises to `None` — if absence meant "authentication off", that typo would be a
+        // silently open surface behind a file that reads as armed (ADR-0097).
+        let mut config = valid();
+        config.internal_shared_secret = None;
+        let refusal = config
+            .validate()
+            .expect_err("an absent secret refuses the boot");
+        assert!(
+            refusal.contains("internal_shared_secret"),
+            "the refusal must name the field to set: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_too_short_internal_secret_is_refused_without_quoting_it() {
+        let mut config = valid();
+        config.internal_shared_secret = Some(InternalSecret::new("short"));
+        let refusal = config
+            .validate()
+            .expect_err("a short secret refuses the boot");
+        assert!(refusal.contains("at least"), "got {refusal}");
+        assert!(
+            !refusal.contains("short"),
+            "the refusal reports the length, never the value: {refusal}"
+        );
+    }
+
+    #[test]
+    fn the_internal_secret_is_redacted_from_debug() {
+        let secret = InternalSecret::new("the-actual-secret-value");
+        let rendered = format!("{secret:?}");
+        assert!(
+            !rendered.contains("the-actual-secret-value"),
+            "got {rendered}"
+        );
+        assert_eq!(secret.expose(), "the-actual-secret-value");
+    }
 
     #[test]
     fn parses_a_minimal_config() {
@@ -392,6 +513,11 @@ mod tests {
             config.trusted_proxy_hops, 1,
             "one trusted proxy — the bundled Caddy — when the posture does not say otherwise"
         );
+        // The `/internal` secret is required (ADR-0097) and is not what this test is about, so it
+        // is supplied rather than asserted on.
+        let mut config = config;
+        config.internal_shared_secret =
+            Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
         config
             .validate()
             .expect("the defaults are a valid configuration");
@@ -408,6 +534,9 @@ mod tests {
         )
         .expect("valid config");
         assert_eq!(config.trusted_proxy_hops, 2);
+        let mut config = config;
+        config.internal_shared_secret =
+            Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
         config.validate().expect("two hops is valid");
     }
 

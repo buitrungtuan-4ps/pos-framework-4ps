@@ -339,7 +339,8 @@ metadata:
     # ADAPT: issue over DNS-01 (Cloudflare), grey-clouded record, never Flexible SSL (ADR-0023).
     cert-manager.io/cluster-issuer: letsencrypt-dns01 # ADAPT to your cert-manager issuer
     # `/internal/*` is the cloud's own trusted-network surface and is NOT part of the public one.
-    # Those handlers authenticate nothing — deliberately, because they are documented as
+    # Those handlers require the X-Pos-Internal-Key shared secret (ADR-0097) as well as this deny —
+    # neither replaces the other. They are documented as
     # private-network-only (`/internal/ingest` is the reconciliation re-push, `/internal/reconcile`
     # the id-diff endpoint, `/internal/ota/report` the fleet report). The Compose lane closes them in
     # deploy/Caddyfile.d/site.caddy; this lane published them, unauthenticated, to the internet —

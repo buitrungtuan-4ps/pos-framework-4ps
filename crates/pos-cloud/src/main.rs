@@ -93,7 +93,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.admin_login_window_secs,
     )
     .with_trusted_proxy_hops(config.trusted_proxy_hops)
-    .with_admin_setup_token(config.admin_setup_token.clone());
+    .with_admin_setup_token(config.admin_setup_token.clone())
+    .with_internal_shared_secret(config.internal_shared_secret.clone());
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
@@ -282,8 +283,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.reconcile(),
             store.admin(),
             SystemClock,
+            config.internal_shared_secret.clone(),
         ))
-        .merge(http::ota_report_router(store.config_trees(), SystemClock))
+        .merge(http::ota_report_router(
+            store.config_trees(),
+            SystemClock,
+            config.internal_shared_secret.clone(),
+        ))
         .merge(http::device_router(
             store.device_proposals(),
             store.admin(),

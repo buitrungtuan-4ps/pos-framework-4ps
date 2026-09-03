@@ -42,11 +42,14 @@ enrolment then works exactly as in the runbook ([ADR-0045](../docs/adr/0045-firs
 
 ## The `/internal` deny is mandatory, and you must verify it
 
-`pos_cloud` serves three routes under `/internal/*` that authenticate **nothing**, by design: they
-are documented as private-network-only (`/internal/ingest` is the reconciliation re-push,
-`/internal/reconcile` the id-diff endpoint, `/internal/ota/report` the fleet report). Reaching them
-from the internet means unauthenticated event injection, an id-holding oracle, and falsifiable fleet
-state for any tenant.
+`pos_cloud` serves three routes under `/internal/*` that are documented as private-network-only
+(`/internal/ingest` is the reconciliation re-push, `/internal/reconcile` the id-diff endpoint,
+`/internal/ota/report` the fleet report). Since ADR-0097 they also require the
+`X-Pos-Internal-Key` shared secret from `cloud.toml` — **which does not make this deny optional.**
+The two controls answer different questions: the key decides who inside the network may call them,
+this deny decides whether the internet can reach them at all. Reaching them from outside means event
+injection, an id-holding oracle, and falsifiable fleet state for any tenant, behind nothing but one
+shared key.
 
 The Compose lane closes them in [`deploy/Caddyfile.d/site.caddy`](../deploy/Caddyfile.d/site.caddy),
 and `cargo run -q -p xtask -- tls-modes` fails if that deny is ever removed. **This lane did not have
