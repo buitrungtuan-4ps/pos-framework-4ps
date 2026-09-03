@@ -1908,6 +1908,22 @@ impl InventoryStore for PostgresInventory {
         rows.iter().map(versioned_inventory).collect()
     }
 
+    async fn get_ingredient(
+        &self,
+        tenant_id: TenantId,
+        ingredient_id: IngredientId,
+    ) -> Result<Option<Versioned<PublishedIngredient>>, InventoryStoreError> {
+        let row = self
+            .fetch_one(
+                &tenant_id.to_string(),
+                INVENTORY_KIND_INGREDIENT,
+                &ingredient_id.to_string(),
+            )
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        row.as_ref().map(versioned_inventory).transpose()
+    }
+
     async fn create_ingredient(
         &self,
         tenant_id: TenantId,
@@ -1973,6 +1989,22 @@ impl InventoryStore for PostgresInventory {
         rows.iter().map(versioned_inventory).collect()
     }
 
+    async fn get_recipe(
+        &self,
+        tenant_id: TenantId,
+        item: MenuItemId,
+    ) -> Result<Option<Versioned<PublishedRecipe>>, InventoryStoreError> {
+        let row = self
+            .fetch_one(
+                &tenant_id.to_string(),
+                INVENTORY_KIND_RECIPE,
+                &item.to_string(),
+            )
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        row.as_ref().map(versioned_inventory).transpose()
+    }
+
     async fn create_recipe(
         &self,
         tenant_id: TenantId,
@@ -2036,6 +2068,22 @@ impl InventoryStore for PostgresInventory {
             .await
             .map_err(|error| InventoryStoreError::new(error.to_string()))?;
         rows.iter().map(versioned_inventory).collect()
+    }
+
+    async fn get_supplier(
+        &self,
+        tenant_id: TenantId,
+        supplier_id: SupplierId,
+    ) -> Result<Option<Versioned<PublishedSupplier>>, InventoryStoreError> {
+        let row = self
+            .fetch_one(
+                &tenant_id.to_string(),
+                INVENTORY_KIND_SUPPLIER,
+                &supplier_id.to_string(),
+            )
+            .await
+            .map_err(|error| InventoryStoreError::new(error.to_string()))?;
+        row.as_ref().map(versioned_inventory).transpose()
     }
 
     async fn create_supplier(

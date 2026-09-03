@@ -31,6 +31,9 @@ pub struct InventoryRow {
     pub version: String,
 }
 
+/// The columns every read returns, in a stable order matching [`inventory_row`].
+const INVENTORY_COLUMNS: &str = "entity_id, doc::text, xmin::text";
+
 /// The inventory store over a shared pool. Built by
 /// [`PostgresStore::inventory`](crate::PostgresStore::inventory).
 #[derive(Clone, Debug)]
@@ -52,20 +55,45 @@ impl PostgresInventory {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT entity_id, doc::text, xmin::text FROM inventory_items \
-                 WHERE tenant_id = $1 AND kind = $2 ORDER BY entity_id",
+                &format!(
+                    "SELECT {INVENTORY_COLUMNS} FROM inventory_items \
+                     WHERE tenant_id = $1 AND kind = $2 ORDER BY entity_id"
+                ),
                 &[&tenant_id, &kind],
             )
             .await
             .map_err(unavailable)?;
-        Ok(rows
-            .iter()
-            .map(|row| InventoryRow {
-                entity_id: row.get(0),
-                doc_json: row.get(1),
-                version: row.get(2),
-            })
-            .collect())
+        Ok(rows.iter().map(inventory_row).collect())
+    }
+
+    /// One record by `(kind, entity_id)`, or `None` if the tenant has none.
+    ///
+    /// `(tenant_id, kind, entity_id)` is the table's primary key (migration 0037), so this is an
+    /// index lookup of one row — which is the point. The nine `/admin/inventory` handlers that need
+    /// one record used to read the tenant's whole list of that kind and scan it in the cloud, which
+    /// grew with the tenant's catalogue on every read, edit and delete of a single ingredient.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_one(
+        &self,
+        tenant_id: &str,
+        kind: &str,
+        entity_id: &str,
+    ) -> Result<Option<InventoryRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                &format!(
+                    "SELECT {INVENTORY_COLUMNS} FROM inventory_items \
+                     WHERE tenant_id = $1 AND kind = $2 AND entity_id = $3"
+                ),
+                &[&tenant_id, &kind, &entity_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(inventory_row))
     }
 
     /// Inserts a record, refusing if one already holds its `(kind, entity_id)`.
@@ -162,5 +190,17 @@ impl PostgresInventory {
             .await
             .map_err(unavailable)?;
         Ok(())
+    }
+}
+
+/// Reads one queried row into an [`InventoryRow`]. The column order matches [`INVENTORY_COLUMNS`].
+///
+/// Shared by the list and the single-row read so the two cannot disagree about which column is
+/// which — the shape of bug a hand-written `row.get(1)` in each would eventually produce.
+fn inventory_row(row: &tokio_postgres::Row) -> InventoryRow {
+    InventoryRow {
+        entity_id: row.get(0),
+        doc_json: row.get(1),
+        version: row.get(2),
     }
 }
