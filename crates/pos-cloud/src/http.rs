@@ -7646,14 +7646,13 @@ where
         }
         Err(refusal) => return refusal,
     };
-    match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => match ingredients
-            .into_iter()
-            .find(|row| row.record.id == ingredient_id)
-        {
-            Some(row) => versioned_ok(row.record, &row.etag),
-            None => not_found("ingredient"),
-        },
+    match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
+        Ok(Some(row)) => versioned_ok(row.record, &row.etag),
+        Ok(None) => not_found("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -7752,11 +7751,12 @@ where
         }
         Err(refusal) => return refusal,
     };
-    let before = match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => ingredients
-            .into_iter()
-            .find(|row| row.record.id == ingredient_id)
-            .map(|row| row.record),
+    let before = match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -7828,11 +7828,12 @@ where
         }
         Err(refusal) => return refusal,
     };
-    let before = match state.inventory.list_ingredients(tenant_id).await {
-        Ok(ingredients) => ingredients
-            .into_iter()
-            .find(|row| row.record.id == ingredient_id)
-            .map(|row| row.record),
+    let before = match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -7920,11 +7921,9 @@ where
             Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
             Err(refusal) => return refusal,
         };
-    match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => match recipes.into_iter().find(|row| row.record.item == item) {
-            Some(row) => versioned_ok(row.record, &row.etag),
-            None => not_found("recipe"),
-        },
+    match state.inventory.get_recipe(tenant_id, item).await {
+        Ok(Some(row)) => versioned_ok(row.record, &row.etag),
+        Ok(None) => not_found("recipe"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -8020,11 +8019,8 @@ where
         };
     // Read for the audit's "before" only. It no longer decides the status code or the action name:
     // the version comparison in the write does that, so a race here can no longer mislabel either.
-    let before = match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => recipes
-            .into_iter()
-            .find(|row| row.record.item == item)
-            .map(|row| row.record),
+    let before = match state.inventory.get_recipe(tenant_id, item).await {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let recipe = match build_recipe(&request, item) {
@@ -8091,11 +8087,8 @@ where
             Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
             Err(refusal) => return refusal,
         };
-    let before = match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => recipes
-            .into_iter()
-            .find(|row| row.record.item == item)
-            .map(|row| row.record),
+    let before = match state.inventory.get_recipe(tenant_id, item).await {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -8181,14 +8174,9 @@ where
         Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
         Err(refusal) => return refusal,
     };
-    match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => match suppliers
-            .into_iter()
-            .find(|row| row.record.id == supplier_id)
-        {
-            Some(row) => versioned_ok(row.record, &row.etag),
-            None => not_found("supplier"),
-        },
+    match state.inventory.get_supplier(tenant_id, supplier_id).await {
+        Ok(Some(row)) => versioned_ok(row.record, &row.etag),
+        Ok(None) => not_found("supplier"),
         Err(error) => inventory_error_response(&error),
     }
 }
@@ -8281,11 +8269,8 @@ where
         Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
         Err(refusal) => return refusal,
     };
-    let before = match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => suppliers
-            .into_iter()
-            .find(|row| row.record.id == supplier_id)
-            .map(|row| row.record),
+    let before = match state.inventory.get_supplier(tenant_id, supplier_id).await {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
@@ -8355,11 +8340,8 @@ where
         Ok([tenant_id, supplier_id]) => (TenantId::new(tenant_id), SupplierId::new(supplier_id)),
         Err(refusal) => return refusal,
     };
-    let before = match state.inventory.list_suppliers(tenant_id).await {
-        Ok(suppliers) => suppliers
-            .into_iter()
-            .find(|row| row.record.id == supplier_id)
-            .map(|row| row.record),
+    let before = match state.inventory.get_supplier(tenant_id, supplier_id).await {
+        Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {

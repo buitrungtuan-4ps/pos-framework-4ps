@@ -16,6 +16,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The nine `/admin/inventory` handlers that act on one record now read one record.** Reading,
+  editing or deleting a single ingredient, recipe or supplier used to list the tenant's whole
+  collection of that kind and scan it in the cloud — so the work grew with the tenant's catalogue on
+  every one of those calls, and a chain with three thousand ingredients carried all three thousand
+  out of the database to answer "show me this one".
+
+  `InventoryStore` gains `get_ingredient`, `get_recipe` and `get_supplier` beside its `list_*`
+  methods, following the shape `CampaignStore::get_campaign` already set. The `store-postgres` impl
+  answers them from `inventory_items`' primary key, `(tenant_id, kind, entity_id)`, so **no
+  migration** — the index the read needs has been there since migration 0037.
+
+  No behaviour changes: the same record, the same `ETag`, the same `404` when it is absent. That is
+  precisely why the route tests could not tell the two apart, and why the fake now records which
+  reads a handler made — the test asserts that a single-record route never calls `list_*`, which is
+  the only way a regression to scanning is visible at all.
+
 ### Added
 - **The audit trail can be read from either end** (ADR-0098 slice B3-3). The paged form of
   `GET /admin/audit` takes `?order=newest|oldest`; absent, it is `newest`, which is what the read has

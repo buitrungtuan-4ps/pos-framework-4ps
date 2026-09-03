@@ -42,6 +42,20 @@ pub trait InventoryStore {
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<PublishedIngredient>>, InventoryStoreError>> + Send;
 
+    /// One ingredient by id and the version it was read at, or `None` if the tenant has none with
+    /// that id.
+    ///
+    /// Beside [`list_ingredients`](Self::list_ingredients) because the routes that want one record
+    /// were reading the whole list and scanning it: a read, an edit and a delete of a single
+    /// ingredient each carried the tenant's entire ingredient list over the wire from the database
+    /// and grew with the catalogue. The `store-postgres` impl answers this from the table's primary
+    /// key.
+    fn get_ingredient(
+        &self,
+        tenant_id: TenantId,
+        ingredient_id: IngredientId,
+    ) -> impl Future<Output = Result<Option<Versioned<PublishedIngredient>>, InventoryStoreError>> + Send;
+
     /// Inserts an ingredient, refusing if one already holds its id.
     fn create_ingredient(
         &self,
@@ -70,6 +84,14 @@ pub trait InventoryStore {
         &self,
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<PublishedRecipe>>, InventoryStoreError>> + Send;
+
+    /// One recipe by the item it makes and the version it was read at, or `None` if the tenant has
+    /// none for that item. Keyed by the item rather than a recipe id, like the rest of this seam.
+    fn get_recipe(
+        &self,
+        tenant_id: TenantId,
+        item: MenuItemId,
+    ) -> impl Future<Output = Result<Option<Versioned<PublishedRecipe>>, InventoryStoreError>> + Send;
 
     /// Inserts a recipe, refusing if the item or modifier it makes already has one.
     ///
@@ -102,6 +124,14 @@ pub trait InventoryStore {
         &self,
         tenant_id: TenantId,
     ) -> impl Future<Output = Result<Vec<Versioned<PublishedSupplier>>, InventoryStoreError>> + Send;
+
+    /// One supplier by id and the version it was read at, or `None` if the tenant has none with
+    /// that id.
+    fn get_supplier(
+        &self,
+        tenant_id: TenantId,
+        supplier_id: SupplierId,
+    ) -> impl Future<Output = Result<Option<Versioned<PublishedSupplier>>, InventoryStoreError>> + Send;
 
     /// Inserts a supplier, refusing if one already holds its id.
     fn create_supplier(
@@ -204,6 +234,20 @@ mod tests {
                 .collect())
         }
 
+        async fn get_ingredient(
+            &self,
+            tenant_id: TenantId,
+            ingredient_id: IngredientId,
+        ) -> Result<Option<Versioned<PublishedIngredient>>, InventoryStoreError> {
+            Ok(self
+                .ingredients
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|(owner, row, _at)| *owner == tenant_id && row.id == ingredient_id)
+                .map(|(_owner, item, at)| Versioned::new(item.clone(), at.clone())))
+        }
+
         async fn create_ingredient(
             &self,
             tenant_id: TenantId,
@@ -269,6 +313,20 @@ mod tests {
                 .collect())
         }
 
+        async fn get_recipe(
+            &self,
+            tenant_id: TenantId,
+            item: MenuItemId,
+        ) -> Result<Option<Versioned<PublishedRecipe>>, InventoryStoreError> {
+            Ok(self
+                .recipes
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|(owner, row, _at)| *owner == tenant_id && row.item == item)
+                .map(|(_owner, recipe, at)| Versioned::new(recipe.clone(), at.clone())))
+        }
+
         async fn create_recipe(
             &self,
             tenant_id: TenantId,
@@ -332,6 +390,20 @@ mod tests {
                 .filter(|(owner, _row, _at)| *owner == tenant_id)
                 .map(|(_owner, item, at)| Versioned::new(item.clone(), at.clone()))
                 .collect())
+        }
+
+        async fn get_supplier(
+            &self,
+            tenant_id: TenantId,
+            supplier_id: SupplierId,
+        ) -> Result<Option<Versioned<PublishedSupplier>>, InventoryStoreError> {
+            Ok(self
+                .suppliers
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|(owner, row, _at)| *owner == tenant_id && row.id == supplier_id)
+                .map(|(_owner, supplier, at)| Versioned::new(supplier.clone(), at.clone())))
         }
 
         async fn create_supplier(
