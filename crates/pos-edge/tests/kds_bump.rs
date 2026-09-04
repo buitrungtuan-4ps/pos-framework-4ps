@@ -38,6 +38,7 @@ fn a_pizza(item: u128) -> LineDraft {
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         seat: None,
         course_id: None,
+        modifier_menu_item_ids: Vec::new(),
         note_present: false,
     }
 }

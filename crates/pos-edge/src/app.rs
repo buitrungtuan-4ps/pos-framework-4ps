@@ -29,7 +29,7 @@ use pos_core::decision::{
     decide_line, decide_shift, decide_table,
 };
 use pos_core::error::DomainError;
-use pos_core::inventory::{RecipeBook, StockProjection};
+use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
 use pos_core::menu::PricedLine;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
@@ -47,6 +47,9 @@ use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
     ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+// Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
+#[cfg(test)]
+use pos_proto::ids::IngredientId;
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::MenuCatalog;
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
@@ -517,6 +520,9 @@ pub struct LineDraft {
     pub seat: Option<u16>,
     /// Course, when courses are enabled.
     pub course_id: Option<CourseId>,
+    /// The modifiers chosen for this line. Their prices are already inside `unit_price`; these ids
+    /// are what the kitchen prints and what a fire consumes (§8).
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
     /// Whether a guest note was written — its text never enters the log.
     pub note_present: bool,
 }
@@ -623,7 +629,10 @@ pub struct ShiftView {
 
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
 /// computed, and a bill assembled, without re-reading the event log.
-#[derive(Debug, Clone, Copy)]
+/// `Clone`, not `Copy`: the modifier list is a `Vec`. Cloning a record is a handful of words plus a
+/// list that is empty on almost every line, and the alternative — keeping the ids somewhere other
+/// than beside the line they belong to — is how they got lost in the first place.
+#[derive(Debug, Clone)]
 struct LineRecord {
     order_id: OrderId,
     state: OrderLineState,
@@ -635,6 +644,8 @@ struct LineRecord {
     line_total: Money,
     /// The tax class captured at add time, which keys the line into a rate on the bill.
     tax_class_id: TaxClassId,
+    /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
+    modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// What the projection remembers about one bill: the order it bills, the table that order sits on
@@ -684,6 +695,18 @@ struct Projection {
     tables: HashMap<TableId, TableState>,
     table_orders: HashMap<TableId, OrderId>,
     lines: HashMap<OrderLineId, LineRecord>,
+    /// What firing has consumed, folded from each fire's `stock_movements` (§8).
+    ///
+    /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
+    /// the one place §8's arithmetic ran had no reader at all. They land here now.
+    ///
+    /// It is a running consumption total, not yet an inventory: nothing seeds it with what the
+    /// store actually received, so on-hand reads negative until the flagged goods-in/stocktake
+    /// slice lands. That is deliberate and safe — [`EdgeSession::item_sellable`] is the auto-86
+    /// decision and it has no production caller, so nothing 86s a trading store's menu from these
+    /// figures. What the fold buys today is that the consumption is real and testable rather than
+    /// discarded, and that goods-in has something to seed.
+    stock: StockProjection,
     bills: HashMap<BillId, BillRecord>,
     /// The bill open on each order, so a second bill on one order is refused (ADR-0093). See
     /// [`Projection::bill_for_order`] for why this has to be explicit.
@@ -732,7 +755,31 @@ impl Projection {
     }
 
     fn line(&self, line_id: OrderLineId) -> Option<LineRecord> {
-        self.lines.get(&line_id).copied()
+        self.lines.get(&line_id).cloned()
+    }
+
+    /// Folds one fire's consumption into the stock projection.
+    ///
+    /// A movement whose running total would leave `i64` is dropped with a warning rather than
+    /// failing the fire: the sale is already committed and durable at this point, and refusing to
+    /// update a cache is not a reason to tell the kitchen a line did not fire.
+    fn consume(&mut self, movements: &[StockMovement]) {
+        for movement in movements {
+            if let Err(error) = self.stock.apply(movement) {
+                tracing::warn!(%error, "a stock movement overflowed the projection; not folded");
+            }
+        }
+    }
+
+    /// The on-hand figure for an ingredient — negative until goods-in seeds the projection.
+    ///
+    /// `#[cfg(test)]` because the *fold* has a production caller (every fire) and the *read* does
+    /// not yet: `EdgeSession::item_sellable` is the auto-86 decision and nothing calls it outside
+    /// tests. Shipping a reader with no reader would be dead code; the goods-in slice that needs it
+    /// removes this attribute rather than adding the method.
+    #[cfg(test)]
+    fn on_hand(&self, ingredient: IngredientId) -> Quantity {
+        self.stock.on_hand(ingredient)
     }
 
     fn set_line_state(&mut self, line_id: OrderLineId, state: OrderLineState) {
@@ -761,7 +808,7 @@ impl Projection {
             .lines
             .iter()
             .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, record)| (*id, *record))
+            .map(|(id, record)| (*id, record.clone()))
             .collect();
         lines.sort_by_key(|(id, _)| *id);
         lines.into_iter().map(|(_, record)| record).collect()
@@ -1107,6 +1154,7 @@ impl<S: EventStore> Edge<S> {
                 tax_rate: priced.tax_rate,
                 seat: None,
                 course_id: None,
+                modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
                 note_present: *note_present,
             };
             let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
@@ -1122,6 +1170,7 @@ impl<S: EventStore> Edge<S> {
                     course_id: None,
                     line_total: priced.line_total,
                     tax_class_id: priced.tax_class_id,
+                    modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
                 },
             ));
         }
@@ -1292,6 +1341,7 @@ impl<S: EventStore> Edge<S> {
             tax_rate: draft.tax_rate,
             seat: draft.seat,
             course_id: draft.course_id,
+            modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             note_present: draft.note_present,
         };
         self.commit_and_publish(&ctx, &payload).await?;
@@ -1306,6 +1356,7 @@ impl<S: EventStore> Edge<S> {
                 course_id: draft.course_id,
                 line_total: draft.line_total,
                 tax_class_id: draft.tax_class_id,
+                modifier_menu_item_ids: draft.modifier_menu_item_ids,
             },
         );
         Ok(LineView {
@@ -1352,9 +1403,14 @@ impl<S: EventStore> Edge<S> {
             .or(station_id)
             .ok_or(AppError::UnroutableLine)?;
 
+        // The modifiers the line was added with, not an empty list. This argument was
+        // `Vec::new()` until roadmap B1.1: `consumption_for_fire` deducts the base recipe plus one
+        // recipe per modifier, so an empty list meant every modifier's ingredients were sold and
+        // never taken off the shelf — the stock ledger drifted by exactly the modifiers, silently,
+        // on every fired line.
         let command = LineCommand::Fire {
             base_item: record.menu_item_id,
-            modifiers: Vec::new(),
+            modifiers: record.modifier_menu_item_ids.clone(),
             quantity: record.quantity,
             course: record.course_id,
         };
@@ -1368,8 +1424,13 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
-        self.lock_projection()
-            .set_line_state(order_line_id, decision.next_state);
+        {
+            let mut projection = self.lock_projection();
+            projection.set_line_state(order_line_id, decision.next_state);
+            // §8: stock leaves at fire, not at payment. Folded here rather than discarded — see
+            // `Projection::stock` for what this figure is and is not yet.
+            projection.consume(&decision.stock_movements);
+        }
         Ok(LineView {
             order_id: record.order_id,
             order_line_id,
@@ -2008,6 +2069,7 @@ impl<S: EventStore> Edge<S> {
                         course_id: event.course_id,
                         line_total: event.line_total,
                         tax_class_id: event.tax_class_id,
+                        modifier_menu_item_ids: event.modifier_menu_item_ids,
                     },
                 );
             }
@@ -2297,9 +2359,12 @@ mod tests {
     use crate::receipt::InMemoryReceipts;
     use pos_core::billing::Payment;
     use pos_core::decision::Actor;
+    use pos_core::inventory::{Recipe, RecipeBook, RecipeLine};
     use pos_fakes::FakeStore;
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
-    use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, OrderId, StationId, StoreId, TableId};
+    use pos_proto::ids::{
+        DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
+    };
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
@@ -2368,6 +2433,7 @@ mod tests {
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
             seat: None,
             course_id: None,
+            modifier_menu_item_ids: Vec::new(),
             note_present: false,
         }
     }
@@ -2462,6 +2528,113 @@ mod tests {
         });
     }
 
+    /// The regression B1.1 exists for: a fired line consumes the base recipe **and** every
+    /// modifier's.
+    ///
+    /// Before the fix `fire_line` passed `modifiers: Vec::new()` to `decide_line`, so a large pizza
+    /// deducted the base dough and never the "large" modifier's extra. Nothing failed, nothing
+    /// logged, and the shelf quietly disagreed with the books by exactly the modifiers — on every
+    /// fired line, forever. Reverting either half of the fix (the `Vec::new()`, or the modifier
+    /// field on the record) turns the 150 g below back into 100 g.
+    #[test]
+    fn a_fired_line_consumes_its_modifier_recipe_as_well_as_the_base() {
+        pos_fakes::executor::run_ready(async {
+            let base = MenuItemId::new(Ulid::from_u128(500));
+            let large = MenuItemId::new(Ulid::from_u128(501));
+            let dough = IngredientId::new(Ulid::from_u128(900));
+
+            // The base takes 100 g of dough; the "large" modifier adds 50 g of the same.
+            let mut recipes = RecipeBook::new();
+            recipes.insert(
+                base,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(100_000),
+                }]),
+            );
+            recipes.insert(
+                large,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(50_000),
+                }]),
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.recipes = recipes;
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+
+            let table = TableId::new(Ulid::from_u128(220));
+            edge.seat_table(actor(), table).await.expect("seats");
+            let mut draft = a_line();
+            draft.modifier_menu_item_ids = vec![large];
+            let line = edge.add_line(actor(), table, draft).await.expect("adds");
+            edge.fire_line(
+                actor(),
+                line.order_line_id,
+                Some(StationId::new(Ulid::from_u128(9))),
+            )
+            .await
+            .expect("fires");
+
+            // Negative because nothing has seeded what the store received yet: this is a
+            // consumption total, and goods-in is the flagged follow-up that turns it into stock.
+            assert_eq!(
+                edge.lock_projection().on_hand(dough),
+                Quantity::from_milli(-150_000),
+                "base 100 g + modifier 50 g must both leave the shelf at fire (§8)"
+            );
+        });
+    }
+
+    /// And the other direction, so the test above cannot pass by summing something unrelated: a
+    /// line with no modifiers consumes only its base.
+    #[test]
+    fn a_fired_line_with_no_modifiers_consumes_only_its_base() {
+        pos_fakes::executor::run_ready(async {
+            let base = MenuItemId::new(Ulid::from_u128(500));
+            let dough = IngredientId::new(Ulid::from_u128(900));
+            let mut recipes = RecipeBook::new();
+            recipes.insert(
+                base,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(100_000),
+                }]),
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.recipes = recipes;
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+
+            let table = TableId::new(Ulid::from_u128(221));
+            edge.seat_table(actor(), table).await.expect("seats");
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.fire_line(
+                actor(),
+                line.order_line_id,
+                Some(StationId::new(Ulid::from_u128(9))),
+            )
+            .await
+            .expect("fires");
+
+            assert_eq!(
+                edge.lock_projection().on_hand(dough),
+                Quantity::from_milli(-100_000),
+            );
+        });
+    }
+
     #[test]
     fn firing_an_already_fired_line_is_refused() {
         pos_fakes::executor::run_ready(async {
@@ -2551,6 +2724,7 @@ mod tests {
             line_total: vnd(150_000),
             tax_class_id: EdgeSession::standard_tax_class(),
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+            modifier_menu_item_ids: Vec::new(),
             repriced: false,
         }
     }

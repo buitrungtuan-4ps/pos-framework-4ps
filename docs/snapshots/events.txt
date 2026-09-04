@@ -163,6 +163,7 @@ sales.order_line.added	field=course_id
 sales.order_line.added	field=display_name
 sales.order_line.added	field=line_total
 sales.order_line.added	field=menu_item_id
+sales.order_line.added	field=modifier_menu_item_ids
 sales.order_line.added	field=note_present
 sales.order_line.added	field=order_id
 sales.order_line.added	field=order_line_id

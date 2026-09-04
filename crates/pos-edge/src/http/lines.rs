@@ -40,6 +40,12 @@ pub(crate) struct LineRequest {
     seat: Option<u16>,
     #[serde(default)]
     course_id: Option<CourseId>,
+    /// The modifiers chosen for this line. Optional, so a device that sends none — or an older one
+    /// that does not know the field — adds a bare line exactly as before. What it changes is the
+    /// kitchen: a fired line consumes the base recipe **plus** one recipe per modifier (§8), so a
+    /// line that omits them is a line whose extras are never taken off the shelf.
+    #[serde(default)]
+    modifier_menu_item_ids: Vec<MenuItemId>,
     #[serde(default)]
     note_present: bool,
 }
@@ -56,6 +62,7 @@ impl From<LineRequest> for LineDraft {
             tax_rate: request.tax_rate,
             seat: request.seat,
             course_id: request.course_id,
+            modifier_menu_item_ids: request.modifier_menu_item_ids,
             note_present: request.note_present,
         }
     }

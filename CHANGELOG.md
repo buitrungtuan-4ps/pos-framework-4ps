@@ -16,6 +16,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fired line consumed only its base recipe, never its modifiers** (roadmap v3 **B1.1**,
+  `docs/pos-spec.md` §8). `fire_line` passed `modifiers: Vec::new()` to `decide_line`, so a large
+  pizza deducted the base dough and never the "large" modifier's extra 50 g. Nothing failed and
+  nothing logged: the shelf simply disagreed with the books by exactly the modifiers, on every
+  fired line.
+
+  The ids had nowhere to travel, which is why the argument was empty. Three places carry them now:
+  `sales.order_line.added` gains `modifier_menu_item_ids` (additive, `#[serde(default)]` so a store
+  upgrading can still replay its own log), `pos_core::menu::PricedLine` carries them through
+  repricing instead of dropping them once their prices were summed, and the edge's line record keeps
+  them from add to fire. `POST /api/tables/{id}/lines` accepts them; a device that sends none behaves
+  exactly as before.
+
+  Also fixed in the same seam: the consumption `decide_line` computed was **discarded**. The one
+  place §8's arithmetic ran had no reader at all. It now folds into a `StockProjection` on the edge.
+  That figure is a running consumption total, not an inventory — nothing seeds it with what the store
+  received, so it reads negative until the flagged goods-in/stocktake slice lands, and nothing 86s a
+  menu from it (`EdgeSession::item_sellable` still has no production caller). What the fold buys
+  today is that the arithmetic is real and testable rather than thrown away.
+
+  **Upgrade note:** none required. The event field defaults, the route field is optional, and no
+  migration or `PROTOCOL_VERSION` change is involved. A store that upgrades keeps its history; lines
+  added before the upgrade replay with no modifiers, which is what they were recorded as.
+
 ### Added
 
 - **Over-the-air updates run on the shipped edge** (roadmap v3 **R4** + **R5-d**,

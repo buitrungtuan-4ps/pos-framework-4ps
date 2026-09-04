@@ -46,6 +46,7 @@ fn a_line() -> pos_edge::LineDraft {
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         seat: None,
         course_id: None,
+        modifier_menu_item_ids: Vec::new(),
         note_present: false,
     }
 }
@@ -60,6 +61,7 @@ fn a_priced_line() -> pos_core::menu::PricedLine {
         line_total: vnd(150_000),
         tax_class_id: EdgeSession::standard_tax_class(),
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+        modifier_menu_item_ids: Vec::new(),
         repriced: false,
     }
 }
