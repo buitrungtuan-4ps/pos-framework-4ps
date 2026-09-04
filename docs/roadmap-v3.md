@@ -79,9 +79,14 @@ gh pr list --state merged --limit 500 --json number \
   --jq '[.[] | select(.number >= 71)] | length'
 ```
 
-Everything from **#71** (B9.1, which landed this roadmap) onward belongs to the v3 era; **#75–#89 do
-not exist**. What is *in* those 85 is not derivable from the number, which is the other half of why it
-was never useful on its own — read `CHANGELOG.md` for that.
+Everything from **#71** (B9.1, which landed this roadmap) onward belongs to the v3 era. **#75–#89 are
+not merged work** — they exist, as fifteen Dependabot pull requests that are still open, which is why
+the recompute above counts only merged pull requests. (An earlier revision of this paragraph said they
+"do not exist"; the 2026-09-04 inventory that checked every number found them, along with the fact
+that #2–#26 are issues — GitHub numbers issues and pull requests from one sequence — and that **no
+pull request in this repository has ever been closed unmerged**.) What is *in* the merged set is not
+derivable from the number, which is the other half of why it was never useful on its own — read
+`CHANGELOG.md` for that.
 
 ## Program A — Ship the Edge
 
