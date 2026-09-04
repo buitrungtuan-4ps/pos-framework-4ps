@@ -2629,10 +2629,12 @@ impl EmployeeStore for PostgresPeople {
         &self,
         tenant: TenantId,
         page: PageRequest,
+        search: Option<&str>,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
         let (rows, total) = self
             .fetch_page(
                 &tenant.to_string(),
+                search,
                 i64::from(page.limit()),
                 i64::from(page.offset()),
             )

@@ -65,6 +65,14 @@ export function People() {
   // Assign form (store from the top-bar context).
   const [assignEmployee, setAssignEmployee] = createSignal("");
   const [assignRole, setAssignRole] = createSignal("");
+  // The assign picker searches the roster on the server rather than filtering a loaded copy of it
+  // (ADR-0098, B3-4). `assignChoice` holds the whole chosen row, not just the id, so the picker can
+  // name who is selected without going back to a list it no longer keeps.
+  const [assignSearch, setAssignSearch] = createSignal("");
+  const [assignMatches, setAssignMatches] = createSignal<readonly Employee[]>([]);
+  const [assignChoice, setAssignChoice] = createSignal<Employee | null>(null);
+  let assignSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let assignSearchSeq = 0;
   const [pendingRemove, setPendingRemove] = createSignal<Assignment | null>(null);
 
   // A `412` means somebody else saved this person or role while the form was open (ADR-0094). The
@@ -266,6 +274,48 @@ export function People() {
     }
   };
 
+  /// How many matches the picker asks for. Enough that a specific search lands the person on the
+  /// first screen of results; small enough that a vague one does not pull a page of T1 rows the
+  /// operator never looks at.
+  const ASSIGN_MATCH_LIMIT = 12;
+
+  // Debounced so a five-letter name is one request rather than five, and sequence-numbered so a slow
+  // early response cannot overwrite a fast later one — the classic out-of-order search bug.
+  const searchForAssignee = (text: string) => {
+    setAssignSearch(text);
+    clearTimeout(assignSearchTimer);
+    const needle = text.trim();
+    if (!needle) {
+      setAssignMatches([]);
+      return;
+    }
+    const seq = ++assignSearchSeq;
+    assignSearchTimer = setTimeout(() => {
+      void api
+        .listEmployeesPage(tenantId(), { limit: ASSIGN_MATCH_LIMIT }, needle)
+        .then((page) => {
+          if (seq === assignSearchSeq) {
+            setAssignMatches(page.items);
+          }
+        })
+        .catch((caught: unknown) => void fail(caught));
+    }, 250);
+  };
+
+  const chooseAssignee = (employee: Employee) => {
+    setAssignChoice(employee);
+    setAssignEmployee(employee.employee_id);
+    setAssignSearch("");
+    setAssignMatches([]);
+  };
+
+  const clearAssignee = () => {
+    setAssignChoice(null);
+    setAssignEmployee("");
+    setAssignSearch("");
+    setAssignMatches([]);
+  };
+
   const createAssignment = async () => {
     if (!storeId()) {
       setError(t("people.assignNeedsStore"));
@@ -278,7 +328,7 @@ export function People() {
     setBusy(true);
     try {
       await api.createAssignment(tenantId(), assignEmployee(), storeId(), assignRole());
-      setAssignEmployee("");
+      clearAssignee();
       setAssignRole("");
       toast.ok(t("people.assigned"));
       await loadAssignments();
@@ -570,26 +620,78 @@ export function People() {
                 <p class="text-sm text-ink-muted">{t("people.publishHint")}</p>
                 <Show when={canManage()}>
                   <div class="flex flex-wrap items-end gap-3">
-                    <label class="block">
+                    {/*
+                      Searched on the server, not filtered out of a loaded roster (ADR-0098, B3-4).
+                      A `<select>` here had to hold every active employee, which is what stopped the
+                      table above from ever being paged: page the table and the picker would offer
+                      only whoever landed on the page.
+
+                      An archived match is listed and disabled rather than filtered away. Dropping it
+                      would leave an operator searching for a real person and being shown nothing,
+                      with no way to tell "no such person" from "that person is archived".
+                    */}
+                    <div class="block w-72">
                       <span class="mb-1 block text-sm font-medium text-ink">
                         {t("people.employee")}
                       </span>
-                      <select
-                        class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                        aria-label={t("people.employee")}
-                        value={assignEmployee()}
-                        onChange={(event) => setAssignEmployee(event.currentTarget.value)}
+                      <Show
+                        when={assignChoice()}
+                        fallback={
+                          <div>
+                            <input
+                              type="text"
+                              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                              aria-label={t("people.findEmployee")}
+                              placeholder={t("people.findEmployee")}
+                              value={assignSearch()}
+                              onInput={(event) => searchForAssignee(event.currentTarget.value)}
+                            />
+                            <Show when={assignSearch().trim()}>
+                              <ul class="mt-1 max-h-48 overflow-y-auto rounded-token border border-line bg-surface-raised">
+                                <For each={assignMatches()}>
+                                  {(match) => (
+                                    <li>
+                                      <button
+                                        type="button"
+                                        disabled={match.status === "archived"}
+                                        onClick={() => chooseAssignee(match)}
+                                        class="flex min-h-touch w-full items-center justify-between gap-2 px-3 text-left text-sm text-ink hover:bg-surface disabled:text-ink-muted"
+                                      >
+                                        <span>
+                                          {match.name} ({match.code})
+                                        </span>
+                                        <Show when={match.status === "archived"}>
+                                          <StatusBadge
+                                            tone="archived"
+                                            label={t("status.archived")}
+                                          />
+                                        </Show>
+                                      </button>
+                                    </li>
+                                  )}
+                                </For>
+                                <Show when={assignMatches().length === 0}>
+                                  <li class="px-3 py-2 text-sm text-ink-muted">
+                                    {t("people.noEmployeeMatch")}
+                                  </li>
+                                </Show>
+                              </ul>
+                            </Show>
+                          </div>
+                        }
                       >
-                        <option value="">{t("people.choose")}</option>
-                        <For each={employees()?.filter((e) => e.status === "active") ?? []}>
-                          {(employee) => (
-                            <option value={employee.employee_id}>
-                              {employee.name} ({employee.code})
-                            </option>
-                          )}
-                        </For>
-                      </select>
-                    </label>
+                        {(chosen) => (
+                          <div class="flex min-h-touch items-center justify-between gap-2 rounded-token border border-line bg-surface-raised px-3">
+                            <span class="text-base text-ink">
+                              {chosen().name} ({chosen().code})
+                            </span>
+                            <Button variant="secondary" onClick={clearAssignee}>
+                              {t("people.changeEmployee")}
+                            </Button>
+                          </div>
+                        )}
+                      </Show>
+                    </div>
                     <label class="block">
                       <span class="mb-1 block text-sm font-medium text-ink">
                         {t("people.role")}

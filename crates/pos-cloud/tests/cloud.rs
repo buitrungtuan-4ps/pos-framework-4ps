@@ -10799,13 +10799,26 @@ impl EmployeeStore for FakeEmployees {
         &self,
         tenant: TenantId,
         page: PageRequest,
+        search: Option<&str>,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
         // The whole matching roster first, then the window over it — the order the adapter's
-        // `ORDER BY … LIMIT … OFFSET` applies. Windowing before ordering would flip a page's rows
-        // in place and leave every page holding the rows it already held.
-        let roster = self.list(tenant).await?;
-        let total = u32::try_from(roster.len()).unwrap_or(u32::MAX);
-        let items = roster
+        // `WHERE … ORDER BY … LIMIT … OFFSET` applies. Windowing before ordering would flip a page's
+        // rows in place and leave every page holding the rows it already held; filtering after the
+        // window would make `total` count the roster instead of the match.
+        let needle = search.map(str::to_lowercase);
+        let matched: Vec<Versioned<Employee>> = self
+            .list(tenant)
+            .await?
+            .into_iter()
+            .filter(|row| {
+                needle.as_ref().is_none_or(|needle| {
+                    row.record.name.to_lowercase().contains(needle)
+                        || row.record.code.to_lowercase().contains(needle)
+                })
+            })
+            .collect();
+        let total = u32::try_from(matched.len()).unwrap_or(u32::MAX);
+        let items = matched
             .into_iter()
             .skip(page.offset() as usize)
             .take(page.limit() as usize)
@@ -11024,7 +11037,7 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
     let mut stitched = Vec::new();
     for offset in [0, 2, 4] {
         let page = store
-            .list_page(mine, PageRequest::new(2, offset).expect("bounds"))
+            .list_page(mine, PageRequest::new(2, offset).expect("bounds"), None)
             .await
             .expect("a page");
         assert_eq!(
@@ -11047,7 +11060,7 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
 
     // A page past the end is empty and still counts the roster — not an error, and not a zero total.
     let beyond = store
-        .list_page(mine, PageRequest::new(10, 50).expect("bounds"))
+        .list_page(mine, PageRequest::new(10, 50).expect("bounds"), None)
         .await
         .expect("a page past the end");
     assert!(beyond.items.is_empty());
@@ -11056,7 +11069,7 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
     // No page carries a PIN hash, the same as the unpaged read: paging changes how much of the
     // roster crosses the wire, never which fields do (ADR-0070).
     let page = store
-        .list_page(mine, PageRequest::new(5, 0).expect("bounds"))
+        .list_page(mine, PageRequest::new(5, 0).expect("bounds"), None)
         .await
         .expect("the whole roster as one page");
     assert!(
@@ -12158,8 +12171,9 @@ impl EmployeeStore for FakePeople {
         &self,
         tenant: TenantId,
         page: PageRequest,
+        search: Option<&str>,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
-        self.employees.list_page(tenant, page).await
+        self.employees.list_page(tenant, page, search).await
     }
     async fn get(
         &self,
@@ -13214,6 +13228,95 @@ async fn the_paged_roster_refuses_a_bound_outside_the_range_and_an_offset_withou
             "{bound} names {field}"
         );
     }
+}
+
+/// `?q=` narrows the roster page to whoever a name or a staff code matches, and narrows `total` too.
+///
+/// This is what an assign picker needs before the People screen's table can be paged
+/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4): a picker that offers matches for
+/// what the operator typed does not need the whole roster loaded, and one that does cannot survive
+/// the table paging out from under it.
+#[tokio::test]
+async fn the_roster_search_narrows_the_page_and_its_total_by_name_or_code() {
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    for (code, name) in [("C01", "Mai Anh"), ("C02", "Bao"), ("MAI99", "Linh")] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/employees",
+                &serde_json::json!({ "tenant_id": tenant_ulid, "code": code, "name": name }),
+                &cookie,
+            ))
+            .await
+            .expect("route create employee");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    // "mai" matches one person by name and a different one by code — case-insensitively, and the
+    // total counts the match rather than the roster.
+    let matched = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}&limit=10&q=mai"),
+            &cookie,
+        ))
+        .await
+        .expect("route search");
+    assert_eq!(matched.status(), StatusCode::OK);
+    let body = json_body(matched).await;
+    assert_eq!(
+        body["total"], 2,
+        "the total counts the match, not the roster: {body}"
+    );
+    let mut codes: Vec<String> = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|row| row["code"].as_str().expect("a code").to_owned())
+        .collect();
+    codes.sort();
+    assert_eq!(
+        codes,
+        vec!["C01".to_owned(), "MAI99".to_owned()],
+        "one matched on name, the other on code"
+    );
+
+    // No match is an empty page and a zero total, not an error — the one true zero.
+    let none = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}&limit=10&q=nobody"),
+            &cookie,
+        ))
+        .await
+        .expect("route search with no match");
+    assert_eq!(none.status(), StatusCode::OK);
+    let body = json_body(none).await;
+    assert_eq!(body["total"], 0);
+    assert!(body["items"].as_array().expect("items").is_empty());
+
+    // `q` shapes a page, so it is refused on the unpaged read rather than silently ignored.
+    let unpaged = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/employees?tenant_id={tenant_ulid}&q=mai"),
+            &cookie,
+        ))
+        .await
+        .expect("route search without a limit");
+    assert_eq!(
+        unpaged.status(),
+        StatusCode::BAD_REQUEST,
+        "a search with no limit is refused, not answered with the whole roster"
+    );
+    let body = json_body(unpaged).await;
+    assert_eq!(body["error"]["details"][0]["field"], "q");
 }
 
 #[tokio::test]

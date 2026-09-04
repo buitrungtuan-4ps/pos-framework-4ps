@@ -1392,6 +1392,17 @@ struct EmployeeListQuery {
     /// How many employees to skip. Only meaningful with `limit`.
     #[serde(default)]
     offset: Option<String>,
+    /// A case-insensitive substring the person's name or staff code must contain.
+    ///
+    /// Only meaningful with `limit`: on the unpaged read the route refuses rather than quietly
+    /// returning the whole roster, the same as every other search on this surface.
+    ///
+    /// There is no `sort`/`order` here, and that is deliberate rather than an omission. The other
+    /// four paged reads got them in B3-3 because their screens have sortable table headers; the
+    /// People table sorts client-side and has no server field to sort on yet. They belong to the
+    /// slice that pages that table, where the headers are what make them necessary.
+    #[serde(default)]
+    q: Option<String>,
 }
 
 /// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
@@ -1615,6 +1626,12 @@ where
     // missing whoever fell off it (ADR-0098). The console's table is what wants a page — and gets
     // strictly less T1 data per response than the read beside it (ADR-0070).
     let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
+        // `q` narrows a *page*. Honouring it on the whole-roster read would answer a different
+        // question than the caller asked; ignoring it would answer the wrong one silently. The
+        // route names the missing parameter instead.
+        if present_param(query.q.as_deref()).is_some() {
+            return page_shaping_needs_a_limit_refusal("q");
+        }
         return match state.people.list(tenant_id).await {
             Ok(employees) => (StatusCode::OK, Json(employees)).into_response(),
             Err(error) => people_error_response(&error),
@@ -1624,7 +1641,8 @@ where
         Ok(page) => page,
         Err(refusal) => return refusal,
     };
-    match state.people.list_page(tenant_id, page).await {
+    let search = present_param(query.q.as_deref());
+    match state.people.list_page(tenant_id, page, search).await {
         Ok(read) => paged_ok(read, page),
         Err(error) => people_error_response(&error),
     }

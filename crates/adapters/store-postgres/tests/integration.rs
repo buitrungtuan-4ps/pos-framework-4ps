@@ -3774,7 +3774,7 @@ mod employees_store {
             let mut stitched = Vec::new();
             for offset in [0, 2, 4] {
                 let (page, total) = people
-                    .fetch_page(TENANT_A, 2, offset)
+                    .fetch_page(TENANT_A, None, 2, offset)
                     .await
                     .expect("page over the tied batch");
                 assert_eq!(
@@ -3795,7 +3795,7 @@ mod employees_store {
 
             // A page past the end is empty and still counts the roster — not an error, not zero.
             let (beyond, beyond_total) = people
-                .fetch_page(TENANT_A, 10, 50)
+                .fetch_page(TENANT_A, None, 10, 50)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
@@ -3803,7 +3803,7 @@ mod employees_store {
 
             // The other tenant's page sees only its own row, and counts only its own.
             let (theirs, their_total) = people
-                .fetch_page("tenant-b", 10, 0)
+                .fetch_page("tenant-b", None, 10, 0)
                 .await
                 .expect("the other tenant's page");
             assert_eq!(their_total, 1, "a headcount is per tenant");
@@ -3812,6 +3812,86 @@ mod employees_store {
                 "Elsewhere",
                 "and the page is too"
             );
+        });
+    }
+
+    /// `?q=` narrows the roster page on the person's **name or staff code**, and narrows `total`
+    /// with it.
+    ///
+    /// Both columns, because those are the two handles an operator has on someone: a name they were
+    /// told, or the code on a badge. The two matches here are deliberately *different people*, so a
+    /// predicate that dropped either column would fail rather than pass on the other's row.
+    ///
+    /// This is the read an assign picker sits on, and having it is what lets the People screen's
+    /// table be paged at all ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4).
+    #[test]
+    fn the_roster_search_narrows_the_page_and_its_total_on_name_or_code() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            for (id, code, name) in [
+                ("01EMPFIND00000000000000A1", "C01", "Mai Anh"),
+                ("01EMPFIND00000000000000A2", "C02", "Bao"),
+                ("01EMPFIND00000000000000A3", "MAI99", "Linh"),
+            ] {
+                people
+                    .insert(id, TENANT_A, code, name)
+                    .await
+                    .expect("insert the employee");
+            }
+
+            let (matched, matched_total) = people
+                .fetch_page(TENANT_A, Some("mai"), 10, 0)
+                .await
+                .expect("the searched page");
+            assert_eq!(
+                matched_total, 2,
+                "the total counts what matched, not the roster"
+            );
+            let mut codes: Vec<String> = matched.into_iter().map(|row| row.code).collect();
+            codes.sort();
+            assert_eq!(
+                codes,
+                vec!["C01".to_owned(), "MAI99".to_owned()],
+                "one matched on name, the other on code, both case-insensitively"
+            );
+
+            // No match is an empty page and a zero total — and this zero is the true one, because
+            // the empty-window fallback carries the same predicate the page did.
+            let (none, none_total) = people
+                .fetch_page(TENANT_A, Some("nobody"), 10, 0)
+                .await
+                .expect("a search that matches nothing");
+            assert!(none.is_empty());
+            assert_eq!(
+                none_total, 0,
+                "the fallback count is filtered, not the whole roster"
+            );
+
+            // `%` is a character in the needle, not a wildcard: the read uses `position`, not
+            // `ILIKE`, so an operator searching for a literal percent gets a literal search rather
+            // than every row.
+            let (wild, wild_total) = people
+                .fetch_page(TENANT_A, Some("%"), 10, 0)
+                .await
+                .expect("a literal percent");
+            assert!(wild.is_empty(), "no name or code contains a percent sign");
+            assert_eq!(wild_total, 0);
+
+            // An unsearched page is still the whole roster.
+            let (all, all_total) = people
+                .fetch_page(TENANT_A, None, 10, 0)
+                .await
+                .expect("the unsearched page");
+            assert_eq!(all.len(), 3);
+            assert_eq!(all_total, 3);
+            assert!(
+                all.iter().all(|row| !row.has_pin),
+                "a searched or unsearched page carries whether a PIN exists, never the hash"
+            );
+
+            drop(admin);
         });
     }
 
