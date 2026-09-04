@@ -149,6 +149,11 @@ mod tests {
             employee_id: EmployeeId::new(Ulid::from_u128(employee)),
             store_id: StoreId::new(Ulid::from_u128(store)),
             role_template_id: RoleTemplateId::new(Ulid::from_u128(role)),
+            // The compiler pairs an assignment with its employee by id, out of the whole roster it
+            // is handed — the resolved name is for the console's paged read, and this path has no
+            // use for it.
+            employee_name: None,
+            employee_code: None,
         }
     }
 

@@ -324,10 +324,43 @@ pub struct AssignmentRow {
     pub store_id: String,
     /// The role that store grants.
     pub role_template_id: String,
+    /// The assigned person's name, resolved by the join. `None` only if no employee row matches.
+    pub employee_name: Option<String>,
+    /// The assigned person's staff code, resolved by the join. `None` on the same terms as the name.
+    pub employee_code: Option<String>,
 }
 
-/// The assignment columns a read returns.
-const ASSIGNMENT_COLUMNS: &str = "id, tenant_id, employee_id, store_id, role_template_id";
+/// The assignment columns a read returns, qualified for [`ASSIGNMENT_JOIN`] and in
+/// [`assignment_row`]'s order. `created_at` is qualified at every call site for the same reason the
+/// ids are: both joined tables carry a column of that name.
+const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.store_id, a.role_template_id, \
+     e.name, e.code";
+
+/// The `FROM` every assignment read uses: the grants, with the assigned person joined in.
+///
+/// Resolving the name here rather than in the caller is what lets the console show who an assignment
+/// belongs to without reading the tenant's whole roster to look the id up — the read that stops
+/// working once the roster is paged
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), B3-4). A store's assignments are tens of
+/// rows and the join is on the employees' primary key, so this costs an index lookup per row and no
+/// second query.
+///
+/// **`LEFT`, not `INNER`.** `employee_store_assignments` declares no foreign key to `employees`
+/// (migration 0024 has none, and nothing since adds one), so nothing in the schema stops an
+/// assignment outliving the row it points at. An inner join would drop such a row from the list —
+/// turning a data problem into an invisible one, and quietly removing a grant the operator can still
+/// see the effects of. A left join surfaces it with no name, which the console renders as the raw id,
+/// exactly what it did before this read resolved anything.
+///
+/// **Personal data (T1).** `name` and `code` are the employee record's, so this read now returns
+/// personal data where it used to return only ids
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). That is a redistribution, not an
+/// expansion: the caller reaches this behind `console.people.manage`, the same gate that lets them
+/// read the roster itself, and the console screen already displayed the name — by fetching the whole
+/// roster to find it. Nothing new is exposed, to nobody new, and `pin_phc` is not selected here any
+/// more than it is anywhere else.
+const ASSIGNMENT_JOIN: &str = "employee_store_assignments a \
+     LEFT JOIN employees e ON e.id = a.employee_id AND e.tenant_id = a.tenant_id";
 
 impl PostgresPeople {
     /// Inserts a role template, its permission set given as JSON array text cast into the `jsonb`
@@ -494,8 +527,8 @@ impl PostgresPeople {
         let rows = connection
             .query(
                 &format!(
-                    "SELECT {ASSIGNMENT_COLUMNS} FROM employee_store_assignments \
-                     WHERE tenant_id = $1 AND store_id = $2 ORDER BY created_at DESC"
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.store_id = $2 ORDER BY a.created_at DESC"
                 ),
                 &[&tenant_id, &store_id],
             )
@@ -518,8 +551,8 @@ impl PostgresPeople {
         let rows = connection
             .query(
                 &format!(
-                    "SELECT {ASSIGNMENT_COLUMNS} FROM employee_store_assignments \
-                     WHERE tenant_id = $1 AND employee_id = $2 ORDER BY created_at DESC"
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.employee_id = $2 ORDER BY a.created_at DESC"
                 ),
                 &[&tenant_id, &employee_id],
             )
@@ -566,6 +599,8 @@ fn assignment_row(row: &tokio_postgres::Row) -> AssignmentRow {
         employee_id: row.get(2),
         store_id: row.get(3),
         role_template_id: row.get(4),
+        employee_name: row.get(5),
+        employee_code: row.get(6),
     }
 }
 

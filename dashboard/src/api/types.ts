@@ -912,6 +912,16 @@ export interface Assignment {
   readonly employee_id: string;
   readonly store_id: string;
   readonly role_template_id: string;
+  /**
+   * The assigned person's name, resolved by the server as it reads (ADR-0098, B3-4).
+   *
+   * `null` when no employee row matches `employee_id` — nothing in the schema forbids an assignment
+   * outliving the person's record, and a grant that still works is worth showing unlabelled rather
+   * than hiding. Render `employee_id` in that case.
+   */
+  readonly employee_name: string | null;
+  /** The assigned person's staff code, `null` on the same terms as the name. */
+  readonly employee_code: string | null;
 }
 
 /** One entry of the pos-core permission catalogue the role editor offers (ADR-0070, §9). */

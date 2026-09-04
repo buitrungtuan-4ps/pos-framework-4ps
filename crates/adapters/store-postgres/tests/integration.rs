@@ -3980,6 +3980,91 @@ mod role_templates_and_assignments {
         });
     }
 
+    /// An assignment read names the person it grants, and still lists one whose employee row is gone.
+    ///
+    /// The console used to turn an assignment's `employee_id` into a name by searching the tenant's
+    /// whole roster, which is the read that stops working once the roster is paged
+    /// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4). The resolution is a join
+    /// on the read that needs it.
+    ///
+    /// The second half is why that join is `LEFT`. Nothing declares a foreign key from an assignment
+    /// to an employee, so an assignment can name a row that is not there; an inner join would drop it
+    /// from the list, hiding a grant that still exists. It lists with no name instead, and the console
+    /// falls back to showing the id.
+    #[test]
+    fn an_assignment_read_names_the_person_and_still_lists_one_whose_employee_is_gone() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            people
+                .insert("01EMP00000000000000000MAI1", "tenant-a", "C77", "Mai")
+                .await
+                .expect("insert the employee");
+            people
+                .insert_assignment(
+                    "01ASSIGN0000000000000NAMED",
+                    "tenant-a",
+                    "01EMP00000000000000000MAI1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000A1",
+                )
+                .await
+                .expect("assign the person who exists");
+            // No `employees` row is ever inserted for this id.
+            people
+                .insert_assignment(
+                    "01ASSIGN000000000000DANGLE",
+                    "tenant-a",
+                    "01EMP0000000000000000GONE1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000A1",
+                )
+                .await
+                .expect("assign an id with no employee row");
+
+            let rows = people
+                .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
+                .await
+                .expect("by store");
+            assert_eq!(rows.len(), 2, "both grants are listed, resolvable or not");
+
+            let named = rows
+                .iter()
+                .find(|row| row.id == "01ASSIGN0000000000000NAMED")
+                .expect("the resolvable assignment");
+            assert_eq!(
+                named.employee_name.as_deref(),
+                Some("Mai"),
+                "the join names the person, so no roster read is needed"
+            );
+            assert_eq!(named.employee_code.as_deref(), Some("C77"));
+
+            let dangling = rows
+                .iter()
+                .find(|row| row.id == "01ASSIGN000000000000DANGLE")
+                .expect("the assignment whose employee row is gone is still listed");
+            assert_eq!(
+                dangling.employee_name, None,
+                "an unresolvable grant reads as unnamed, not as absent"
+            );
+            assert_eq!(dangling.employee_code, None);
+
+            // The other direction resolves the same way.
+            let by_employee = people
+                .fetch_assignments_for_employee("tenant-a", "01EMP00000000000000000MAI1")
+                .await
+                .expect("by employee");
+            assert_eq!(by_employee.len(), 1);
+            assert_eq!(
+                by_employee.first().expect("a row").employee_name.as_deref(),
+                Some("Mai")
+            );
+
+            drop(admin);
+        });
+    }
+
     /// Assignments bind a person to a store with a role, read both by store and by employee,
     /// tenant-scoped; the same person at the same store is refused; and — unlike employees/roles — an
     /// assignment IS removable (a DELETE grant), which offboards the person ([ADR-0070]).

@@ -110,3 +110,38 @@ and PDPD-aware. Additive throughout: new tenant-scoped tables and a new config n
 *catalogue* stays in `pos-core`; this ADR only adds the *assignment* of those permissions to people.
 The break-glass and console-admin auth (ADR-0067) are unaffected — console admins authorise the
 console; employees authorise the store.
+
+## Delivery note — the assignment read names its person (2026-09-04)
+
+`GET /admin/assignments` returned three ids and nothing else, so the People screen labelled an
+assignment by searching the tenant's whole roster for the matching employee. That works until the
+roster is paged, and paging it is what
+[ADR-0098](0098-paged-admin-reads.md)'s B3-4 note deferred for exactly this reason. The resolution
+moves onto the read that needs it: a `LEFT JOIN` on `employees` puts the person's `name` and `code`
+on the assignment row.
+
+Three things worth recording, because each was decided by looking rather than by assuming.
+
+**Why `LEFT`.** `employee_store_assignments` declares no foreign key to `employees` — migration 0024
+has none, and nothing since adds one. So the schema permits an assignment naming a row that is not
+there. An inner join would drop it from the list, which hides a grant that still exists: the
+console would show nothing while the store still authorises the person. A left join lists it with a
+null name, which the console renders as the id — precisely what it did before this read resolved
+anything. Both directions are pinned by an integration test, and swapping `LEFT` for `INNER` fails
+it.
+
+**This is not an expansion of T1 exposure.** The name and code are personal data, and the read that
+carries them used to carry none. But the caller reaches this endpoint through
+`console.people.manage`, the same permission that lets them read the roster in full, and the screen
+already displayed the name — by fetching the entire roster to find it. The same person sees the same
+data; it arrives on a smaller response instead of a larger one. `pin_phc` is not selected here, as
+it is not selected on any read. Data minimization improves rather than regresses: labelling one
+store's assignments no longer requires downloading every employee in the tenant.
+
+**The screen still does not page.** Removing the roster read from the labelling was one of three
+blockers. The assign picker still offers every active employee out of the loaded set, and giving the
+table a page would leave the picker offering only whoever landed on it. That needs a searching
+picker over a server-side employee search — and `GET /admin/employees` has no `q`: the `q`/`sort`/
+`order` that B3-3 gave the other four paged reads never reached employees, because employees were
+held back to B3-4. So the remaining order is: search the roster server-side, put the picker on it,
+then page the table.
