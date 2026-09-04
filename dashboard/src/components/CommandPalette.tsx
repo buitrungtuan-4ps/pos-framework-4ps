@@ -5,23 +5,16 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
-import { type MessageKey, t } from "../i18n";
+import { t } from "../i18n";
+import { SCREENS, type ScreenId, screenHref, specOf } from "../state/screens";
+import { storeId, tenantId } from "../state/session";
 
-type Target = { href: string; key: MessageKey };
-
-const TARGETS: readonly Target[] = [
-  { href: "/", key: "nav.reports" },
-  { href: "/stores", key: "nav.stores" },
-  { href: "/stores/new", key: "wizard.title" },
-  { href: "/catalog", key: "nav.catalog" },
-  { href: "/layout", key: "nav.layout" },
-  { href: "/config", key: "nav.config" },
-  { href: "/api-keys", key: "nav.apiKeys" },
-  { href: "/devices", key: "nav.devices" },
-  { href: "/webhooks", key: "nav.webhooks" },
-  { href: "/translations", key: "nav.translations" },
-  { href: "/activation", key: "nav.activation" },
-];
+// The palette's entries come from the one screen table, filtered to those worth a quick jump — so a
+// screen can never be in the palette under a path the router does not serve, which was possible when
+// this file kept its own list of eleven hand-written hrefs.
+const TARGETS: readonly ScreenId[] = (Object.keys(SCREENS) as ScreenId[]).filter(
+  (id) => specOf(id).inPalette,
+);
 
 // Open state is module-level so the top-bar button (and touch devices, which have no Cmd-K) can open
 // the palette alongside the keyboard shortcut.
@@ -40,7 +33,12 @@ export function CommandPalette() {
 
   const matches = () => {
     const needle = query().trim().toLowerCase();
-    const all = TARGETS.map((target) => ({ href: target.href, label: t(target.key) }));
+    // Each target is resolved against the live context, so jumping from the palette keeps the
+    // tenant the operator is working in rather than dropping them at a bare path.
+    const all = TARGETS.map((id) => ({
+      href: screenHref(id, tenantId(), storeId()),
+      label: t(specOf(id).key),
+    }));
     return needle ? all.filter((item) => item.label.toLowerCase().includes(needle)) : all;
   };
 

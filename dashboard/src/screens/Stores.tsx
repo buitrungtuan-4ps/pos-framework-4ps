@@ -10,6 +10,7 @@ import type { Brand, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
+import { screenHref } from "../state/screens";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
@@ -281,7 +282,7 @@ export function Stores() {
             actions={
               <div class="flex gap-2">
                 <A
-                  href="/stores/new"
+                  href={screenHref("newStore", tenantId(), "")}
                   class="inline-flex min-h-touch items-center justify-center rounded-token bg-accent px-4 text-base font-medium text-accent-ink"
                 >
                   {t("wizard.open")}
