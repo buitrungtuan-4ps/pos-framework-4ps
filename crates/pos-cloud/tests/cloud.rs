@@ -2848,7 +2848,12 @@ async fn the_admin_reconcile_read_does_not_want_the_internal_key() {
 async fn an_internal_route_with_no_secret_configured_refuses_rather_than_admits() {
     // `CloudConfig::validate` means a booted process always has one, so this is the fork-that-wires-
     // the-router-by-hand case. It must land closed.
-    let router = http::ota_report_router(FakeOtaReports::default(), clock(), None);
+    let router = http::ota_report_router(
+        FakeOtaReports::default(),
+        clock(),
+        FakeKeys::default(),
+        None,
+    );
     let response = router
         .oneshot(post_internal("/internal/ota/report", &report_body(None)))
         .await
@@ -8941,8 +8946,29 @@ fn ota_report_app(reports: FakeOtaReports) -> axum::Router {
     http::router(app).merge(http::ota_report_router(
         reports,
         clock(),
+        FakeKeys::default(),
         Some(internal_secret()),
     ))
+}
+
+/// The report router with a key store a test can issue a store token against — what the `/sync`
+/// route authenticates. Returns the router and the keys, so a caller can mint the token it needs.
+fn store_report_app(reports: FakeOtaReports) -> (axum::Router, FakeKeys) {
+    let keys = FakeKeys::default();
+    let app = app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+    );
+    let router = http::router(app).merge(http::ota_report_router(
+        reports,
+        clock(),
+        keys.clone(),
+        Some(internal_secret()),
+    ));
+    (router, keys)
 }
 
 /// The body an edge posts, with `self_test_passed` supplied by the caller so each case can choose
@@ -15690,4 +15716,102 @@ async fn promoting_a_version_the_cloud_does_not_host_is_refused() {
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = json_body(refused).await;
     assert_eq!(body["error"]["details"][0]["field"], "target_version");
+}
+
+// ---------------------------------------------------------------------------------------------
+// R5-a: a store reports on a route that can say who it is
+// ---------------------------------------------------------------------------------------------
+
+/// The `/sync` route establishes the tenant from the key instead of believing the body — which is the
+/// whole reason ADR-0097 said a shared secret could not make the `/internal` shape honest.
+#[tokio::test]
+async fn a_store_report_takes_its_tenant_from_the_key_not_the_body() {
+    let reports = FakeOtaReports::default();
+    let (router, keys) = store_report_app(reports.clone());
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    let accepted = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/report", store_id()),
+            &serde_json::json!({ "installed": "1.5.0", "self_test_passed": true }),
+            &token,
+        ))
+        .await
+        .expect("route the report");
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+
+    let recorded = reports.rows.lock().expect("lock").clone();
+    assert_eq!(recorded.len(), 1);
+    let (recorded_tenant, recorded_store, installed, self_test) = &recorded[0];
+    // The body never carried either id.
+    assert_eq!(*recorded_tenant, tenant());
+    assert_eq!(*recorded_store, store_id());
+    assert_eq!(installed, "1.5.0");
+    assert_eq!(*self_test, Some(true));
+}
+
+/// A box that has never self-tested says so by omission, and the route keeps that distinct from
+/// `false` (ADR-0078 Amendment 1) on the new surface too.
+#[tokio::test]
+async fn a_store_report_can_say_it_has_never_self_tested() {
+    let reports = FakeOtaReports::default();
+    let (router, keys) = store_report_app(reports.clone());
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    let accepted = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/report", store_id()),
+            &serde_json::json!({ "installed": "1.5.0" }),
+            &token,
+        ))
+        .await
+        .expect("route the report");
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        reports.rows.lock().expect("lock").clone()[0].3,
+        None,
+        "absent, not false"
+    );
+}
+
+/// The refusals: no key at all, and a key without the scope the OTA path runs on.
+#[tokio::test]
+async fn a_store_report_needs_a_scoped_key() {
+    let (router, keys) = store_report_app(FakeOtaReports::default());
+    let path = format!("/sync/stores/{}/report", store_id());
+    let body = serde_json::json!({ "installed": "1.5.0" });
+
+    let unauthenticated = router
+        .clone()
+        .oneshot(post_json(&path, &body))
+        .await
+        .expect("route the unauthenticated report");
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let wrong_scope = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let refused = router
+        .oneshot(post_json_bearer(&path, &body, &wrong_scope))
+        .await
+        .expect("route the wrong-scope report");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+}
+
+/// A blank version is refused the same way on both surfaces — the shared write helper is what makes
+/// that true rather than merely intended.
+#[tokio::test]
+async fn a_store_report_with_a_blank_version_is_refused() {
+    let (router, keys) = store_report_app(FakeOtaReports::default());
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    let refused = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/report", store_id()),
+            &serde_json::json!({ "installed": "   " }),
+            &token,
+        ))
+        .await
+        .expect("route the blank report");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "installed");
 }

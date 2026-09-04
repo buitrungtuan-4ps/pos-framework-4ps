@@ -183,3 +183,37 @@ Out, with reasons:
 and its three call sites, the deploy and doc changes, the corrections to every "carries no
 authentication" claim including the gate's hint, and tests that pin the 404-with-no-oracle refusal
 and the boot refusal.
+
+---
+
+**Delivery note (2026-09-04) — the report move this ADR said was owed is done.**
+
+This record predicted its own successor: *"When store-originated reporting gains a real caller, it
+moves to `/sync/stores/{store_id}/…`, where the cloud resolves the tenant from the scoped key instead
+of reading it out of the body."* R5 is that caller, so the move landed with it.
+
+`POST /sync/stores/{store_id}/report` now takes the tenant from the key and the store from the path,
+and the body carries only `installed` and `self_test_passed`. Dropping the two ids from the body was
+not tidying: leaving them would mean the wire still *offered* a store id that the cloud has to be
+careful to ignore, which is the kind of field somebody wires back up in two years.
+
+**What the move actually buys, stated exactly.** A report is now **tenant-attributable**. It is not
+store-attributable, because a [`Grant`](../../crates/pos-cloud/src/auth/apikey.rs) pins a tenant and a
+scope, not a store — so a key issued to one store can still name a sibling store of the same tenant in
+the path. Cross-tenant forgery is closed; intra-tenant is not. That residual is bounded by what a
+report *is*: pure telemetry that never changes what any box runs ([ADR-0078](0078-sync-and-ota-closure.md)),
+so the worst case is a distorted rollout picture inside one operator's own fleet. Closing it needs a
+store-scoped grant, which is a key-issuance change and its own slice — recorded here rather than
+implied, because "attributable" without the qualifier is exactly the overclaim this ADR was written to
+avoid making about a shared secret.
+
+**`/internal/ota/report` stays, and now has no intended caller.** It keeps the shared-secret guard and
+remains legitimate for on-box tooling, which is what `/internal` is for. But the edge no longer posts
+to it, so it is a deprecation candidate rather than a live path; it is not removed here because the
+CHANGELOG's rule is two releases of deprecation first. Both routes share one write helper
+(`record_ota_report`), so the difference between them is *where identity comes from* and nothing else —
+which makes that the real difference rather than merely the intended one.
+
+The route gate is `read_config`, for the reason [ADR-0088](0088-ota-artifact-hosting.md) Amendment 1
+gives for the artifact route: every provisioned box already carries it, so the OTA path needs no
+re-provisioning of live stores, and a report is not a secret.

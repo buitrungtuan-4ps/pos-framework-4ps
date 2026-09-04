@@ -52,6 +52,12 @@ store-sqlite = { path = "../adapters/store-sqlite" }
 cloud-sync-http  = { path = "../adapters/cloud-sync-http" }
 key-vault-keyring = { path = "../adapters/key-vault-keyring" }
 
+# The `Signer` the OTA loop verifies an artifact with (ADR-0047, roadmap R5-d). A workspace path
+# crate whose own subtree (ed25519-dalek, blake2) is already in the lock through the adapter's own
+# test lane, so this adds no new third-party crate — and the adapter is verify-only: it cannot hold
+# or generate a private key, which is what keeps signing keys off every store.
+updater-minisign = { path = "../adapters/updater-minisign" }
+
 # The store's outbound event stream (ADR-0087): the `MessageLink` half of the outbox, the
 # same adapter whose consumer `pos_cloud` already runs. A workspace path crate — its
 # `async-nats` subtree is already in the lock through the cloud, so this adds no new
@@ -125,6 +131,10 @@ pos-fakes = { path = "../pos-fakes" }
 # The shared port contract suites: `EdgeOrderIn` is proven against the `OrderIn` suite (ADR-0064),
 # the same suite `FakeIntake` passes — so "the edge is a real OrderIn" is verified, not asserted.
 pos-contract-tests = { path = "../pos-contract-tests" }
+# The install seam works on real files, so its integration tests work on a real directory. Already in
+# the lock as store-sqlite's dev-dependency at the same major, so `cargo deny`'s
+# `multiple-versions = "deny"` stays satisfied.
+tempfile = "3"
 
 # A shipped binary, not a library, so it declares its own lint table rather than
 # inheriting the strict library baseline (Cargo rejects a manifest that both

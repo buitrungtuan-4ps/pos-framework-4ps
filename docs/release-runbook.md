@@ -114,6 +114,23 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    then every store in the ring fetched a `404`, which means "install nothing", so the fleet sat
    still with nothing in any log saying why.
 
+7. **Watch the ring take it.** Each store weighs the rollout on its own loop (ten minutes), fetches
+   the artifact for the architecture it was compiled for, verifies the signature against the key
+   baked into its binary, copies its database to `.pre-update`, smoke-tests the staged file, swaps
+   the `bin/current` symlink and exits so `systemd` starts it on the new version. The Fleet screen
+   shows the versions stores report; `GET /admin/ota` is the same data.
+
+   **A store that cannot come up puts itself back.** A committed version stays marked unconfirmed
+   until it reaches a healthy boot, and past three attempts the edge retargets `bin/current` at the
+   previous version, restores the `.pre-update` database and exits — so a bad release shows up as
+   stores reporting the *old* version with `self_test_passed: false`, not as stores going dark. If
+   that is what you see, engage the kill switch (`halted`) before the ramp widens, and read the
+   failure from the reports rather than from the shop.
+
+   Only a store laid out with `bin/current` updates over the air. One provisioned before that
+   layout keeps trading and logs that it found none; [`deploy/edge/README.md`](../deploy/edge/README.md)
+   has the migration.
+
 ## Verifying an artifact by hand
 
 ```

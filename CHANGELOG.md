@@ -17,6 +17,76 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+
+- **Over-the-air updates run on the shipped edge** (roadmap v3 **R4** + **R5-d**,
+  [ADR-0055](docs/adr/0055-edge-ota-updater.md) Amendment 1). The rollout decision, signature
+  verification and install orchestration have been merged and tested for four releases and **nothing
+  ran them**: `OtaUpdater` had no caller outside a test, and there was no installer for any operating
+  system. Both halves land together, because an installer with no caller is the same gap again.
+  - `crates/pos-edge/src/installer.rs` — the Linux install seam. Two version slots under the
+    service's own state directory, promoted by one atomic `rename(2)` of the `bin/current` symlink,
+    with the `.pre-update` database copy taken before anything is written and `bin/previous` recorded
+    before the swap so a power cut leaves a box that still runs the old binary and knows where to go
+    back to.
+  - `crates/pos-edge/src/ota_client.rs` — the loop. It reads the published `fleet_update` and
+    `device_ota` nodes out of the live session, assembles the device state through
+    `ota_state::device_state`, weighs the rollout, and reports the outcome to the cloud before asking
+    the process to drain so the service manager restarts it into the new binary.
+  - `pos-edge --self-test` — the pre-commit smoke test, run against the *staged* file before
+    anything is swapped: can these bytes run on this box, and do they read this store's
+    configuration. It catches the wrong architecture and a truncated download; it deliberately does
+    not open the database, which the running edge still owns.
+  - A **self-healing revert.** A committed version is marked unconfirmed until it reaches a healthy
+    boot; past three attempts the edge points `current` back at the previous version, restores the
+    database and exits. A release that crash-loops can never record its own verdict, which is
+    exactly why the marker exists — without it a bad release needs somebody to drive to the shop.
+
+### Changed
+
+- **`deploy/edge/pos-edge.service` runs the binary from the state directory.** `ExecStart` is now
+  `/var/lib/pos-edge/bin/current`, a symlink the edge owns, rather than `/usr/local/bin/pos-edge`.
+  The unit's `ProtectSystem=strict` and `NoNewPrivileges` make everything outside the state directory
+  read-only to the process — deliberately — so a self-update cannot write `/usr/local/bin` and must
+  not be given the privilege to. `/usr/local/bin/pos-edge` stays as the operator's rescue copy.
+
+  **Upgrade note.** An existing store keeps trading unchanged and simply does not self-update: with
+  no `bin/current` the edge logs that it found no layout and starts no updater. To turn updates on,
+  follow the install block in the unit's header (create `bin/`, copy the running binary to `slot-a`,
+  link `current` at it, change `ExecStart`) and reload systemd. `Restart=always` becomes
+  load-bearing rather than merely prudent — a clean exit is how the edge asks to be restarted into a
+  version it just installed, so `on-failure` would leave a store stopped after an update.
+- **`FakeCloudSync`'s release fixture lost its leading `v`, and its artifact became a runnable
+  program.** `KNOWN_RELEASE` was `v1.2.3` while a rollout publishes, and a binary reports, the bare
+  `1.2.3` — so the first real caller asking the fake for a release got "no such release", and the
+  fake would have hidden the very drift [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Amendment 2 exists to prevent. And the artifact bytes were a placeholder string, which the real
+  installer's smoke test cannot execute: every install-path test would have come back a rollback,
+  proving that a truncated download is caught rather than that a good release installs.
+
+- **The two OTA routes a store calls moved from `/internal` to `/sync`, so a store can actually reach
+  them** (roadmap `docs/roadmap-v3.md` **R5**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Amendment 1 and [ADR-0097](docs/adr/0097-internal-route-authentication.md)'s delivery note). The
+  reverse proxy answers `404` to the whole `/internal` prefix from outside the box, so both the
+  artifact fetch and the update report were unreachable by the only caller they have — the same defect
+  #175 found for the artifact route, present twice.
+
+  `POST /sync/stores/{store_id}/report` is new: the tenant comes from the scoped key and the store
+  from the path, so a report is **tenant-attributable**, which ADR-0097 recorded that no strength of
+  shared secret could make the `/internal` shape. It is not store-attributable — a grant pins a
+  tenant, not a store — and that residual is stated in the ADR rather than glossed. The artifact fetch
+  now sends `arch`, stamped into the binary from Cargo's own `TARGET` by `build.rs`, because guessing
+  it from `std::env::consts` is silently wrong for a musl fork.
+
+  `POST /internal/ota/report` still exists and keeps its shared-secret guard for on-box tooling, but
+  the edge no longer posts to it. Both routes share one write helper, so the only difference between
+  them is where identity comes from.
+
+  **Upgrade note** — no `PROTOCOL_VERSION` change and no migration. The edge and the cloud ship in the
+  same release, so no store speaks the old wire to a new cloud or the reverse. `arch` is additive.
+  A fork that calls `/internal/ota/report` from its own cloud-side tooling is unaffected; a fork that
+  somehow had a *store* calling it was getting a proxy `404` and now works.
+
+### Added
 - **A release can be put into the cloud, and cannot be promoted before it is** (roadmap `docs/roadmap-v3.md`
   **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 2). `POST /admin/releases?release=&arch=`
   takes the bare `pos-edge` executable as its body and minisign's signature line in `X-Pos-Minisig`,

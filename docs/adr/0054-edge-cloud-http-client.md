@@ -121,3 +121,9 @@ already reached it for the sibling `/internal/ota/report`.
 Nothing else in this ADR changes: the transport seam, the rustls reuse, the `POST`-with-JSON-body shape
 and the reasons for each all stand. What changes is the one path constant, and the contract suite that
 pins it — in R2's implementation slice, not here.
+
+**Delivered (2026-09-04).** The path constant and the contract suite that pinned it changed in R5-a,
+not in R2's slice as this correction guessed: R2 built the *server* at the new path, and moving the
+*client* belonged with the slice that gives it a caller. `fetch_update` now posts to
+`POST {base}/sync/stores/{store_id}/artifact` with `{ release, arch }`, and the sibling report to
+`POST {base}/sync/stores/{store_id}/report`. Everything else in this ADR stands unchanged.

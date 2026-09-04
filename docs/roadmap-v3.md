@@ -46,6 +46,26 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 | **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (+ ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
 | **v1.3 — Production International** | B·W10 + JP/IN go-live (small in code; ops-gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
 
+### What is left for v1.0 (recomputed 2026-09-04, item by item against the tree)
+
+v1.0 is `A·P1 → A·P3` + `A·P1x` + `B·W1` + `B9.1`. **A·P1 and A·P1x are complete** — all thirteen items,
+the last being R5. What remains is **nine slices**:
+
+| # | Slice | Why it is still open |
+| --- | --- | --- |
+| 1 | **R3** | Per-store installer on the Handoff screen. Was blocked on E6; E6 is done, so this is now unblocked. |
+| 2 | **E4** | Windows service wrapper — platform code the Linux CI cannot exercise. Carries the Windows half of R4's install seam with it. |
+| 3 | **E5 residual** | Three hardcoded `VND` sites in the edge UI (shift opening float, expected cash, one Pay label). |
+| 4 | **Q5 tail** | Paging and `/admin`-in-OpenAPI are done. Left: the webhook header docs↔code mismatch, implement-or-drop `pos-api-version`, wire-or-delete the two dead scopes, rate-limit `/v1/orders` and `/sync`. |
+| 5 | **Q6** | Integrator docs: webhook quickstart, auth guide, API tour. |
+| 6 | **Q7** | UX step budget, failable in e2e. |
+| 7 | **B1.1** | Fire zeroes modifiers, so recipe consumption is wrong. |
+| 8 | **B1.2** | Sales channel is per-session, not per-order — so tax can be wrong per order. |
+| 9 | **B1.3** | Tips are a hardcoded zero. |
+
+Three of those nine (**B1.1–B1.3**) are correctness bugs in the selling path and are the ones worth doing
+first: everything above them is reach, and these are wrong answers a store would print on a receipt.
+
 Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ +5–7 wk · v1.3 ≈ +2–3 wk of
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
 materially.
@@ -142,6 +162,8 @@ first real store.
     this is the chosen-once-at-startup kind — so `serve`'s signature and `main.rs` are unchanged. One
     property fell out for free: keying the live map by digest as well means the edge now holds no
     device token anywhere.
+
+  **Done, both slices.** `DeviceRegistry` is the eighteenth port with its own contract suite, `pos-fakes` implementation and `store-sqlite` adapter; the edge writes through to it on pair and on sign-in, refills both tables at start-up, and carries the `sign_in_idle_timeout` as configuration (`crates/pos-edge/src/durable_auth.rs`, and the `DeviceRegistry` bound on `compose`). A power cycle no longer unpairs the shop.
 - **R1b** — Stamp the release tag into the binary. `crates/pos-edge/Cargo.toml` is `version = "0.0.0"` and
   nothing writes the tag at build time, so every artifact reports the same version and the whole OTA
   progress model (ADR-0078) cannot tell one release from another. **Done**: the release workflow exports
@@ -158,6 +180,8 @@ first real store.
   says. Fix: emit `cloud_url`, offer a bind port, and generate the mode-0600 env file
   (`POS_EDGE_SYNC_KEY`, `POS_EDGE_NATS_URL`) beside it; and add `relay_orders` to the key-issuance UI,
   which today offers four scopes and not that one — so no operator can grant the relay its scope.
+
+  **Done.** The wizard emits `cloud_url` and a bind port, generates the mode-0600 env file beside the `config.toml`, and `relay_orders` is offered in the key-issuance UI — so the loops E1 and E3 built can reach a cloud, which is what made both of those read "wired but unreachable".
 - **E7a** — TLS becomes a chosen posture, not an inference (D24, [ADR-0090](adr/0090-tls-postures.md)).
   `bootstrap.sh` picks the TLS method from `DOMAIN`'s suffix, which reaches only two of the four
   legitimate postures, silently downgrades a managed domain with an empty `CF_DNS_API_TOKEN` to a method
@@ -167,6 +191,8 @@ first real store.
   `trusted_proxy_hops` configuration — without which `external` collapses the whole company onto one
   login-rate-limit bucket. **Sequenced before E7**: ADR-0089 binds TLS to the published port and needs a
   certificate path some posture put there on purpose.
+
+  **Done.** `TLS_MODE` selects one of four committed per-mode Caddyfiles rather than overwriting one, `secrets/tls/` is the path every consumer reads, and `trusted_proxy_hops` is configuration — without which `external` collapses the whole company onto one login-rate-limit bucket.
 - **E7** — Make the event bus reachable (D23, [ADR-0089](adr/0089-edge-event-bus-transport.md)). NATS sits
   on an `internal: true` Docker network with no published port and no proxy route, so
   `POS_EDGE_NATS_URL` has nowhere valid to point and the outbox publishes nowhere. The store keeps
@@ -178,10 +204,7 @@ first real store.
   connect options, so `link-nats` now lifts them) and the integration suite had been running against
   a broker with no authorization at all. Reachability of a published port on an `internal: true`
   network stays **unverified** — a real box has to say, and the fallback is recorded.
-- **R5** — Wire `OtaUpdater` into the running edge. It has **zero production callers** — the only
-  construction in the tree is `crates/pos-edge/tests/ota.rs`. Four merged slices (P9a/P9b/P9e-4, ADR-0047/
-  0048/0055) built update decision, signature verification, self-test and rollback, and none of it runs.
-  Principle 3 ("dễ cập nhật") is unmet until this lands, and it must land with R4's real installer.
+- **R5** — Wire `OtaUpdater` into the running edge. **Done.** It had **zero production callers** — the only construction in the tree was `crates/pos-edge/tests/ota.rs` — and four merged slices (P9a/P9b/P9e-4, ADR-0047/0048/0055) had built update decision, signature verification, self-test and rollback with none of it running. All four measured slices have landed: **R5-a** the two store-called `/internal` routes moved to `/sync` (the proxy denies that prefix off-box, so *both* the artifact fetch and the update report were unreachable, and the report gained the store-scoped route ADR-0097 said it owed); **R5-b** `arch` stamped from Cargo's `TARGET` by a build script; **R5-c** the real Linux `UpdateInstaller` (= **R4**); **R5-d** the loop, smaller than it looked because `ota_state::device_state` already assembled the whole `DeviceState`. Three things earlier notes listed as blockers were already built: the transport's bearer (`CloudHttpClient` attaches it), response headers on the client, and the edge reading both OTA config nodes. Principle 3 ("dễ cập nhật") is met. What is still gated is the real box: that `systemd` restarts into the retargeted symlink and the store comes back trading (`docs/gate-register.md`), and the Windows installer, which is **E4**.
 
 **Q1 moves up.** The in-process end-to-end acceptance suite is listed under A·P3, but it is the gate that
 would have caught every one of the seven above — seven times this program has merged code that was written,
@@ -225,7 +248,7 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **R3** — Per-store installer on the Handoff screen; one-file `pos-edge install --store <id>` self-installer; zip is the fallback. **Depends on E6** — an installer that writes a `config.toml` without `cloud_url` reproduces the same break at scale.
 - **E4** — Windows service wrapper.
 - **E5** — Edge UI consumes the **real** menu/locale/tender from `EdgeSession` (kills the hardcoded `ui/src/lib/menu.ts`; publishing a menu now changes the POS). Also: the UI never computes money — every figure comes from the edge. **Done, less three residual hardcoded `VND` sites**: the shift opening float, the shift screen's expected-cash figure, and one Pay-screen label.
-- **R4** — Real `UpdateInstaller` for Linux (systemd swap → self-test → rollback); Windows follows E4. **Ships with R5** — an installer with no caller is the same gap again.
+- **R4** — Real `UpdateInstaller` for Linux (systemd swap → self-test → rollback); Windows follows E4. **Done, shipped with R5** — an installer with no caller is the same gap again. [ADR-0055](adr/0055-edge-ota-updater.md) Amendment 1 records the two things the ADR assumed and the tree contradicted. **The edge cannot write `/usr/local/bin/pos-edge`, and must not be able to**: the unit runs the store under `ProtectSystem=strict` and `NoNewPrivileges`, so the binary moved to a symlink inside the service's own state directory and the sandbox stayed as strict as it is. And **the self-test that gates `commit` is not the one that decides a rollback** — ADR-0048's highest-precedence rule compares against the version the box is *running*, so a pre-commit verdict can never satisfy it, and a store that failed a build pre-commit would have installed the same build forever. There are now two: a smoke test that execs the staged file, and a boot confirmation whose absence past three attempts reverts the box on its own.
 
 ### A·P3 — Prove
 - **Q1** — In-process end-to-end acceptance suite (dine-in + takeaway), the v1.0 gate. **Done.**
@@ -270,22 +293,27 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
     Mid-conversion the surface is deliberately mixed, and safe by construction: nothing consumes the
     shape — `cloud-sync-http` maps on HTTP status alone and never parses a body — and the console's
     `failure()` now reads the envelope, `{"violations":[…]}` and raw text alike.
-  - **Q3b** — the ~360 inline validation refusals, by surface: non-`/admin` (`/v1`, `/sync`,
+  - **Q3b — done, in five slices.** The ~360 inline validation refusals, by surface: non-`/admin` (`/v1`, `/sync`,
     `/internal`, `/activate`) first, then `/admin`. These carry `details` — the field name and a
     stable reason — which is what lets a console form highlight the offending input instead of
     showing a sentence.
-  - **Q3c** — ETag on read, `If-Match` required on PATCH, `412` on mismatch.
-- **Q4** — Store hub + URL context `/t/:tenant/s/:store`.
+  - **Q3c** — ETag on read, `If-Match` required on PATCH, `412` on mismatch. **Done** ([ADR-0094](adr/0094-console-optimistic-concurrency.md), [ADR-0095](adr/0095-conditional-writes-for-collections.md)): six keyed upserts split into `create_*`/`update_*` so a conditional write has something to be conditional on, and collections that had no single row to version gained one.
+
+  **Q3 is closed.** All three sub-slices landed, including the 22 plain-text `400` sites the census missed on its first pass.
+- **Q4** — Store hub + URL context `/t/:tenant/s/:store`. **Done** (option A: the tenant is a path segment and the store a `?store=` query, so a link is shareable and a bookmark survives an org switch).
 - **Q5** — `/admin` becomes a real contract: pagination/`q`/sort on the unbounded lists; `/admin` into OpenAPI + the drift gate; fix the webhook header docs↔code mismatch; implement or drop `pos-api-version`; wire or delete the two dead scopes; rate-limit `/v1/orders` and `/sync`.
 - **Q6** — Integrator docs: webhook quickstart (correct HMAC header), auth guide, API tour.
 - **Q7** — UX step budget: a measured action budget for ~12 common tasks, failable in e2e (add item ≤2 taps, cash settle ≤3, price change ≤4 clicks).
 
 ### A·P4 — Operate
-- **O1** — Alert delivery webhook.
+
+> This section and **A·PF** below carried no status markers at all until 2026-09-04, which is why > "how much is left" was not answerable from this document. Two of the five here were already > delivered under other headings. The rest, and all of A·PF, are open.
+
+- **O1** — Alert delivery webhook. **Done** — the `AlertChannel` abstraction with a webhook channel over the existing TLS sender, plus the evaluator loop that fills it.
 - **O2** — TCP `:9100` printer transport + a "test print" button.
 - **O3** — Store-side WAL-shipping backup.
 - **O4** — JetStream capacity probe.
-- **O5** — In-code auth for `/internal/*` (a shared-secret header; defence in depth over the network boundary).
+- **O5** — In-code auth for `/internal/*` (a shared-secret header; defence in depth over the network boundary). **Done** ([ADR-0097](adr/0097-internal-route-authentication.md)) — and it recorded what a fleet-wide secret cannot buy: attributability. The two routes a *store* called moved to `/sync` in R5 instead, where the tenant comes from the scoped key rather than from the body.
 
 ### A·PF — Performance & durability (turns principle 4 into gates)
 - **PF1** — Latency budget as a CI gate: p99 per operation on a standard weak box (2-core/2GB) — add item <30 ms, fire <40 ms, settle <60 ms, `/ws` fan-out <50 ms (kept from P5), config apply <200 ms. Criterion + in-process HTTP benches; a regressing PR goes red.

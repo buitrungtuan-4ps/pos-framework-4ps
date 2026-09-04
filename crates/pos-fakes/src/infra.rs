@@ -501,7 +501,14 @@ impl FakeCloudSync {
     /// The one activation code this channel accepts; anything else is refused.
     pub const VALID_CODE: &'static str = "AAAA-AAAA-AAAA";
     /// The one release this channel publishes; anything else is not found.
-    pub const KNOWN_RELEASE: &'static str = "v1.2.3";
+    ///
+    /// **Bare, with no leading `v`.** It carried one until R5 wired up the first real caller, and
+    /// that would have made the fake hide the very drift
+    /// [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 2 exists to prevent: the
+    /// edge asks for a release by the bare version a rollout publishes and a binary reports, so a
+    /// fixture spelled `v1.2.3` answers every wiring test with "no such release" — a `404` whose
+    /// only meaning is "install nothing", and which is silent by design.
+    pub const KNOWN_RELEASE: &'static str = "1.2.3";
 
     /// A channel with the fixed fixtures, serving a signature that verifies.
     #[must_use]
@@ -535,9 +542,17 @@ impl FakeCloudSync {
     }
 
     /// The artifact bytes [`Self::KNOWN_RELEASE`] returns.
+    ///
+    /// A **runnable program**, not a placeholder string. The point of an update artifact is that a
+    /// store installs it and then runs it, and the real installer's pre-commit smoke test does
+    /// exactly that — execs the staged file as `pos-edge --self-test`
+    /// ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md) Amendment 1). Bytes that cannot be
+    /// executed make every install-path test come back as a rollback, which is the correct answer to
+    /// the wrong question: the fake would be proving that a truncated download is caught rather than
+    /// that a good release installs.
     #[must_use]
     pub fn artifact_bytes() -> Vec<u8> {
-        b"fake-update-artifact".to_vec()
+        b"#!/bin/sh\nexit 0\n".to_vec()
     }
 
     /// The detached signature [`Self::KNOWN_RELEASE`] returns beside [`Self::artifact_bytes`].

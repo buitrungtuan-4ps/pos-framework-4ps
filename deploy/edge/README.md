@@ -14,12 +14,46 @@ Use [`pos-edge.service`](pos-edge.service). The install steps are in its header 
 systemd sends `SIGTERM`; the edge drains in-flight requests before exiting, so a committed sale is
 durable and an interrupted one was never acknowledged.
 
+### The binary lives under the state directory
+
+`ExecStart` is **`/var/lib/pos-edge/bin/current`**, a symlink, not `/usr/local/bin/pos-edge`
+([ADR-0055](../../docs/adr/0055-edge-ota-updater.md) Amendment 1). The unit runs the store as an
+unprivileged user under `ProtectSystem=strict` and `NoNewPrivileges`, which make everything outside
+its `StateDirectory` read-only to the process — so an over-the-air update cannot write
+`/usr/local/bin`, and giving it that privilege would let a compromised till replace system binaries.
+The layout:
+
+```
+/var/lib/pos-edge/bin/current      -> slot-a | slot-b   what systemd starts
+/var/lib/pos-edge/bin/previous     -> slot-a | slot-b   where a rollback goes back to
+/var/lib/pos-edge/bin/slot-a       a version, mode 0755
+/var/lib/pos-edge/bin/slot-b       the other one
+/var/lib/pos-edge/bin/unconfirmed  present while a new version has not booted healthy yet
+/var/lib/pos-edge/store.sqlite.pre-update   the database as it was before the install
+```
+
+An install writes the spare slot, retargets `current` with one atomic `rename(2)`, and **exits**;
+`Restart=always` is what turns that exit into a start on the new binary. If a committed version
+never reaches a healthy boot, the edge counts its attempts, and past three it points `current` back
+at `previous`, restores the `.pre-update` database and exits again — so a bad release heals itself
+instead of needing somebody at the shop.
+
+`/usr/local/bin/pos-edge` is still worth keeping: it is the operator's rescue copy and what
+`pos-edge --self-test` is run from by hand. It is simply not what the service runs.
+
+**A box laid out the old way keeps trading.** With no `bin/current` the edge logs that it found no
+layout and starts no updater; everything else — pairing, selling, config-pull, heartbeat, the relay
+— is unchanged. To migrate an existing store, follow the unit's install block (create `bin/`, copy
+the running binary to `slot-a`, link `current` at it) and change `ExecStart`.
+
 ## Windows — a service
 
 Windows is a supported store OS. Until the native service wrapper (the `windows-service` crate) lands
 with hardware bring-up (roadmap A5) — it is platform code that cannot be exercised on the Linux CI —
 install the binary as a service with the built-in Service Control Manager, which delivers the same
-graceful-stop signal the binary already handles:
+graceful-stop signal the binary already handles. Over-the-air updates stay off on Windows until that
+slice lands: the install seam needs a symlink a service account can create, and the edge detects the
+absence rather than failing an install every ten minutes.
 
 ```
 sc.exe create pos-edge binPath= "C:\pos\pos-edge.exe" start= auto

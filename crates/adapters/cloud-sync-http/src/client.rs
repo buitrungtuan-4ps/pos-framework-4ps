@@ -12,7 +12,7 @@
 use pos_ports::cloud_sync::{ActivationGrant, CloudSync, SignedArtifact, UpdateReport};
 use pos_ports::signer::Signature;
 use pos_ports::{PortError, PortName, Secret};
-use pos_proto::ids::DeviceId;
+use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::text::ReleaseTag;
 
 use crate::wire::{HttpResponse, HttpTransport};
@@ -23,8 +23,17 @@ const PORT: PortName = PortName::CloudSync;
 /// The cloud route the activation exchange posts to ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 const ACTIVATE_PATH: &str = "/activate";
 
-/// The cloud route the OTA artifact fetch posts to ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)).
-const ARTIFACT_PATH: &str = "/internal/ota/artifact";
+/// The cloud route the OTA artifact fetch posts to
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
+///
+/// **On `/sync`, not `/internal`.** ADR-0054 pinned this at `/internal/ota/artifact` when `/internal`
+/// was believed to be the store-facing surface. It is not: `deploy/Caddyfile.d/site.caddy` answers
+/// `404` to every `/internal/*` request from outside the box, and a store reaches its cloud through
+/// that proxy — so the pinned path was unreachable by its only caller. The rule, from that amendment:
+/// a route a store calls belongs on `/sync`; `/internal` is for callers on the box's own network.
+fn artifact_path(store_id: StoreId) -> String {
+    format!("/sync/stores/{store_id}/artifact")
+}
 
 /// The response header carrying the artifact's detached signature, as lowercase hex
 /// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Named after the existing
@@ -33,21 +42,42 @@ const ARTIFACT_PATH: &str = "/internal/ota/artifact";
 /// bytes.
 const SIGNATURE_HEADER: &str = "X-Pos-Artifact-Signature";
 
-/// The cloud route an update report posts to ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
-const REPORT_PATH: &str = "/internal/ota/report";
+/// The cloud route an update report posts to ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// store-scoped for the same reason [`artifact_path`] is — and for one more.
+///
+/// [ADR-0097](../../../docs/adr/0097-internal-route-authentication.md) recorded that a fleet-wide
+/// shared secret could never make the `/internal` report *attributable*: that route read `tenant_id`
+/// and `store_id` out of the body, so it believed the caller's claim about which store it was. On
+/// `/sync` the cloud takes the tenant from the scoped key and the store from the path. The ADR said
+/// the move was owed "when store-originated reporting gains a real caller"; this is that caller.
+fn report_path(store_id: StoreId) -> String {
+    format!("/sync/stores/{store_id}/report")
+}
 
 /// The [`CloudSync`] adapter: the edge's request/response channel to its cloud, over an
 /// [`HttpTransport`].
 #[derive(Debug, Clone)]
 pub struct HttpCloudSync<T> {
     transport: T,
+    store_id: StoreId,
+    arch: &'static str,
 }
 
 impl<T> HttpCloudSync<T> {
-    /// Wraps a transport as a [`CloudSync`] channel.
+    /// Wraps a transport as a [`CloudSync`] channel for one store, on one architecture.
+    ///
+    /// Both are properties of the **box**, not of any single call, so they are constructor state
+    /// rather than parameters on [`CloudSync::fetch_update`]. That also keeps the port unchanged: the
+    /// store id became part of the path when the store-called routes moved to `/sync`, and `arch` is
+    /// the additive body field [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+    /// Correction 2 added — neither is something a caller should have to remember to pass.
     #[must_use]
-    pub const fn new(transport: T) -> Self {
-        Self { transport }
+    pub const fn new(transport: T, store_id: StoreId, arch: &'static str) -> Self {
+        Self {
+            transport,
+            store_id,
+            arch,
+        }
     }
 }
 
@@ -64,29 +94,32 @@ struct ActivateResponse {
     credential: String,
 }
 
-/// The artifact-fetch request body: the release to fetch.
+/// The artifact-fetch request body: the release to fetch, and the architecture to fetch it for.
+///
+/// `arch` is additive per [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Correction 2.
+/// R1's workflow cross-compiles two targets, so a request without one cannot say which binary it
+/// means — and guessing hands an `aarch64` box an `x86_64` executable that fails its self-test
+/// *after* the install, which is the expensive place to find out.
 #[derive(serde::Serialize)]
 struct FetchRequest<'a> {
     release: &'a str,
+    arch: &'a str,
 }
 
-/// The update-report request body: which store, the version it now runs, and its self-test outcome
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). The identity rides in the body as
-/// `/internal/reconcile` does — which is why the route's shared secret
-/// ([ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md)) does not make the report
-/// *attributable*: a key-holder can file one for any store. ADR-0097 records the move to
-/// `/sync/stores/{store_id}/…` this owes once it has a production caller. This adapter does **not**
-/// attach the key: one transport serves both `/activate` and `/internal/*`, so doing it
-/// unconditionally would send a fleet-wide secret to an unauthenticated pre-activation endpoint.
+/// The update-report request body: the version the store now runs, and its self-test outcome.
+///
+/// No `tenant_id` and no `store_id` any more. The `/internal` shape carried both, which is exactly
+/// what made a report un-attributable ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md));
+/// on `/sync` the tenant comes from the scoped key the transport already attaches and the store from
+/// the path. Dropping them from the body is not a courtesy — leaving them would mean the wire still
+/// *offered* a store id the cloud must be careful to ignore.
 #[derive(serde::Serialize)]
 struct ReportRequest<'a> {
-    tenant_id: String,
-    store_id: String,
     installed: &'a str,
     /// Omitted entirely when the store has never self-tested (ADR-0078 Amendment 1), rather than
     /// sent as `null`: the cloud's field is `#[serde(default)]`, so an absent field and a `null` mean
-    /// the same thing there, and omitting keeps the body byte-identical to the pre-amendment shape
-    /// for every store that does have a verdict.
+    /// the same thing there, and omitting keeps a never-self-tested box distinguishable from a failed
+    /// one.
     #[serde(skip_serializing_if = "Option::is_none")]
     self_test_passed: Option<bool>,
 }
@@ -113,13 +146,14 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
     async fn fetch_update(&self, release: &ReleaseTag) -> Result<SignedArtifact, PortError> {
         let body = serde_json::to_vec(&FetchRequest {
             release: release.as_str(),
+            arch: self.arch,
         })
         .map_err(|error| {
             PortError::internal(PORT, format!("encoding the fetch request failed: {error}"))
         })?;
         let response = self
             .transport
-            .post_json(ARTIFACT_PATH, body)
+            .post_json(&artifact_path(self.store_id), body)
             .await
             .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
         parse_fetch(response)
@@ -127,8 +161,6 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
 
     async fn report(&self, report: &UpdateReport) -> Result<(), PortError> {
         let body = serde_json::to_vec(&ReportRequest {
-            tenant_id: report.tenant.to_string(),
-            store_id: report.store.to_string(),
             installed: report.installed.as_str(),
             self_test_passed: report.self_test_passed,
         })
@@ -137,7 +169,7 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
         })?;
         let response = self
             .transport
-            .post_json(REPORT_PATH, body)
+            .post_json(&report_path(report.store), body)
             .await
             .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
         parse_report(&response)

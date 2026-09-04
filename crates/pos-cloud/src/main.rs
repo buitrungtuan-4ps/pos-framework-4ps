@@ -348,6 +348,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .merge(http::ota_report_router(
             store.config_trees(),
             SystemClock,
+            // The store-facing report route authenticates the box by its scoped key, so a report
+            // carries a tenant the cloud established rather than one the body claimed
+            // (ADR-0097). The `/internal` route beside it keeps the shared secret.
+            store.api_keys(),
             config.internal_shared_secret.clone(),
         ))
         // Both halves of R2's artifact hosting, and both need the object store: the store-facing
