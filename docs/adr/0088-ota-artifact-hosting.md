@@ -1,7 +1,7 @@
 # ADR-0088 — The cloud hosts the update artifact, and stays a dumb host
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-01
-**Relates to** [ADR-0003](0003-cattle-not-pets.md) (replace the box, don't nurse it) · [ADR-0037](0037-api-keys.md) (the scoped store key) · [ADR-0044](0044-fork-and-deploy.md) (what runs on the VPS) · [ADR-0047](0047-minisign-verification.md) (the edge verifies the signature, always) · [ADR-0048](0048-ota-rollout-model.md) (rings, revocation, the rollout decision) · [ADR-0053](0053-cloud-sync-port.md) (`CloudSync::fetch_update`) · [ADR-0054](0054-edge-cloud-http-client.md) (the adapter that calls it) · [ADR-0078](0078-sync-and-ota-closure.md) (`report()` and the rollout progress model) · `docs/release-runbook.md` (R1: how an artifact is built and signed) · `docs/roadmap-v3.md` (roadmap v3, slice R2)
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-04
+**Relates to** [ADR-0003](0003-cattle-not-pets.md) (replace the box, don't nurse it) · [ADR-0037](0037-api-keys.md) (the scoped store key) · [ADR-0044](0044-fork-and-deploy.md) (what runs on the VPS) · [ADR-0047](0047-minisign-verification.md) (the edge verifies the signature, always) · [ADR-0048](0048-ota-rollout-model.md) (rings, revocation, the rollout decision) · [ADR-0053](0053-cloud-sync-port.md) (`CloudSync::fetch_update`) · [ADR-0054](0054-edge-cloud-http-client.md) (the adapter that calls it) · [ADR-0078](0078-sync-and-ota-closure.md) (`report()` and the rollout progress model) · `docs/release-runbook.md` (R1: how an artifact is built and signed) · [ADR-0097](0097-internal-route-authentication.md) (why `/internal` is private-network-only) · `docs/roadmap-v3.md` (roadmap v3, slice R2)
 
 **Context.** The over-the-air path is built at both ends and joined in the middle by nothing.
 
@@ -55,3 +55,63 @@ Two things make this more than "add a route". First, hosting binaries is a **new
 
 1. **"Garage is already deployed *for media*" was wrong.** Garage runs on the box, but for backups and WAL shipping; media renditions live in a Postgres `bytea` table (`media_assets`, migration `0030`) — [ADR-0042](0042-image-pipeline.md)/[ADR-0031](0031-cloud-adapter-transports.md) deliberately chose that over the condemned `blob-garage` port, and `pos-cloud` does not depend on `blob-garage` today. The decision above is unaffected — a ≤150 KB rendition and a 30 MB binary are genuinely different calls, and the size argument for keeping artifacts out of the database stands — but "no new dependency" was too strong: the artifact-storage slice has to add `blob-garage` to `pos-cloud`, and with it S3 credentials the deployment does not currently provision (`bootstrap.sh` writes `garage.toml`; the access keys are minted at runtime with `garage key create`). That plumbing — env vars, a bucket, the runbook step — belongs to that slice and is named here so it is not discovered as a surprise.
 2. **The wire request carries no architecture.** [ADR-0054](0054-edge-cloud-http-client.md) pinned `fetch_update` as `POST /internal/ota/artifact` with a body of `{"release": "…"}`, and R1's workflow builds *two* targets (`x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`). So "one blob per (release, architecture)" is right, but the route as pinned cannot say *which* architecture it is being asked for. The registry slice keys artifacts by `(release, target)` accordingly; the route slice must add `arch` to the request body as an **additive** field the adapter fills from its own build target. That is a change to ADR-0054's request shape — still no `PROTOCOL_VERSION` bump, since `/internal` is unversioned and the field is additive, but it is a wire change, and the claim above that there is "no adapter change to the request shape" was wrong.
+
+**Amendment 1 (2026-09-04) — the artifact route moves to `/sync`, because `/internal` is unreachable by a store.**
+
+The decision above says the artifact route "requires the store's scoped key" and "joins the store-facing
+family". [ADR-0054](0054-edge-cloud-http-client.md) pinned that route as `POST /internal/ota/artifact`,
+describing `/internal/` as "the store-facing surface, not the public `/v1`".
+
+**That description stopped being true, and nobody reconciled the two.** The proxy now denies the whole
+prefix:
+
+```
+handle /internal/* {
+	respond 404
+}
+```
+
+`deploy/Caddyfile.d/site.caddy`, mirrored in `k8s/pos-cloud.yaml`. It is the enforcement of a real hole
+— `/internal/ingest`, `/internal/reconcile` and `/internal/ota/report` were reachable and
+unauthenticated from the internet — and it is deliberate: `/internal/*` is the cloud's own
+**trusted-network** surface, private-network-only by design, answering `404` rather than `403` so an
+unauthenticated caller learns nothing.
+
+A store dials its cloud at `cloud_url`, which is the public hostname, through that proxy. So the pinned
+path is **unreachable by the one caller it exists for**. Building the handler there would have produced
+a route that 404s exactly as it does today — written, tested, and unreachable, which is the failure
+`docs/roadmap-v3.md` indicts this program for seven times.
+
+The deny's own comment already names the alternative, and [ADR-0097](0097-internal-route-authentication.md)
+reached the same conclusion independently for the sibling report route, recording that it "moves to
+`/sync/stores/{store_id}/…` when it gains a real caller". Neither was carried across to the artifact
+route. This amendment carries it.
+
+- **The route is `POST /sync/stores/{store_id}/artifact`.** The store-facing family, where the cloud
+  resolves the tenant from the scoped key rather than trusting a body field, and where the config-pull,
+  heartbeat, device and relay routes already live. `/internal` keeps what it is for: the cloud's own
+  trusted-network tooling.
+
+- **It requires the `read_config` scope** — the owner's call, taken 2026-09-04, on the question this ADR
+  deferred as "an operational question, not an architectural one". Every provisioned box already carries
+  `read_config`, so the OTA path works with **no re-provisioning**: no revisiting each live store to
+  rewrite its mode-0600 env file, which at a hundred stores is a hundred site visits before a single
+  update can ship. The cost accepted is that `read_config` now also authorises downloading a release
+  artifact — a scope slightly broader than its name. That is bounded by what the scope is *for*: not
+  secrecy (the artifact is signed, and the edge verifies it against a build-baked anchor,
+  [ADR-0047](0047-minisign-verification.md)/[ADR-0092](0092-artifact-trust-chain.md)), but not running an
+  open binary-distribution host on the VPS. A dedicated `fetch_update` scope stays the cleaner shape and
+  the thing to reach for if a fork ever hosts stores it does not trust.
+
+- **The request body keeps `release` and gains `arch`**, exactly as Correction 2 said. Moving the path
+  does not change the body.
+
+- **Still no `PROTOCOL_VERSION` bump.** `/sync` is unversioned like `/internal`, the field is additive,
+  and the route has no existing server to break. The only client is `cloud-sync-http`, shipped in the
+  same binary as the updater that calls it.
+
+**What this costs.** ADR-0054's pinned path was wrong and its contract suite pins the wrong wire; both
+change in the implementation slice. That is the price of a pin written before the surface it names was
+given a meaning — and the reason this amendment exists rather than a quiet edit is that the *next* route
+someone adds under `/internal` for a store to call will fail the same way. The rule, stated once: **a
+route a store calls belongs on `/sync`; `/internal` is for callers on the box's own network.**

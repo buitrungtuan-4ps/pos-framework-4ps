@@ -1,7 +1,7 @@
 # ADR-0054 — The edge→cloud HTTP client reuses the tree's rustls stack, behind a transport seam
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-21
-**Relates to** [ADR-0007](0007-in-house-vs-dependency.md) · [ADR-0038](0038-webhook-tls-sender.md) · [ADR-0047](0047-minisign-verification.md) · [ADR-0048](0048-ota-rollout-model.md) · [ADR-0050](0050-activation-code-exchange.md) · [ADR-0053](0053-cloud-sync-port.md)
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-04
+**Relates to** [ADR-0007](0007-in-house-vs-dependency.md) · [ADR-0038](0038-webhook-tls-sender.md) · [ADR-0047](0047-minisign-verification.md) · [ADR-0048](0048-ota-rollout-model.md) · [ADR-0050](0050-activation-code-exchange.md) · [ADR-0053](0053-cloud-sync-port.md) · [ADR-0088](0088-ota-artifact-hosting.md) (Amendment 1 corrects the artifact path pinned here) · [ADR-0097](0097-internal-route-authentication.md)
 
 **Context.** [ADR-0053](0053-cloud-sync-port.md) added the `CloudSync` port — the store's one
 request/response channel to the cloud, carrying `activate(code)` (the first-boot activation exchange,
@@ -99,3 +99,25 @@ a wrong one is a wrong retry policy (the same obligation the `CloudSync` contrac
   route is defined by this ADR and implemented by its P9e-4 counterpart; until then the artifact path
   has a client and a pinned contract but no server, which is the ordinary order in which a
   request/response pair lands here.
+
+**Correction (2026-09-04) — `fetch_update`'s pinned path is wrong, and this ADR's reason for it no longer holds.**
+
+Above, the artifact endpoint is pinned at `POST {base}/internal/ota/artifact`, justified as sitting
+"under `/internal/` beside `/internal/ingest` and `/internal/reconcile` — the store-facing surface, not
+the public `/v1`".
+
+**`/internal/` is not the store-facing surface.** It became the cloud's own *trusted-network* surface
+when the proxy was taught to deny the whole prefix (`deploy/Caddyfile.d/site.caddy`, mirrored in
+`k8s/pos-cloud.yaml`), closing a real hole: three `/internal` handlers were reachable and
+unauthenticated from the internet. The deny answers `404` to every `/internal/*` request from outside
+the box, and a store reaches its cloud through exactly that proxy — so the path pinned here cannot be
+called by the client this ADR describes.
+
+The store-facing surface is `/sync/stores/{store_id}/…`, where the cloud resolves the tenant from the
+scoped key rather than trusting a body field. [ADR-0088](0088-ota-artifact-hosting.md) Amendment 1 moves
+the artifact route there and states the rule; [ADR-0097](0097-internal-route-authentication.md) had
+already reached it for the sibling `/internal/ota/report`.
+
+Nothing else in this ADR changes: the transport seam, the rustls reuse, the `POST`-with-JSON-body shape
+and the reasons for each all stand. What changes is the one path constant, and the contract suite that
+pins it — in R2's implementation slice, not here.
