@@ -17,6 +17,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A console link now carries the tenant it was read under** (roadmap `docs/cloud-admin-ux-plan.md`
+  Track F1). Screens moved from `/people` to `/t/<tenant>/people`, and where a screen uses a store,
+  it rides along as `?store=<id>`. Two consequences an operator will notice: a link pasted into a
+  message opens on the same tenant for whoever receives it, and two browser tabs can sit on two
+  different tenants at once — previously impossible, because the context lived in `localStorage`,
+  which every tab of an origin shares.
+
+  Old links still work. A bare `/people` redirects through the remembered tenant, so bookmarks and
+  anything already sent survive.
+
+  **The tenant is a path segment; the store is a query parameter.** That is not cosmetic. Every
+  tenant-scoped screen needs a tenant — that is what the context gate already enforces — but the
+  store is genuinely optional, and several screens (People, Reports, Campaigns) render perfectly
+  well before one is chosen. Encoding an optional thing as a required path segment would have forced
+  a placeholder like `/s/-/people` into the URL, which is the sort of thing this track has spent
+  three slices removing.
+
+  Console-level screens — the alert list, the audit trail, the admin roster, the account screens —
+  keep bare paths, because they span every tenant and have none to carry.
+
+### Changed
+- **The console's screens are defined once instead of four times.** The router, the nav, the
+  breadcrumb labels and the command palette were four hand-maintained lists that had to agree: 28
+  `<Route>`s, the nav groups, a 28-entry label map, and the palette's own 11 hrefs. Nothing checked
+  them against each other, and the dashboard has no test runner — so a screen added to three of the
+  four, or a path typo'd in one, produced a dead link or a blank breadcrumb that only a human
+  clicking through would find.
+
+  They now all derive from one table. A screen's id is a union type, so a typo is a compile error;
+  the router's component map is keyed by that union, so a screen without a component does not build.
+  This was the prerequisite for moving 25 routes safely without tests to catch a broken link.
+
+  **Upgrade note** No API, schema or permission change — this is the console's own URLs. Old
+  bookmarks redirect rather than break.
+
 - **Alerts can now be pushed off the console** (roadmap Track O2 slice 4, ADR-0073). The evaluator has
   been storing every firing alert since O2 slice 3, and the notification bell reads them — but nothing
   left the building. A store that went dark at 02:00 waited in the table until somebody opened the

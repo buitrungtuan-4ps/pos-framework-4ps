@@ -8,10 +8,26 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { AdminRole } from "../api/types";
-import { LOCALES, type Locale, type MessageKey, locale, localeName, setLocale, t } from "../i18n";
+import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
-import { actingAdmin, setActingAdmin, setAuthed, storeName, tenantName } from "../state/session";
+import {
+  actingAdmin,
+  setActingAdmin,
+  setAuthed,
+  storeId,
+  storeName,
+  tenantId,
+  tenantName,
+} from "../state/session";
+import {
+  NAV_GROUPS,
+  type ScreenId,
+  screenAtPath,
+  screenHref,
+  screenPathOf,
+  specOf,
+} from "../state/screens";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { ContextPicker } from "./ContextPicker";
 import { NotificationBell, ToastHost } from "./Toast";
@@ -20,117 +36,20 @@ import { NotificationBell, ToastHost } from "./Toast";
 // glance whether it is ready to open; a console-level screen omits it (no context, always openable).
 // `roles` (when set) limits the entry to those admin roles — the server enforces the same gate, so
 // this only hides what a role cannot use (ADR-0067).
-type NavItem = { href: string; key: MessageKey; scope?: Scope; roles?: readonly AdminRole[] };
-type NavGroup = { key: MessageKey; items: readonly NavItem[] };
-
-// The roles that may reach the admin roster: owner and admin can view and invite (the server gates
-// role/status *changes* to owner alone).
-const ADMIN_MANAGERS: readonly AdminRole[] = ["owner", "admin"];
-
-// The admin areas, grouped and each tagged with the working context it needs — so the nav shows at a
-// glance whether a screen is ready to open (its tenant, or tenant *and* store, is set) or is waiting
-// on a choice in the top bar. The console-identity screens carry no scope and are always reachable.
-const NAV_GROUPS: readonly NavGroup[] = [
-  {
-    key: "nav.group.overview",
-    items: [
-      { href: "/", key: "nav.reports", scope: "store" },
-      { href: "/fleet", key: "nav.fleet", scope: "tenant" },
-      { href: "/ota", key: "nav.ota", scope: "tenant", roles: ADMIN_MANAGERS },
-      { href: "/reconcile", key: "nav.reconcile", scope: "tenant" },
-      { href: "/alerts", key: "nav.alerts" },
-      { href: "/audit", key: "nav.audit" },
-    ],
-  },
-  {
-    key: "nav.group.masterData",
-    items: [
-      { href: "/stores", key: "nav.stores", scope: "tenant" },
-      { href: "/catalog", key: "nav.catalog", scope: "tenant" },
-      { href: "/campaigns", key: "nav.campaigns", scope: "tenant", roles: ADMIN_MANAGERS },
-      { href: "/inventory", key: "nav.inventory", scope: "tenant", roles: ADMIN_MANAGERS },
-      { href: "/channels", key: "nav.channels", scope: "tenant", roles: ADMIN_MANAGERS },
-      { href: "/media", key: "nav.media", scope: "tenant", roles: ADMIN_MANAGERS },
-      { href: "/layout", key: "nav.layout", scope: "tenant" },
-      { href: "/floor", key: "nav.floor", scope: "store", roles: ADMIN_MANAGERS },
-      { href: "/stations", key: "nav.stations", scope: "store", roles: ADMIN_MANAGERS },
-      { href: "/people", key: "nav.people", scope: "tenant", roles: ADMIN_MANAGERS },
-    ],
-  },
-  {
-    key: "nav.group.settings",
-    items: [
-      { href: "/config", key: "nav.config", scope: "store" },
-      { href: "/store-settings", key: "nav.storeSettings", scope: "store" },
-      { href: "/tax-rates", key: "nav.taxRates", scope: "tenant" },
-      { href: "/translations", key: "nav.translations", scope: "tenant" },
-      { href: "/subjects", key: "nav.subjects", scope: "tenant", roles: ["owner"] },
-    ],
-  },
-  {
-    key: "nav.group.access",
-    items: [
-      { href: "/api-keys", key: "nav.apiKeys", scope: "tenant" },
-      { href: "/devices", key: "nav.devices", scope: "tenant" },
-      { href: "/activation", key: "nav.activation", scope: "store" },
-      { href: "/admins", key: "nav.admins", roles: ADMIN_MANAGERS },
-    ],
-  },
-  {
-    key: "nav.group.integrations",
-    items: [{ href: "/webhooks", key: "nav.webhooks", scope: "tenant" }],
-  },
-  {
-    key: "nav.group.account",
-    items: [
-      { href: "/my-sessions", key: "nav.mySessions" },
-      { href: "/my-security", key: "nav.mySecurity" },
-    ],
-  },
-];
-
-// The page label for the breadcrumb, by route. `/stores/new` is the one path without a nav entry.
-const CRUMB_KEY: Record<string, MessageKey> = {
-  "/": "nav.reports",
-  "/fleet": "nav.fleet",
-  "/ota": "nav.ota",
-  "/reconcile": "nav.reconcile",
-  "/alerts": "nav.alerts",
-  "/audit": "nav.audit",
-  "/stores": "nav.stores",
-  "/stores/new": "wizard.title",
-  "/catalog": "nav.catalog",
-  "/campaigns": "nav.campaigns",
-  "/inventory": "nav.inventory",
-  "/channels": "nav.channels",
-  "/media": "nav.media",
-  "/layout": "nav.layout",
-  "/floor": "nav.floor",
-  "/stations": "nav.stations",
-  "/people": "nav.people",
-  "/config": "nav.config",
-  "/store-settings": "nav.storeSettings",
-  "/tax-rates": "nav.taxRates",
-  "/api-keys": "nav.apiKeys",
-  "/devices": "nav.devices",
-  "/webhooks": "nav.webhooks",
-  "/translations": "nav.translations",
-  "/subjects": "nav.subjects",
-  "/activation": "nav.activation",
-  "/admins": "nav.admins",
-  "/my-sessions": "nav.mySessions",
-  "/my-security": "nav.mySecurity",
-};
+// The nav's entries, their labels and their scopes all come from `state/screens`, which the router
+// reads too — see that module for why these were merged. What stays here is only how they are
+// *rendered*: the grouping headings, the role gate, and the context dot.
 
 // Whether the signed-in admin's role clears a nav entry's role gate. An entry with no `roles` is open
 // to all; a role-gated entry stays hidden until whoami loads (a brief, safe absence rather than a
 // flash of an area the role cannot use).
-function navItemVisible(item: NavItem): boolean {
-  if (!item.roles) {
+function navItemVisible(id: ScreenId): boolean {
+  const roles = specOf(id).roles;
+  if (!roles) {
     return true;
   }
   const role = actingAdmin()?.role;
-  return role !== undefined && item.roles.includes(role);
+  return role !== undefined && (roles as readonly AdminRole[]).includes(role);
 }
 
 // The nav dot's tooltip/aria: whether the item's context is ready, or which piece it is waiting on.
@@ -172,8 +91,8 @@ export function Shell(props: ParentProps) {
     if (storeName()) {
       trail.push(storeName());
     }
-    const pageKey = CRUMB_KEY[location.pathname];
-    trail.push(pageKey ? t(pageKey) : t("app.title"));
+    const screen = screenAtPath(screenPathOf(location.pathname));
+    trail.push(screen ? t(screen.key) : t("app.title"));
     return trail;
   };
 
@@ -226,16 +145,18 @@ export function Shell(props: ParentProps) {
                       </p>
                       <ul class="flex flex-wrap gap-1 md:flex-col">
                         <For each={items()}>
-                          {(item) => (
+                          {(id) => (
                             <li>
                               <A
-                                href={item.href}
-                                end={item.href === "/"}
+                                // The link carries the working context, so copying it out of the
+                                // address bar gives somebody else the same screen on the same tenant.
+                                href={screenHref(id, tenantId(), storeId())}
+                                end={specOf(id).path === "/"}
                                 class="flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base text-ink hover:bg-surface-raised"
                                 activeClass="bg-surface-raised font-semibold"
                               >
-                                <span>{t(item.key)}</span>
-                                <Show when={item.scope}>
+                                <span>{t(specOf(id).key)}</span>
+                                <Show when={specOf(id).scope}>
                                   {(scope) => (
                                     <span
                                       aria-label={scopeHint(scope())}

@@ -10,6 +10,7 @@ import { api, ApiError } from "../api/client";
 import type { Brand, CreateApiKeyResponse, Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
+import { screenHref } from "../state/screens";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
@@ -399,7 +400,7 @@ export function NewStore() {
 
               <Banner tone="ok" message={t("wizard.doneHint")} />
               <div>
-                <Button onClick={() => navigate("/stores", { replace: true })}>
+                <Button onClick={() => navigate(screenHref("stores", tenantId(), ""), { replace: true })}>
                   {t("wizard.finish")}
                 </Button>
               </div>

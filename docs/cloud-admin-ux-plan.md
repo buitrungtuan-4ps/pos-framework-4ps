@@ -207,7 +207,7 @@ actors; O1 early because fleet blindness is the operational risk.)
 | Phase | Scope | Size |
 |---|---|---|
 | **F0 · Fix now** | The seven bugs of §2: tenant-create UI, context gate, wizard idempotency, session-expiry redirect, webhook re-enable (route + button), auto-load everywhere, asset cache headers. | **S–M** |
-| **F1 · Console shell** | Grouped scope-aware nav (§4 of v1), URL-encoded context (`/t/:tenant/s/:store/…`), breadcrumbs, org switcher with search + caching, toast + notification-center primitives, command palette (screens + entities), locale persistence + endonyms + localized title, in-app help links to the shipped guides, version footer. | **M** |
+| **F1 · Console shell** | Grouped scope-aware nav (§4 of v1), URL-encoded context (`/t/:tenant/…` + `?store=` — see the note below), breadcrumbs, org switcher with search + caching, toast + notification-center primitives, command palette (screens + entities), locale persistence + endonyms + localized title, in-app help links to the shipped guides, version footer. | **M** |
 | **F2 · CRUD kit + API foundation** | Components: DataTable (server search/sort/pagination, virtualization, bulk-select), FormField (label+control+field error, aria-invalid), ConfirmDialog (typed-name for high-risk), Modal/Drawer, StatusBadge, EmptyState, dnd-list primitive, "technical details" ULID disclosure. API: pagination/filter/sort/q params + read-one on every entity; true partial PATCH + ETag/If-Match; AIP-193 structured errors on /admin; API-key labels; `(tenant_id, created_at)` indexes; compression/timeout/body-limit layers; /admin in OpenAPI with drift gate. Migrate Stores, Devices (merge proposals + registry into one Devices area), ApiKeys, Webhooks, Translations onto the kit. Perf wave 1 lands here. | **L** |
 | **F3 · Catalog & Layout rebuild** | Split the 1801-line Catalog into kit-based sub-screens (Items / Menus / Modifiers / Taxonomy / Tax classes) with search + bulk price editing; rebuild Layout as a **visual drag-and-drop grid** with device-shaped preview, collision detection, copy-between-channels; drag-to-reorder sections and taxonomy; currency-aware price fields. (Sequenced last in F because it consumes everything F2 builds.) | **L** |
 
@@ -272,3 +272,25 @@ unchanged and lands when the kit stabilizes.
 **F0** — all seven fixes are small, independent, and testable; it removes the reported ULID error,
 the tenant-creation dead end, and the duplicate-store trap in one PR. F1 and F2 follow. The full
 sequence is §5's recommended order, re-confirmable at each track boundary.
+
+
+## Correction — the URL shape, on building it (2026-09-03)
+
+This plan specified `/t/:tenant/s/:store/…`. Built as `/t/:tenant/…` with the store as an optional
+`?store=` instead, on the owner's call after the screens were measured.
+
+The store is not a property of a screen the way the tenant is. Fifteen screens read a store and
+thirteen never do — but the split that matters is a different one: several of the fifteen work
+*with or without* one. People renders its employee table before a store is chosen and uses the store
+only to scope the assignments section; Reports, Campaigns, Channels, TaxRates and Config are the
+same shape. A required `/s/:store` segment would have forced those to either demand a store they do
+not need — a functional regression on screens already reviewed — or carry a sentinel like `/s/-/`,
+putting a placeholder where a real id goes. That is the ULID-in-the-UI problem slice 3c existed to
+remove, reintroduced in the address bar.
+
+The tenant stays a path segment because it genuinely is required: every tenant-scoped screen needs
+one, which is what `RequireContext` gates on. An optional thing belongs in the query, where absence
+is the natural state and no placeholder is needed.
+
+What this delivers is what the plan wanted: a link that opens on the tenant it was read under, and
+two tabs on two tenants — which `localStorage` context could never do, being per-origin.

@@ -5,14 +5,25 @@
 // shown, and the ULID sits underneath, muted, for reference only.
 
 import { createSignal, For, Show } from "solid-js";
+import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
 import { t } from "../i18n";
 import { selectStore, selectTenant, storeId, storeName, tenantId, tenantName } from "../state/session";
+import {
+  SCREENS,
+  type ScreenId,
+  screenAtPath,
+  screenHref,
+  screenPathOf,
+  specOf,
+} from "../state/screens";
 import { Button } from "./ui";
 
 export function ContextPicker() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [open, setOpen] = createSignal(false);
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
@@ -62,13 +73,35 @@ export function ContextPicker() {
     }
   };
 
+  // Moving the context moves the URL: the address bar is what a link is copied from, so it has to
+  // say which tenant and store the screen is being read under. `selectTenant`/`selectStore` still
+  // write the signals and the remembered context — the redirect for a bare path reads that memory —
+  // and `TenantContext` re-affirms from the URL on arrival, so the two never disagree.
+  const goToContext = (tenant: string, store: string) => {
+    const screen = screenAtPath(screenPathOf(location.pathname));
+    // A console-level screen (the audit trail, the admin roster) has no tenant in its URL, so
+    // changing context there leaves the address bar alone rather than inventing a path.
+    if (!screen?.tenantScoped) {
+      return;
+    }
+    const id = (Object.keys(SCREENS) as ScreenId[]).find(
+      (candidate) => specOf(candidate).path === screen.path,
+    );
+    if (id) {
+      navigate(screenHref(id, tenant, store));
+    }
+  };
+
   const chooseTenant = (tenant: Tenant) => {
     selectTenant(tenant.tenant_id, tenant.name);
+    // `selectTenant` clears the store, so the new URL carries the tenant alone.
+    goToContext(tenant.tenant_id, "");
     void loadStores(tenant.tenant_id);
   };
 
   const chooseStore = (store: Store) => {
     selectStore(store.store_id, store.name);
+    goToContext(tenantId(), store.store_id);
     setOpen(false);
   };
 
