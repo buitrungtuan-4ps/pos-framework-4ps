@@ -66,6 +66,20 @@ pub fn released() -> Option<ReleaseVersion> {
     ReleaseVersion::parse(VERSION)
 }
 
+/// The target triple this binary was compiled for, stamped by `build.rs` from Cargo's own `TARGET`.
+///
+/// What the OTA artifact fetch sends as `arch` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// Correction 2): R1's workflow cross-compiles two targets, so a request without one cannot say which
+/// binary it means, and guessing hands an `aarch64` box an `x86_64` executable that fails its
+/// self-test *after* the install.
+///
+/// Not composed from `std::env::consts` — see `build.rs` for why that is silently wrong for a musl
+/// fork.
+#[must_use]
+pub const fn target() -> &'static str {
+    env!("POS_EDGE_TARGET")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{VERSION, released, tag};

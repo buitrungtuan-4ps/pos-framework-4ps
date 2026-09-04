@@ -17,27 +17,29 @@
 //! [`UpdateInstaller`]**: the only implementor in the tree is that test's `RecordingInstaller`. So
 //! the module is complete, tested, and unreachable.
 //!
-//! Two things gate wiring it, and neither is here.
+//! **What gated it, and what still does.** The gate used to be the wire: [`CloudSync::fetch_update`]
+//! posted to `/internal/ota/artifact`, `pos_cloud` served no such route, and even a handler there
+//! would have been unreachable — `deploy/Caddyfile.d/site.caddy` answers **404 to every
+//! `/internal/*` request from outside the box**, deliberately, and a store dials its cloud over that
+//! proxy. That is closed: the cloud serves `POST /sync/stores/{store_id}/artifact`
+//! ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1), the adapter posts there
+//! with the `arch` the box was compiled for, and the update report moved to `/sync` beside it
+//! ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) — where a report is
+//! tenant-attributable rather than merely secret-gated.
 //!
-//! **The artifact route does not exist, and the path it would be built at is the wrong one.**
-//! [`CloudSync::fetch_update`] posts to `/internal/ota/artifact`, pinned by
-//! [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md); `pos_cloud` does not serve it
-//! (roadmap v3 **R2**, [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)). Adding the
-//! handler there would not be enough: `deploy/Caddyfile.d/site.caddy` answers **404 to every
-//! `/internal/*` request from outside the box**, deliberately, because those handlers are the
-//! cloud's own trusted-network surface. A store dials its cloud over that proxy, so the pinned path
-//! is unreachable *by the caller it exists for* — and the deny's own comment says where store
-//! traffic belongs: `/sync/stores/{id}/…`, where the tenant comes from the scoped key rather than a
-//! body field. The pin predates the deny and nobody reconciled them; doing so is R2's first step.
+//! **What remains is the two halves that touch the OS.** There is still no production
+//! [`UpdateInstaller`] (roadmap **R4**: systemd swap → self-test → rollback, which needs a box to
+//! validate against), and nothing still constructs [`OtaUpdater`] outside `tests/ota.rs` (**R5-d**:
+//! the loop that reads the two published OTA nodes, assembles a [`DeviceState`] through
+//! `ota_state::device_state`, and reports at boot and on rollback). Until both land, everything below
+//! is complete, tested, and unreachable.
 //!
-//! **There is no real installer.** One for Linux is roadmap **R4**, and it needs a box to validate
-//! against.
-//!
-//! This paragraph replaces one that said the seam is what "the shipped binary implements against the
-//! OS". That was never true, and it is the sentence a reader would have trusted to decide the wiring
-//! was somebody else's finished work. Roadmap v3 indicts this program for merging written, tested,
-//! unreachable code seven times; a docstring that describes the intended end state in the present
-//! tense is how the eighth would hide.
+//! An earlier version of this paragraph said the seam is what "the shipped binary implements against
+//! the OS". That was never true, and it is the sentence a reader would have trusted to decide the
+//! wiring was somebody else's finished work. Roadmap v3 indicts this program for merging written,
+//! tested, unreachable code seven times; a docstring that describes the intended end state in the
+//! present tense is how the eighth would hide. So this paragraph is kept honest as the wiring lands,
+//! one clause at a time, rather than rewritten once at the end.
 //!
 //! # Verify before the disk is touched
 //!

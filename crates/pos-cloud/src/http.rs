@@ -845,9 +845,12 @@ where
 /// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
 /// report's arrival instant.
 #[derive(Clone)]
-struct OtaReportState<R, C> {
+struct OtaReportState<R, C, K> {
     reports: R,
     clock: C,
+    /// The key store the **store-facing** route authenticates against. The `/internal` route beside
+    /// it does not use this: it is trusted-network and guarded by the shared secret instead.
+    keys: K,
     /// The `/internal` shared secret (ADR-0097). Guarded at the handler like the other two, for one
     /// shape across all three, even though this router carries only the one route.
     internal_shared_secret: Option<InternalSecret>,
@@ -871,6 +874,24 @@ struct OtaReportRequest {
     self_test_passed: Option<bool>,
 }
 
+/// What a **store** reports about itself ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// on the `/sync` route that replaced the `/internal` one for store-originated reporting
+/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+///
+/// No `tenant_id` and no `store_id`: the tenant comes from the scoped key and the store from the
+/// path. That is the entire point of the move — the `/internal` shape took both in the body, so it
+/// trusted the caller's claim about which store it was, and a shared secret could change *who could
+/// reach* the route without making a report attributable.
+#[derive(Debug, Clone, Deserialize)]
+struct StoreReportRequest {
+    /// The release the store is now running.
+    installed: String,
+    /// Whether the post-install self-test passed; absent when the store has never self-tested
+    /// (ADR-0078 Amendment 1).
+    #[serde(default)]
+    self_test_passed: Option<bool>,
+}
+
 /// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
 /// stated independently of [`CloudApp`] like [`reconcile_router`].
 ///
@@ -878,20 +899,27 @@ struct OtaReportRequest {
 /// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
 /// private-network, and absent from the public OpenAPI, exactly like `/internal/ingest` and
 /// `/internal/reconcile`; the server stamps the arrival instant from its own clock.
-pub fn ota_report_router<R, C>(
+pub fn ota_report_router<R, C, K>(
     reports: R,
     clock: C,
+    keys: K,
     internal_shared_secret: Option<InternalSecret>,
 ) -> Router
 where
     R: OtaReportStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/internal/ota/report", post(ingest_ota_report::<R, C>))
+        .route(
+            "/sync/stores/{store_id}/report",
+            post(receive_store_report::<R, C, K>),
+        )
+        .route("/internal/ota/report", post(ingest_ota_report::<R, C, K>))
         .with_state(OtaReportState {
             reports,
             clock,
+            keys,
             internal_shared_secret,
         })
 }
@@ -1520,27 +1548,72 @@ where
 /// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies.
 /// A malformed id or an empty version is a `400`; a store failure is a retryable `503`; success is
 /// `204`. The key does not make the report *attributable* — the store id rides in the body — which is
-/// why ADR-0097 records this route as owing a move to `/sync` when it gains a real caller.
-async fn ingest_ota_report<R, C>(
-    State(state): State<OtaReportState<R, C>>,
+/// A **store** reports the version it is running, on the route that can say who it is.
+///
+/// The tenant comes from the scoped key and the store from the path, so a report is
+/// tenant-attributable — which the `/internal` shape could not be at any strength of secret, because
+/// it read both out of the body ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+///
+/// **What this does not close.** A [`Grant`](crate::auth::apikey::Grant) pins a tenant, not a store,
+/// so a key issued to one store can still name a sibling store of the *same tenant* in the path.
+/// That is a real residual and it is stated rather than glossed: the move closes cross-tenant
+/// forgery, not intra-tenant. It is bounded by what a report *is* — pure telemetry that never changes
+/// what any box runs (ADR-0078) — so the worst outcome is a distorted rollout picture for one
+/// operator's own fleet. Closing it needs a store-scoped grant, which is a key-issuance change and
+/// its own slice.
+///
+/// Gated on `read_config`, for the reason [`serve_ota_artifact`] is: every provisioned box already
+/// carries it, so the OTA path works with no re-provisioning, and a report is not a secret.
+async fn receive_store_report<R, C, K>(
+    State(state): State<OtaReportState<R, C, K>>,
     headers: HeaderMap,
-    Json(request): Json<OtaReportRequest>,
+    Path(store_id): Path<String>,
+    Json(request): Json<StoreReportRequest>,
 ) -> Response
 where
     R: OtaReportStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
-    if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
-        return refusal;
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
     }
-    let (tenant_id, store_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("store_id", &request.store_id),
-    ]) {
-        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
-    let installed = request.installed.trim();
+    record_ota_report(
+        &state,
+        grant.tenant(),
+        store_id,
+        &request.installed,
+        request.self_test_passed,
+    )
+    .await
+}
+
+/// The half both report routes share: check the version is not blank, then write the row.
+///
+/// Extracted so the two routes cannot drift on validation or on the status they answer — the whole
+/// difference between them is meant to be *where identity comes from*, and a shared body makes that
+/// true rather than merely intended.
+async fn record_ota_report<R, C, K>(
+    state: &OtaReportState<R, C, K>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    installed: &str,
+    self_test_passed: Option<bool>,
+) -> Response
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    let installed = installed.trim();
     if installed.is_empty() {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -1554,7 +1627,7 @@ where
             tenant_id,
             store_id,
             installed,
-            request.self_test_passed,
+            self_test_passed,
             state.clock.now(),
         )
         .await
@@ -1565,6 +1638,37 @@ where
             service_unavailable("fleet")
         }
     }
+}
+
+/// why ADR-0097 records this route as owing a move to `/sync` when it gains a real caller.
+async fn ingest_ota_report<R, C, K>(
+    State(state): State<OtaReportState<R, C, K>>,
+    headers: HeaderMap,
+    Json(request): Json<OtaReportRequest>,
+) -> Response
+where
+    R: OtaReportStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
+        return refusal;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    record_ota_report(
+        &state,
+        tenant_id,
+        store_id,
+        &request.installed,
+        request.self_test_passed,
+    )
+    .await
 }
 
 // --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) ------------------------

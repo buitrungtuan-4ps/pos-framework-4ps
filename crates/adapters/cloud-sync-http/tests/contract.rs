@@ -42,6 +42,14 @@ fn granted_device() -> DeviceId {
     DeviceId::new(Ulid::from_u128(0x0DE7))
 }
 
+/// The store this harness speaks for.
+///
+/// Named once and used both to build the adapter (which puts it in the path) and to build the report
+/// the suite hands it, so the two cannot drift into a test that passes for the wrong reason.
+fn reporting_store() -> StoreId {
+    StoreId::new(Ulid::from_u128(0x570E))
+}
+
 /// The detached signature the stub serves beside [`ARTIFACT`]. Opaque bytes: this suite proves the
 /// *wire* carries a signature and the adapter decodes it, not that Ed25519 works.
 const ARTIFACT_SIGNATURE: &[u8] = b"stub-detached-signature";
@@ -117,12 +125,23 @@ impl HttpTransport for StubCloud {
                     }
                 }
             }
-            "/internal/ota/artifact" => {
+            // Store-scoped, not `/internal` (ADR-0088 Amendment 1). Matched by shape so the stub
+            // asserts the *family* the real cloud serves rather than one hard-coded store id — a
+            // path that is not under `/sync/stores/` falls through to the 404 arm below, which is
+            // what would catch a regression back to `/internal`.
+            path if path.starts_with("/sync/stores/") && path.ends_with("/artifact") => {
                 let release = request
                     .get("release")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                if release == KNOWN_RELEASE {
+                // `arch` is required (ADR-0088 Correction 2). Enforced here rather than ignored:
+                // without it the cloud cannot tell which of R1's two cross-compiled binaries the
+                // box means, and the wrong one fails its self-test only after installing.
+                let arch = request
+                    .get("arch")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if release == KNOWN_RELEASE && !arch.is_empty() {
                     // The wire shape ADR-0092 fixes: the artifact is the raw body and its detached
                     // signature rides a header as lowercase hex. The header name is spelled in
                     // mixed case here on purpose — the wire delivers it lowercased, and the
@@ -143,14 +162,20 @@ impl HttpTransport for StubCloud {
                     }
                 }
             }
-            "/internal/ota/report" => {
+            path if path.starts_with("/sync/stores/") && path.ends_with("/report") => {
                 // A well-formed report is accepted; parsing proves the adapter sent the fields the
                 // cloud expects. `self_test_passed` is deliberately NOT required (ADR-0078
                 // Amendment 1): the real route reads it as `#[serde(default)]`, so a store that has
                 // never self-tested omits it and still reports which binary it runs. This stub
                 // required it until the amendment, which is what the suite's new case caught.
-                let has_fields =
-                    request.get("store_id").is_some() && request.get("installed").is_some();
+                //
+                // And the body must *not* carry a store id any more (ADR-0097's delivery note): the
+                // store is in the path and the tenant is in the key. A body field would be a store
+                // id the cloud has to remember to ignore, which is the field somebody wires back up
+                // in two years — so its absence is asserted, not merely unused.
+                let has_fields = request.get("installed").is_some()
+                    && request.get("store_id").is_none()
+                    && request.get("tenant_id").is_none();
                 // When the verdict *is* sent it must be a boolean, not a string or a number — the
                 // shape the cloud will deserialize into `Option<bool>`.
                 let verdict_well_formed = request
@@ -183,7 +208,11 @@ impl CloudSyncHarness for HttpHarness {
     type Channel = HttpCloudSync<StubCloud>;
 
     async fn fresh(&self) -> Setup<Self::Channel> {
-        Ok(HttpCloudSync::new(StubCloud))
+        Ok(HttpCloudSync::new(
+            StubCloud,
+            reporting_store(),
+            "x86_64-unknown-linux-gnu",
+        ))
     }
 
     fn valid_code(&self) -> String {
@@ -209,7 +238,7 @@ impl CloudSyncHarness for HttpHarness {
     fn sample_report(&self) -> UpdateReport {
         UpdateReport {
             tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
-            store: StoreId::new(Ulid::from_u128(0x570E)),
+            store: reporting_store(),
             installed: ReleaseTag::new(KNOWN_RELEASE),
             self_test_passed: Some(true),
         }

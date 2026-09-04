@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The two OTA routes a store calls moved from `/internal` to `/sync`, so a store can actually reach
+  them** (roadmap `docs/roadmap-v3.md` **R5**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Amendment 1 and [ADR-0097](docs/adr/0097-internal-route-authentication.md)'s delivery note). The
+  reverse proxy answers `404` to the whole `/internal` prefix from outside the box, so both the
+  artifact fetch and the update report were unreachable by the only caller they have — the same defect
+  #175 found for the artifact route, present twice.
+
+  `POST /sync/stores/{store_id}/report` is new: the tenant comes from the scoped key and the store
+  from the path, so a report is **tenant-attributable**, which ADR-0097 recorded that no strength of
+  shared secret could make the `/internal` shape. It is not store-attributable — a grant pins a
+  tenant, not a store — and that residual is stated in the ADR rather than glossed. The artifact fetch
+  now sends `arch`, stamped into the binary from Cargo's own `TARGET` by `build.rs`, because guessing
+  it from `std::env::consts` is silently wrong for a musl fork.
+
+  `POST /internal/ota/report` still exists and keeps its shared-secret guard for on-box tooling, but
+  the edge no longer posts to it. Both routes share one write helper, so the only difference between
+  them is where identity comes from.
+
+  **Upgrade note** — no `PROTOCOL_VERSION` change and no migration. The edge and the cloud ship in the
+  same release, so no store speaks the old wire to a new cloud or the reverse. `arch` is additive.
+  A fork that calls `/internal/ota/report` from its own cloud-side tooling is unaffected; a fork that
+  somehow had a *store* calling it was getting a proxy `404` and now works.
+
 ### Added
 - **A release can be put into the cloud, and cannot be promoted before it is** (roadmap `docs/roadmap-v3.md`
   **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 2). `POST /admin/releases?release=&arch=`

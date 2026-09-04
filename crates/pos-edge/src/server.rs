@@ -336,7 +336,14 @@ where
             return app;
         }
     };
-    let cloud = Arc::new(HttpCloudSync::new(transport));
+    // Activation only, so the store id and target carried here are never used for a path: `/activate`
+    // is not store-scoped and is deliberately unauthenticated (the box has no key yet). They are
+    // passed because the adapter is one type — the OTA loop builds its own over a keyed transport.
+    let cloud = Arc::new(HttpCloudSync::new(
+        transport,
+        store_id,
+        crate::version::target(),
+    ));
     let app = app.merge(activation_router(
         Arc::clone(edge),
         cloud,

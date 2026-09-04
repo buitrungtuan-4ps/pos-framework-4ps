@@ -178,10 +178,7 @@ first real store.
   connect options, so `link-nats` now lifts them) and the integration suite had been running against
   a broker with no authorization at all. Reachability of a published port on an `internal: true`
   network stays **unverified** — a real box has to say, and the fallback is recorded.
-- **R5** — Wire `OtaUpdater` into the running edge. It has **zero production callers** — the only
-  construction in the tree is `crates/pos-edge/tests/ota.rs`. Four merged slices (P9a/P9b/P9e-4, ADR-0047/
-  0048/0055) built update decision, signature verification, self-test and rollback, and none of it runs.
-  Principle 3 ("dễ cập nhật") is unmet until this lands, and it must land with R4's real installer.
+- **R5** — Wire `OtaUpdater` into the running edge. It has **zero production callers** — the only construction in the tree is `crates/pos-edge/tests/ota.rs`. Four merged slices (P9a/P9b/P9e-4, ADR-0047/0048/0055) built update decision, signature verification, self-test and rollback, and none of it runs. Principle 3 ("dễ cập nhật") is unmet until this lands, and it must land with R4's real installer. **Measured as four slices** once every seam was read: **R5-a** the two store-called `/internal` routes move to `/sync` (**done** — the proxy denies that prefix off-box, so *both* the artifact fetch and the update report were unreachable, and the report gained the store-scoped route ADR-0097 said it owed); **R5-b** `arch` stamped from Cargo's `TARGET` by a build script (**done**); **R5-c** the real Linux `UpdateInstaller` (R4 — systemd swap, self-test, rollback; the only piece CI cannot fully exercise, since `commit()` may reboot); **R5-d** the loop that constructs `OtaUpdater`, smaller than it looked because `ota_state::device_state` already assembles the whole `DeviceState`. Three things earlier notes listed as blockers were already built: the transport's bearer (`CloudHttpClient` attaches it), response headers on the client, and the edge reading both OTA config nodes.
 
 **Q1 moves up.** The in-process end-to-end acceptance suite is listed under A·P3, but it is the gate that
 would have caught every one of the seven above — seven times this program has merged code that was written,
