@@ -854,7 +854,10 @@ mod api_keys_store {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let keys = store.api_keys();
             let hash: &[u8] = &[3_u8; 32];
-            let scopes = vec!["read_rollups".to_owned(), "read_events".to_owned()];
+            // Two names, one of which this build does not know: the adapter stores whatever it is
+            // given and the domain drops unknown names on the way back out (`Scope::from_wire`), so
+            // a key issued by a newer cloud round-trips through an older one without loss.
+            let scopes = vec!["read_rollups".to_owned(), "read_config".to_owned()];
 
             keys.insert(
                 "KEY0000000000000000000001",

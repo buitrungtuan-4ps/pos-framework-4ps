@@ -73,11 +73,15 @@ POST /v1/webhook_endpoints/{webhook_endpoint_id}:rotate_secret
 POST /v1/webhook_deliveries/{webhook_delivery_id}:redeliver
 ```
 
-**Pagination** (AIP-158): request `page_size` and `page_token`; response returns `next_page_token`. This applies to the event feed as well:
+**Pagination** (AIP-158): request `page_size` and `page_token`; response returns `next_page_token`.
 
-```
-GET /v1/events?page_size=200&page_token=<ulid>&filter=event_type:"billing.bill.settled"
-```
+`GET /v1/events` — the paged event feed this section used to give as the worked example — **does not
+exist**, and the `read_events` scope that would have gated it was removed in roadmap **Q5**. Events
+leave the cloud two other ways: pushed to a registered endpoint as webhook deliveries
+([ADR-0032](adr/0032-webhooks.md)), or read from the store's own log on the box. A public pull feed
+is a new read surface with its own PII, retention and paging decisions and is not promised here.
+Paged `/admin` reads follow [ADR-0098](adr/0098-paged-admin-reads.md) instead, which is the
+convention the cloud actually implements.
 
 **Filtering and ordering:** `filter`, `order_by=create_time desc`. **Partial update:** `update_mask=display_name,price_amount_minor`.
 

@@ -111,9 +111,17 @@ The console's guided new-store wizard produces both files an operator carries to
 healthy — configuration syncs, the dashboard shows it alive — while the order relay answers `403` on
 every poll, so orders placed in the cloud never reach the kitchen. The wizard pre-selects both.
 
-**Two scopes are dead.** `read_events` and `manage_webhooks` exist in the cloud's `Scope` enum but
-gate no route, so they are deliberately absent from both scope pickers. Do not issue a key expecting
-them to grant anything.
+**Two scopes were removed.** `read_events` and `manage_webhooks` existed in the cloud's `Scope` enum
+and gated **no route**; roadmap **Q5** deleted them. The issue route used to accept them, so a key
+could be handed over with a scope list promising an authority the cloud would never honour — it now
+refuses the name. A key already stored with either name keeps working and grants exactly what it
+granted before: unknown names are dropped on read, and these two granted nothing.
+
+If a fork wants either capability it is building it, not re-enabling it. `read_events` needs a public
+event feed that does not exist — a new read surface, with its own PII, retention and paging
+decisions. `manage_webhooks` needs webhook CRUD on `/v1` behind a bearer key; the console already has
+it behind a session and RBAC ([ADR-0067](adr/0067-multi-admin-console-rbac.md)), so a second path
+would be weaker auth on the same writes.
 
 ## 4. TLS — pick one of four postures
 

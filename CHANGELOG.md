@@ -16,6 +16,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Removed
+
+- **The two API-key scopes that gated nothing** (roadmap v3 **Q5**). `read_events` and
+  `manage_webhooks` were variants of the cloud's `Scope` enum and **no route consulted either**.
+  The console's picker had already stopped offering them, but `POST /admin/api-keys` still
+  **accepted** them — so an integrator could be handed a key whose scope list promised an authority
+  the cloud would never honour, with nothing anywhere to say so. Deleting the variants is what turns
+  that into a refusal: the strict parse on the issue route now names the unknown scope back.
+
+  Wiring them instead was considered and rejected as out of scope for a tail item. `read_events`
+  named a public event feed that does not exist — a new read surface with its own PII, retention and
+  paging decisions — and `docs/naming-and-api.md` used `GET /v1/events` as its pagination example,
+  which is now corrected to say plainly that the route was never built and how events do leave the
+  cloud. `manage_webhooks` named webhook CRUD on `/v1` behind a bearer key, while the console
+  already has that CRUD behind a session and RBAC ([ADR-0067](docs/adr/0067-multi-admin-console-rbac.md));
+  a second path would be weaker auth on the same writes.
+
+  **Upgrade note:** a key already stored with either name keeps working and authorises exactly what
+  it did before — unknown scope names are dropped on read (deny-by-default), and these two granted
+  nothing to drop. What changes is issuing: a request naming either scope is refused rather than
+  silently satisfied. No migration; no stored data is rewritten. `docs/fork-checklist.md` records
+  what a fork would have to build to have either capability.
+
 ### Fixed
 
 - **The published webhook headers were not the ones the cloud sent** (roadmap v3 **Q5**,

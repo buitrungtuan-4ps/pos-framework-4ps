@@ -1428,9 +1428,9 @@ async fn a_request_without_a_key_is_unauthorised() {
 
 #[tokio::test]
 async fn a_key_without_the_scope_is_forbidden() {
-    // A valid key, but granted only ManageWebhooks — it may not read rollups.
+    // A valid key, but granted only PlaceOrders — it may not read rollups.
     let keys = FakeKeys::default();
-    let token = issue_key(&keys, tenant(), &[Scope::ManageWebhooks]);
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
     let ulid = store_id().as_ulid().to_string();
 
     let response = http::router(app(

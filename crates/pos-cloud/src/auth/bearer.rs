@@ -316,7 +316,7 @@ mod tests {
         let grant = authenticate(&keys, &clock, &bearer(&token))
             .await
             .expect("valid");
-        let refused = require_scope(&grant, Scope::ManageWebhooks).expect_err("not granted");
+        let refused = require_scope(&grant, Scope::PlaceOrders).expect_err("not granted");
         assert_eq!(refused.into_response().status(), StatusCode::FORBIDDEN);
     }
 

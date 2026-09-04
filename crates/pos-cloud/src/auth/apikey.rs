@@ -38,14 +38,30 @@ pub const TOKEN_PREFIX: &str = "pos_";
 
 /// A capability an API key may be granted. Deny-by-default: a key holds a set of these and authorises
 /// nothing outside it. The set grows with the public API.
+///
+/// # Two names are gone
+///
+/// `read_events` and `manage_webhooks` were variants here until roadmap **Q5**, and **neither gated
+/// a single route**. `read_events` named a raw event feed that was never built; `manage_webhooks`
+/// named webhook CRUD that exists only under `/admin`, behind a console session and RBAC
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)) — not behind a bearer key. The console's
+/// scope picker had already stopped offering them, but `POST /admin/api-keys` still **accepted**
+/// them, so an integrator could be handed a key whose scope list promised an authority the cloud
+/// would never honour. Removing the variants is what makes that refusal happen: [`Scope::from_wire`]
+/// now returns `None`, and the issue route's strict parse names the unknown scope back.
+///
+/// Wiring them instead was considered and is not a tail item. A public event feed is a new read
+/// surface with its own PII, retention and paging questions ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)
+/// governs the first of those), and a second path to the webhook writes would weaken auth on a
+/// surface that already has stronger auth, for no capability gain. `docs/fork-checklist.md` records
+/// both as removed rather than dead.
+///
+/// A key already stored with either name keeps working exactly as it does today: [`Self::from_parts`]
+/// drops names this build does not know, and these two granted nothing to drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
     /// Read per-store activity rollups (`GET /v1/stores/{id}/rollups/daily`).
     ReadRollups,
-    /// Read the raw event stream.
-    ReadEvents,
-    /// Create, list, and delete webhook endpoints.
-    ManageWebhooks,
     /// Pull the store's own configuration updates (`GET /sync/stores/{id}/config`). The credential a
     /// first-party store holds to keep its config current ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
     ReadConfig,
@@ -69,8 +85,6 @@ impl Scope {
     pub const fn as_wire(self) -> &'static str {
         match self {
             Self::ReadRollups => "read_rollups",
-            Self::ReadEvents => "read_events",
-            Self::ManageWebhooks => "manage_webhooks",
             Self::ReadConfig => "read_config",
             Self::ManageDevices => "manage_devices",
             Self::PlaceOrders => "place_orders",
@@ -87,8 +101,6 @@ impl Scope {
     pub fn from_wire(name: &str) -> Option<Self> {
         match name {
             "read_rollups" => Some(Self::ReadRollups),
-            "read_events" => Some(Self::ReadEvents),
-            "manage_webhooks" => Some(Self::ManageWebhooks),
             "read_config" => Some(Self::ReadConfig),
             "manage_devices" => Some(Self::ManageDevices),
             "place_orders" => Some(Self::PlaceOrders),
@@ -527,8 +539,55 @@ mod tests {
         );
         assert!(grant.authorizes(Scope::ReadRollups));
         assert!(
-            !grant.authorizes(Scope::ManageWebhooks),
+            !grant.authorizes(Scope::PlaceOrders),
             "deny by default: an ungranted scope is refused"
+        );
+    }
+
+    /// The two names roadmap **Q5** removed must not parse.
+    ///
+    /// They were variants that gated no route, and the issue route accepted them — so an operator
+    /// could be handed a key whose scope list promised an authority the cloud would never honour.
+    /// `from_wire` returning `None` is what turns that into a refusal, because the issue route's
+    /// parse is strict and names the unknown scope back. Asserted here rather than at the route so
+    /// the guarantee sits with the vocabulary itself.
+    #[test]
+    fn the_scopes_that_gated_nothing_no_longer_parse() {
+        assert_eq!(Scope::from_wire("read_events"), None);
+        assert_eq!(Scope::from_wire("manage_webhooks"), None);
+        // Every remaining name still does, so the removal did not take a live one with it.
+        for scope in [
+            Scope::ReadRollups,
+            Scope::ReadConfig,
+            Scope::ManageDevices,
+            Scope::PlaceOrders,
+            Scope::RelayOrders,
+        ] {
+            assert_eq!(Scope::from_wire(scope.as_wire()), Some(scope));
+        }
+    }
+
+    /// A key stored with a removed name keeps working, and gains nothing from it.
+    ///
+    /// This is the compatibility half of the removal: `from_parts` drops names this build does not
+    /// know (deny-by-default on read), and these two granted nothing to drop — so a key issued
+    /// before the removal authorises exactly what it authorised before.
+    #[test]
+    fn a_key_stored_with_a_removed_scope_keeps_the_rest_of_its_authority() {
+        let restored = StoredApiKey::from_parts(
+            ApiKeyId::new(Ulid::from_u128(9)),
+            &TenantId::new(Ulid::from_u128(1)).as_ulid().to_string(),
+            &[7_u8; 32],
+            &["read_rollups".to_owned(), "read_events".to_owned()],
+            false,
+            None,
+        )
+        .expect("the row rebuilds");
+        assert!(restored.scopes.contains(&Scope::ReadRollups));
+        assert_eq!(
+            restored.scopes.len(),
+            1,
+            "the removed name is dropped, not guessed at"
         );
     }
 
