@@ -18,6 +18,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A per-store installer on the new-store wizard's handoff step** (roadmap v3 **R3**).
+  The wizard already handed the operator a `config.toml` and an `env` file and then asked them to
+  follow a README on the shop floor: create a service user, get two sets of owners and modes right,
+  install a systemd unit, and lay out the update slots. **Download installer** now produces
+  `install-pos-edge.sh` for that one store, carrying both files inside it as quoted heredocs. Run it
+  as `sudo sh install-pos-edge.sh ./pos-edge ./pos-edge.service` and the box is laid out, enabled and
+  started.
+
+  The slot layout is the reason it is worth generating rather than typing. Since ADR-0055
+  Amendment 1 the unit starts `/var/lib/pos-edge/bin/current`, a symlink the edge retargets to
+  install its own updates; a box with the binary only at `/usr/local/bin/pos-edge` trades perfectly
+  well and **silently never self-updates** — the kind of mistake a hand-typed install makes and
+  nobody notices for a release or two.
+
+  A re-run refreshes the config, the unit and the rescue copy but **leaves an already-installed
+  binary alone**: a box that had updated itself over the air would otherwise have `current` pointed
+  back at whatever binary the technician was holding, which is a silent downgrade of a live shop.
+  That guard is also what makes the claimed idempotency true.
+
+  It is not a `curl | sh`: nothing in it reaches the network, and the operator can read every line
+  before running it. It **contains the store's key**, so the handoff screen says so in as many words
+  and the script's own header says to delete it once the box is up. The two separate downloads stay
+  for the cases the script cannot cover — a Windows box, a host managed some other way, or a
+  technician who wants to read the config before it is written.
+  [`docs/guides/bring-a-store-online.md`](docs/guides/bring-a-store-online.md) Step 2 now leads with
+  the installer and keeps the manual path beside it.
+
 - **The UX step budget is now measured** (roadmap v3 **Q7**, `docs/ui-ux.md` §6).
   `docs/ui-ux.md` has said since P6 that a common action takes at most two taps from the role's home
   screen and a rare one at most three — the rule behind design principle 1, "a normal operator sells
