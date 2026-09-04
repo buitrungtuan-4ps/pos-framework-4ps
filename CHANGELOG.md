@@ -18,6 +18,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The UX step budget is now measured** (roadmap v3 **Q7**, `docs/ui-ux.md` §6).
+  `docs/ui-ux.md` has said since P6 that a common action takes at most two taps from the role's home
+  screen and a rare one at most three — the rule behind design principle 1, "a normal operator sells
+  without training" — and nothing checked it. A rule nothing measures decays one convenient extra
+  dialog at a time.
+
+  `ui/scripts/step-budget.mjs` declares the tap count of **thirteen** selling tasks and resolves
+  every declared tap against the source: the route must exist in `App.tsx`, its screen must exist,
+  and an interactive element on that screen must really call the named action. `pnpm build` runs it,
+  so the `ui` CI job fails on a breach. Zero new dependencies — it uses the TypeScript compiler the
+  i18n gate already uses. Run alone with `pnpm steps`; it prints every task and marks the four
+  sitting **at** their ceiling, which are the flows to defend hardest (cash settle, both counter
+  charges, the kitchen bump).
+
+  All three of its failure modes were verified by breaking them: a renamed handler, a route that does
+  not exist, and a flow one tap over budget.
+
+  **What it cannot see is stated in the script and in the doc**: a required tap nobody declared. Add
+  a confirm dialog to the pay flow and leave the declaration alone, and the gate stays green while
+  the flow is one tap worse. Catching that needs a browser driving a running edge with a paired
+  device — a harness this repo does not have, filed with what it would take. So the gate stops a
+  budget being quietly raised and a flow being quietly renamed; a reviewer still owns "did this add a
+  step?", and the printed map is what makes that a five-second question.
+
 - **An integrator guide** (roadmap v3 **Q6**): `docs/guides/integrate-with-the-api.md`, for a third
   party connecting to the cloud rather than for someone running it. Three parts — authentication and
   what a refusal means, a tour of what `/v1` actually offers, and a webhook quickstart with a
