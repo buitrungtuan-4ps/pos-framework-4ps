@@ -207,3 +207,34 @@ appends it anyway, so that the totality rule holds by construction rather than b
 remembering which column happens to have a unique index behind it. Names are not unique, so
 migration 0046 adds `employees_by_tenant_name (tenant_id, name, id)`; an `EXPLAIN` test asserts the
 plan walks it with no `Sort` node above the scan, and deleting the migration fails that test.
+
+## Delivery note — the roster table pages (2026-09-04)
+
+The last step. The People screen's employee table reads twelve rows at a time, searches on the
+server and sorts on the server. The two notes above each said "the screen still does not page" and
+named what was blocking it; nothing is now.
+
+**What it took, and why it was four slices rather than one.** The table was never the hard part. It
+was the third of three readers of the tenant's whole roster, and paging it while the other two still
+needed the set would have sent *more* data, not less. So: the assignment row learned to name its own
+person, the assign picker learned to search, the read learned to order — and only then could the
+table ask for a page. Each of those was a change to something other than the table, which is why
+"page the employees table" was never a single slice, and why measuring the screen before starting is
+what made the sequence obvious.
+
+**Three props travel together, and the reason is honesty rather than completeness.**
+`serverTotal`+`onPage` page it. Without `onSort` the headers would go inert, silently removing a
+capability the screen had. Without `onQuery` the search box would filter the twelve rows on screen
+while looking like it searched the roster. Each of those is a smaller lie than an unpaged table —
+and each is still a lie, which is the standard this ADR has been applying to `total` and to `ORDER
+BY` all along.
+
+**`kit.tsx` gained `onQuery`.** Its `searchText` docstring had said server-side search "is not wired
+yet" since B3-2; it is now, on the same shape as `onSort`: the prop's presence switches the box to
+server mode and disables the local filter. A caller that offers `searchText` without `onQuery` keeps
+the local behaviour, so the four screens already using it are untouched.
+
+**What the operator sees.** A tenant with two hundred staff no longer waits for two hundred rows to
+render the first twelve. The search box asks the server, so it finds people who are not on screen —
+which the local filter could not do the moment the table was paged, and could only do before because
+the screen was holding everything. Sorting by name or code reorders the roster rather than the page.

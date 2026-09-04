@@ -136,10 +136,13 @@ export function DataTable<T>(props: {
   actions?: (row: T) => JSX.Element;
   actionsHeader?: string;
   /**
-   * When present, a search box filters rows on this text (case-insensitive substring).
+   * When present, a search box appears above the table.
    *
-   * Client-side only: in server mode it would filter the page rather than the set, which is the same
-   * lie the local sort would tell. Server-side search is ADR-0098's `?q=`, and is not wired yet.
+   * Without `onQuery` it filters `rows` here, case-insensitively, on this text. With `onQuery` the
+   * box is the caller's to answer and this function is not consulted — filtering locally in server
+   * mode would narrow the *page* rather than the set, the same lie the local sort would tell. Pass
+   * it anyway: it is what makes the box appear, and a caller that later drops `onQuery` gets the
+   * local behaviour back rather than a box that does nothing.
    */
   searchText?: (row: T) => string;
   /** When greater than 0, rows are paginated at this page size, with a pager below the table. */
@@ -159,16 +162,35 @@ export function DataTable<T>(props: {
    * first page: a page-four offset means nothing once the order changes.
    */
   onSort?: (field: string, descending: boolean) => void;
+  /**
+   * Asks the caller to re-read the set matching `text`, which is ADR-0098's `?q=`.
+   *
+   * Its presence is what makes the search box server-backed. The caller is expected to reset to the
+   * first page — a page-four offset means nothing once the set it indexed into has changed — and to
+   * debounce: this fires on every keystroke, because the component cannot know what a request costs
+   * the caller.
+   */
+  onQuery?: (text: string) => void;
 }) {
   const [sortKey, setSortKey] = createSignal<string | null>(null);
   const [ascending, setAscending] = createSignal(true);
   const [query, setQuery] = createSignal("");
   const [page, setPage] = createSignal(0);
 
+  /**
+   * Whether the search box is answered by the server rather than by filtering `rows` here.
+   *
+   * Keyed on `onQuery` alone, the same way `serverSorted` keys on `onSort`: a caller that offers it
+   * has taken responsibility for the box, and one that does not gets the local filter.
+   */
+  const serverQueried = () => props.onQuery !== undefined;
+
   const filtered = createMemo(() => {
     const needle = query().trim().toLowerCase();
     const text = props.searchText;
-    if (!needle || !text) {
+    // In server mode `rows` is already what matched. Filtering it again would narrow the page rather
+    // than the set — the same lie re-sorting a page would tell.
+    if (serverQueried() || !needle || !text) {
       return props.rows;
     }
     return props.rows.filter((row) => text(row).toLowerCase().includes(needle));
@@ -268,8 +290,12 @@ export function DataTable<T>(props: {
           placeholder={t("table.search")}
           value={query()}
           onInput={(event) => {
-            setQuery(event.currentTarget.value);
+            const text = event.currentTarget.value;
+            setQuery(text);
+            // Back to the first page either way: an offset indexed into the set the previous search
+            // matched, and that set has just changed.
             setPage(0);
+            props.onQuery?.(text);
           }}
           class="min-h-touch w-full max-w-xs rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
         />

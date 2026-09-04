@@ -414,3 +414,35 @@ by inheritance from the query that was already there, not by design.
    with itself. Making `window_total` return `0` on the empty branch — the exact pre-fix
    behaviour — now fails five integration tests, one per paged read. The guard is real, and the
    next adapter to get this wrong will be told.
+6. **#299** — the People screen, the one the cohort could not finish.
+
+   B3-4 held this back and named the reason: the screen read the roster three times over, and only
+   one of those was a table. Four slices later it pages. The sequence is the note worth keeping,
+   because the order was forced rather than chosen:
+
+   1. **The assignment row names its person** (#167). A `LEFT JOIN` puts the employee's name and
+      code on the read that needs them, so labelling an assignment stops searching the roster. The
+      join is `LEFT` because no foreign key ties the two tables — an inner join would have hidden a
+      grant that still works.
+   2. **The picker searches** (#168). `?q=` on the roster read, matching name or staff code. This
+      exposed a gap in B3-3's own coverage: the cohort that "all" got `q`/`sort`/`order` was four of
+      five, because employees had been held back to B3-4 and nobody re-checked the membership.
+   3. **The read orders** (#169). `?sort=`/`?order=`, because the table's headers sort client-side
+      and `DataTable` makes headers inert in server mode without `onSort`. Deferred as speculative
+      in #168 and correctly so; it became a requirement the moment a consumer was read rather than
+      imagined.
+   4. **The table pages** (#170), and `kit.tsx` gains `onQuery` so its search box can be answered by
+      the server rather than filtering the page it is sitting on.
+
+   **The rule this confirms, now four for four.** B3-2 stated it for `items`, B3-4 for `employees`:
+   *the API and the screen are separate slices whenever the screen's other consumers of the same
+   read are not tables.* What #299 adds is the corollary — those other consumers are not obstacles
+   to route around but work items in their own right, and each one is a slice. A screen with three
+   readers of a set needs three slices before the fourth can page it, and no amount of wanting the
+   table paged shortens that.
+
+   **A test that proved nothing, found by mutation.** #169's first order test used three distinct
+   names, so removing the tiebreaker flip from the descending order *passed* — the tiebreaker never
+   fired. Seeding two people with the same name made the guard real. This is the same shape as the
+   `total: 0` defect B3-5 fixed: an assertion that looks like a guard, is not one, and stays that
+   way until something forces the case it was written for.
