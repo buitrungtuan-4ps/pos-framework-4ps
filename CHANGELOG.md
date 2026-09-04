@@ -107,6 +107,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (tenant_id, created_at DESC, id DESC)`; additive, `IF NOT EXISTS`, and the existing
   `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
 
+### Fixed
+- **The audit trail's "acting admin" filter can now be used** (roadmap Track G2 slice 4). It asked
+  for an admin ULID while the table beside it showed an email, so an operator could see who made a
+  change but had no way to filter by them — the id was never displayed anywhere to copy. It is a
+  list of admins by name now, and the trail filters by whoever is picked.
+
 ### Changed
 - **The People screen's employee table reads a page at a time.** A tenant with two hundred staff no
   longer waits for two hundred rows to see the first twelve.

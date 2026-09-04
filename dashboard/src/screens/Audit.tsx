@@ -4,10 +4,10 @@
 // opens in a detail drawer. Read-only, behind console.data.read; global by design, so no tenant is
 // required to open it.
 
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { AuditEntry, TrailOrder } from "../api/types";
+import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -58,7 +58,17 @@ export function Audit() {
   // The applied filters. Empty strings mean "no filter"; the client drops absent fields.
   const [entityType, setEntityType] = createSignal("");
   const [action, setAction] = createSignal("");
+  // The acting admin, held as the id the server filters on. The control offers names, because that
+  // is what the table's actor column shows — asking an operator to paste a ULID they can only read
+  // as an email was a filter nobody could use (#295).
+  //
+  // A plain `<select>` over the whole set, deliberately. Console admins are the people who
+  // administer this deployment, not a tenant's staff: a handful, bounded by how many humans hold
+  // console logins, and `GET /admin/admins` has always returned all of them unpaged. That is the
+  // distinction ADR-0098 draws — a picker over a small bounded set is fine, one over a set that
+  // grows with the business is not, and the People screen's roster was the latter.
   const [actor, setActor] = createSignal("");
+  const [admins, setAdmins] = createSignal<AdminIdentity[]>([]);
   // Which end of the trail the pager walks from. The server orders the whole matching set, so this
   // is a re-read rather than a re-sort of the page (ADR-0098 B3-3).
   const [order, setOrder] = createSignal<TrailOrder>("newest");
@@ -95,7 +105,15 @@ export function Audit() {
     }
   };
 
-  onMount(() => void load(0));
+  onMount(() => {
+    void load(0);
+    // The roster fills the actor picker. A failure here is not worth a banner over the trail: the
+    // picker degrades to "any admin" and the rest of the screen works, so it is logged and dropped.
+    void api
+      .listAdmins()
+      .then(setAdmins)
+      .catch(() => setAdmins([]));
+  });
 
   /**
    * Re-reads the trail from the other end, starting at its first page.
@@ -192,12 +210,26 @@ export function Audit() {
             onInput={setAction}
             placeholder={t("audit.filter.actionHint")}
           />
-          <TextField
-            label={t("audit.filter.actor")}
-            value={actor()}
-            onInput={setActor}
-            placeholder={t("audit.filter.actorHint")}
-          />
+          <label class="block">
+            <span class="mb-1 block text-sm font-medium text-ink">
+              {t("audit.filter.actor")}
+            </span>
+            <select
+              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+              aria-label={t("audit.filter.actor")}
+              value={actor()}
+              onChange={(event) => setActor(event.currentTarget.value)}
+            >
+              <option value="">{t("audit.filter.anyActor")}</option>
+              <For each={admins()}>
+                {(admin) => (
+                  <option value={admin.id}>
+                    {admin.name} ({admin.email})
+                  </option>
+                )}
+              </For>
+            </select>
+          </label>
         </div>
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={entries()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
