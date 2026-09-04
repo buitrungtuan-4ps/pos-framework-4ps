@@ -18,6 +18,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till is told whether its store takes tips, and which tender it accepts** (roadmap v3
+  **B1.3** and **E5**, `GET /api/menu`).
+
+  Both facts were already live in `EdgeSession`, applied from published configuration, and read by
+  **nobody**. The consequences were not symmetric.
+
+  `accepted_tender` made the till offer a method the edge would refuse, so a cash-only store's
+  refusal arrived as a `400` in front of the guest instead of a button that was never there.
+
+  Tips were worse than a bad refusal. B1.3 landed the domain, the event and the wire — a `tip` on
+  each `Payment`, gated on `Capability::Tips`, with the change arithmetic corrected — and shipped no
+  way for a cashier to enter one. There is no tip pad, no suggested-percentage row and no i18n key
+  anywhere in `ui/`, so **`tip_amount` is zero on every payment a real store takes**, whatever the
+  capability says. This entry is the first half of closing that: the till can now *know*. The pad
+  itself is the next commit.
+
+  `MenuResponse` carries them because they are the same kind of fact as a price — published from the
+  console, resolved for this store, refreshed when the price book is — and because the till already
+  reads that route on load, so nothing new is called or authorised. `GET /api/session` was the other
+  candidate and is the wrong one: it answers *who is signed in on this device*, per-device identity
+  with a per-sign-in lifetime, and hanging store-wide configuration off it would conflate the two.
+
+  **Two flags, not ten.** The session carries ten capability flags and the till could be handed all
+  of them; nine would arrive with no reader, which is the failure this repository has shipped
+  repeatedly (`docs/roadmap-v3.md` Cadence). A flag joins this response in the change that consumes
+  it; B5.3 is where the rest arrive with their gates.
+
+  `accepted_tender` is `null` rather than a list of all seven methods when a store restricts
+  nothing, so the till can tell "no restriction published" from "a restriction that happens to allow
+  everything" — and so a method added to the enum later is accepted by an unrestricted store without
+  a config change.
+
+  Verified through the composed router rather than by calling the handler, because the question is
+  whether the shipped binary serves them, and in both directions: a store with tips **off** says so.
+  Reinstating the bug fails the test with `left: Bool(false), right: Bool(true)`.
+
 - **`pos_edge` runs as a real Windows service** (roadmap v3 **E4**,
   `crates/pos-edge/src/service.rs`). Two things were wrong, and the second is the one that mattered.
 
