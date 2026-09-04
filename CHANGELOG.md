@@ -16,6 +16,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **The gate register counted three chores as things only a person can do.** `docs/gate-register.md`
+  shipped with "mint the Garage S3 access keys on the box", "set `RCLONE_REMOTE` on the box" and "add
+  the certificate-export cron line" listed as human gates. None of them is.
+
+  `bootstrap.sh` already runs on the box on every deploy — `.github/workflows/deploy.yml` invokes it
+  over SSH — and already mints the database password, the broker token and the internal shared secret.
+  Garage genuinely has to generate its own key pair, but `garage key create` is a command on the box
+  and `bootstrap.sh` is a script on the box; the bucket-and-layout setup around it was deferred to
+  backups and never written. `deploy.yml` already pipes four other values down the same SSH line, so
+  `RCLONE_REMOTE` can ride along. And `bootstrap.sh` already calls `tls-export.sh` once, so it can
+  write the crontab entry too.
+
+  The three move to a new section — **manual today, and should not be** — which is a backlog, not a
+  gate list. The page now states the test that would have caught them (*is there a reason a script
+  cannot do this?*) before the tables rather than after, and records how the mistake was made: every
+  row cited a document that describes the step as something an operator does, which is an accurate
+  description of today and not evidence that a person is required.
+
+  **What is left is genuinely human**: a secret a machine must not hold (the offline signing key), a
+  one-shot value only a person can take custody of (the super-admin's TOTP), a judgement no config can
+  make (which addresses to firewall), physical hardware, and outside bodies.
+
 ### Changed
 - **The OTA artifact route moves off `/internal` before it is built** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
   Amendment 1, roadmap `docs/roadmap-v3.md` **R2**). [ADR-0054](docs/adr/0054-edge-cloud-http-client.md)

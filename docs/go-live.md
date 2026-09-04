@@ -61,11 +61,15 @@ Follow [`deploy-runbook.md`](deploy-runbook.md) start to finish. Three points in
    The `otpauth://` URI is shown **once**. Take custody of it before closing the terminal; the setup
    route then answers `409` forever, and recovery is `reset_admin` with a reviewer's approval.
 
-9. ⛔ **GATE — day-two durability** ([H10, H11](gate-register.md#3-human-decision--at-first-boot-and-after)).
-   Set `RCLONE_REMOTE` **on the box** (it is not a GitHub secret; setting it there does nothing), and
-   add the certificate-export cron line on the two ACME modes. Both fail silently: an unset backup
-   target looks identical to a working one until a restore, and a stale certificate export surfaces
-   weeks later at expiry.
+9. ⛔ **GATE — choose a backup destination** ([H10](gate-register.md#3-human-decision--at-first-boot-and-after)).
+   Which provider, which bucket, whose credentials — that is the decision. Today you also have to put
+   `RCLONE_REMOTE` on the box by hand and add the certificate-export cron line yourself
+   ([A2, A3](gate-register.md#8-manual-today-and-should-not-be)); neither *needs* a person, and both
+   are on the list to automate.
+
+   Do them anyway until then, because both fail silently: an unset backup target looks identical to a
+   working one right up until a restore, and a stale certificate export surfaces weeks later, at
+   expiry.
 
 ## Phase 2 — Open the event bus
 
