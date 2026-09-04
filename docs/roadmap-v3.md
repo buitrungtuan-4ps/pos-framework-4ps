@@ -73,7 +73,7 @@ written, tested and merged *looks* finished from the inside.
 | **B1.3** | `Payment.tip` reached the edge and was recorded; the till had no tip entry, so the amount was zero on every real payment | **Closed** (#183) |
 | **E5** | A fifth hardcoded-`VND` site in `Takeaway.tsx` — the same defect fixed one file over, written the same way and missed | **Closed** (#183) |
 | **E3** | The wizard emitted no `[nats]` section, so every provisioned store published nothing at all | **Closed** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md) Amendment 1 settles the stream layout the value needed) |
-| **Q4** | The URL context half shipped; the per-store landing screen it was for did not | Open — a six-card store hub, ADR first |
+| **Q4** | The URL context half shipped; the per-store landing screen it was for did not | **Closed** — six cards on the tenant-scoped index ([ADR-0099](adr/0099-store-hub.md)); Reports moved to `/reports` |
 | **Q7** | `ui/` got its step budget; `dashboard/` has none, so the console's own flows are unmeasured | Open — measure the price-change flow, then decide the ceiling |
 
 **What is not done is everything that needs a machine.** [`gate-register.md`](gate-register.md) §6 is
@@ -327,7 +327,14 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
   - **Q3c** — ETag on read, `If-Match` required on PATCH, `412` on mismatch. **Done** ([ADR-0094](adr/0094-console-optimistic-concurrency.md), [ADR-0095](adr/0095-conditional-writes-for-collections.md)): six keyed upserts split into `create_*`/`update_*` so a conditional write has something to be conditional on, and collections that had no single row to version gained one.
 
   **Q3 is closed.** All three sub-slices landed, including the 22 plain-text `400` sites the census missed on its first pass.
-- **Q4** — Store hub + URL context `/t/:tenant/s/:store`. **Done** (option A: the tenant is a path segment and the store a `?store=` query, so a link is shareable and a bookmark survives an org switch).
+- **Q4** — Store hub + URL context `/t/:tenant/s/:store`. **Done, both halves.** The URL is option A
+  (the tenant a path segment, the store a `?store=` query, so a link is shareable and a bookmark
+  survives an org switch). The hub itself is six read-only cards on the tenant-scoped index
+  ([ADR-0099](adr/0099-store-hub.md)), composed from reads that already existed — no route, no
+  projection, no migration, no permission — with Reports moved to `/reports`. Two of the six are
+  counts rather than lists, and the ADR records why: the cloud projects neither a live out-of-stock
+  set nor a shift roster, and the roster is employee personal data needing a lawful basis rather
+  than a card.
 - **Q5** — `/admin` becomes a real contract: pagination/`q`/sort on the unbounded lists; `/admin` into OpenAPI + the drift gate; fix the webhook header docs↔code mismatch; implement or drop `pos-api-version`; wire or delete the two dead scopes; rate-limit `/v1/orders` and `/sync`.
 - **Q6** — Integrator docs: webhook quickstart (correct HMAC header), auth guide, API tour.
 - **Q7** — UX step budget: a measured action budget for ~12 common tasks, failable in e2e (add item ≤2 taps, cash settle ≤3, price change ≤4 clicks).

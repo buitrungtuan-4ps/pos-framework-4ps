@@ -126,6 +126,9 @@ const Stations = lazy(() =>
 const StoreSettings = lazy(() =>
   import("./screens/StoreSettings").then((module) => ({ default: module.StoreSettings })),
 );
+const StoreHub = lazy(() =>
+  import("./screens/StoreHub").then((module) => ({ default: module.StoreHub })),
+);
 const Stores = lazy(() =>
   import("./screens/Stores").then((module) => ({ default: module.Stores })),
 );
@@ -155,6 +158,7 @@ function Guarded(props: ParentProps) {
 // Every guarded screen, by id. A `Record<ScreenId, …>` rather than a list, so a screen added to
 // `SCREENS` without a component here does not compile — the router cannot fall behind the table.
 const COMPONENTS: Record<ScreenId, Component> = {
+  storeHub: StoreHub,
   reports: Reports,
   fleet: Fleet,
   ota: Ota,
@@ -265,8 +269,11 @@ export function App() {
             <Route path={SCREENS[id].path} component={COMPONENTS[id]} />
           ))}
           {/* The pre-context landing: no tenant chosen yet, or none remembered. The Shell's picker
-              is the first thing here, which is what F0's context gate exists for. */}
-          <Route path="/" component={COMPONENTS.reports} />
+              is the first thing here, which is what F0's context gate exists for. It renders the hub
+              (ADR-0099), whose `RequireContext` is the panel that asks for a store — the same screen
+              a chosen context lands on, so the bare root and `/t/<tenant>?store=X` do not disagree
+              about what the console's front page is. */}
+          <Route path="/" component={COMPONENTS.storeHub} />
           {/* Old bookmarks. Every tenant-scoped path that used to be absolute still resolves, now by
               redirecting through the remembered tenant. */}
           {TENANT_SCOPED.filter((id) => SCREENS[id].path !== "/").map((id) => (

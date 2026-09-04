@@ -16,6 +16,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The console has a landing page that answers "is this shop all right"** (roadmap v3 **Q4**,
+  [ADR-0099](docs/adr/0099-store-hub.md)). Q4's URL half shipped long ago — a tenant is a path
+  segment and the store a `?store=` query, so a console link is shareable — and the screen it was
+  *for* was never built, which is why the slice read as done.
+
+  The tenant-scoped index now renders a six-card **store overview**: whether the box is online and
+  when it last checked in, whether it holds the configuration that was published to it, what it took
+  on its latest trading day, how many tills are open, how many items are out of stock, and what is
+  firing against it. Each card links to the screen that can act on the answer; the hub itself is
+  read-only, because a hub that writes is a second copy of five editors.
+
+  **Reports moves to `/reports`** and keeps every capability. It is a good screen and it was the
+  wrong *first* screen: it answered how much the shop made before saying whether the shop was
+  online. A bookmark of `/t/<tenant>?store=X` now opens the overview; nothing 404s.
+
+  **Two cards are honest approximations and say so on the card.** "Shifts open" is a count of tills,
+  not a list of names — the cloud projects no roster, and a roster would be employee personal data
+  needing a lawful basis rather than a card. "Out of stock" is the day's net count, not the live
+  list — the events are counted but no projection folds them into "which dishes". Both are recorded
+  as follow-ups in the ADR instead of being dressed up. Takings is the only card behind a permission,
+  because prices are T2; a shift count and an out-of-stock count are operational facts, and gating
+  them behind the revenue permission would have left an Ops admin unable to see that the kitchen had
+  run out of something.
+
+  No new route, projection, migration or permission: the hub is composed from four reads the console
+  already made.
+
 ### Fixed
 
 - **Every store the console has ever provisioned published none of its sales** (roadmap v3 **E3**).

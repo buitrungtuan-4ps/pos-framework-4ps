@@ -104,5 +104,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0096](0096-unprocessable-status.md) | A twelfth status, because nine refusals cannot say what is wrong with them | Accepted |
 | [0097](0097-internal-route-authentication.md) | The `/internal` routes get a key of their own, and now is the only cheap time to do it | Accepted |
 | [0098](0098-paged-admin-reads.md) | Paging is a second read, not a change to the read that exists | Accepted |
+| [0099](0099-store-hub.md) | The console's landing page answers "is this shop all right", not "how much did it make" | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
