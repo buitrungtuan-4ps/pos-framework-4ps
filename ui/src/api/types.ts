@@ -145,11 +145,16 @@ export interface PaymentRequest {
   method: string;
   tendered: Money;
   applied_to_bill: Money;
+  // The tip taken on this tender, held apart from the sale and never part of the bill total. On the
+  // payment rather than beside it (roadmap B1.3): tips used to be a separate `tips` list on the
+  // settle request with no correspondence to the payments, so no captured payment could record its
+  // own tip and each one's change was over-reported by exactly the tip. Optional — omit it and the
+  // tender carries no tip, which is how every device behaved before the field existed.
+  tip?: Money;
 }
 
 export interface SettleRequest {
   payments: PaymentRequest[];
-  tips?: Money[];
 }
 
 export interface BillResponse {

@@ -26,8 +26,9 @@ use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 use crate::app::{BillView, Edge};
 use crate::http::{bad_request, error_response, parse_ulid};
 
-/// One payment a device applies to a bill: how it was paid, what the guest handed over, and what was
-/// put against the total. Change lives in the gap between `tendered` and `applied_to_bill`.
+/// One payment a device applies to a bill: how it was paid, what the guest handed over, what was put
+/// against the total, and what they left. Change is what is left of `tendered` once
+/// `applied_to_bill` and `tip` are taken out of it.
 ///
 /// `method` arrives as an [`Open`] enum so an unrecognised token is a clean rejection rather than a
 /// deserialise failure; [`Self::into_payment`] is the domain boundary that refuses an unspecified or
@@ -37,6 +38,11 @@ pub(crate) struct PaymentRequest {
     method: Open<PaymentMethod>,
     tendered: Money,
     applied_to_bill: Money,
+    /// The tip on this tender. Optional, so a device that takes no tips — or one built before the
+    /// field existed — settles exactly as before. It replaces the request's `tips` list, which
+    /// carried tips beside the payments with no correspondence to them (roadmap **B1.3**).
+    #[serde(default)]
+    tip: Option<Money>,
 }
 
 impl PaymentRequest {
@@ -47,16 +53,20 @@ impl PaymentRequest {
             method: self.method.require()?,
             tendered: self.tendered,
             applied_to_bill: self.applied_to_bill,
+            // An absent tip is no tip, in the tendered amount's currency — never a zero in some
+            // other currency, which the settlement arithmetic would refuse.
+            tip: self
+                .tip
+                .unwrap_or_else(|| Money::zero(self.tendered.currency_code)),
         })
     }
 }
 
-/// A settle request: the payments applied, and any tips (a separate ledger, never part of the total).
+/// A settle request: the payments applied, each carrying the tip taken on it (a separate ledger,
+/// never part of the total).
 #[derive(Debug, Deserialize)]
 pub(crate) struct SettleRequest {
     payments: Vec<PaymentRequest>,
-    #[serde(default)]
-    tips: Vec<Money>,
 }
 
 /// A bill as returned to a device after a command.
@@ -157,10 +167,7 @@ where
     {
         return bad_request("this store does not accept one of those payment methods as tender");
     }
-    respond(
-        edge.settle_bill(actor, bill_id, payments, request.tips)
-            .await,
-    )
+    respond(edge.settle_bill(actor, bill_id, payments).await)
 }
 
 /// Maps a bill command outcome to a response.

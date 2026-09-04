@@ -106,8 +106,8 @@ fn a_restart_rebuilds_the_projection_from_the_log() {
                         method: PaymentMethod::Cash,
                         tendered: vnd(165_000),
                         applied_to_bill: vnd(165_000),
+                        tip: vnd(0),
                     }],
-                    vec![],
                 )
                 .await
                 .expect("settles");
@@ -249,8 +249,8 @@ fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
                     method: PaymentMethod::Cash,
                     tendered: vnd(165_000),
                     applied_to_bill: vnd(165_000),
+                    tip: vnd(0),
                 }],
-                vec![],
             )
             .await
             .expect("the counter bill is still there after the restart, and settles");

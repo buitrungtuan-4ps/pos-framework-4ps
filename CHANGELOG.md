@@ -18,6 +18,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Tips were recorded as zero, and change was over-reported by the tip** (roadmap v3 **B1.3**,
+  [ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)). `billing.payment.captured` has
+  carried a `tip_amount` since P5 and it was written as a literal zero on every payment ever
+  captured — so a store could take tips all night and its own log said nobody tipped, and tip-out
+  could not be reconstructed from it.
+
+  The cause was the shape, not the assignment. Tips travelled as a `Vec<Money>` **beside** the
+  payments, with no correspondence between the two lists. The settlement arithmetic came out right
+  in total — tips were correctly excluded from `total_due` and correctly subtracted from the total
+  change — but nothing knew *which* tender a tip was taken on, so no captured payment had a tip to
+  record. The tip now lives on `pos_core::billing::Payment` and the parallel list is gone.
+
+  That shape hid a second, worse defect. Each payment's `change_given` was computed as
+  `tendered − applied_to_bill`, which over-reports the change by exactly the tip: a guest handing
+  over 200,000 on a 165,000 bill and leaving 20,000 was recorded as owed **35,000** back rather
+  than 15,000. The arithmetic now lives in one place, `Payment::change`, which subtracts the tip.
+
+  A tip also now requires the store to have tips on (`tips_enabled`, §10). The gate refuses taking
+  the money, never the sale: a store with tips off settles untipped bills exactly as before, and a
+  tipped tender is refused rather than pocketed silently.
+
+  **Upgrade note:** `POST /api/bills/{id}/settle` takes the tip per payment
+  (`payments[].tip`, optional) instead of a request-level `tips` array. A device that sends neither
+  settles exactly as before; one that still sends `tips` has that field ignored, so its tips would
+  go unrecorded — update the caller. `Payment`, `billing::settle`, `BillCommand::Settle` and
+  `Edge::settle_bill` changed shape with it. No migration, no event-schema change (the event field
+  already existed) and no `PROTOCOL_VERSION` change: the fix is that the field is now populated.
+
 - **Every order was taxed at the store's channel, not its own** (roadmap v3 **B1.2**,
   [ADR-0074](docs/adr/0074-localization-and-tax.md)). Tax rates are configured per tax class **per
   channel**, and both bill reads looked the rate up with `EdgeSession.sales_channel` — a store-wide

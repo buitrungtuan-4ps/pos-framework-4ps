@@ -131,14 +131,15 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
                         method: PaymentMethod::Cash,
                         tendered: vnd(200_000),
                         applied_to_bill: vnd(200_000),
+                        tip: vnd(0),
                     },
                     Payment {
                         method: PaymentMethod::Card,
                         tendered: vnd(295_000),
                         applied_to_bill: vnd(295_000),
+                        tip: vnd(0),
                     },
                 ],
-                vec![],
             )
             .await
             .expect("settles split across cash and card");
@@ -231,8 +232,8 @@ fn the_running_check_matches_what_the_bill_settles_against() {
                     method: PaymentMethod::Cash,
                     tendered: check.total_due,
                     applied_to_bill: check.total_due,
+                    tip: vnd(0),
                 }],
-                Vec::new(),
             )
             .await
             .expect("the check's own figure settles the bill");

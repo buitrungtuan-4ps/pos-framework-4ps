@@ -1849,7 +1849,6 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         bill_id: BillId,
         payments: Vec<Payment>,
-        tips: Vec<Money>,
     ) -> Result<BillView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let bill = self
@@ -1894,7 +1893,6 @@ impl<S: EventStore> Edge<S> {
             BillCommand::Settle {
                 total_due: totals.total_due,
                 payments: payments.clone(),
-                tips,
             },
             &ctx,
         )?;
@@ -1912,16 +1910,17 @@ impl<S: EventStore> Edge<S> {
 
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse). The
-        // captured payments are what let the shift cash roll-up be rebuilt from the log; each records
-        // its own change, and tips are held apart from the sale (per-payment tip capture is P7).
+        // captured payments are what let the shift cash roll-up and the tip-out be rebuilt from the
+        // log; each records its own change and its own tip, held apart from the sale.
         let zero = Money::zero(self.session().currency);
         let mut envelopes = Vec::with_capacity(payments.len() + 1);
         let mut messages = Vec::with_capacity(payments.len() + 1);
         for payment in &payments {
-            let change = payment
-                .tendered
-                .checked_sub(payment.applied_to_bill)
-                .map_err(DomainError::from)?;
+            // `Payment::change` subtracts the tip; computing it here as `tendered − applied` was the
+            // arithmetic half of B1.3 and over-reported the change by exactly the tip. The clamp
+            // stays: a tender that does not cover its own share plus its tip owes no change, and
+            // `settle` has already refused the settlement if that is true in total.
+            let change = payment.change().map_err(AppError::Domain)?;
             let captured = BillingPaymentCaptured {
                 bill_id,
                 payment_id: PaymentId::new(self.next_ulid()),
@@ -1930,7 +1929,7 @@ impl<S: EventStore> Edge<S> {
                 tendered: payment.tendered,
                 applied_to_bill: payment.applied_to_bill,
                 change_given: if change.is_negative() { zero } else { change },
-                tip_amount: zero,
+                tip_amount: payment.tip,
             };
             let (envelope, message) = self.prepare(&ctx, &captured)?;
             envelopes.push(envelope);
@@ -2495,15 +2494,19 @@ impl<S: EventStore> Edge<S> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::num::NonZeroU32;
     use std::sync::Arc;
 
     use super::{Edge, EdgeSession, LineDraft, StoreIdentity};
     use crate::queue::{InMemoryQueueNumbers, QueueNumberAuthority};
     use crate::receipt::InMemoryReceipts;
     use pos_core::billing::Payment;
+    use pos_core::capability::{Capability, CapabilityContext};
     use pos_core::decision::Actor;
     use pos_core::inventory::{Recipe, RecipeBook, RecipeLine};
     use pos_fakes::FakeStore;
+    use pos_ports::event_store::{EventQuery, EventStore};
+    use pos_proto::events::BillingPaymentCaptured;
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
         DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
@@ -2515,7 +2518,8 @@ mod tests {
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use pos_proto::{
-        BillState, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState, TableState,
+        BillState, EventType, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
+        TableState,
     };
 
     fn identity() -> StoreIdentity {
@@ -2894,6 +2898,7 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(minor),
             applied_to_bill: vnd(minor),
+            tip: vnd(0),
         }
     }
 
@@ -2913,7 +2918,7 @@ mod tests {
 
             // One 150k line at the 10% standard rate is 165k owed.
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -2948,9 +2953,10 @@ mod tests {
                 method: PaymentMethod::Card,
                 tendered: vnd(100_000),
                 applied_to_bill: vnd(100_000),
+                tip: vnd(0),
             };
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card])
                 .await
                 .expect("settles across two tenders");
             assert_eq!(settled.state, BillState::Settled);
@@ -2966,13 +2972,13 @@ mod tests {
             edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("first settle");
 
             // A settled bill is terminal: a second settle is refused (a refund is a new movement).
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
         });
@@ -2989,12 +2995,12 @@ mod tests {
 
             // 150k applied against 165k owed does not sum to the total — the invariant refuses it.
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)])
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
             // Nothing settled, so no receipt was consumed and the bill is still open.
             let again = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("the still-open bill settles");
             assert_eq!(
@@ -3044,7 +3050,7 @@ mod tests {
             );
 
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("and the counter sale settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -3056,6 +3062,131 @@ mod tests {
             assert_eq!(settled.total_due, Some(vnd(165_000)));
             assert_eq!(settled.table_state, None, "and cycles no table");
         });
+    }
+
+    /// The defect roadmap **B1.3** closes, proved against the durable log rather than a return
+    /// value — the log is what the shift roll-up and the tip-out are rebuilt from, and it was the
+    /// half that was wrong.
+    ///
+    /// Two figures were broken on every tipped sale ever captured. `tip_amount` was written as a
+    /// literal zero, because tips arrived as a `Vec<Money>` beside the payments and no payment knew
+    /// which tip was its own — so a store could take tips all night and its own log said nobody
+    /// tipped. And `change_given` was `tendered − applied_to_bill`, which ignores the tip: on this
+    /// sale it read 35,000 against a true 15,000, telling the till to hand back money the guest had
+    /// just left behind.
+    #[test]
+    fn a_captured_payment_records_its_own_tip_and_the_change_left_after_it() {
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            let edge = Edge::new(
+                store.clone(),
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let order_id = a_counter_order(&edge).await;
+            let opened = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("opens");
+
+            // 165,000 owed. The guest hands over 200,000 and leaves 20,000.
+            let tipped = Payment {
+                method: PaymentMethod::Cash,
+                tendered: vnd(200_000),
+                applied_to_bill: vnd(165_000),
+                tip: vnd(20_000),
+            };
+            edge.settle_bill(actor(), opened.bill_id, vec![tipped])
+                .await
+                .expect("a tipped cash sale settles");
+
+            let captured = only_captured_payment(&store).await;
+            assert_eq!(
+                captured.tip_amount,
+                vnd(20_000),
+                "the tip the guest left, not a hardcoded zero"
+            );
+            assert_eq!(
+                captured.change_given,
+                vnd(15_000),
+                "200,000 − 165,000 applied − 20,000 tip; not 35,000"
+            );
+            assert_eq!(captured.applied_to_bill, vnd(165_000));
+            assert_eq!(captured.tendered, vnd(200_000));
+        });
+    }
+
+    /// A store that has not turned tips on refuses to take one (§10, `tips_enabled`).
+    ///
+    /// The untipped settle in the same test is the half that matters as much: the gate refuses
+    /// *taking the money*, never the sale, so a store with tips off trades exactly as it did.
+    #[test]
+    fn a_store_with_tips_disabled_refuses_a_tip_but_still_settles() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let order_id = a_counter_order(&edge).await;
+            let opened = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("opens");
+
+            let refused = edge
+                .settle_bill(
+                    actor(),
+                    opened.bill_id,
+                    vec![Payment {
+                        method: PaymentMethod::Cash,
+                        tendered: vnd(185_000),
+                        applied_to_bill: vnd(165_000),
+                        tip: vnd(20_000),
+                    }],
+                )
+                .await;
+            assert!(
+                matches!(refused, Err(super::AppError::Domain(_))),
+                "a store that does not take tips refuses one, rather than pocketing it silently"
+            );
+
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .await
+                .expect("and the same bill settles untipped, exactly as before");
+        });
+    }
+
+    /// The single `billing.payment.captured` in a store's log.
+    ///
+    /// Read back through the [`EventStore`] port rather than from a return value: the captured
+    /// payment is not in `BillView`, and the log is what the cloud's roll-ups and the store's own
+    /// replay actually consume.
+    async fn only_captured_payment(store: &FakeStore) -> BillingPaymentCaptured {
+        let envelopes = store
+            .read(&EventQuery::first(
+                identity().store_id,
+                NonZeroU32::new(1_000).expect("1000 is not zero"),
+            ))
+            .await
+            .expect("the log reads");
+        let mut captured: Vec<BillingPaymentCaptured> = envelopes
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.known() == Some(EventType::BillingPaymentCaptured)
+            })
+            .map(|envelope| envelope.data.decode().expect("a captured payment decodes"))
+            .collect();
+        assert_eq!(captured.len(), 1, "one tender, one captured payment");
+        captured.remove(0)
     }
 
     /// A store that taxes takeaway at 5% and dine-in at 10%, over a caller-supplied log.
@@ -3207,7 +3338,7 @@ mod tests {
                 .open_bill_for_order(actor(), paid)
                 .await
                 .expect("opens");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles");
 
@@ -3350,7 +3481,6 @@ mod tests {
                     actor(),
                     pos_proto::ids::BillId::new(Ulid::from_u128(999)),
                     vec![cash(1)],
-                    vec![],
                 )
                 .await;
             assert!(matches!(refused, Err(super::AppError::UnknownBill)));
@@ -3401,7 +3531,7 @@ mod tests {
             edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles in cash");
 
@@ -3416,8 +3546,9 @@ mod tests {
                 method: PaymentMethod::Card,
                 tendered: vnd(165_000),
                 applied_to_bill: vnd(165_000),
+                tip: vnd(0),
             };
-            edge.settle_bill(actor(), bill2.bill_id, vec![card], vec![])
+            edge.settle_bill(actor(), bill2.bill_id, vec![card])
                 .await
                 .expect("settles on card");
 
