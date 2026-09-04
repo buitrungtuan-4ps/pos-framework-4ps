@@ -18,6 +18,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console's own flows are measured, and the price-change flow costs eight clicks** (roadmap v3
+  **Q7**, the second half). `ui/` got a step budget the day Q7 landed; `dashboard/` did not, so
+  nothing measured the flows an operator runs from the office — and the one that matters most is
+  changing a price. `dashboard/scripts/step-budget.mjs` now resolves every declared click against
+  the source (a sidebar entry against `NAV_GROUPS`, an in-app link against the `screenHref` call
+  that builds it, a handler against the screen's own interactive elements) and runs from
+  `pnpm build`, so the `dashboard` CI job fails when a flow is renamed out from under its
+  declaration.
+
+  **It measures; it does not yet rule.** §6's two-and-three-tap ceiling is about a till in service,
+  and applying it unchanged to a back-office console would be a number chosen to look strict rather
+  than one anybody had argued for. So every console flow declares no ceiling, the gate fails only on
+  an unresolvable declaration, and it reports the cost. The first numbers are in
+  [`docs/ui-ux.md`](docs/ui-ux.md) §1.6: **8** clicks to change a price and publish it, 5 to
+  provision a store, 3 to change a capability, 2 to acknowledge an alert, 1 to see whether a shop is
+  online.
+
+  The price flow is the one to argue about, and the argument is not the eight: six clicks author the
+  change and the last two publish it, and a price saved without that second step leaves the till
+  charging the old one with nothing on either screen saying so. Shortening it should shorten the
+  first six.
+
+  It also earned its keep immediately, by refusing a declaration that claimed the new-store wizard
+  was one sidebar click away. It is in `SCREENS` and in no nav group — it is reached from the Stores
+  screen — so that flow is five clicks, not four.
+
 - **The console has a landing page that answers "is this shop all right"** (roadmap v3 **Q4**,
   [ADR-0099](docs/adr/0099-store-hub.md)). Q4's URL half shipped long ago — a tenant is a path
   segment and the store a `?store=` query, so a console link is shareable — and the screen it was
