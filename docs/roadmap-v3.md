@@ -46,25 +46,32 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 | **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (+ ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
 | **v1.3 — Production International** | B·W10 + JP/IN go-live (small in code; ops-gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
 
-### What is left for v1.0 (recomputed 2026-09-04, item by item against the tree)
+### v1.0 code-complete (recomputed 2026-09-04, item by item against the tree)
 
-v1.0 is `A·P1 → A·P3` + `A·P1x` + `B·W1` + `B9.1`. **A·P1 and A·P1x are complete** — all thirteen items,
-the last being R5. What remains is **nine slices**:
+v1.0 is `A·P1 → A·P3` + `A·P1x` + `B·W1` + `B9.1`. **Every slice in it has landed.** The nine that were
+open on 2026-09-04 are the last of them:
 
-| # | Slice | Why it is still open |
+| # | Slice | What landed |
 | --- | --- | --- |
-| 1 | **R3** | Per-store installer on the Handoff screen. Was blocked on E6; E6 is done, so this is now unblocked. |
-| 2 | **E4** | Windows service wrapper — platform code the Linux CI cannot exercise. Carries the Windows half of R4's install seam with it. |
-| 3 | **E5 residual** | Three hardcoded `VND` sites in the edge UI (shift opening float, expected cash, one Pay label). |
-| 4 | **Q5 tail** | Paging and `/admin`-in-OpenAPI are done. Left: the webhook header docs↔code mismatch, implement-or-drop `pos-api-version`, wire-or-delete the two dead scopes, rate-limit `/v1/orders` and `/sync`. |
-| 5 | **Q6** | Integrator docs: webhook quickstart, auth guide, API tour. |
-| 6 | **Q7** | UX step budget, failable in e2e. |
-| 7 | **B1.1** | Fire zeroes modifiers, so recipe consumption is wrong. |
-| 8 | **B1.2** | Sales channel is per-session, not per-order — so tax can be wrong per order. |
-| 9 | **B1.3** | Tips are a hardcoded zero. |
+| 1 | **B1.1** | Modifiers thread through the line draft, record and event, so recipe consumption is right. |
+| 2 | **B1.2** | Channel is per-order. Three defects, not one: `seat_table` emitted no `sales.order.opened` at all, the replay ignored the event (so the fix evaporated on restart), and the bootstrap tax table covered only dine-in — which would have stopped a LAN-only store settling a takeaway order it had already fired. |
+| 3 | **B1.3** | Real tips, gated on `tips_enabled`. Also worse than named: each payment's `change_given` was `tendered − applied`, so the till over-reported change by exactly the tip — it told the cashier to hand back money the guest had just left. |
+| 4 | **E5 residual** | Four sites, not three. The unnamed one was the only *wrong number* rather than a wrong label: `parseWhole(amount(), "VND")` is out by a factor of 100 on any two-decimal currency. |
+| 5 | **Q5 tail** | Two of the four documented webhook headers described a per-event delivery model that was never built, so this was not a rename. `pos-api-version` dropped (nothing read it), the two dead scopes deleted (`POST /admin/api-keys` still *accepted* them, so a key could promise authority no route consults), and `/v1/orders` + `/sync` given budgets — per-tenant after auth for orders, per-connection before auth for sync, because the store id on `/sync` is caller-supplied and keying on it would let anyone exhaust one named shop's budget. |
+| 6 | **Q6** | [`docs/guides/integrate-with-the-api.md`](guides/integrate-with-the-api.md): auth, an API tour, webhooks with a complete receiver, and an explicit list of what is deliberately not there. |
+| 7 | **Q7** | `ui/scripts/step-budget.mjs` — thirteen selling tasks, every declared tap resolved against `App.tsx` and the screen that renders it, run by `pnpm build`. Honest about the one case it cannot see: a required tap nobody declared. |
+| 8 | **R3** | A per-store `install-pos-edge.sh` on the wizard's Handoff screen, embedding both files, laying out the update slots, and deliberately leaving an already-installed binary alone so a box that updated itself is not rolled back. |
+| 9 | **E4** | The Windows service wrapper (`crates/pos-edge/src/service.rs`). The old instructions could not have worked — a console program never answers SCM's start handshake — and OTA could not have worked even with a shim, because SCM treats a clean exit as a deliberate stop, so a store that installed a release would have gone dark. `ServeOutcome` now says whether a stop was a restart, and the wrapper turns that into an exit code a failure action acts on. |
 
-Three of those nine (**B1.1–B1.3**) are correctness bugs in the selling path and are the ones worth doing
-first: everything above them is reach, and these are wrong answers a store would print on a receipt.
+**What is not done is everything that needs a machine.** [`gate-register.md`](gate-register.md) §6 is
+the list, and E4 narrowed one row rather than closing it: the wrapper is compiled by the
+`windows-2022` CI job, but that a real service reaches `RUNNING`, drains on stop and restarts on
+exit `1` is a Windows box's job to prove. The same is true of the `systemd` restart, the headless
+keyring across a reboot, power loss mid-transaction and the 222 ev/s soak.
+
+The next code is **v1.1** — `B·W2` + `B·W3` + `B·W7` + `B·W8` + `A·P4` + `A·PF`, of which A·P4 has
+three of five open (`O2` printer transport, `O3` store-side WAL shipping, `O4` JetStream capacity
+probe) and all four of A·PF is open.
 
 Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ +5–7 wk · v1.3 ≈ +2–3 wk of
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
@@ -245,8 +252,8 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 
 ### A·P2 — Publish from the cloud
 - **R2** — OTA artifact server + Garage store + promote-release; the cloud stays a dumb host, the edge verifies the signature ([ADR-0088](adr/0088-ota-artifact-hosting.md)). **Done.** The store-facing route is `POST /sync/stores/{store_id}/artifact` on the `read_config` scope (Amendment 1 — `/internal` is denied to anything off the box, so ADR-0054's pinned path was unreachable by its only caller); `bootstrap.sh` mints the Garage layout, bucket and key on every deploy, so nothing here needs a human; `POST /admin/releases` uploads the pair and `PUT /admin/config/ota` now refuses a `target_version` the cloud does not host. Amendment 2 records the two mismatches the upload half exposed: **the signature has to cover the bytes `apply` installs** (the workflow signed only the tarball, and unpacking it server-side would install unsigned bytes — it now signs the bare binary too), and **a release has one name, not three** (bare, as `target_version` and the binary's own version spell it). Remaining: nothing on the cloud side. The edge still fetches from the old path — that is R5's.
-- **R3** — Per-store installer on the Handoff screen; one-file `pos-edge install --store <id>` self-installer; zip is the fallback. **Depends on E6** — an installer that writes a `config.toml` without `cloud_url` reproduces the same break at scale.
-- **E4** — Windows service wrapper.
+- **R3** — Per-store installer on the Handoff screen. **Done.** Not `pos-edge install --store <id>` as sketched: the wizard already holds the store id, the cloud URL and the key, so the artifact is a generated `install-pos-edge.sh` carrying `config.toml` and `env` as quoted heredocs — a technician runs one command instead of following a README at 7am in a restaurant. The reason it is worth generating rather than typing is the **slot layout**: since [ADR-0055](adr/0055-edge-ota-updater.md) Amendment 1 the unit starts `bin/current`, and a box with the binary only at `/usr/local/bin/pos-edge` trades perfectly well and silently never self-updates. A re-run refreshes the config, the unit and the rescue copy but **leaves an installed binary alone** — without that guard, re-running on a box that had updated itself over the air would repoint `current` at whatever binary the technician was holding, a silent downgrade of a live shop. It contains the store's key, which the screen and the script both say in as many words.
+- **E4** — Windows service wrapper. **Done** (`crates/pos-edge/src/service.rs`). Two things were worse than "platform code CI cannot exercise". First, the documented install **could not work**: `sc.exe create` on a console program yields *error 1053*, because SCM gives a starting service about thirty seconds to connect back and report `RUNNING` and a plain program never does — so every Windows store was either under a third-party shim or running in a console window, which nothing restarts after a power cut. Second, over-the-air updates could not have worked even with a shim: an install exits so the manager restarts it, and SCM has no `Restart=always` — it has failure actions, applied only when a service *looks* like it failed, so a store that installed a release and exited zero would have sat dark until somebody drove there. So `serve` now returns a [`ServeOutcome`](../crates/pos-edge/src/server.rs) saying whether a stop was a restart, and the wrapper turns that into a non-zero exit code the documented failure action acts on; an operator's own stop still exits zero and stays stopped. The install seam needed no second copy — `installer.rs` already had both platforms' primitives behind two `cfg` functions. What is still gated is SCM's own behaviour ([`gate-register.md`](gate-register.md) P3).
 - **E5** — Edge UI consumes the **real** menu/locale/tender from `EdgeSession` (kills the hardcoded `ui/src/lib/menu.ts`; publishing a menu now changes the POS). Also: the UI never computes money — every figure comes from the edge. **Done, less three residual hardcoded `VND` sites**: the shift opening float, the shift screen's expected-cash figure, and one Pay-screen label.
 - **R4** — Real `UpdateInstaller` for Linux (systemd swap → self-test → rollback); Windows follows E4. **Done, shipped with R5** — an installer with no caller is the same gap again. [ADR-0055](adr/0055-edge-ota-updater.md) Amendment 1 records the two things the ADR assumed and the tree contradicted. **The edge cannot write `/usr/local/bin/pos-edge`, and must not be able to**: the unit runs the store under `ProtectSystem=strict` and `NoNewPrivileges`, so the binary moved to a symlink inside the service's own state directory and the sandbox stayed as strict as it is. And **the self-test that gates `commit` is not the one that decides a rollback** — ADR-0048's highest-precedence rule compares against the version the box is *running*, so a pre-commit verdict can never satisfy it, and a store that failed a build pre-commit would have installed the same build forever. There are now two: a smoke test that execs the staged file, and a boot confirmation whose absence past three attempts reverts the box on its own.
 

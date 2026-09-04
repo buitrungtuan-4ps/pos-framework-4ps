@@ -48,22 +48,59 @@ the running binary to `slot-a`, link `current` at it) and change `ExecStart`.
 
 ## Windows — a service
 
-Windows is a supported store OS. Until the native service wrapper (the `windows-service` crate) lands
-with hardware bring-up (roadmap A5) — it is platform code that cannot be exercised on the Linux CI —
-install the binary as a service with the built-in Service Control Manager, which delivers the same
-graceful-stop signal the binary already handles. Over-the-air updates stay off on Windows until that
-slice lands: the install seam needs a symlink a service account can create, and the edge detects the
-absence rather than failing an install every ten minutes.
+Windows is a supported store OS, and the binary speaks the Service Control Manager's protocol itself
+(roadmap **E4**, `crates/pos-edge/src/service.rs`): started by SCM it reports `RUNNING`, a stop
+drains in-flight requests exactly as a `SIGTERM` does on Linux, and a machine shutdown is treated as
+a stop. Started from a console it notices that SCM is not there and runs in the foreground, so
+`pos-edge.exe --self-test` and an operator's manual run are unchanged. **No third-party wrapper is
+needed.**
+
+Run the four commands as an administrator:
 
 ```
 sc.exe create pos-edge binPath= "C:\pos\pos-edge.exe" start= auto
 sc.exe description pos-edge "Pizza 4P's POS edge (store server)"
 setx POS_EDGE_CONFIG "C:\pos\config.toml" /M
+sc.exe failure pos-edge reset= 86400 actions= restart/5000/restart/5000/restart/30000
 sc.exe start pos-edge
 ```
 
-A wrapper such as NSSM works equally well and adds log rotation. Configure the service to send
-`CTRL+BREAK`/stop so the edge drains rather than being killed outright.
+### The `failure` line is not optional
+
+It is the Windows counterpart of the unit's `Restart=always`, and without it the store does not come
+back from an update or a crash. SCM has no "always restart" setting — it has **failure actions**, and
+it applies them only when a service looks like it failed. So:
+
+- An **install** retargets `bin\current` and exits with code **1**, which SCM reads as a failure and
+  the action above restarts five seconds later, on the new binary. Exiting `0` would look like a
+  deliberate stop and the shop would stay dark until somebody drove there.
+- An **operator's `sc.exe stop`** exits `0` and the service stays stopped, which is what was asked
+  for.
+- A **failed start** — unreadable config, port already bound, a store database that will not open —
+  also exits `1`, so the same action retries it rather than leaving a dead service.
+
+`reset= 86400` means the failure count clears after a day, so three bad days in a row do not exhaust
+the action list.
+
+### Over-the-air updates on Windows
+
+The slot layout is the same as on Linux and the same code lays it out; only the two primitives differ
+(`CreateSymbolicLinkW` instead of `symlink(2)`, and no permission bit to set). Two things are worth
+knowing:
+
+- **Creating a symlink needs a privilege.** `SeCreateSymbolicLinkPrivilege` is held by
+  Administrators and by `LocalSystem`, which is the account `sc.exe create` uses when no `obj=` is
+  given. A service running as a named low-privilege account will not have it unless it was granted,
+  and the edge reports the absence rather than failing an install every ten minutes: with no
+  `bin\current` the updater is not started at all and the box trades on the binary it has.
+- **Nothing in this repository has watched it happen.** The Windows CI job compiles the wrapper, so
+  a rename or a signature change fails a pull request. That a real service reaches `RUNNING`, that a
+  stop drains, and that a failure action restarts on exit code 1 are checks that need a Windows box
+  with a service installed on it — a row in [`docs/gate-register.md`](../../docs/gate-register.md),
+  not a claim made here.
+
+A wrapper such as NSSM still works if you want its log rotation, but it is no longer what makes the
+service run.
 
 ## Configuration
 

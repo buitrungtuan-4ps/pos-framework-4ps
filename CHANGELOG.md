@@ -18,6 +18,44 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **`pos_edge` runs as a real Windows service** (roadmap v3 **E4**,
+  `crates/pos-edge/src/service.rs`). Two things were wrong, and the second is the one that mattered.
+
+  **The documented install could not work.** `deploy/edge/README.md` said to run `sc.exe create` and
+  `sc.exe start`; the Service Control Manager gives a starting service about thirty seconds to
+  connect back and report `RUNNING`, and a plain console program never does, so SCM kills it with
+  *error 1053*. Every Windows store was therefore either under a third-party shim or running in a
+  console window — which nothing restarts after a power cut. The binary now speaks SCM's protocol
+  itself: started as a service it reports `RUNNING`, a stop (and a machine shutdown) drains in-flight
+  requests exactly as a `SIGTERM` does on Linux, and started from a console it notices SCM is absent
+  and runs in the foreground, so `--self-test` and an operator's manual run are unchanged.
+
+  **Over-the-air updates could not have worked on Windows even with a shim.** An install retargets
+  `bin\current` and exits, and on Linux `Restart=always` turns that exit into a start on the new
+  binary. SCM has no such setting — it has failure actions, applied only when a service *looks* like
+  it failed, and a service that reports `STOPPED` with exit code zero has been stopped on purpose.
+  A store that installed a release at 11:40 on a Saturday would have sat dark until somebody drove to
+  the shop. So `serve` now returns a **`ServeOutcome`** — `Stopped`, or `RestartWanted` — and the
+  wrapper reports exit code `1` for the second, which the documented
+  `sc.exe failure … actions= restart/5000` acts on. An operator's own `sc.exe stop` still exits zero
+  and stays stopped.
+
+  `deploy/edge/README.md` now carries the five registration commands, says why the `failure` line is
+  not optional, and records what the symlink privilege needs (Administrators and `LocalSystem` hold
+  it; a named low-privilege account does not, and the edge reports the absence rather than failing an
+  install every ten minutes). One new dependency, `windows-service`, target-gated so a Linux build
+  compiles none of it.
+
+  **Upgrade note.** A Windows store already registered with `sc.exe` should add the failure action —
+  without it the box will not come back from an update. Nothing changes for a Linux store, where the
+  two stops were always indistinguishable and always restarted. There is no wire, migration,
+  permission or default change.
+
+  What is not proven: SCM's own behaviour. The `windows-2022` CI job compiles the wrapper, so a
+  rename or a signature change fails a pull request, but that a real service reaches `RUNNING`,
+  drains on stop and restarts on exit `1` needs a Windows box —
+  [`docs/gate-register.md`](docs/gate-register.md) P3, which this narrows rather than closes.
+
 - **A per-store installer on the new-store wizard's handoff step** (roadmap v3 **R3**).
   The wizard already handed the operator a `config.toml` and an `env` file and then asked them to
   follow a README on the shop floor: create a service user, get two sets of owners and modes right,

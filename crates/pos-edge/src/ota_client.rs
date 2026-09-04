@@ -97,6 +97,62 @@ impl<T: RestartRequest> RestartRequest for Arc<T> {
     }
 }
 
+/// The field [`RestartRequest`], and the one thing the process has to be able to say out loud once
+/// the server has drained: **this stop was a restart** (roadmap v3 **E4**).
+///
+/// A `SIGTERM` and an installed update end the process through the same shutdown watch, because both
+/// have to drain in-flight requests the same way — a store must not lose a committed sale to either.
+/// On `systemd` that is the whole story: `Restart=always` starts the binary again whatever the exit
+/// code was, so the two stops need not be told apart.
+///
+/// Windows' Service Control Manager is the opposite. A service that reports `SERVICE_STOPPED` with
+/// exit code zero has, as far as SCM is concerned, been stopped **on purpose**, and nothing starts
+/// it again. A store that installed an update, exited cleanly and never came back would sit dark
+/// until somebody drove to the shop — during trading hours, on the strength of a release nobody
+/// asked the box to take that minute.
+///
+/// So the intent is recorded beside the watch rather than inferred from it: the OTA loop flips both,
+/// and the process reads [`Self::wanted`] after the drain to decide what to tell the operating
+/// system. The flag only ever goes from `false` to `true`, so asking twice is asking once.
+#[derive(Debug, Clone)]
+pub struct RestartIntent {
+    /// Whether a restart was asked for. `Arc` because the OTA loop holds one clone and the process
+    /// that reads it after the drain holds another.
+    wanted: Arc<core::sync::atomic::AtomicBool>,
+    /// The shutdown the server and every background loop drain on.
+    shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+impl RestartIntent {
+    /// An intent over the shutdown `shutdown` — nothing asked for yet.
+    #[must_use]
+    pub fn new(shutdown: Arc<tokio::sync::watch::Sender<bool>>) -> Self {
+        Self {
+            wanted: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+            shutdown,
+        }
+    }
+
+    /// Whether the stop that is now happening was asked for so the binary on disk can be started.
+    ///
+    /// `false` for an operator's stop, a `SIGTERM`, or a machine shutdown.
+    #[must_use]
+    pub fn wanted(&self) -> bool {
+        self.wanted.load(core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl RestartRequest for RestartIntent {
+    fn request_restart(&self) {
+        // Record the intent *before* asking for the drain. The reader runs after the server stops,
+        // so either order is correct today; this order stays correct if a future reader ever looks
+        // while the drain is in flight.
+        self.wanted
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+        let _ignored = self.shutdown.send(true);
+    }
+}
+
 /// What the unconfirmed-boot marker said about this boot.
 ///
 /// Produced by the install seam — on Linux by
@@ -402,6 +458,49 @@ mod tests {
             self.asked
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+
+    #[test]
+    fn an_untouched_intent_asks_for_nothing() {
+        // The ordinary case, and the one that matters most on Windows: an operator's stop must not
+        // look like an update's restart, or a service told to stop would come straight back up.
+        let (sender, _receiver) = tokio::sync::watch::channel(false);
+        let intent = super::RestartIntent::new(std::sync::Arc::new(sender));
+        assert!(!intent.wanted(), "nobody has asked for a restart");
+    }
+
+    #[test]
+    fn a_restart_request_both_drains_and_says_it_was_a_restart() {
+        // The two halves have to happen together: the drain is what keeps a committed sale, and the
+        // recorded intent is what the process tells the service manager once the drain is done.
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        let intent = super::RestartIntent::new(std::sync::Arc::new(sender));
+        intent.request_restart();
+        assert!(*receiver.borrow(), "the drain was asked for");
+        assert!(intent.wanted(), "and it was asked for as a restart");
+    }
+
+    #[test]
+    fn asking_a_second_time_says_the_same_thing() {
+        // The loop reports and then asks; a retry or a second tick must not turn one restart into
+        // something else. The flag only ever goes one way.
+        let (sender, _receiver) = tokio::sync::watch::channel(false);
+        let intent = super::RestartIntent::new(std::sync::Arc::new(sender));
+        intent.request_restart();
+        intent.request_restart();
+        assert!(intent.wanted(), "still exactly one answer: restart me");
+    }
+
+    #[test]
+    fn a_clone_reads_the_same_intent() {
+        // The OTA loop owns one clone and the process that reads the answer after the drain owns
+        // another. If they were separate flags the reader would always see `false` and a Windows box
+        // would install an update and stay dark.
+        let (sender, _receiver) = tokio::sync::watch::channel(false);
+        let intent = super::RestartIntent::new(std::sync::Arc::new(sender));
+        let held_by_the_loop = intent.clone();
+        held_by_the_loop.request_restart();
+        assert!(intent.wanted(), "one intent, two handles");
     }
 
     #[test]
