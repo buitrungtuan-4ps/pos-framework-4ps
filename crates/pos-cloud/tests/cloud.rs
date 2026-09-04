@@ -9030,6 +9030,19 @@ async fn a_malformed_ota_report_is_refused_and_records_nothing() {
 /// The router with the OTA levers merged in ([ADR-0052](../../docs/adr/0052-ota-rollout-config.md),
 /// ADR-0078) — the rollout publish/halt/read and the placement publish/read.
 fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    ota_app_hosting(admin, config_trees, &["1.4.0"])
+}
+
+/// The OTA levers, with `hosted` releases already in the registry.
+///
+/// A rollout naming a version the cloud does not host is refused ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)
+/// Amendment 2), so a test about *publishing* has to host its version first. Pass an empty slice to
+/// exercise the refusal itself.
+fn ota_app_hosting(
+    admin: FakeAdmin,
+    config_trees: FakeConfigTrees,
+    hosted: &[&str],
+) -> axum::Router {
     let app = app_full(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -9037,11 +9050,27 @@ fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
         admin.clone(),
         config_trees.clone(),
     );
+    let releases = FakeReleases::default();
+    for release in hosted {
+        releases
+            .artifacts
+            .lock()
+            .expect("the artifact list is not poisoned")
+            .push(pos_cloud::ota::ReleaseArtifact {
+                release: (*release).to_owned(),
+                target: pos_cloud::ota::TargetTriple::parse(TEST_TARGET).expect("a triple"),
+                size_bytes: 4,
+                sha256: "00".repeat(32),
+                recorded_at: Timestamp::from_milliseconds_since_epoch(1_777_000_000_000)
+                    .expect("a valid timestamp"),
+            });
+    }
     http::router(app).merge(http::ota_config_router(
         config_trees,
         admin,
         clock(),
         Arc::new(NoopAuditRecorder),
+        releases,
     ))
 }
 
@@ -15123,11 +15152,21 @@ impl pos_cloud::ota::ReleaseStore for FakeReleases {
         &self,
         artifact: &pos_cloud::ota::ReleaseArtifact,
     ) -> Result<pos_cloud::ota::RecordOutcome, pos_cloud::ota::ReleaseStoreError> {
-        self.artifacts
+        let mut artifacts = self
+            .artifacts
             .lock()
-            .expect("the artifact list is not poisoned")
-            .push(artifact.clone());
-        Ok(pos_cloud::ota::RecordOutcome::Recorded)
+            .expect("the artifact list is not poisoned");
+        let stored = artifacts
+            .iter()
+            .find(|held| held.release == artifact.release && held.target == artifact.target)
+            .map(|held| held.sha256.clone());
+        // The fake consults the same pure rule the adapter does, as the port's doc asks: otherwise
+        // "re-uploading different bytes is refused" would be a claim only the SQL could break.
+        let outcome = pos_cloud::ota::admit_artifact(stored.as_deref(), artifact)?;
+        if outcome == pos_cloud::ota::RecordOutcome::Recorded {
+            artifacts.push(artifact.clone());
+        }
+        Ok(outcome)
     }
 
     async fn find_artifact(
@@ -15175,13 +15214,13 @@ fn artifact_fixture(
     let target = pos_cloud::ota::TargetTriple::parse(TEST_TARGET).expect("a valid triple");
     let blobs = FakeBlobs::default();
     blobs.put_now(
-        pos_cloud::ota::artifact_key("v1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
+        pos_cloud::ota::artifact_key("1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
             .expect("a valid key")
             .as_str(),
         body,
     );
     blobs.put_now(
-        pos_cloud::ota::artifact_key("v1.4.0", &target, pos_cloud::ota::ArtifactKind::Signature)
+        pos_cloud::ota::artifact_key("1.4.0", &target, pos_cloud::ota::ArtifactKind::Signature)
             .expect("a valid key")
             .as_str(),
         signature,
@@ -15192,7 +15231,7 @@ fn artifact_fixture(
         .lock()
         .expect("the artifact list is not poisoned")
         .push(pos_cloud::ota::ReleaseArtifact {
-            release: "v1.4.0".to_owned(),
+            release: "1.4.0".to_owned(),
             target,
             size_bytes: i64::try_from(body.len()).expect("a representable size"),
             sha256: sha2::Sha256::digest(body)
@@ -15221,7 +15260,7 @@ async fn a_store_fetches_the_artifact_and_its_signature() {
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", TEST_TARGET),
+            &artifact_body("1.4.0", TEST_TARGET),
             &token,
         ))
         .await
@@ -15249,7 +15288,7 @@ async fn a_key_without_read_config_cannot_fetch_an_artifact() {
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", TEST_TARGET),
+            &artifact_body("1.4.0", TEST_TARGET),
             &token,
         ))
         .await
@@ -15263,7 +15302,7 @@ async fn an_unauthenticated_artifact_fetch_is_refused() {
     let response = router
         .oneshot(post_json(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", TEST_TARGET),
+            &artifact_body("1.4.0", TEST_TARGET),
         ))
         .await
         .expect("route the fetch");
@@ -15296,7 +15335,7 @@ async fn an_architecture_the_cloud_hosts_nothing_for_is_a_not_found() {
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", "sparc64-unknown-linux-gnu"),
+            &artifact_body("1.4.0", "sparc64-unknown-linux-gnu"),
             &token,
         ))
         .await
@@ -15312,7 +15351,7 @@ async fn an_architecture_that_could_not_name_a_target_is_a_validation_refusal() 
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", "X86_64 Linux!"),
+            &artifact_body("1.4.0", "X86_64 Linux!"),
             &token,
         ))
         .await
@@ -15337,7 +15376,7 @@ async fn a_blob_that_does_not_match_its_recorded_digest_is_not_served() {
     let (router, token, blobs) = artifact_fixture(b"the-binary", b"\x01", &[Scope::ReadConfig]);
     let target = pos_cloud::ota::TargetTriple::parse(TEST_TARGET).expect("a valid triple");
     blobs.put_now(
-        pos_cloud::ota::artifact_key("v1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
+        pos_cloud::ota::artifact_key("1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
             .expect("a valid key")
             .as_str(),
         b"tampered",
@@ -15345,7 +15384,7 @@ async fn a_blob_that_does_not_match_its_recorded_digest_is_not_served() {
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", TEST_TARGET),
+            &artifact_body("1.4.0", TEST_TARGET),
             &token,
         ))
         .await
@@ -15364,17 +15403,291 @@ async fn a_recorded_release_whose_blob_is_missing_is_not_a_not_found() {
         .lock()
         .expect("the blob map is not poisoned")
         .remove(
-            pos_cloud::ota::artifact_key("v1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
+            pos_cloud::ota::artifact_key("1.4.0", &target, pos_cloud::ota::ArtifactKind::Binary)
                 .expect("a valid key")
                 .as_str(),
         );
     let response = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id().as_ulid()),
-            &artifact_body("v1.4.0", TEST_TARGET),
+            &artifact_body("1.4.0", TEST_TARGET),
             &token,
         ))
         .await
         .expect("route the fetch");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// ---------------------------------------------------------------------------------------------
+// R2's other half: putting a release into the cloud, and refusing to promote one that is not there
+// ---------------------------------------------------------------------------------------------
+
+/// A well-formed minisign signature line: the 74-byte blob (`algorithm ∥ key_id ∥ ed25519`) as
+/// base64, which is what line 2 of a `.minisig` holds. The bytes are arbitrary — the cloud never
+/// verifies, it only checks the shape ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)).
+fn minisig_line() -> String {
+    use base64::Engine as _;
+    let mut blob = Vec::with_capacity(74);
+    blob.extend_from_slice(b"ED");
+    blob.extend_from_slice(&[7_u8; 8]);
+    blob.extend_from_slice(&[9_u8; 64]);
+    base64::engine::general_purpose::STANDARD.encode(&blob)
+}
+
+/// The `/admin` release router plus the store-facing artifact route, over one shared object store and
+/// one shared registry — so a test can upload and then download the same release, which is the whole
+/// point of the pair.
+fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
+    let blobs = FakeBlobs::default();
+    let releases = FakeReleases::default();
+    let keys = FakeKeys::default();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app)
+        .merge(http::release_admin_router(
+            blobs.clone(),
+            releases.clone(),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::ota_artifact_router(
+            keys.clone(),
+            clock(),
+            blobs,
+            releases,
+        ));
+    (router, keys)
+}
+
+/// Builds the upload request: the bare executable as the body, the signature line in its header.
+fn upload_request(
+    release: &str,
+    arch: &str,
+    body: Vec<u8>,
+    minisig: &str,
+    cookie: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("/admin/releases?release={release}&arch={arch}"))
+        .header("content-type", "application/octet-stream")
+        .header("x-pos-minisig", minisig)
+        .header("cookie", cookie)
+        .body(Body::from(body))
+        .expect("build the upload")
+}
+
+/// The pair joined: what `/admin` stores is byte-for-byte what a store downloads, signature included.
+/// Until this passed, the serve route had no production producer at all — only a test wrote the rows
+/// it reads.
+#[tokio::test]
+async fn an_uploaded_release_is_what_a_store_downloads() {
+    let (router, keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let binary = b"the next pos-edge".to_vec();
+
+    let uploaded = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            binary.clone(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let served = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/artifact", store_id()),
+            &artifact_body("1.5.0", TEST_TARGET),
+            &token,
+        ))
+        .await
+        .expect("route the download");
+    assert_eq!(served.status(), StatusCode::OK);
+    let signature_header = served
+        .headers()
+        .get("x-pos-artifact-signature")
+        .and_then(|value| value.to_str().ok())
+        .expect("the signature header")
+        .to_owned();
+    let downloaded = axum::body::to_bytes(served.into_body(), usize::MAX)
+        .await
+        .expect("read the body");
+    assert_eq!(downloaded.as_ref(), binary.as_slice());
+    // The header is the hex of the same 74 bytes the upload's base64 carried.
+    assert_eq!(signature_header.len(), 74 * 2);
+    assert!(signature_header.starts_with("4544"), "\"ED\" in hex");
+}
+
+/// Uploading is a `console.ota.publish` action, not something any signed-in admin can do: a release
+/// artifact is what every store in a ring will execute.
+#[tokio::test]
+async fn an_upload_without_the_ota_permission_is_refused() {
+    let admin = provisioned_admin();
+    let (router, _keys) = release_app(admin.clone());
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-upload").await;
+
+    let refused = router
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"x".to_vec(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+}
+
+/// The three request-shape refusals, each naming its own field. The cloud does not verify the
+/// signature — but a value that could never *be* a signature is refused while a human is watching,
+/// rather than at every box in the ring hours later.
+#[tokio::test]
+async fn a_malformed_upload_is_refused_naming_the_field() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let good = minisig_line();
+
+    for (release, arch, body, minisig, field) in [
+        (
+            "1.5.0",
+            TEST_TARGET,
+            b"x".to_vec(),
+            "not base64!!",
+            "x-pos-minisig",
+        ),
+        (
+            "1.5.0",
+            TEST_TARGET,
+            b"x".to_vec(),
+            "c2hvcnQ=",
+            "x-pos-minisig",
+        ),
+        ("1.5.0", TEST_TARGET, Vec::new(), good.as_str(), "body"),
+        (
+            "../etc",
+            TEST_TARGET,
+            b"x".to_vec(),
+            good.as_str(),
+            "release",
+        ),
+        // Uppercase: a triple is `[a-z0-9_-]`, and unlike a space this is URI-legal.
+        (
+            "1.5.0",
+            "X86_64-Unknown-Linux",
+            b"x".to_vec(),
+            good.as_str(),
+            "arch",
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(upload_request(release, arch, body, minisig, &cookie))
+            .await
+            .expect("route the upload");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "release={release} arch={arch} minisig={minisig}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "the refusal names {field}"
+        );
+    }
+}
+
+/// Re-running a release step is not an error, and changing a release's bytes is: a version a ring has
+/// already installed has to keep meaning the same thing.
+#[tokio::test]
+async fn re_uploading_is_idempotent_but_changing_the_bytes_is_refused() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let minisig = minisig_line();
+
+    let first = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"same".to_vec(),
+            &minisig,
+            &cookie,
+        ))
+        .await
+        .expect("route the first upload");
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let again = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"same".to_vec(),
+            &minisig,
+            &cookie,
+        ))
+        .await
+        .expect("route the repeat");
+    assert_eq!(
+        again.status(),
+        StatusCode::OK,
+        "identical bytes are a no-op"
+    );
+
+    let changed = router
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"different".to_vec(),
+            &minisig,
+            &cookie,
+        ))
+        .await
+        .expect("route the changed upload");
+    assert_eq!(changed.status(), StatusCode::CONFLICT);
+}
+
+/// The promote guard. Publishing a rollout for a version the cloud does not host used to succeed and
+/// then fail invisibly — every store in the ring fetching a `404`, which means "install nothing", so
+/// the fleet would sit still with nothing in any log explaining why.
+#[tokio::test]
+async fn promoting_a_version_the_cloud_does_not_host_is_refused() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_hosting(provisioned_admin(), config_trees, &[]);
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/ota",
+            &serde_json::json!({
+                "tenant_id": tenant().to_string(),
+                "store_id": store_id().to_string(),
+                "target_version": "9.9.9",
+                "min_ring": "canary",
+                "rollout_percent": 10,
+                "signing_key_id": "0101010101010101",
+                "revoked_key_ids": [],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "target_version");
 }

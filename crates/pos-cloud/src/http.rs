@@ -173,7 +173,12 @@ use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
-use crate::ota::{ArtifactKind, ReleaseStore, TargetTriple, artifact_key, validate_release_tag};
+use base64::Engine as _;
+
+use crate::ota::{
+    ArtifactKind, RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple,
+    artifact_key, validate_release_tag,
+};
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeListFilter,
@@ -951,6 +956,381 @@ where
             blobs,
             releases,
         })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The `/admin` release surface: putting an artifact in, and reading what is hosted
+// ---------------------------------------------------------------------------------------------
+
+/// The largest release binary the upload accepts.
+///
+/// A `pos-edge` build with its embedded UI is a few tens of megabytes; 128 MiB leaves room to grow
+/// while still refusing an upload that could only be a mistake. The limit sits on this route rather
+/// than on the reverse proxy so that a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
+/// `external` posture) still gets it.
+const MAX_RELEASE_UPLOAD_BYTES: usize = 128 * 1024 * 1024;
+
+/// The header the upload carries the signature in: the **first base64 line** of the `.minisig` file
+/// minisign wrote (line 2 of the file — line 1 is the untrusted comment).
+///
+/// Deliberately a different name from [`ARTIFACT_SIGNATURE_HEADER`], which the *serve* route answers
+/// with in lowercase hex. Same bytes, two encodings, two directions: reusing one name for both would
+/// make a mis-encoded upload look like a valid download header.
+const UPLOAD_SIGNATURE_HEADER: &str = "x-pos-minisig";
+
+/// Bytes in a minisign signature blob: `algorithm(2) ∥ key_id(8) ∥ ed25519_signature(64)`.
+///
+/// Mirrors `updater-minisign`'s `SIGNATURE_LEN`, which is private to that adapter. Checking the
+/// length here is a **shape** check and emphatically not verification — the cloud never verifies, and
+/// [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) is explicit that it stays a dumb host.
+/// What it buys is that a signature which could never verify is refused at the one moment a human is
+/// watching, instead of at every box in the ring hours later.
+const MINISIGN_SIGNATURE_LEN: usize = 74;
+
+/// The collaborators the `/admin` release routes need: the object store the bytes go to, the registry
+/// that records them, and the admin/clock/audit trio every console write carries.
+#[derive(Clone)]
+struct ReleaseAdminState<B, L, A, C> {
+    blobs: B,
+    releases: L,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Which release and target the uploaded bytes are.
+///
+/// `release` is spelled the way a rollout's `target_version` and the binary's own version spell it —
+/// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// Amendment 2). The uploader passes the string it will promote.
+#[derive(Debug, Clone, Deserialize)]
+struct ReleaseUploadQuery {
+    release: String,
+    arch: String,
+}
+
+/// One hosted artifact, as the console reads it.
+#[derive(Debug, Clone, Serialize)]
+struct HostedArtifactResponse {
+    arch: String,
+    size_bytes: i64,
+    sha256: String,
+    recorded_at_ms: i64,
+}
+
+/// Builds the `/admin` release sub-router — the half that puts an artifact *into* the cloud.
+///
+/// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`]: without an
+/// object store there is nowhere for the bytes to go, and a route that always answers `503` is worse
+/// than a route that is honestly absent.
+///
+/// `POST /admin/releases?release=&arch=` takes the **bare executable** as its body and minisign's
+/// signature line in [`UPLOAD_SIGNATURE_HEADER`]. The bare executable, not the release tarball,
+/// because `UpdateInstaller::apply` writes the bytes it is handed as the next binary — so the
+/// signature the edge checks has to cover *these* bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// Amendment 2). Unpacking a tarball server-side would hand `apply` bytes nobody signed.
+pub fn release_admin_router<B, L, A, C>(
+    blobs: B,
+    releases: L,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/releases", post(admin_upload_release::<B, L, A, C>))
+        .route(
+            "/admin/releases/{release}",
+            get(admin_list_release::<B, L, A, C>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            MAX_RELEASE_UPLOAD_BYTES,
+        ))
+        .with_state(ReleaseAdminState {
+            blobs,
+            releases,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Decodes minisign's base64 signature line into the raw 74-byte blob the edge verifies against.
+///
+/// [ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md) Correction 2 put the decode here: every
+/// type in the tree holds raw signature bytes, minisign's on-disk form is base64, and the boundary
+/// where one becomes the other is this upload. The edge never sees base64.
+///
+/// # Errors
+///
+/// The [`Response`] to send — a `400` naming the header, for a value that is not base64 or does not
+/// decode to a minisign blob's length.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the route returns, the same \
+              shape the other route helpers carry"
+)]
+fn decode_minisig_line(headers: &HeaderMap) -> Result<Vec<u8>, Response> {
+    let Some(line) = headers
+        .get(UPLOAD_SIGNATURE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the upload must carry minisign's signature line",
+            &[(
+                UPLOAD_SIGNATURE_HEADER,
+                "absent — send the second line of the .minisig file",
+            )],
+        ));
+    };
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(line.trim()) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "minisign's signature line is not valid base64",
+            &[(UPLOAD_SIGNATURE_HEADER, "not base64")],
+        ));
+    };
+    if bytes.len() != MINISIGN_SIGNATURE_LEN {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "that is not a minisign signature",
+            &[(
+                UPLOAD_SIGNATURE_HEADER,
+                "a minisign signature decodes to seventy-four bytes",
+            )],
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Writes an artifact's two blobs, signature first.
+///
+/// The order is the contract, not a preference: the serve route treats "the registry says this
+/// release exists but a blob does not" as the cloud's own inconsistency and answers `500`. Recording
+/// the row only after **both** blobs are stored means that state is never reachable through this
+/// route — a half-finished upload leaves no row, and the release simply does not exist yet.
+///
+/// # Errors
+///
+/// The [`Response`] to send: `503`, because an object store that cannot be written is a dependency
+/// being down, and the same upload retried later is the right thing for the caller to do.
+async fn store_artifact_blobs<B: BlobStore>(
+    blobs: &B,
+    binary_key: &BlobKey,
+    signature_key: &BlobKey,
+    binary: &[u8],
+    signature: &[u8],
+) -> Result<(), Response> {
+    for (key, bytes, part) in [
+        (signature_key, signature, "signature"),
+        (binary_key, binary, "binary"),
+    ] {
+        if let Err(error) = blobs.put(key, bytes).await {
+            tracing::error!(%error, part, key = key.as_str(), "storing a release blob failed");
+            return Err(service_unavailable("the release artifact store"));
+        }
+    }
+    Ok(())
+}
+
+/// Checks everything about an upload that can be judged from the request alone: that the release and
+/// target could be storage keys, that the body is not empty, and that the signature header decodes to
+/// a minisign blob.
+///
+/// Separated from the handler so that "is this request well-formed" and "did storing it work" stay
+/// legible as two steps — and because every refusal here is a `400` naming its field, while every
+/// failure after it is a dependency being down.
+///
+/// # Errors
+///
+/// The [`Response`] to send: a `400` naming `release`, `arch`, `body`, or the signature header.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the route returns, the same \
+              shape the other route helpers carry"
+)]
+fn parse_release_upload(
+    query: &ReleaseUploadQuery,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(TargetTriple, Vec<u8>), Response> {
+    if let Err(error) = validate_release_tag(&query.release) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("release: {error}"),
+            &[("release", "not usable as a storage key")],
+        ));
+    }
+    let target = TargetTriple::parse(&query.arch).map_err(|error| {
+        api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("arch: {error}"),
+            &[("arch", "not a target triple")],
+        )
+    })?;
+    if body.is_empty() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the upload body is the release executable, and it is empty",
+            &[("body", "empty")],
+        ));
+    }
+    let signature = decode_minisig_line(headers)?;
+    Ok((target, signature))
+}
+
+/// A super-admin uploads one release artifact: the bare executable, plus its minisign signature.
+///
+/// Idempotent by [`admit_artifact`]'s rule — re-uploading the same release/target with identical
+/// bytes answers `200` rather than failing, so a re-run of a release step does not wedge; different
+/// bytes for a release a ring may already have installed are refused, because a version that can
+/// change under a fleet is not a version.
+async fn admin_upload_release<B, L, A, C>(
+    State(state): State<ReleaseAdminState<B, L, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ReleaseUploadQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishOta,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (target, signature) = match parse_release_upload(&query, &headers, &body) {
+        Ok(parsed) => parsed,
+        Err(refusal) => return refusal,
+    };
+    let (Ok(binary_key), Ok(signature_key)) = (
+        artifact_key(&query.release, &target, ArtifactKind::Binary),
+        artifact_key(&query.release, &target, ArtifactKind::Signature),
+    ) else {
+        return api_error(ErrorStatus::Internal, "could not compose the artifact keys");
+    };
+    let artifact = ReleaseArtifact {
+        release: query.release.clone(),
+        target,
+        size_bytes: i64::try_from(body.len()).unwrap_or(i64::MAX),
+        sha256: hex_digest(&body),
+        recorded_at: state.clock.now(),
+    };
+    if let Err(refusal) =
+        store_artifact_blobs(&state.blobs, &binary_key, &signature_key, &body, &signature).await
+    {
+        return refusal;
+    }
+    let outcome = match state.releases.record_artifact(&artifact).await {
+        Ok(outcome) => outcome,
+        Err(ReleaseStoreError::Immutable { release, target }) => {
+            return api_error_with_details(
+                ErrorStatus::AlreadyExists,
+                format!("release {release} for {target} is already hosted with different bytes"),
+                &[("release", "already hosted with a different digest")],
+            );
+        }
+        Err(error @ ReleaseStoreError::Unavailable(_)) => {
+            tracing::error!(%error, "recording a release artifact failed");
+            return service_unavailable("the release registry");
+        }
+    };
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        None,
+        "release.upload",
+        "release_artifact",
+        &format!("{}/{}", artifact.release, artifact.target),
+        None,
+        Some(serde_json::json!({
+            "arch": artifact.target.as_str(),
+            "size_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+        })),
+    )
+    .await;
+    let status = match outcome {
+        RecordOutcome::Recorded => StatusCode::CREATED,
+        RecordOutcome::AlreadyRecorded => StatusCode::OK,
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "release": artifact.release,
+            "arch": artifact.target.as_str(),
+            "size_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+        })),
+    )
+        .into_response()
+}
+
+/// Which targets a release is hosted for — what an operator checks before promoting it, and what the
+/// promote guard consults on their behalf.
+async fn admin_list_release<B, L, A, C>(
+    State(state): State<ReleaseAdminState<B, L, A, C>>,
+    headers: HeaderMap,
+    Path(release): Path<String>,
+) -> Response
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    if let Err(error) = validate_release_tag(&release) {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("release: {error}"),
+            &[("release", "not usable as a storage key")],
+        );
+    }
+    match state.releases.list_artifacts(&release).await {
+        Ok(artifacts) => Json(serde_json::json!({
+            "release": release,
+            "artifacts": artifacts
+                .into_iter()
+                .map(|artifact| HostedArtifactResponse {
+                    arch: artifact.target.to_string(),
+                    size_bytes: artifact.size_bytes,
+                    sha256: artifact.sha256,
+                    recorded_at_ms: artifact.recorded_at.as_milliseconds_since_epoch(),
+                })
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing a release's artifacts failed");
+            service_unavailable("the release registry")
+        }
+    }
 }
 
 /// Reads a release's two blobs — the executable and its raw detached signature.
@@ -9437,11 +9817,12 @@ where
 /// The collaborators the OTA rollout routes need: the config-tree store the `fleet_update` node is
 /// written onto, plus the admin/clock/audit every write carries.
 #[derive(Clone)]
-struct OtaConfigState<Cfg, A, C> {
+struct OtaConfigState<Cfg, A, C, L> {
     config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    releases: L,
 }
 
 /// A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no
@@ -9501,43 +9882,92 @@ struct PublishPlacementRequest {
 /// for nothing: safe, but it never updates. Both halves have to be authored for a fleet to move
 /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md),
 /// [ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)).
-pub fn ota_config_router<Cfg, A, C>(
+pub fn ota_config_router<Cfg, A, C, L>(
     config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    releases: L,
 ) -> Router
 where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/admin/config/ota",
-            get(admin_get_rollout::<Cfg, A, C>).put(admin_publish_rollout::<Cfg, A, C>),
+            get(admin_get_rollout::<Cfg, A, C, L>).put(admin_publish_rollout::<Cfg, A, C, L>),
         )
         .route(
             "/admin/config/ota/halt",
-            post(admin_halt_rollout::<Cfg, A, C>),
+            post(admin_halt_rollout::<Cfg, A, C, L>),
         )
         .route(
             "/admin/config/ota/placement",
-            get(admin_get_placement::<Cfg, A, C>).put(admin_publish_placement::<Cfg, A, C>),
+            get(admin_get_placement::<Cfg, A, C, L>).put(admin_publish_placement::<Cfg, A, C, L>),
         )
         .with_state(OtaConfigState {
             config_trees,
             admin,
             clock,
             audit,
+            releases,
         })
+}
+
+/// Refuses a rollout whose `target_version` the cloud does not host
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 2).
+///
+/// Without this, the console's happy path was: publish a typo, and every store in the ring fetches,
+/// gets a `404`, and stays on the old version. A `404` on the artifact route means "install nothing",
+/// so that failure is silent by design — the fleet just never moves, and no log says why. The check
+/// turns it into a `422` at the moment a human is looking at the field they got wrong, and lists what
+/// *is* hosted so they can see the spelling they meant.
+///
+/// It reads the registry, not the object store, so it also works on a deployment with no
+/// `[artifacts]` block: such a cloud can never upload, therefore hosts nothing, therefore cannot
+/// promote — the correct posture for one that ships no edge releases.
+///
+/// # Errors
+///
+/// The [`Response`] to send: `422` naming `target_version` when nothing is hosted for it, or `503`
+/// when the registry could not be read (refusing to publish is right either way — a rollout is not
+/// worth guessing about).
+async fn require_hosted_release<L: ReleaseStore>(
+    releases: &L,
+    target_version: &str,
+) -> Result<(), Response> {
+    if validate_release_tag(target_version).is_err() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "target_version: not usable as a storage key, so no artifact could be hosted for it",
+            &[("target_version", "not usable as a storage key")],
+        ));
+    }
+    match releases.list_artifacts(target_version).await {
+        Ok(hosted) if hosted.is_empty() => Err(api_error_with_details(
+            ErrorStatus::Unprocessable,
+            format!(
+                "no release artifact is hosted for {target_version}, so every store in the ring \
+                 would fetch nothing — upload it first (POST /admin/releases)"
+            ),
+            &[("target_version", "no artifact hosted for this version")],
+        )),
+        Ok(_hosted) => Ok(()),
+        Err(error) => {
+            tracing::error!(%error, "checking hosted release artifacts failed");
+            Err(service_unavailable("the release registry"))
+        }
+    }
 }
 
 /// Composes a `fleet_update` node onto a store's Store layer and publishes it — the same
 /// load→merge→publish→version shape as the campaigns/tax node publishes, so the other Store-level keys
 /// survive. The node is validated by the config tree's `CapabilityValidator` before it commits.
-async fn admin_publish_rollout<Cfg, A, C>(
-    State(state): State<OtaConfigState<Cfg, A, C>>,
+async fn admin_publish_rollout<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<PublishRolloutRequest>,
 ) -> Response
@@ -9545,6 +9975,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9564,6 +9995,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
+    if let Err(refusal) = require_hosted_release(&state.releases, &request.target_version).await {
+        return refusal;
+    }
     // A fresh publish is live: `halted` is omitted so it defaults false in the node.
     let node = serde_json::json!({
         "target_version": request.target_version,
@@ -9597,8 +10031,8 @@ where
 /// `halted`, and re-publishes — preserving the rest of the rollout, so an operator halts a bad rollout
 /// (or resumes a paused one) without re-typing the target, ring, and key. `400` if the store has no
 /// rollout to halt.
-async fn admin_halt_rollout<Cfg, A, C>(
-    State(state): State<OtaConfigState<Cfg, A, C>>,
+async fn admin_halt_rollout<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<HaltRolloutRequest>,
 ) -> Response
@@ -9606,6 +10040,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9677,8 +10112,8 @@ struct OtaNodeWrite<'a> {
 }
 
 /// The shared load→set-node→publish→save→audit tail behind every OTA lever.
-async fn publish_ota_node<Cfg, A, C>(
-    state: &OtaConfigState<Cfg, A, C>,
+async fn publish_ota_node<Cfg, A, C, L>(
+    state: &OtaConfigState<Cfg, A, C, L>,
     context: &AdminContext,
     tenant_id: TenantId,
     store_id: StoreId,
@@ -9688,6 +10123,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     let nodes = vec![(write.key.to_owned(), write.node)];
     let id = match publish_config_nodes(
@@ -9726,8 +10162,8 @@ where
 
 /// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
 /// is published. Behind [`ConsolePermission::Read`].
-async fn admin_get_rollout<Cfg, A, C>(
-    State(state): State<OtaConfigState<Cfg, A, C>>,
+async fn admin_get_rollout<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Query(query): Query<OtaRolloutQuery>,
 ) -> Response
@@ -9735,6 +10171,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -9784,8 +10221,8 @@ where
 /// mechanism has, and it is also the granularity a shop wants — a counter running two releases at once
 /// is worse than a counter a week behind. ADR-0052 Correction 1 records this against that ADR's
 /// original "per-device" wording.
-async fn admin_publish_placement<Cfg, A, C>(
-    State(state): State<OtaConfigState<Cfg, A, C>>,
+async fn admin_publish_placement<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<PublishPlacementRequest>,
 ) -> Response
@@ -9793,6 +10230,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9834,8 +10272,8 @@ where
 
 /// Reads a store's published placement — the authored `device_ota` node — or `null` if the store has
 /// never been placed. Behind [`ConsolePermission::Read`].
-async fn admin_get_placement<Cfg, A, C>(
-    State(state): State<OtaConfigState<Cfg, A, C>>,
+async fn admin_get_placement<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Query(query): Query<OtaRolloutQuery>,
 ) -> Response
@@ -9843,6 +10281,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,

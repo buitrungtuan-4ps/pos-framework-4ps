@@ -82,6 +82,38 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    - `pos-edge-vX.Y.Z-<target>.tar.gz.minisig` — its minisign signature,
    plus `SHA256SUMS` and its `.minisig`.
 
+5. **Upload the OTA pair to the cloud.** The Release is where a human downloads from; the cloud is
+   where a *store* downloads from, and they are separate steps on purpose (the cloud never sees the
+   signing key, [D1](roadmap-v3.md#debates-settled)). For each Linux target, send the **bare
+   executable** and the signature line beside it:
+
+   ```sh
+   TAG=v1.2.3
+   TARGET=x86_64-unknown-linux-gnu
+   # `release` is the version *without* the tag's `v` — the same string the binary reports and a
+   # rollout's `target_version` names (ADR-0088 Amendment 2). One release, one spelling.
+   curl -fsS --cookie "$CONSOLE_COOKIE" \
+     -H "content-type: application/octet-stream" \
+     -H "x-pos-minisig: $(sed -n 2p "pos-edge-${TAG}-${TARGET}.bin.minisig")" \
+     --data-binary "@pos-edge-${TAG}-${TARGET}.bin" \
+     "https://$DOMAIN/admin/releases?release=${TAG#v}&arch=${TARGET}"
+   ```
+
+   Re-running is safe: identical bytes answer `200` instead of `201`. Different bytes for a release
+   already hosted are refused with `409` — a version a ring has installed has to keep meaning the
+   same thing.
+
+   **Why the `.bin` and not the `.tar.gz`.** `UpdateInstaller::apply` writes the bytes it is handed
+   as the next binary, so the signature the edge checks has to cover exactly those bytes. The tarball
+   has its own signature and its own consumer; unpacking it server-side would install bytes nobody
+   signed.
+
+6. **Check what is hosted, then promote.** `GET /admin/releases/1.2.3` lists the targets the cloud
+   holds. Then publish the rollout (`PUT /admin/config/ota`, or the Fleet screen). Promoting a
+   version with no hosted artifact is refused — before the guard existed, a typo published fine and
+   then every store in the ring fetched a `404`, which means "install nothing", so the fleet sat
+   still with nothing in any log saying why.
+
 ## Verifying an artifact by hand
 
 ```

@@ -350,10 +350,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             config.internal_shared_secret.clone(),
         ))
+        // Both halves of R2's artifact hosting, and both need the object store: the store-facing
+        // route a box downloads from, and the `/admin` route a release is uploaded to. Absent an
+        // `[artifacts]` block there is nowhere for bytes to live, so both are honestly absent rather
+        // than present and answering `503`.
         .merge(match artifacts {
-            Some(blobs) => {
-                http::ota_artifact_router(store.api_keys(), SystemClock, blobs, store.releases())
-            }
+            Some(blobs) => http::ota_artifact_router(
+                store.api_keys(),
+                SystemClock,
+                blobs.clone(),
+                store.releases(),
+            )
+            .merge(http::release_admin_router(
+                blobs,
+                store.releases(),
+                store.admin(),
+                SystemClock,
+                Arc::clone(&audit),
+            )),
             None => Router::new(),
         })
         .merge(http::device_router(
@@ -581,6 +595,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+            // The promote guard's source of truth: a rollout naming a version nobody hosts is
+            // refused here rather than discovered as a fleet-wide `404` (ADR-0088 Amendment 2).
+            store.releases(),
         ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.

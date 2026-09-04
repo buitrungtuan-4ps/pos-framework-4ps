@@ -213,6 +213,14 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
+    // --- release hosting (R2, ADR-0088) ---
+    // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
+    // `X-Pos-Minisig` — so `docs/release-runbook.md` step 5 carries the exact `curl`, which is a
+    // better home for it than a document that stops short of response schemas anyway. Listed here
+    // rather than annotated to stay inside the fidelity B5 chose: the auth surface is documented, the
+    // console surface is enumerated.
+    "/admin/releases",
+    "/admin/releases/{release}",
     "/admin/config/qr",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",

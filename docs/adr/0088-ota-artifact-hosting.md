@@ -115,3 +115,45 @@ change in the implementation slice. That is the price of a pin written before th
 given a meaning — and the reason this amendment exists rather than a quiet edit is that the *next* route
 someone adds under `/internal` for a store to call will fail the same way. The rule, stated once: **a
 route a store calls belongs on `/sync`; `/internal` is for callers on the box's own network.**
+
+---
+
+**Amendment 2 (2026-09-04) — what gets signed, and what the release is called.**
+
+Building the `/admin` upload half turned up two mismatches between what this ADR assumed and what the
+rest of the tree actually does. Both would have produced a fleet that fails at the last step, and
+neither is visible from either side alone — which is why they are recorded here rather than fixed
+quietly.
+
+- **The signature must cover exactly the bytes the edge writes.** The release workflow signs
+  `pos-edge-<tag>-<target>.tar.gz`; `UpdateInstaller::apply` takes `&[u8]` and, by its own contract,
+  "writes the verified artifact as the next binary" — a bare executable. So the two halves of the
+  trust chain were describing different files. Unpacking the tarball on the upload path (the tempting
+  fix) is the one option that must not be taken: the bytes that reach `apply` would then be bytes
+  nobody signed, and [ADR-0047](0047-minisign-verification.md)'s guarantee would end at the `tar`
+  call. Instead the workflow now stages and signs the **bare binary** as a third asset per target
+  (`pos-edge-<tag>-<target>.bin`), and that is the pair the upload carries. The tarball keeps its own
+  signature and its own consumer — a human, and R3's installer — and is not what OTA reads.
+
+- **A release has one name, not three.** This ADR called the registry key "the release tag, as the
+  workflow cut it (e.g. `v1.2.3`)". But R1b makes the binary report `1.2.3` (the workflow strips the
+  `v`, so that a running store's version is comparable with a rollout's), and a rollout's
+  `target_version` is bare for the same reason. Three spellings of one release, with a `404` as the
+  only symptom when they disagree — and a `404` on this route means "install nothing", so the fleet
+  would sit at the old version with nothing in any log saying why. **The registry is keyed by the
+  same bare string that appears in `target_version` and in the binary's own `version`.**
+  `validate_release_tag` already accepts it (`1.2.3` is alphanumerics and dots); no mapping function
+  exists anywhere, deliberately, because a mapping is a fourth place for the spelling to drift. The
+  uploader passes the string it will promote.
+
+**And the promote step gets a guard.** `PUT /admin/config/ota` publishes a rollout naming a
+`target_version`. Nothing checked that the cloud actually hosts that version, so the console's
+happy path was: promote a typo, watch every store in the ring fetch, `404`, and stay put. The route
+now refuses a `target_version` with no recorded artifact, naming the field and listing what is
+hosted. This is the whole of "promote" that did not already exist — the publish, the audit and the
+kill switch shipped with O3 ([ADR-0078](0078-sync-and-ota-closure.md)); what was missing was the
+refusal.
+
+The guard reads the registry, not the object store, so it works on a deployment with no `[artifacts]`
+block configured — such a deployment simply cannot upload, and therefore cannot promote, which is the
+correct posture for a cloud that ships no edge releases.

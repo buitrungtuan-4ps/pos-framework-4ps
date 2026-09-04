@@ -1579,6 +1579,7 @@ version = "0.0.0"
 dependencies = [
  "argon2",
  "axum",
+ "base64",
  "blob-garage",
  "bytes",
  "csv",
