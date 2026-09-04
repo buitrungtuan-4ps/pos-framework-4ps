@@ -157,6 +157,16 @@ pub trait EmployeeStore {
     /// be: an import writes a whole roster in one transaction, and PostgreSQL's `now()` is
     /// transaction time, so `created_at` alone does not order those rows (decision 9).
     ///
+    /// `search`, when given, is a case-insensitive substring the person's **name or staff code**
+    /// must contain — the two things an operator knows about someone they are looking for. It is
+    /// what lets a picker offer the right person out of a roster too long to render, which is the
+    /// prerequisite for paging the People screen's table at all
+    /// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4). `total` counts what the search
+    /// matched, not the whole roster, so a pager sizes itself to the result rather than the set.
+    ///
+    /// It does not search `pin_phc`, which is not selected by any read and would be meaningless to
+    /// match a substring against besides.
+    ///
     /// # Errors
     ///
     /// [`EmployeeStoreError`] if the read fails.
@@ -164,6 +174,7 @@ pub trait EmployeeStore {
         &self,
         tenant: TenantId,
         page: PageRequest,
+        search: Option<&str>,
     ) -> impl Future<Output = Result<Page<Versioned<Employee>>, EmployeeStoreError>> + Send;
 
     /// Reads one employee within its tenant, or `None` if there is no such id.

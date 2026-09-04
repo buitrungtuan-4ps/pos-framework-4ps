@@ -145,3 +145,34 @@ picker over a server-side employee search — and `GET /admin/employees` has no 
 `order` that B3-3 gave the other four paged reads never reached employees, because employees were
 held back to B3-4. So the remaining order is: search the roster server-side, put the picker on it,
 then page the table.
+
+## Delivery note — the assign picker searches instead of holding (2026-09-04)
+
+The second of the three steps the note above laid out. `GET /admin/employees` takes a `?q=`, and the
+People screen's assign picker calls it with a short limit instead of filtering a roster it keeps in
+memory.
+
+**The gap this closed was in an earlier slice's coverage, not in a design.** B3-3 gave `q`, `sort`
+and `order` to the four paged reads it touched; employees were not among them, because employees had
+been held back to B3-4 pending the owner's T1 call. So the cohort that "all" got a search was in fact
+four of five, and nobody noticed until the picker needed the fifth. Recorded because the shape
+generalises: a slice that says "the cohort" is worth re-checking against the cohort's actual members
+when a later slice depends on it.
+
+**`sort` and `order` are still absent, and that is a decision.** The other four got them because
+their screens have sortable table headers pointing at server fields. The People table sorts
+client-side over rows it already holds. Adding server ordering now would be surface with no
+consumer; it belongs to the slice that pages the table, where the headers are what make it
+necessary.
+
+**The search matches name or code, and neither alone would do.** Those are the two handles an
+operator has on someone: a name they were told, or the code on a badge. It does not match `pin_phc` —
+not selected by any read, and a substring predicate over an Argon2id hash could only ever leak timing
+about a secret.
+
+**An archived match is shown disabled, not filtered out.** Filtering would have been fewer lines, and
+wrong: an operator searching for a real person would see an empty list and be unable to tell "no such
+person" from "that person is archived". The disabled row answers the question they actually have.
+
+What is left for step three is the employees table itself — now the screen's only reader of the whole
+roster.

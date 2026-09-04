@@ -716,14 +716,19 @@ export const api = {
   // One page of the roster. This is T1 personal data either way (ADR-0070) — paging does not change
   // the fields or the gate, it sends fewer rows per response than the read above it.
   //
-  // No console screen calls this yet, and that is measured rather than pending: the People screen
-  // needs the whole roster for its assign picker and to render a name against an assignment row, so
-  // paging only its table would add a request instead of removing data. See the comment on that
-  // table for what would have to change first.
-  listEmployeesPage: (tenantId: string, page: PageRequest) =>
+  // `search`, when given, narrows on the person's name or staff code and narrows `total` with it.
+  // That is what the assign picker calls: it asks for a short page of whoever matches what the
+  // operator typed, instead of holding the roster in memory to filter locally. The server refuses a
+  // search without a limit rather than answering with the whole roster, so the two travel together.
+  //
+  // The People table still does not call this. It is the last of the screen's three whole-roster
+  // readers; see the comment on that table.
+  listEmployeesPage: (tenantId: string, page: PageRequest, search?: string) =>
     requestJson<Page<Employee>>(
       "GET",
-      `/admin/employees?${tenantPageQuery(tenantId, page)}`,
+      `/admin/employees?${tenantPageQuery(tenantId, page)}${
+        search ? `&q=${encodeURIComponent(search)}` : ""
+      }`,
     ),
   getEmployee: (tenantId: string, id: string) =>
     requestJson<Employee>(

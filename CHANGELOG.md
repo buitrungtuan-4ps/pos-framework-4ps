@@ -108,6 +108,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
 
 ### Changed
+- **The assign picker on the People screen searches the roster instead of holding it.** Typing part
+  of a name or a staff code asks the server for the matches; `GET /admin/employees` takes a `?q=`
+  now, which it did not before — the search the other four paged reads got in an earlier release
+  never reached employees.
+
+  An archived employee still appears in the results, listed and greyed out rather than filtered
+  away. Hiding them would leave an operator searching for a real person, being shown nothing, and
+  having no way to tell "no such person" from "that person is archived".
+
+  This is the second of three steps toward paging that screen's employee table (roadmap `#299`).
+  With the picker off the whole roster and assignment rows already naming their person, the table is
+  the only reader left.
+
+  `?q=` requires `?limit=`: a search without one is refused rather than answered with the whole
+  roster, the same as everywhere else on this surface. The search matches the name and the staff
+  code, never the PIN hash — which no read returns in any case.
+
 - **An assignment now says who it is for.** `GET /admin/assignments` returned three ids and nothing
   else, so the People screen turned an assignment into a person's name by searching the whole loaded
   roster. The row carries `employee_name` and `employee_code` now, resolved by the server as it

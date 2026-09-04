@@ -60,6 +60,27 @@ const EMPLOYEE_COLUMNS: &str =
 /// different sequences — which would make "page 2" name rows from an order nothing else uses.
 const EMPLOYEE_ORDER: &str = "ORDER BY created_at DESC, id DESC";
 
+/// The paged read's optional filter: a case-insensitive substring of the person's **name or staff
+/// code**, or everything when the parameter is `NULL`.
+///
+/// Both columns, because those are the two handles an operator has on someone they are looking for:
+/// a name they were told, or the code on a badge. Neither alone would answer half the searches an
+/// assign picker gets.
+///
+/// **Not `pin_phc`.** It is not selected by any read, and matching a substring against an Argon2id
+/// hash would be meaningless even if it were — the only thing such a predicate could do is leak
+/// timing about a secret.
+///
+/// `position(lower($n) in lower(col))` rather than `ILIKE`, so `%` and `_` in what the operator
+/// typed are characters and not wildcards — the same choice, for the same reason, as the catalog
+/// item search. It cannot use `employees_code_key`: a substring match is not a prefix match. That is
+/// acceptable here in a way it would not be on the event tables, because the predicate runs over one
+/// tenant's employees — hundreds of rows that `employees_by_tenant_newest` has already narrowed to —
+/// not over a table that grows with traffic.
+const EMPLOYEE_SEARCH: &str = "($2::text IS NULL \
+       OR position(lower($2) in lower(name)) > 0 \
+       OR position(lower($2) in lower(code)) > 0)";
+
 /// The employee store over a shared pool. Built by [`PostgresStore::people`](crate::PostgresStore::people).
 #[derive(Clone, Debug)]
 pub struct PostgresPeople {
@@ -116,7 +137,7 @@ impl PostgresPeople {
         Ok(rows.iter().map(employee_row).collect())
     }
 
-    /// One page of a tenant's employees, newest first, with how many the tenant has.
+    /// One page of a tenant's employees matching `search`, newest first, with how many matched.
     ///
     /// The same columns and the same order as [`fetch`](Self::fetch), so a page is a window onto the
     /// sequence that read returns — including the same deliberate absence of `pin_phc`. Paging
@@ -133,12 +154,17 @@ impl PostgresPeople {
     /// on there, and reporting `0` would tell the caller the tenant has no staff. [`window_total`]
     /// is where that case is handled, for this read and every other paged read in the adapter.
     ///
+    /// `search` narrows on [`EMPLOYEE_SEARCH`], and the total narrows with it: the count answers
+    /// "how many matched", not "how big is the roster", because that is the number a pager over the
+    /// results has to size itself from.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
     pub async fn fetch_page(
         &self,
         tenant_id: &str,
+        search: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<EmployeeRow>, i64), PortError> {
@@ -147,9 +173,10 @@ impl PostgresPeople {
             .query(
                 &format!(
                     "SELECT {EMPLOYEE_COLUMNS}, count(*) OVER() FROM employees \
-                     WHERE tenant_id = $1 {EMPLOYEE_ORDER} LIMIT $2 OFFSET $3"
+                     WHERE tenant_id = $1 AND {EMPLOYEE_SEARCH} \
+                     {EMPLOYEE_ORDER} LIMIT $3 OFFSET $4"
                 ),
-                &[&tenant_id, &limit, &offset],
+                &[&tenant_id, &search, &limit, &offset],
             )
             .await
             .map_err(unavailable)?;
@@ -162,8 +189,8 @@ impl PostgresPeople {
             &connection,
             &rows,
             7,
-            "SELECT count(*) FROM employees WHERE tenant_id = $1",
-            &[&tenant_id],
+            &format!("SELECT count(*) FROM employees WHERE tenant_id = $1 AND {EMPLOYEE_SEARCH}"),
+            &[&tenant_id, &search],
         )
         .await?;
         Ok((rows.iter().map(employee_row).collect(), total))
