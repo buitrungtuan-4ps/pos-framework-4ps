@@ -112,8 +112,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   count rides on the returned rows, so an empty window — a page past the end, or a pager sitting on
   page four of a roster that has since shrunk — had no row to read it from and answered `0`. That
   reads as "this tenant has no staff", and the console's pager sizes itself from that number. The
-  count is now taken properly when the window comes back empty. The four other paged reads
-  (`vouchers`, `media`, `audit`, `items`) still have this behaviour and are tracked separately.
+  count is now taken properly when the window comes back empty.
+- **The same fix now covers every paged read**, not just the roster: vouchers, the media library,
+  the audit trail and the item master all reported a total of zero for an empty page, and all four
+  now report the size of the set the page is past the end of. For the two reads that filter — the
+  audit trail's seven optional filters, and the item search that also looks inside per-locale names
+  — the count still counts what the filter matched, so a search with no hits still reports zero,
+  which was always the true answer there. One helper (`store::window_total`) now owns this for all
+  five reads, so a sixth inherits it rather than having to remember it.
 
 ### Added
 - **The console surface has a generated API document** (roadmap v3 B5, ADR-0019 amended).

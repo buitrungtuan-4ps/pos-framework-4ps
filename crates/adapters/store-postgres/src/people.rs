@@ -19,7 +19,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{RowUpdate, pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable, window_total};
 
 /// An employee as listed — identity, code, status, and whether a PIN is set. Never the PIN hash.
 #[derive(Clone, Debug)]
@@ -130,8 +130,8 @@ impl PostgresPeople {
     ///
     /// The one case that needs a second statement is an *empty* window — a page past the end, or a
     /// roster that shrank under a pager sitting on page four. `count(*) OVER()` has no row to ride
-    /// on there, and reporting `0` would tell the caller the tenant has no staff. The other paged
-    /// reads in this adapter still do report `0` on that path; see the `total` binding below.
+    /// on there, and reporting `0` would tell the caller the tenant has no staff. [`window_total`]
+    /// is where that case is handled, for this read and every other paged read in the adapter.
     ///
     /// # Errors
     ///
@@ -158,17 +158,14 @@ impl PostgresPeople {
         // when what happened is that the caller asked past the end of a roster that does have
         // people. The pager on the other side reads this number to decide how many pages exist, so
         // it gets counted properly. One extra round trip, only on the path that returned nothing.
-        let total = match rows.first() {
-            Some(row) => row.get::<_, i64>(7),
-            None => connection
-                .query_one(
-                    "SELECT count(*) FROM employees WHERE tenant_id = $1",
-                    &[&tenant_id],
-                )
-                .await
-                .map_err(unavailable)?
-                .get(0),
-        };
+        let total = window_total(
+            &connection,
+            &rows,
+            7,
+            "SELECT count(*) FROM employees WHERE tenant_id = $1",
+            &[&tenant_id],
+        )
+        .await?;
         Ok((rows.iter().map(employee_row).collect(), total))
     }
 

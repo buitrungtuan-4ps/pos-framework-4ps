@@ -18,7 +18,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{RowUpdate, pool_unavailable, unavailable};
+use crate::store::{RowUpdate, pool_unavailable, unavailable, window_total};
 
 /// An item as listed — the product master.
 #[derive(Clone, Debug)]
@@ -341,7 +341,8 @@ impl PostgresCatalog {
     ///
     /// `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one snapshot, so the count
     /// cannot disagree with the page it labels — and it counts what the *search* matched, not the
-    /// tenant's whole master.
+    /// tenant's whole master. An empty window carries no count at all, which [`window_total`]
+    /// answers with a second query rather than a misleading zero.
     ///
     /// Every `ORDER BY` this can produce is total and is a literal — see [`catalog_item_order`] and
     /// [`CATALOG_ITEM_SEARCH`]. The default order is covered by `catalog_items_by_tenant_newest`
@@ -374,9 +375,18 @@ impl PostgresCatalog {
             )
             .await
             .map_err(unavailable)?;
-        // Every row carries the same window count; an empty page carries none, which is the right
-        // answer both for a page past the end and for a tenant with no items.
-        let total = rows.first().map_or(0, |row| row.get::<_, i64>(10));
+        // The fallback repeats the page's predicate from the same constant, so a search that
+        // narrows the page narrows the count with it.
+        let total = window_total(
+            &connection,
+            &rows,
+            10,
+            &format!(
+                "SELECT count(*) FROM catalog_items WHERE tenant_id = $1 AND {CATALOG_ITEM_SEARCH}"
+            ),
+            &[&tenant_id, &search],
+        )
+        .await?;
         Ok((rows.iter().map(catalog_item_row).collect(), total))
     }
 

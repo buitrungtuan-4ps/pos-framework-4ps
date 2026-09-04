@@ -15,7 +15,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{pool_unavailable, unavailable, window_total};
 
 /// One media asset as listed — its identity and size, never its bytes (a listing must not ship the
 /// renditions).
@@ -99,7 +99,9 @@ impl PostgresMedia {
     /// One page of a tenant's assets, newest first, with the size of the whole library.
     ///
     /// `count(*) OVER()` rides on the windowed `SELECT` rather than running separately: one round
-    /// trip, one snapshot, so the count cannot disagree with the page it labels.
+    /// trip, one snapshot, so the count cannot disagree with the page it labels. An empty window
+    /// carries no count at all, which [`window_total`] answers with a second query rather than a
+    /// misleading zero.
     ///
     /// The `ORDER BY` is total — `created_at DESC, media_id DESC` — because `created_at` alone is
     /// not. It defaults to `now()`, which is transaction time, so a batch of uploads shares one
@@ -129,9 +131,14 @@ impl PostgresMedia {
             )
             .await
             .map_err(unavailable)?;
-        // Every row carries the same window count; an empty page carries none, which is the right
-        // answer both for a page past the end and for a tenant with no assets.
-        let total = rows.first().map_or(0, |row| row.get::<_, i64>(4));
+        let total = window_total(
+            &connection,
+            &rows,
+            4,
+            "SELECT count(*) FROM media_assets WHERE tenant_id = $1",
+            &[&tenant_id],
+        )
+        .await?;
         Ok((rows.iter().map(media_asset_row).collect(), total))
     }
 
