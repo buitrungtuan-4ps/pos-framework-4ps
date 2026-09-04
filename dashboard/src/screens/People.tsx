@@ -11,7 +11,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { Assignment, Employee, PermissionInfo, RoleTemplate } from "../api/types";
+import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
@@ -30,7 +30,15 @@ import {
 import { toast } from "../components/Toast";
 
 export function People() {
-  const [employees, setEmployees] = createSignal<Employee[] | null>(null);
+  // One page of the roster, not the whole thing (ADR-0098, #299). The table below is the only reader
+  // now: an assignment row carries the person it names, and the assign picker searches the server.
+  const [roster, setRoster] = createSignal<Page<Employee> | null>(null);
+  const [rosterOffset, setRosterOffset] = createSignal(0);
+  const [rosterQuery, setRosterQuery] = createSignal("");
+  const [rosterSort, setRosterSort] = createSignal("newest");
+  const [rosterDescending, setRosterDescending] = createSignal(false);
+  let rosterQueryTimer: ReturnType<typeof setTimeout> | undefined;
+  let rosterSeq = 0;
   const [roles, setRoles] = createSignal<RoleTemplate[]>([]);
   const [catalogue, setCatalogue] = createSignal<PermissionInfo[]>([]);
   const [assignments, setAssignments] = createSignal<Assignment[]>([]);
@@ -91,18 +99,47 @@ export function People() {
     toast.error(message);
   };
 
+  /** How many employees the table shows at once. The pager reads `total` for the rest. */
+  const ROSTER_PAGE_SIZE = 12;
+
+  /**
+   * Reads one page of the roster under the current offset, search and order.
+   *
+   * Sequence-numbered like the assign picker's search: typing is debounced but responses can still
+   * arrive out of order, and a slow early page overwriting a fast later one would show the operator
+   * rows they did not ask for.
+   */
+  const loadRoster = async () => {
+    const seq = ++rosterSeq;
+    const page = await api.listEmployeesPage(
+      tenantId(),
+      { limit: ROSTER_PAGE_SIZE, offset: rosterOffset() },
+      rosterQuery().trim() || undefined,
+      rosterSort(),
+      rosterDescending() ? "desc" : "asc",
+    );
+    if (seq === rosterSeq) {
+      setRoster(page);
+    }
+  };
+
+  /** Reloads from the first page — what a write does, since it can change what page four holds. */
+  const reloadRoster = async () => {
+    setRosterOffset(0);
+    await loadRoster();
+  };
+
   const load = async () => {
     setError("");
     setBusy(true);
     try {
-      const [loadedEmployees, loadedRoles, loadedCatalogue] = await Promise.all([
-        api.listEmployees(tenantId()),
+      const [loadedRoles, loadedCatalogue] = await Promise.all([
         api.listRoles(tenantId()),
         api.permissionCatalogue(),
       ]);
-      setEmployees(loadedEmployees);
       setRoles(loadedRoles);
       setCatalogue(loadedCatalogue);
+      await loadRoster();
       await loadAssignments();
     } catch (caught) {
       await fail(caught);
@@ -144,7 +181,9 @@ export function People() {
       setNewCode("");
       setNewName("");
       toast.ok(t("people.employeeCreated"));
-      await load();
+      // Back to the first page: the roster is newest-first by default, so the person just added is
+      // at the top of it and nowhere near wherever the operator was paged to.
+      await reloadRoster();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -168,7 +207,8 @@ export function People() {
       setPinFor(null);
       setPinValue("");
       toast.ok(t("people.pinSet"));
-      await load();
+      // Same row, same page — re-read where the operator is rather than moving them.
+      await loadRoster();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -191,7 +231,8 @@ export function People() {
       );
       setPendingArchive(null);
       toast.ok(doneMessage);
-      await load();
+      // Archiving changes a status, not membership: the row stays on the page it was on.
+      await loadRoster();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -383,16 +424,21 @@ export function People() {
     return [...groups.entries()].map(([group, items]) => ({ group, items }));
   };
 
+  // `sortField` is the server's token (`EmployeeSort`), `sortValue` the local comparator. Both are
+  // given: the table is server-sorted, so only `sortField` is consulted, and `sortValue` is what the
+  // headers would fall back to if this table ever went back to holding the whole roster.
   const employeeColumns = (): Column<Employee>[] => [
     {
       key: "name",
       header: t("people.name"),
+      sortField: "name",
       sortValue: (row) => row.name,
       cell: (row) => <span>{row.name}</span>,
     },
     {
       key: "code",
       header: t("people.code"),
+      sortField: "code",
       sortValue: (row) => row.code,
       cell: (row) => <span class="text-ink-muted">{row.code}</span>,
     },
@@ -477,28 +523,45 @@ export function People() {
             }
           >
             <Show
-              when={employees()}
+              when={roster()}
               fallback={<p class="text-sm text-ink-muted">{t("people.loadHint")}</p>}
             >
               {(loaded) => (
-                // Still paged here, not by the server, and still a measurement rather than an
-                // oversight. `GET /admin/employees?limit=` exists (ADR-0098) and
-                // `api.listEmployeesPage` calls it, but this screen had three readers of the whole
-                // roster and paging it would have broken the two that are not this table.
+                // Server-paged, server-searched and server-sorted (ADR-0098, #299). This screen used
+                // to hold the tenant's whole roster for three readers at once; the other two are
+                // gone — an assignment row names its own person, and the assign picker searches the
+                // server — so the table is free to ask for twelve rows at a time.
                 //
-                // One of the three is gone: an assignment now carries the name of the person it
-                // grants, so labelling the assignments table no longer searches the roster. The
-                // remaining blocker is the assign picker below, which offers every active employee
-                // from the loaded set — give this table a page and the picker offers only whoever
-                // landed on it, which is worse than a slow list. That needs a searching picker over
-                // a server-side employee search, and `GET /admin/employees` has no `q` yet (the
-                // other four paged reads got one in B3-3; employees did not). So the order is:
-                // search the roster server-side, put the picker on it, then page this table.
+                // All four props travel together on purpose. `serverTotal`+`onPage` are what make
+                // the pager count the set rather than the page; without `onSort` the headers would
+                // go inert, and without `onQuery` the search box would filter the twelve rows on
+                // screen while looking like it searched the roster. Each of those is a smaller lie
+                // than an unpaged table, but a lie.
                 <DataTable
                   columns={employeeColumns()}
-                  rows={loaded()}
+                  rows={loaded().items}
                   searchText={(row) => `${row.name} ${row.code}`}
-                  pageSize={12}
+                  pageSize={ROSTER_PAGE_SIZE}
+                  serverTotal={loaded().total}
+                  onPage={(offset) => {
+                    setRosterOffset(offset);
+                    void loadRoster().catch(fail);
+                  }}
+                  onSort={(field, descending) => {
+                    setRosterSort(field);
+                    setRosterDescending(descending);
+                    // A page-four offset means nothing once the order changes.
+                    void reloadRoster().catch(fail);
+                  }}
+                  onQuery={(text) => {
+                    setRosterQuery(text);
+                    clearTimeout(rosterQueryTimer);
+                    // Debounced like the assign picker: the kit fires this per keystroke, because it
+                    // cannot know what a request costs the caller.
+                    rosterQueryTimer = setTimeout(() => {
+                      void reloadRoster().catch(fail);
+                    }, 250);
+                  }}
                   empty={<EmptyState title={t("people.employeesEmpty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (

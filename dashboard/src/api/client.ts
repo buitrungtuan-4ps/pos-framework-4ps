@@ -721,13 +721,21 @@ export const api = {
   // operator typed, instead of holding the roster in memory to filter locally. The server refuses a
   // search without a limit rather than answering with the whole roster, so the two travel together.
   //
-  // The People table still does not call this. It is the last of the screen's three whole-roster
-  // readers; see the comment on that table.
-  listEmployeesPage: (tenantId: string, page: PageRequest, search?: string) =>
+  // `sort`/`order` are the roster's orders (`newest`, `name`, `code`) and `asc`/`desc`. The People
+  // table calls this with all four; the assign picker calls it with a search and a short limit.
+  listEmployeesPage: (
+    tenantId: string,
+    page: PageRequest,
+    search?: string,
+    sort?: string,
+    order?: string,
+  ) =>
     requestJson<Page<Employee>>(
       "GET",
       `/admin/employees?${tenantPageQuery(tenantId, page)}${
         search ? `&q=${encodeURIComponent(search)}` : ""
+      }${sort ? `&sort=${encodeURIComponent(sort)}` : ""}${
+        order ? `&order=${encodeURIComponent(order)}` : ""
       }`,
     ),
   getEmployee: (tenantId: string, id: string) =>

@@ -108,6 +108,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
 
 ### Changed
+- **The People screen's employee table reads a page at a time.** A tenant with two hundred staff no
+  longer waits for two hundred rows to see the first twelve.
+
+  The search box and the column headers now ask the server, so searching finds people who are not on
+  the current page, and sorting by name or staff code reorders the roster rather than the twelve rows
+  on screen. Both were client-side before, which was correct while the screen held the whole roster
+  and would have quietly become wrong the moment it stopped.
+
+  This completes `#299`. The table was never the hard part: it was the last of three things on this
+  screen that read the entire roster, and paging it while the other two still needed the set would
+  have sent more data rather than less. The assignment rows and the assign picker had to move first.
+
 - **The employee roster page can be ordered by name or staff code.** `GET /admin/employees` takes
   `?sort=newest|name|code` and `?order=asc|desc`; an unrecognised token is refused by name rather
   than quietly answered with the default order.
