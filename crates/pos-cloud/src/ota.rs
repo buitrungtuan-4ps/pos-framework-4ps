@@ -249,7 +249,15 @@ pub fn artifact_key(
 /// than persisted so that a row and its blobs cannot disagree about where the bytes are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseArtifact {
-    /// The release tag, as the workflow cut it (e.g. `v1.2.3`).
+    /// The release, spelled the **same way** as the rollout's `target_version` and the binary's own
+    /// [`version`](https://docs.rs/pos-edge) — bare, without the tag's leading `v` (e.g. `1.2.3`).
+    ///
+    /// One release, one name. R1b makes the workflow stamp `${TAG#v}` into the binary so a running
+    /// store's version is comparable with a rollout's; a registry keyed by the `v`-prefixed tag would
+    /// be a third spelling, and the only symptom of a disagreement is a `404` on the artifact route —
+    /// which means "install nothing", so a fleet would sit at the old version with nothing saying why
+    /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 2). No mapping function
+    /// exists, deliberately: a mapping would be a fourth place for the spelling to drift.
     pub release: String,
     /// The target the binary was compiled for.
     pub target: TargetTriple,
@@ -471,6 +479,20 @@ mod tests {
         assert_eq!(
             validate_release_tag(&"v".repeat(65)),
             Err(ReleaseTagError::TooLong)
+        );
+    }
+
+    /// The spelling ADR-0088 Amendment 2 settled: a release is named the way `target_version` and the
+    /// binary's own version name it — bare. Pinned as a test because the failure mode of getting it
+    /// wrong is a `404` that reads as "nothing to install", which is silent by design.
+    #[test]
+    fn a_release_is_named_without_the_tags_leading_v() {
+        assert_eq!(validate_release_tag("1.2.3"), Ok(()));
+        let triple = TargetTriple::parse("x86_64-unknown-linux-gnu").expect("a triple");
+        let key = artifact_key("1.2.3", &triple, ArtifactKind::Binary).expect("a key");
+        assert_eq!(
+            key.as_str(),
+            "releases/1.2.3/x86_64-unknown-linux-gnu/pos-edge"
         );
     }
 

@@ -116,9 +116,14 @@ deployment pays for it again, which is the cost that makes it worth naming.
 
 | # | What is manual now | Why it does not need a person | Where it lands |
 |---|---|---|---|
-| A1 | **Minting the Garage S3 access keys** (`garage key create`) | `bootstrap.sh` already runs on the box on every deploy, and already mints the database password, the broker token and the internal shared secret. Garage must generate the key pair itself — that part is real — but `garage key create` is a command on the box, and `bootstrap.sh` is a script on the box. The bucket-and-layout setup around it was deferred to backups and never written (`deploy/bootstrap.sh:344` says so) | R2's artifact slice, in `bootstrap.sh`, idempotent across redeploys like every other secret it keeps |
 | A2 | **Delivering `RCLONE_REMOTE` to the box** | `.github/workflows/deploy.yml` already pipes `DOMAIN`, `TLS_MODE`, `ACME_EMAIL` and `CF_DNS_API_TOKEN` down the same SSH line. One more variable is one more line. *Choosing* the destination stays [H10](#3-human-decision--at-first-boot-and-after) | `deploy.yml` + [`fork-checklist.md`](fork-checklist.md) §2, whose "no workflow reads it" note describes the gap and should say so |
 | A3 | **Installing the certificate-export cron line** | `bootstrap.sh` already runs `tls-export.sh` once on each deploy. Writing the crontab entry is one more command in the same script — and doing it there also closes the hole where a stopped exporter is invisible until a certificate expires weeks later | `bootstrap.sh`, beside the existing `tls-export.sh` call |
+
+**A1 is closed.** *Minting the Garage S3 access keys* was the third row here. `bootstrap.sh` now
+creates the layout, the bucket and the key and writes them into `secrets/cloud.toml`, idempotently,
+on every deploy (#177) — so nobody SSHes into the box for it. Kept as a line rather than deleted
+silently: the owner's question ("why is so much of a deploy manual?") is what produced this whole
+section, and a row disappearing without a note would lose the answer.
 
 ## How this page got it wrong the first time
 

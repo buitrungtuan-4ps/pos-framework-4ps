@@ -143,8 +143,14 @@ jobs:
             cp LICENSE "$stage/" 2>/dev/null || true
             tar -czf "dist/${stage}.tar.gz" "$stage"
             rm -rf "$stage"
+            # The bare executable, as its own asset. OTA installs a bare binary --
+            # `UpdateInstaller::apply` writes the bytes it is handed as the next binary -- so the
+            # signature the edge checks has to cover *these* bytes, not the tarball's
+            # (ADR-0088 Amendment 2). Unpacking the tarball on the upload path instead would hand
+            # `apply` bytes nobody ever signed.
+            cp "target/${target}/release/pos-edge" "dist/pos-edge-${TAG}-${target}.bin"
           done
-          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
+          ( cd dist && sha256sum *.tar.gz *.bin > SHA256SUMS )
           ls -l dist
 
       - name: Sign every artifact with minisign
@@ -159,7 +165,7 @@ jobs:
           # minisign reads the password from stdin when stdin is not a TTY (it is not, here); a
           # passwordless key ignores the piped line. The trusted comment carries the release tag,
           # so a signature names what it signed.
-          for f in dist/*.tar.gz dist/SHA256SUMS; do
+          for f in dist/*.tar.gz dist/*.bin dist/SHA256SUMS; do
             minisign -S -s minisign.key -m "$f" \
               -t "pos-edge ${TAG}" -c "pos-edge ${TAG} $(basename "$f")" \
               <<<"${MINISIGN_PASSWORD:-}"

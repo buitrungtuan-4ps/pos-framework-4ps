@@ -93,6 +93,11 @@ toml       = "1"
 url  = "2"
 hmac = "0.13"
 sha2 = "0.11"
+# minisign's on-disk signature is base64; every type in the tree holds raw bytes. The `/admin` upload
+# is the one boundary where one becomes the other (ADR-0092 Correction 2), so the decoder lives here.
+# Already in the graph transitively at this version, so `multiple-versions = "deny"` stays satisfied
+# and no new supply-chain surface enters — this makes a transitive crate a stated dependency.
+base64 = "0.22"
 
 # The webhook TLS sender (ADR-0038). Every crate here is already in the tree at these versions — the
 # HTTP/1.1 client (`hyper` + `hyper-util` + `http-body-util` + `bytes`) via `axum`, and the TLS stack

@@ -17,6 +17,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **A release can be put into the cloud, and cannot be promoted before it is** (roadmap `docs/roadmap-v3.md`
+  **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 2). `POST /admin/releases?release=&arch=`
+  takes the bare `pos-edge` executable as its body and minisign's signature line in `X-Pos-Minisig`,
+  behind `console.ota.publish` and audited; `GET /admin/releases/{release}` lists the targets the
+  cloud holds. Until this landed, only a test ever wrote the rows the store-facing artifact route
+  reads.
+
+  **Two mismatches were found building it, and both are corrected here.** The release workflow signed
+  only the `.tar.gz`, while `UpdateInstaller::apply` installs a bare binary — so the trust chain's two
+  halves named different files, and unpacking the tarball server-side would have installed bytes
+  nobody signed. The workflow now stages and signs `pos-edge-<tag>-<target>.bin` per target, and that
+  is the pair the upload carries. Separately, a release had three spellings — `v1.2.3` in the
+  registry's docs, `1.2.3` in the binary (R1b strips the `v`) and `1.2.3` in a rollout's
+  `target_version`. It now has one: the bare version, everywhere.
+
+  **`PUT /admin/config/ota` refuses a `target_version` with no hosted artifact** (`422`, naming the
+  field). Before the guard, promoting a typo succeeded and every store in the ring then fetched a
+  `404` — which means "install nothing", so the fleet sat still with nothing in any log saying why.
+
+  **Upgrade note** — no `PROTOCOL_VERSION` change and no migration: the routes are new, the registry
+  table shipped with #177, and the `arch` field is additive. Two things change for an operator: the
+  release runbook has an upload step (step 5) whose `release` value is the version **without** the
+  tag's `v`, and a rollout can no longer name a version the cloud does not host. A deployment with no
+  `[artifacts]` block cannot upload and therefore cannot promote — correct for a cloud that ships no
+  edge releases, and unchanged for every other route.
+
 - **The cloud can hold an edge release and hand it to a store** (roadmap `docs/roadmap-v3.md` **R2**,
   [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). `POST /sync/stores/{store_id}/artifact` returns
   the signed binary, with its detached signature in `X-Pos-Artifact-Signature` as lowercase hex so
