@@ -71,7 +71,7 @@ pos-country-zz = { path = "../../countries/zz", optional = true }
 # test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 axum       = "0.8"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 
 # The embedded back-office dashboard (ADR-0060), served as the router's fallback (src/assets.rs).
 # Same crate, version and features pos-edge uses to embed its operator UI: `debug-embed` embeds in

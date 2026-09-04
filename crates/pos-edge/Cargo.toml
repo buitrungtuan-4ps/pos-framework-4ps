@@ -69,7 +69,7 @@ link-nats = { path = "../adapters/link-nats" }
 # dependency-rule test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 axum       = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 # `debug-embed` makes rust-embed embed in every profile, not only release, so the
 # tests exercise the same serving path the shipped binary does. `dev-ui` reads
 # from disk instead, and is handled explicitly in `http::assets`.
