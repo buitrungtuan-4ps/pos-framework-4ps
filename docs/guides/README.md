@@ -1,6 +1,6 @@
 # Guides
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-21
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-04
 
 Five short, task-shaped guides. Each is meant to be finished in one sitting.
 
@@ -9,6 +9,7 @@ Five short, task-shaped guides. Each is meant to be finished in one sitting.
 | Clone the repo and see a sale happen | [Start from zero](start-from-zero.md) |
 | Deploy the cloud to a real server | [Start from zero → Part 2](start-from-zero.md#part-2--deploy-the-cloud-to-a-vps-15-minutes), then the [deploy runbook](../deploy-runbook.md) |
 | Bring a real store online from the dashboard | [Bring a store online](bring-a-store-online.md) |
+| Take a fork all the way to a trading store | [Go live](../go-live.md), and the [gate register](../gate-register.md) it stops at |
 | Write an adapter for a new vendor/device | [Write an adapter](write-an-adapter.md) |
 | Add a new country (tax, locale, vendors) | [Add a country module](add-a-country-module.md) |
 | Prove the capacity numbers, run fleet scenarios | [Run the simulator](run-the-simulator.md) |
