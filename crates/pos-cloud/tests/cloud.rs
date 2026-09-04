@@ -11923,6 +11923,11 @@ impl AssignmentStore for FakeAssignments {
             employee_id: assignment.employee_id,
             store_id: assignment.store_id,
             role_template_id: assignment.role_template_id,
+            // Stored unresolved: this fake holds only assignments, so it has no roster to join
+            // against — exactly the state the adapter's `LEFT JOIN` reports when no employee row
+            // matches. `FakePeople`, which holds all three seams, is where the resolution happens.
+            employee_name: None,
+            employee_code: None,
         });
         Ok(())
     }
@@ -12213,6 +12218,40 @@ impl RoleTemplateStore for FakePeople {
     }
 }
 
+impl FakePeople {
+    /// Fills in each assignment's `employee_name`/`employee_code` from the roster this fake also
+    /// holds — the in-memory stand-in for the adapter's `LEFT JOIN`.
+    ///
+    /// It lives here and not in `FakeAssignments` for the same reason the join lives in the people
+    /// module and not in a standalone assignments table: resolving the name needs both seams, and
+    /// `FakePeople` is the type that has both. An employee the roster does not know stays `None`,
+    /// which is what the left join yields for an assignment whose employee row is gone.
+    async fn resolved(
+        &self,
+        tenant: TenantId,
+        rows: Vec<Assignment>,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let roster = self
+            .employees
+            .list(tenant)
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let found = roster
+                    .iter()
+                    .find(|employee| employee.record.employee_id == row.employee_id);
+                Assignment {
+                    employee_name: found.map(|employee| employee.record.name.clone()),
+                    employee_code: found.map(|employee| employee.record.code.clone()),
+                    ..row
+                }
+            })
+            .collect())
+    }
+}
+
 impl AssignmentStore for FakePeople {
     async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
         self.assignments.assign(assignment).await
@@ -12222,16 +12261,19 @@ impl AssignmentStore for FakePeople {
         tenant: TenantId,
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        self.assignments.list_for_store(tenant, store_id).await
+        let rows = self.assignments.list_for_store(tenant, store_id).await?;
+        self.resolved(tenant, rows).await
     }
     async fn list_for_employee(
         &self,
         tenant: TenantId,
         employee_id: EmployeeId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        self.assignments
+        let rows = self
+            .assignments
             .list_for_employee(tenant, employee_id)
-            .await
+            .await?;
+        self.resolved(tenant, rows).await
     }
     async fn remove(
         &self,
@@ -12680,6 +12722,99 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
     let table_ref = pos_cloud::qr::verify_table_token(&secret, token).expect("verifies");
     assert_eq!(table_ref.table_id, active);
     assert_eq!(table_ref.store_id, store);
+}
+
+/// An assignment names the person it grants, so the console can label it without reading the roster.
+///
+/// This is what has to be true before the People screen's employee table can be paged
+/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4): the screen used to turn an
+/// assignment's `employee_id` into a name by searching the whole loaded roster, which stops working
+/// the moment the roster arrives a page at a time. The resolution moves to the read that needs it.
+#[tokio::test]
+async fn an_assignment_names_the_person_it_grants_so_the_console_need_not_read_the_roster() {
+    let admin = provisioned_admin();
+    let router = people_app_with_audit(
+        admin,
+        FakePeople::default(),
+        Arc::new(AuditSink::new(FakeAudit::default())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C77", "name": "Mai" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create employee");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let role = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Server",
+                "permissions": ["billing.discount.apply"],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(role.status(), StatusCode::CREATED);
+    let role_id = json_body(role).await["id"].as_str().expect("id").to_owned();
+
+    let assigned = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/assignments",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "employee_id": employee_id,
+                "store_id": store_ulid,
+                "role_template_id": role_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route assign");
+    assert_eq!(assigned.status(), StatusCode::CREATED);
+
+    // Both directions of the read carry the person, not just their id.
+    for query in [
+        format!("tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("tenant_id={tenant_ulid}&employee_id={employee_id}"),
+    ] {
+        let listed = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/assignments?{query}"),
+                &cookie,
+            ))
+            .await
+            .expect("route list assignments");
+        assert_eq!(listed.status(), StatusCode::OK);
+        let rows = json_body(listed).await;
+        let row = &rows[0];
+        assert_eq!(
+            row["employee_name"], "Mai",
+            "the row names the person, so no roster read is needed to label it: {rows}"
+        );
+        assert_eq!(row["employee_code"], "C77", "and carries their staff code");
+        assert_eq!(
+            row["employee_id"], employee_id,
+            "the id stays, because that is what the remove call takes"
+        );
+    }
 }
 
 #[tokio::test]

@@ -438,6 +438,22 @@ impl fmt::Display for AssignmentId {
 
 /// A person's assignment to a store with a role. All three ids are the same tenant (the `tenant_id`
 /// column + RLS isolate them; the route layer checks referential validity before writing).
+///
+/// # Who the assignment is for
+///
+/// The row carries the assigned person's name and code alongside their id, resolved by the store as
+/// it reads. Without them a caller can only name the person by looking the id up in the tenant's
+/// roster, which is a whole-set read the console cannot keep making once the roster is paged
+/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4).
+///
+/// Both are `Option`, and the reason is in the schema rather than the domain: nothing declares a
+/// foreign key from an assignment to an employee, so an assignment can outlive the row it names.
+/// `None` means exactly that, and a caller should fall back to showing the id — the assignment is
+/// real and still grants access, so hiding it would be worse than showing it unlabelled.
+///
+/// The name and code are T1 personal data
+/// ([ADR-0070](../../docs/adr/0070-people-and-access.md)) and reaching them needs
+/// `console.people.manage`, the same gate as reading the roster.
 #[derive(Debug, Clone, Serialize)]
 pub struct Assignment {
     /// The assignment id.
@@ -450,6 +466,10 @@ pub struct Assignment {
     pub store_id: StoreId,
     /// The role that store grants them.
     pub role_template_id: RoleTemplateId,
+    /// The assigned person's name, or `None` if no employee row matches `employee_id`.
+    pub employee_name: Option<String>,
+    /// The assigned person's staff code, `None` on the same terms as the name.
+    pub employee_code: Option<String>,
 }
 
 /// A new assignment to create.

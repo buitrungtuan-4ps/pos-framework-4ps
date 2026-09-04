@@ -107,6 +107,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   (tenant_id, created_at DESC, id DESC)`; additive, `IF NOT EXISTS`, and the existing
   `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
 
+### Changed
+- **An assignment now says who it is for.** `GET /admin/assignments` returned three ids and nothing
+  else, so the People screen turned an assignment into a person's name by searching the whole loaded
+  roster. The row carries `employee_name` and `employee_code` now, resolved by the server as it
+  reads, and the screen uses them.
+
+  This is the first of three steps toward paging that screen's employee table (roadmap `#299`,
+  ADR-0098 B3-4). It could not be paged while three separate parts of the screen needed the whole
+  roster; this removes one of them. The remaining blocker is the assign picker, which still offers
+  every active employee from the loaded set and needs a server-side employee search first.
+
+  Both new fields can be `null`. Nothing in the schema stops an assignment outliving the employee
+  record it names, and a grant that still works is worth showing unlabelled rather than dropping
+  from the list — the console shows the id in that case, exactly as it did before.
+
+  **On personal data** The name and code are T1 (ADR-0070), so this read returns personal data where
+  it returned only ids. It is a redistribution, not an expansion: the same caller, behind the same
+  `console.people.manage` permission that already lets them read the roster, already saw the name on
+  this screen — by fetching the entire roster to find it. Nobody new can see anything new, and the
+  PIN hash is no more selected here than anywhere else.
+
 ### Fixed
 - **A page past the end of the employee roster no longer reports a headcount of zero.** The window
   count rides on the returned rows, so an empty window — a page past the end, or a pager sitting on

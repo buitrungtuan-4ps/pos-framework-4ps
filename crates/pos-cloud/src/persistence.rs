@@ -2841,6 +2841,8 @@ fn assignment_record(row: &AssignmentRow) -> Result<Assignment, AssignmentStoreE
         employee_id,
         store_id,
         role_template_id,
+        employee_name: row.employee_name.clone(),
+        employee_code: row.employee_code.clone(),
     })
 }
 
