@@ -41,9 +41,10 @@ use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::GuestNote;
 use pos_proto::{Open, Quantity, SalesChannel, Timestamp};
 
-use crate::auth::apikey::{ApiKeyStore, Scope};
+use crate::auth::apikey::{ApiKeyStore, Grant, Scope};
 use crate::auth::bearer::{authenticate, require_scope};
-use crate::http::api_error;
+use crate::auth::rate_limit::SlidingRateLimiter;
+use crate::http::{api_error, too_many_requests};
 use crate::relay::{LookUpQuery, parse_look_up};
 
 /// Maps a request's store to the tenant that owns it, so the endpoint can refuse a cross-tenant
@@ -116,6 +117,9 @@ pub(crate) struct OrdersState<X, K, C, D> {
     keys: K,
     clock: C,
     directory: D,
+    /// The per-tenant intake limiter (roadmap **Q5**), shared with the rest of the process through
+    /// [`crate::http::CloudApp::orders_rate_limiter`].
+    limiter: SlidingRateLimiter,
 }
 
 impl<X: Clone, K: Clone, C: Clone, D: Clone> Clone for OrdersState<X, K, C, D> {
@@ -125,15 +129,52 @@ impl<X: Clone, K: Clone, C: Clone, D: Clone> Clone for OrdersState<X, K, C, D> {
             keys: self.keys.clone(),
             clock: self.clock.clone(),
             directory: self.directory.clone(),
+            limiter: self.limiter.clone(),
         }
     }
+}
+
+/// Charges one call against the caller's tenant budget, or refuses with a `429` (roadmap **Q5**).
+///
+/// After authentication and the scope check, so the key is the **proven** tenant rather than a
+/// caller-supplied string, and so an unauthenticated flood is turned away by the cheaper check
+/// first. Both the submit and the look-up spend from the same budget: the look-up is the resolution
+/// path a caller retries when a submit times out, so exempting it would leave the loop that most
+/// needs bounding unbounded.
+/// `Some(refusal)` when the tenant is over budget, `None` when the call may proceed. An `Option`
+/// rather than a `Result` because a `Response` is a large `Err` to carry, and "maybe a refusal" is
+/// what this actually is.
+fn refuse_over_budget<X, K, C, D>(
+    state: &OrdersState<X, K, C, D>,
+    grant: &Grant,
+) -> Option<Response>
+where
+    C: ClockSource,
+{
+    let keys = [format!("tenant:{}", grant.tenant())];
+    state
+        .limiter
+        .check_and_record(&keys, state.clock.now())
+        .err()
+        .map(|retry_after_secs| {
+            too_many_requests(
+                "too many order-intake calls for this tenant; try again later",
+                retry_after_secs,
+            )
+        })
 }
 
 /// Builds the public order-intake sub-router: `POST /v1/orders`.
 ///
 /// Carries its own state and is merged into the app router, so the `CloudApp` generics do not grow
 /// (the same shape the device, activation, and translation sub-routers take).
-pub fn orders_router<X, K, C, D>(intake: X, keys: K, clock: C, directory: D) -> Router
+pub fn orders_router<X, K, C, D>(
+    intake: X,
+    keys: K,
+    clock: C,
+    directory: D,
+    limiter: SlidingRateLimiter,
+) -> Router
 where
     X: OrderIn + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
@@ -150,6 +191,7 @@ where
             keys,
             clock,
             directory,
+            limiter,
         })
 }
 
@@ -189,6 +231,9 @@ where
     };
     if let Err(forbidden) = require_scope(&grant, Scope::PlaceOrders) {
         return forbidden.into_response();
+    }
+    if let Some(refusal) = refuse_over_budget(&state, &grant) {
+        return refusal;
     }
 
     let order = match to_inbound_order(&request) {
@@ -361,6 +406,9 @@ where
     };
     if let Err(forbidden) = require_scope(&grant, Scope::PlaceOrders) {
         return forbidden.into_response();
+    }
+    if let Some(refusal) = refuse_over_budget(&state, &grant) {
+        return refusal;
     }
     let (store_id, sales_channel, external_reference) = match parse_look_up(&query) {
         Ok(parts) => parts,

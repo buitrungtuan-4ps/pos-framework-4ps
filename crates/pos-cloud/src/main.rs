@@ -94,6 +94,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.admin_login_max_attempts,
         config.admin_login_window_secs,
     )
+    .with_orders_rate_limit(config.orders_max_requests, config.orders_window_secs)
+    .with_sync_rate_limit(config.sync_max_requests, config.sync_window_secs)
     .with_trusted_proxy_hops(config.trusted_proxy_hops)
     .with_admin_setup_token(config.admin_setup_token.clone())
     .with_internal_shared_secret(config.internal_shared_secret.clone());
@@ -338,6 +340,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
+    // Pulled out before `router` takes ownership: the intake sub-router and the `/sync` throttle
+    // layer both need a handle, and the whole point of one process holding one limiter each is that
+    // every route throttles against the same counter (roadmap **Q5**).
+    let orders_limiter = app.orders_rate_limiter();
+    let sync_throttle = app.sync_throttle();
     let service = http::router(app)
         .merge(http::reconcile_router(
             store.reconcile(),
@@ -643,6 +650,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.api_keys(),
             SystemClock,
             store.store_directory(),
+            orders_limiter,
         ))
         .merge(relay::orders_sync_router(
             store.order_queue(),
@@ -685,6 +693,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // first, and everything else — `/`, client-routed paths, the built static assets — is served
     // the single-page app, with an unknown path returning index.html for client-side routing.
     let service = service.fallback(assets::serve);
+    // The `/sync` budget, over the fully-composed service (roadmap **Q5**). Here rather than inside
+    // `http::router` because the store-facing surface spans more than one sub-router — the relay's
+    // `/sync/.../orders` routes are merged in above — and a layer applied to only one of them would
+    // leave the busiest path unthrottled. The layer passes every other prefix straight through, so
+    // `/admin`, `/v1` and the console SPA are untouched.
+    let service = service.layer(axum::middleware::from_fn_with_state(
+        sync_throttle,
+        http::throttle_sync,
+    ));
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

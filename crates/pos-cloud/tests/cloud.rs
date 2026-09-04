@@ -37,6 +37,7 @@ use pos_cloud::auth::apikey::{
     issue,
 };
 use pos_cloud::auth::password::hash_password;
+use pos_cloud::auth::rate_limit::SlidingRateLimiter;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
@@ -4257,7 +4258,29 @@ fn order_store() -> StoreId {
 /// Builds the intake router over a fresh fake intake and a directory that says `owner` owns the
 /// store, plus the `keys` a test issued a token into.
 fn orders_app(keys: FakeKeys, owner: Option<TenantId>) -> axum::Router {
-    orders_router(FakeIntake::new(), keys, clock(), FakeDirectory { owner })
+    orders_app_limited(keys, owner, generous_intake_limit())
+}
+
+/// The same intake router with a caller-chosen limiter, so a test can make the `/v1/orders` budget
+/// small enough to reach (roadmap **Q5**).
+fn orders_app_limited(
+    keys: FakeKeys,
+    owner: Option<TenantId>,
+    limiter: SlidingRateLimiter,
+) -> axum::Router {
+    orders_router(
+        FakeIntake::new(),
+        keys,
+        clock(),
+        FakeDirectory { owner },
+        limiter,
+    )
+}
+
+/// A limit no ordinary test can reach, so every test that is not *about* throttling is unaffected by
+/// it — the same reason the production default sits far above a real integrator's rate.
+fn generous_intake_limit() -> SlidingRateLimiter {
+    SlidingRateLimiter::new(1_000, 60)
 }
 
 /// A one-line order body naming `menu_item` on the public-API channel.
@@ -4305,6 +4328,130 @@ async fn orders_submit_accepts_and_creates() {
     let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
     assert_eq!(value["created"].as_bool(), Some(true));
     assert!(value["order_id"].as_str().is_some(), "an id was assigned");
+}
+
+/// The `/sync/*` budget (roadmap **Q5**), which nothing bounded before.
+///
+/// A wedged store — the "`403` on every poll, every five seconds" shape the fork checklist already
+/// documents — cost the cloud a key lookup and a database round trip per iteration, forever, with no
+/// ceiling. The layer refuses before authentication, so a hostile or broken box costs a header
+/// comparison instead.
+#[tokio::test]
+async fn the_sync_surface_is_refused_once_the_connection_is_over_its_budget() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let state =
+        app(Cloud::new(FakeStore::new()), FakeRollups::default(), keys).with_sync_rate_limit(1, 60);
+    let throttle = state.sync_throttle();
+    let router = http::router(state).layer(axum::middleware::from_fn_with_state(
+        throttle,
+        http::throttle_sync,
+    ));
+    let uri = format!("/sync/stores/{}/config", store_id().as_ulid());
+
+    // The first pull is served — whatever it answers, it is not a refusal from the limiter.
+    let first = router
+        .clone()
+        .oneshot(get(&uri, Some(&token)))
+        .await
+        .expect("route the first pull");
+    assert_ne!(first.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let second = router
+        .clone()
+        .oneshot(get(&uri, Some(&token)))
+        .await
+        .expect("route the second pull");
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(second.headers().contains_key("retry-after"));
+
+    // And the layer is a prefix check, not a global one: the console is on its own budget, so a
+    // store hammering `/sync` must not lock an admin out of `/admin`.
+    let console = router
+        .oneshot(get("/admin/login", None))
+        .await
+        .expect("route the console request");
+    assert_ne!(
+        console.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the /sync budget must not spend the console's"
+    );
+}
+
+/// The `/v1/orders` budget (roadmap **Q5**), which nothing bounded before.
+///
+/// One tenant could hold the intake open indefinitely: every call authenticated, resolved the store
+/// through the directory and reached the relay's queue, so a marketplace stuck in a retry loop cost
+/// the cloud that work per iteration and consumed the capacity every other integrator needed. A
+/// limit of one makes the second call the refusal.
+#[tokio::test]
+async fn orders_submit_is_refused_once_the_tenant_is_over_its_budget() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let router = orders_app_limited(keys, Some(tenant()), SlidingRateLimiter::new(1, 60));
+
+    let first = router
+        .clone()
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("throttle-1", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the first submit");
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    // A *different* external reference, so this is a second real order rather than an idempotent
+    // repeat — the budget is what refuses it, not the ledger.
+    let second = router
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("throttle-2", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the second submit");
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        second.headers().contains_key("retry-after"),
+        "a refusal tells the caller how long to hold off, or it will just retry immediately"
+    );
+}
+
+/// The look-up spends from the same budget as the submit.
+///
+/// It is the path a caller retries when a submit times out, so exempting it would leave the loop
+/// that most needs bounding unbounded — a caller polling "did my order land?" forever.
+#[tokio::test]
+async fn the_order_look_up_spends_the_same_budget_as_the_submit() {
+    let keys = FakeKeys::default();
+    let token = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let router = orders_app_limited(keys, Some(tenant()), SlidingRateLimiter::new(1, 60));
+
+    let submitted = router
+        .clone()
+        .oneshot(post_json_bearer(
+            "/v1/orders",
+            &order_body("throttle-3", known, None),
+            &token,
+        ))
+        .await
+        .expect("route the submit");
+    assert_eq!(submitted.status(), StatusCode::CREATED);
+
+    let looked_up = router
+        .oneshot(get(
+            &format!(
+                "/v1/orders?store_id={}&sales_channel=SALES_CHANNEL_API&external_reference=throttle-3",
+                order_store().as_ulid()
+            ),
+            Some(&token),
+        ))
+        .await
+        .expect("route the look-up");
+    assert_eq!(looked_up.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
@@ -4799,6 +4946,7 @@ async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
             FakeDirectory {
                 owner: Some(tenant()),
             },
+            generous_intake_limit(),
         )
         .merge(orders_sync_router_with_cap(
             queue.clone(),

@@ -16,6 +16,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **`/v1/orders` and `/sync/*` now have a budget** (roadmap v3 **Q5**). Both were unbounded: every
+  call authenticated, resolved a store and reached storage, so a caller in a retry loop cost the
+  cloud that work per iteration with no ceiling. The shape is not hypothetical — the fork checklist
+  already documents a store issued the wrong scope answering `403` **on every poll, every five
+  seconds**, indefinitely.
+
+  The sliding-window limiter written for `/admin/login` was already generic over an opaque key, so
+  it is reused rather than reinvented (and renamed from `LoginRateLimiter`, since it now serves
+  three surfaces). Each surface holds its **own** counter, so a store hammering `/sync` cannot lock
+  an admin out of the console — there is a test for exactly that.
+
+  The two surfaces are keyed differently, on purpose:
+  - **`/v1/orders`** by the caller's **tenant**, after authentication. The intake is shared between
+    integrators, so what is worth preventing is one marketplace's runaway loop consuming the
+    capacity the others need, and the tenant is the identity the bearer key proves. The look-up
+    (`GET /v1/orders`) spends the same budget as the submit: it is the path a caller retries when a
+    submit times out, so exempting it would leave the loop that most needs bounding unbounded.
+  - **`/sync/*`** by the **client connection**, before authentication — as a layer over the whole
+    composed service, since the store-facing surface spans more than one sub-router. Per-store would
+    read better and is deliberately not used: the store id sits in the caller-supplied path, so
+    keying on it would let anyone exhaust a named shop's budget by spelling its id, which is a
+    targeted denial of service on one restaurant. Checking before the credential is verified is the
+    point — a wedged box should cost a header comparison, not a key lookup and a database round trip.
+
+  A refusal is the usual AIP-193 `RESOURCE_EXHAUSTED` with a `Retry-After`, through one helper every
+  throttled surface now shares.
+
+  **Upgrade note:** four new optional `CloudConfig` keys, all defaulted, so an existing config file
+  boots unchanged: `orders_max_requests` (300) and `orders_window_secs` (60) — five orders a second
+  for a whole integrator; `sync_max_requests` (600) and `sync_window_secs` (60) — ten requests a
+  second per connection, roughly fifty times what a healthy store generates. Both are sized to bound
+  a runaway loop rather than to shape normal traffic; a deployment with unusual integrators can
+  raise them. Limiter state is in-process and ephemeral, so a restart clears it — which fails open,
+  never closed.
+
 ### Removed
 
 - **The two API-key scopes that gated nothing** (roadmap v3 **Q5**). `read_events` and
