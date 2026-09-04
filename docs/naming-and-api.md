@@ -86,12 +86,29 @@ GET /v1/events?page_size=200&page_token=<ulid>&filter=event_type:"billing.bill.s
 | Header | Purpose |
 |---|---|
 | `idempotency-key` | Deduplicate creates (industry standard) |
-| `pos-signature` | Webhook HMAC-SHA256 |
-| `pos-signature-time` | Signing timestamp (replay window ±5 minutes) |
-| `pos-event-id`, `pos-delivery-id` | Event ULID, delivery attempt id |
-| `pos-api-version` | Optional minor-version pin |
+| `pos-signature` | Webhook HMAC-SHA256, as `v1=<hex>` |
+| `pos-signature-time` | Signing timestamp, Unix seconds (replay window ±5 minutes) |
 
 HTTP header names use hyphens by convention — this is HTTP, not a violation of the snake_case rule.
+They carry no `X-` prefix: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated it for new
+headers, and a receiver should not have to guess which spelling a version sends.
+
+**This table is the contract, and the code is checked against it.** It listed two more headers until
+roadmap **Q5**, and neither existed:
+
+- **`pos-event-id`, `pos-delivery-id`** described a webhook that delivers *one event*. It does not:
+  a delivery is a **page** of events, read after the endpoint's cursor and re-sent unchanged until
+  the receiver accepts it ([ADR-0032](adr/0032-webhooks.md)). There is no single event to
+  name, and no delivery record with an id. A receiver dedupes on the `event_id` **inside** each
+  event in the body, which every event envelope carries; the page as a whole is identified by its
+  last `event_id`, which is also the cursor the cloud advances on success. A per-attempt id would be
+  a real addition rather than a fix, so it is not smuggled in here.
+- **`pos-api-version`** was an optional minor-version pin that nothing read. Every route ignored it,
+  so an integrator who sent it believed they had pinned something and had not — worse than no header
+  at all. Pinning is deliberately not being introduced now
+  ([ADR-0094](adr/0094-console-optimistic-concurrency.md) says the same: `/v1` error bodies may
+  change shape and `pos-api-version` does not move). `PROTOCOL_VERSION` remains the one negotiated
+  version, on the edge↔cloud wire ([ADR-0024](adr/0024-protocol-version-negotiation.md)).
 
 **Errors** (AIP-193) — one shape everywhere:
 

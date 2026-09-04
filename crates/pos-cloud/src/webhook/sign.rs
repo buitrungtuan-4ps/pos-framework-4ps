@@ -26,10 +26,17 @@ use pos_proto::time::Timestamp;
 type HmacSha256 = Hmac<Sha256>;
 
 /// The header carrying the Unix-seconds timestamp a delivery was signed at.
-pub const TIMESTAMP_HEADER: &str = "X-Pos-Webhook-Timestamp";
+///
+/// `pos-signature-time`, as `docs/naming-and-api.md` §"Headers" publishes it. It sent
+/// `X-Pos-Webhook-Timestamp` until roadmap **Q5**, so the one document an integrator reads to build
+/// a receiver named a header the cloud never sent — and a receiver written from it rejected every
+/// delivery as unsigned. The `X-` prefix is also deprecated for new headers
+/// ([RFC 6648](https://www.rfc-editor.org/rfc/rfc6648)), which is why the published table has none.
+pub const TIMESTAMP_HEADER: &str = "pos-signature-time";
 
-/// The header carrying the `v1=<hex>` signature.
-pub const SIGNATURE_HEADER: &str = "X-Pos-Webhook-Signature";
+/// The header carrying the `v1=<hex>` signature. `pos-signature`, as published — see
+/// [`TIMESTAMP_HEADER`] for why it was renamed.
+pub const SIGNATURE_HEADER: &str = "pos-signature";
 
 /// How far a delivery's timestamp may sit from the receiver's clock, in seconds, before it is
 /// rejected as a replay (`docs/roadmap.md` P7: a ±5-minute window).
@@ -200,10 +207,24 @@ fn from_hex(hex: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        REPLAY_TOLERANCE, Signature, SigningSecret, VerifyError, from_hex, sign, to_hex, verify,
+        REPLAY_TOLERANCE, SIGNATURE_HEADER, Signature, SigningSecret, TIMESTAMP_HEADER,
+        VerifyError, from_hex, sign, to_hex, verify,
     };
 
     use pos_proto::time::Timestamp;
+
+    /// The published header table is the contract, and an integrator builds a receiver from it.
+    ///
+    /// These names drifted to `X-Pos-Webhook-Signature`/`-Timestamp` and nothing noticed, so
+    /// `docs/naming-and-api.md` §4 promised two headers the cloud never sent — and a receiver
+    /// written from that document rejected every delivery as unsigned. Asserted as literals rather
+    /// than through the constants they define, so changing a constant fails here and whoever changes
+    /// it has to change the published table in the same commit.
+    #[test]
+    fn the_delivery_headers_are_the_ones_the_standard_publishes() {
+        assert_eq!(SIGNATURE_HEADER, "pos-signature");
+        assert_eq!(TIMESTAMP_HEADER, "pos-signature-time");
+    }
 
     fn at(seconds: i64) -> Timestamp {
         Timestamp::from_milliseconds_since_epoch(seconds.saturating_mul(1000)).expect("valid")

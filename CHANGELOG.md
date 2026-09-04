@@ -18,6 +18,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The published webhook headers were not the ones the cloud sent** (roadmap v3 **Q5**,
+  [ADR-0032](docs/adr/0032-webhooks.md)). `docs/naming-and-api.md` §4 is the table an integrator
+  builds a receiver from, and it listed `pos-signature` / `pos-signature-time` while the sender sent
+  `X-Pos-Webhook-Signature` / `X-Pos-Webhook-Timestamp`. A receiver written from the document
+  therefore found no signature and rejected **every** delivery as unsigned.
+
+  The code now sends the published names, which also drops the `X-` prefix
+  [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated. A test asserts both names as
+  literals, so changing either one fails until the published table changes in the same commit.
+
+  The table was wrong in the other direction too, and that half is fixed by correcting the table:
+  - `pos-event-id` and `pos-delivery-id` described a webhook that delivers **one event**. It
+    delivers a **page**, re-sent unchanged until the receiver accepts it, so there is no single
+    event to name and no delivery record with an id. Both rows are gone, and the document now says
+    what a receiver dedupes on instead: each event's own `event_id`, inside the body. A per-attempt
+    id is a real addition rather than a fix and is flagged as follow-up work, not smuggled in here.
+  - `pos-api-version` was an optional minor-version pin that **no route read**. An integrator who
+    sent it believed they had pinned a version and had not, which is worse than no header. It is
+    removed from the table and from `pos-proto`'s "three numbers" note, which is now two:
+    `PROTOCOL_VERSION` and per-event `schema_version`.
+
+  **Upgrade note:** a webhook receiver reading the old `X-Pos-Webhook-*` headers stops seeing them
+  and must read `pos-signature` / `pos-signature-time`. Nothing else about the delivery changes —
+  same `v1=<hex>` HMAC-SHA256 over the same body, same ±5-minute replay window, same signing
+  secret — so a receiver that reads the header name from configuration needs only that value
+  changed. The edge↔cloud `X-Pos-*` headers are deliberately untouched: both sides must agree on
+  those, and they are not a published contract.
+
 - **The till assumed VND in four places** (roadmap v3 **E5 residual**,
   [ADR-0074](docs/adr/0074-localization-and-tax.md)). The edge has always known the store's currency
   — it comes from the synced `locale` node and the edge already served it on `GET /api/menu` — but

@@ -927,7 +927,8 @@ where
 /// The response header carrying an artifact's detached signature, as lowercase hex
 /// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)).
 ///
-/// It must stay byte-identical to `cloud-sync-http`'s `SIGNATURE_HEADER`: the edge refuses an
+/// It must name the same header as `cloud-sync-http`'s `SIGNATURE_HEADER` — the spellings differ in
+/// case only, which HTTP treats as the same name. The edge refuses an
 /// artifact whose signature header is missing, so a rename on one side alone stops every update in
 /// the fleet — loudly, but only once a rollout reaches a real box.
 const ARTIFACT_SIGNATURE_HEADER: &str = "x-pos-artifact-signature";
@@ -15352,7 +15353,9 @@ fn client_ip(headers: &HeaderMap, trusted_hops: usize) -> Option<&str> {
 /// Its own header rather than `Authorization`, because that space is `pos_<ULID>_<secret>` and
 /// resolves to a `Grant` carrying the tenant every `/sync` handler reads. A tenantless shared secret
 /// has no `Grant` to be, so reusing the header would put a second parse branch inside the one
-/// function that answers *who is calling*. `X-Pos-Webhook-Signature` set the naming convention.
+/// function that answers *who is calling*. The `X-Pos-` spelling is the edge↔cloud family's, kept
+/// because both sides must agree on it; the **published** header table drops the `X-` prefix
+/// (roadmap **Q5**, RFC 6648), and a header an integrator writes against belongs to that table.
 pub(crate) const INTERNAL_KEY_HEADER: &str = "X-Pos-Internal-Key";
 
 /// Refuses a request to an `/internal` route that does not carry the shared secret.

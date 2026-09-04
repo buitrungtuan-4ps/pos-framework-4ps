@@ -37,7 +37,8 @@ fn artifact_path(store_id: StoreId) -> String {
 
 /// The response header carrying the artifact's detached signature, as lowercase hex
 /// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Named after the existing
-/// `X-Pos-Webhook-Signature` convention. It rides a header rather than the body so the body stays
+/// artifact pair's own convention (this name and the cloud's must agree, and they are compared
+/// case-insensitively as HTTP requires). It rides a header rather than the body so the body stays
 /// the raw artifact: a JSON envelope would mean encoding tens of megabytes to move a few hundred
 /// bytes.
 const SIGNATURE_HEADER: &str = "X-Pos-Artifact-Signature";
