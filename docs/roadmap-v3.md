@@ -291,9 +291,9 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 ### A·P5 — Pilot (ops, gated)
 - **P1** — WS-F security review + human/hardware gate register. **The register is done**
   ([`gate-register.md`](gate-register.md)), together with the go-live sequence it sits inside
-  ([`go-live.md`](go-live.md)): thirty gates, each citing the file that already made the claim,
-  across human decision, per-store provisioning, privacy/legal, real hardware, and external
-  registration. **The pre-production security review is not** — [`security-review-ws-d.md`](security-review-ws-d.md)
+  ([`go-live.md`](go-live.md)): twenty-eight gates across human decision, per-store provisioning,
+  privacy/legal, real hardware and external registration — plus three chores it first listed as gates
+  and does not, which moved to a backlog once an owner asked why so much of a deploy was manual. **The pre-production security review is not** — [`security-review-ws-d.md`](security-review-ws-d.md)
   covers WS-D's ops hardening, not this.
 - **P2** — Real-hardware pilot (including sudden power loss) + soak at 222 ev/s.
 

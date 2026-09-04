@@ -19,6 +19,15 @@ is cleared, stated as the symptom an operator would actually see. *Recorded in* 
 lives once it is made — a gate whose answer is not written down is a gate that has to be cleared
 again by the next person.
 
+**The test a row must pass**, before it is added here: *is there a reason a script cannot do this?*
+`bootstrap.sh` runs on the box on every deploy, invoked over SSH by `.github/workflows/deploy.yml`,
+and already mints the database password, the broker token and the internal shared secret. So "someone
+runs a command on the server" is **not** a gate — it is a line nobody has written yet. A real gate
+needs one of: a secret a machine must not hold, a one-shot value only a person can take custody of, a
+judgement no configuration can make, physical hardware, or an outside body.
+
+The first version of this page failed that test three times, and §8 is where those rows went.
+
 ---
 
 ## 1. Human decision — before the first release
@@ -49,11 +58,9 @@ enforces it: `trusted_keys()` takes no arguments and the parser is private.
 
 | # | Gate | Blocks | Recorded in |
 |---|---|---|---|
-| H9 | **Enrol the first super-admin** and take custody of the TOTP secret (it is shown once) | The console. The setup route then refuses further enrolments (`409`) — the token is spent | [`deploy-runbook.md`](deploy-runbook.md) §4 · [ADR-0045](adr/0045-first-boot-admin-enrolment.md) |
-| H10 | **Set an off-box backup target** (`RCLONE_REMOTE`, on the box) | Off-box durability. It is **not** a GitHub secret — setting it there does nothing and leaves off-box backups silently disabled | [ADR-0046](adr/0046-backups-and-restore.md) · [`fork-checklist.md`](fork-checklist.md) §2 |
-| H11 | **Add the certificate-export cron line** on the two `acme-*` modes | A renewal reaching `secrets/tls/`, which is the path every other service reads — including the event bus. **Nothing alerts on a stale export**, so a stopped exporter surfaces weeks later, at expiry | [`deploy-runbook.md`](deploy-runbook.md) §5 · [ADR-0090](adr/0090-tls-postures.md) |
+| H9 | **Take custody of the first super-admin's TOTP secret.** The enrolment itself is one `curl`, and a script could make it; the `otpauth://` URI it returns is shown **once**, and a machine that keeps it has defeated the second factor | The console, and the break-glass path. The setup route then refuses further enrolments (`409`) — the token is spent, and recovery is `reset_admin` with a reviewer's approval | [`deploy-runbook.md`](deploy-runbook.md) §4 · [ADR-0045](adr/0045-first-boot-admin-enrolment.md) |
+| H10 | **Choose an off-box backup destination** — which provider, which bucket, whose credentials | Off-box durability. A backup that lives only on the database's own box is not a backup. Only the *choice* is a gate: delivering the value to the box is [A2](#8-manual-today-and-should-not-be) | [ADR-0046](adr/0046-backups-and-restore.md) |
 | H12 | **Restrict `4222` at the host firewall** wherever the stores' addresses are knowable | Nothing functionally — which is the problem. Publishing the port makes the broker internet-facing with nothing in front of it but its TLS and its token. Stores on residential or mobile connections have no stable address, so no compose file can decide this | [ADR-0089](adr/0089-edge-event-bus-transport.md) · [`deploy-runbook.md`](deploy-runbook.md) §6 |
-| H13 | **Mint the Garage S3 access keys on the box** (`garage key create`) | The OTA artifact store (roadmap R2). Garage generates them at runtime, so they cannot be pre-created or shipped | [ADR-0088](adr/0088-ota-artifact-hosting.md) Correction 1 |
 
 ## 4. Human decision — per store
 
@@ -96,6 +103,36 @@ measure, and say so at the place they stop.
 | X1 | **Japan qualified-invoice registration number** | The JP receipt block, and therefore JP go-live | [`roadmap-v3.md`](roadmap-v3.md) B10.1 |
 | X2 | **India GSP / IRP sandbox registration** | The e-invoice adapter (IRN + signed QR), and therefore IN go-live | [`roadmap-v3.md`](roadmap-v3.md) B10.2 |
 | X3 | **Hosting-region decision** under APPI / DPDP | Where the cloud may run for those countries. Pairs with L3 | [`roadmap-v3.md`](roadmap-v3.md) B10.4 |
+
+---
+
+## 8. Manual today, and should not be
+
+**These are not gates.** They are lines nobody has written, and they are here so the distinction is
+visible rather than lost. Each is a backlog item with a home.
+
+A gate is cleared once and stays cleared. An entry below is *work* — and while it sits undone, every
+deployment pays for it again, which is the cost that makes it worth naming.
+
+| # | What is manual now | Why it does not need a person | Where it lands |
+|---|---|---|---|
+| A1 | **Minting the Garage S3 access keys** (`garage key create`) | `bootstrap.sh` already runs on the box on every deploy, and already mints the database password, the broker token and the internal shared secret. Garage must generate the key pair itself — that part is real — but `garage key create` is a command on the box, and `bootstrap.sh` is a script on the box. The bucket-and-layout setup around it was deferred to backups and never written (`deploy/bootstrap.sh:344` says so) | R2's artifact slice, in `bootstrap.sh`, idempotent across redeploys like every other secret it keeps |
+| A2 | **Delivering `RCLONE_REMOTE` to the box** | `.github/workflows/deploy.yml` already pipes `DOMAIN`, `TLS_MODE`, `ACME_EMAIL` and `CF_DNS_API_TOKEN` down the same SSH line. One more variable is one more line. *Choosing* the destination stays [H10](#3-human-decision--at-first-boot-and-after) | `deploy.yml` + [`fork-checklist.md`](fork-checklist.md) §2, whose "no workflow reads it" note describes the gap and should say so |
+| A3 | **Installing the certificate-export cron line** | `bootstrap.sh` already runs `tls-export.sh` once on each deploy. Writing the crontab entry is one more command in the same script — and doing it there also closes the hole where a stopped exporter is invisible until a certificate expires weeks later | `bootstrap.sh`, beside the existing `tls-export.sh` call |
+
+## How this page got it wrong the first time
+
+All three rows above were published as human gates, and an owner caught it with one question: *why so
+many manual steps?*
+
+The error was mechanical. Each row cited a document that describes the step as something an operator
+does — the deploy runbook says "add the cron line", the fork checklist says `RCLONE_REMOTE` "lives on
+the box" — and all of those are accurate descriptions of **today**. Turning "this is currently done by
+hand" into "this requires a hand" is the inference that does not follow, and citing a source does not
+protect against it: the sources were right, the conclusion drawn from them was not.
+
+Which is why the test is now stated at the top, before the tables. It is one question, and it would
+have caught all three.
 
 ---
 
