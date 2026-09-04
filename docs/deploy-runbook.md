@@ -115,6 +115,12 @@ is spent. Sign in at `/admin/login` with the password and a current code.
 - **Lost your authenticator**: re-run the workflow with **`reset_admin=true`** (the reviewer must
   approve). It clears the super-admin and all sessions; enrol again from step 4 with the token now in
   `secrets/cloud.toml` on the box.
+- **OTA release artifacts**: nothing to do. `bootstrap.sh` creates the Garage layout, the
+  `pos-artifacts` bucket and an S3 key on every deploy, and appends them to `secrets/cloud.toml` as
+  `[artifacts]` ([ADR-0088](adr/0088-ota-artifact-hosting.md)). Garage mints its own keys — that is
+  the one secret here captured rather than generated — but the capture is scripted, not a step for a
+  person. Watch the bootstrap log for `create garage artifact credentials`; a `warn` there means the
+  block was not written and the artifact route stays off, which affects only OTA.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

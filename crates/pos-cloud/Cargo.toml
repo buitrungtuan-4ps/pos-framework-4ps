@@ -46,6 +46,12 @@ store-postgres = { path = "../adapters/store-postgres" }
 # (src/cursor.rs) drives Cloud::ingest; the ack policy is tested without a broker, and the loop is
 # proven against real JetStream by link-nats's own integration test.
 link-nats = { path = "../adapters/link-nats" }
+# OTA release artifacts live in Garage over the BlobStore port (ADR-0088). Adding it here was named
+# in that ADR's Correction 1: the earlier claim of "no new dependency" was too strong, because
+# `blob-garage` served backups and WAL shipping, never pos-cloud. It is deliberately thin — four
+# methods, hand-rolled SigV4, no S3 SDK — so this is a small edge to add, not a subtree.
+blob-garage = { path = "../adapters/blob-garage" }
+
 # The optional monitoring profile: the MetricsSink over VictoriaMetrics (ADR-0031), off the sales
 # path with a bounded queue that drops under pressure. Gated by the [metrics] config and off by
 # default — capacity-and-reliability turns the monitoring profile off below ~50 stores.

@@ -16,6 +16,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+- **The cloud can hold an edge release and hand it to a store** (roadmap `docs/roadmap-v3.md` **R2**,
+  [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). `POST /sync/stores/{store_id}/artifact` returns
+  the signed binary, with its detached signature in `X-Pos-Artifact-Signature` as lowercase hex so
+  the body stays the raw artifact rather than a JSON envelope wrapping tens of megabytes.
+
+  **It requires the `read_config` scope**, so no store needs re-provisioning — every provisioned box
+  already carries it. And it is on `/sync`, not `/internal`: the proxy answers `404` to the whole
+  `/internal` prefix from outside the box, so the path ADR-0054 originally pinned was unreachable by
+  the only client it has (Amendment 1).
+
+  **The cloud stays a dumb host.** It never signs and never verifies the minisign signature — the
+  edge verifies against a trust anchor baked into its own binary, so a compromised cloud, a swapped
+  blob or a spoofed host can make an update *fail*, never make a box install code. What the cloud
+  does check is the registry's SHA-256, which catches a truncated upload or a corrupted blob before
+  thirty megabytes travel.
+
+  **Upgrade note** `bootstrap.sh` now creates the Garage layout, an artifact bucket and an S3 key on
+  every deploy and writes them into `secrets/cloud.toml` as `[artifacts]`. Nothing to run by hand.
+  A cloud with no `[artifacts]` block boots fine with the route off, which is the right posture for a
+  deployment that ships no edge releases. No `PROTOCOL_VERSION` bump: `/sync` is unversioned and the
+  request's `arch` field is additive.
+
+  **Not yet an end-to-end update.** The edge's `OtaUpdater` is still not constructed and
+  `cloud-sync-http` still posts to the old path; both are R5. This is the half that was missing, not
+  the whole chain.
+
 ### Fixed
 - **The gate register counted three chores as things only a person can do.** `docs/gate-register.md`
   shipped with "mint the Garage S3 access keys on the box", "set `RCLONE_REMOTE` on the box" and "add

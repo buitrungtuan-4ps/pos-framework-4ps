@@ -14,7 +14,10 @@
 #   nats.conf       NATS JetStream + a token, plus TLS on the client port once a certificate
 #                   exists (ADR-0089). Rewritten each run with the existing token carried across —
 #                   the TLS half is derived, and a run that cannot read the token refuses.
-#   garage.toml     Garage single-node config with an rpc_secret
+#   garage.toml     Garage single-node config with an rpc_secret. The S3 access keys the cloud
+#                   reads artifacts with are minted from the running server (step 7b) and
+#                   appended to cloud.toml as [artifacts]; Garage generates them, so they are
+#                   the one secret here that is captured rather than pre-generated.
 #   caddy.env       TLS_MODE / DOMAIN / ACME_EMAIL / CF_DNS_API_TOKEN — the only values that
 #                   come from OUTSIDE the box (GitHub secrets in the deploy workflow), plus
 #                   TLS_RELOAD_SERVICES. Unlike the generated secrets above, these are SUPPLIED
@@ -341,6 +344,10 @@ if [ -z "$NATS_TLS_BLOCK" ]; then
   esac
 fi
 
+# The bucket OTA release artifacts live in, and the name of the key that reaches it (ADR-0088).
+GARAGE_BUCKET="${GARAGE_BUCKET:-pos-artifacts}"
+GARAGE_KEY_NAME="${GARAGE_KEY_NAME:-pos-cloud}"
+
 # 4. Garage single node. The rpc_secret is pre-generatable; the S3 access keys are not —
 #    Garage mints those at runtime with `garage key create` when the bucket and layout are
 #    set up, which lands with backups (P8d).
@@ -451,6 +458,83 @@ elif command -v docker >/dev/null 2>&1; then
   fi
 else
   echo "note   docker not found; when installed, run: docker compose -f \"$COMPOSE\" up -d --build"
+fi
+
+# 7b. Wire Garage for OTA release artifacts, and record the credentials in cloud.toml (ADR-0088).
+#
+#     Garage mints its own S3 access keys — unlike every other secret here, they cannot be generated
+#     ahead of time with `openssl rand`, because the server has to know them too. That is the *only*
+#     part of this that is special. It is not a step for a person: this script already runs on the
+#     box on every deploy, so it creates the layout, the bucket and the key itself.
+#
+#     Everything below is idempotent. `garage layout apply` is one-shot per version, and the bucket
+#     and key already exist on a redeploy, so each step checks first and reports "keep" rather than
+#     failing. A run that cannot reach Garage leaves cloud.toml untouched and says so: the cloud
+#     boots fine without an [artifacts] block, with the OTA route off.
+if [ "${POS_BOOTSTRAP_NO_UP:-0}" != "1" ] && command -v docker >/dev/null 2>&1; then
+  garage_cli() { docker compose -f "$COMPOSE" exec -T garage /garage "$@" 2>/dev/null; }
+
+  if grep -q '^\[artifacts\]' "$SECRETS/cloud.toml" 2>/dev/null; then
+    echo "keep   garage artifact credentials (already in cloud.toml)"
+  else
+    # Garage needs a moment after `up` before its RPC answers.
+    garage_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if garage_cli status >/dev/null; then garage_ready=1; break; fi
+      sleep 2
+    done
+
+    if [ "$garage_ready" != "1" ]; then
+      echo "warn   garage did not answer; [artifacts] not written, so the OTA artifact route stays off"
+    else
+      # A single-node layout, assigned once. `garage status` prints the node id in its first column;
+      # `layout assign` is a no-op message on a node that already has a role, so the guard is the
+      # layout version rather than the assign itself.
+      node_id="$(garage_cli status | awk '/^[0-9a-f]{16}/ { print $1; exit }')"
+      if [ -z "$node_id" ]; then
+        echo "warn   could not read the garage node id; [artifacts] not written"
+      else
+        if garage_cli layout show | grep -q 'NO ROLE\|No nodes'; then
+          garage_cli layout assign -z pos -c 10G "$node_id" >/dev/null || true
+          garage_cli layout apply --version 1 >/dev/null || true
+          echo "create garage layout (single node, zone pos)"
+        else
+          echo "keep   garage layout"
+        fi
+
+        if garage_cli bucket info "$GARAGE_BUCKET" >/dev/null; then
+          echo "keep   garage bucket $GARAGE_BUCKET"
+        else
+          garage_cli bucket create "$GARAGE_BUCKET" >/dev/null || true
+          echo "create garage bucket $GARAGE_BUCKET"
+        fi
+
+        # `key create` prints the id and secret once. They are captured here and written straight
+        # into cloud.toml (mode 600) — the same place the database password lives, and never echoed.
+        key_out="$(garage_cli key create "$GARAGE_KEY_NAME")"
+        key_id="$(printf '%s\n' "$key_out" | awk -F': *' '/Key ID/ { print $2; exit }')"
+        key_secret="$(printf '%s\n' "$key_out" | awk -F': *' '/Secret key/ { print $2; exit }')"
+
+        if [ -z "$key_id" ] || [ -z "$key_secret" ]; then
+          echo "warn   could not mint a garage key; [artifacts] not written"
+        else
+          garage_cli bucket allow --read --write "$GARAGE_BUCKET" --key "$key_id" >/dev/null || true
+          {
+            echo ""
+            echo "# Where OTA release artifacts live (ADR-0088). Written by bootstrap.sh: Garage mints"
+            echo "# its own S3 keys, so unlike the secrets above these are captured rather than generated."
+            echo "[artifacts]"
+            echo "endpoint = \"http://garage:3900\""
+            echo "bucket = \"$GARAGE_BUCKET\""
+            echo "region = \"garage\""
+            echo "access_key_id = \"$key_id\""
+            echo "secret_access_key = \"$key_secret\""
+          } >> "$SECRETS/cloud.toml"
+          echo "create garage artifact credentials (in secrets/cloud.toml)"
+        fi
+      fi
+    fi
+  fi
 fi
 
 # 8. Publish the certificate to secrets/tls on the two ACME modes (ADR-0090), so the path exists
