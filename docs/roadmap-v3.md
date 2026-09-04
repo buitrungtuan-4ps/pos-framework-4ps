@@ -1,6 +1,6 @@
 # Roadmap v3 — Production-ready, international, plug-and-play
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-02
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-04
 **Supersedes the planning horizon of** `docs/cloud-admin-ux-plan.md` (roadmap v2, delivered through PR #70)
 **Companion** [ADR-0083](adr/0083-integration-doctrine.md) (the integration doctrine this roadmap's plug-and-play principle rests on)
 
@@ -41,18 +41,47 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 
 | Milestone | Contents | Meaning |
 |---|---|---|
-| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 (≈31 PR, 22 merged) | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
-| **v1.1 — FnB & Management** | B·W2 + B·W3 + B·W7 + B·W8 + A·P4 + A·PF (≈29 PR) | Full order check → bill check → final bill; void/discount/split/refund with routes, events, ceilings; modifiers/notes/courses/fire-rounds; receipt engine per store/order; which item prints at which kitchen printer; config force/lock/fan-out with per-device drift; multi-floor drag-drop floor plan; alerting, network printing, backup; and the performance gates. |
-| **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (≈19 PR + ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
-| **v1.3 — Production International** | B·W10 + JP/IN go-live (≈3 PR code + ops, gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
+| **v1.0 — Ship & Safe** | A·P1→P3 + **A·P1x** + B·W1 + B9.1 | Install from the dashboard onto Win/Linux, activate by code, sell offline-safe, real menu from cloud, no LAN auth hole, no inventory bug, tax correct per channel, `/admin` API contract + integrator docs, and the integration doctrine gate landed early. |
+| **v1.1 — FnB & Management** | B·W2 + B·W3 + B·W7 + B·W8 + A·P4 + A·PF | Full order check → bill check → final bill; void/discount/split/refund with routes, events, ceilings; modifiers/notes/courses/fire-rounds; receipt engine per store/order; which item prints at which kitchen printer; config force/lock/fan-out with per-device drift; multi-floor drag-drop floor plan; alerting, network printing, backup; and the performance gates. |
+| **v1.2 — International** | B·W4 + B·W5 + B·W6 + B·W9 + A·P5 (+ ops) | Multi-component & inclusive tax → `countries/in` + `countries/jp` demo; tender/denominations/buyer-invoice as data; retail quick-sale by preset; plug-and-play proven by CI (connector framework, third-party KDS over `/ws`, card terminal over the port); pilot on real hardware. After this a Japan and an India store can pilot together on one cloud. |
+| **v1.3 — Production International** | B·W10 + JP/IN go-live (small in code; ops-gated) | Qualified-invoice Japan, IRP e-invoice + UPI India, a real card-terminal adapter, data-residency decision (APPI/DPDP), independent pentest. The code is small; the gate is legal registration and physical devices. |
 
 Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ +5–7 wk · v1.3 ≈ +2–3 wk of
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
-materially. **≈82 PR total** plus the gated W10 — up from the original ≈70 by A·P1x's seven closing slices
-(E7a split out of E7 once ADR-0089 found it needed a certificate path) and the two posture ADRs
-(D23/D24). **25 merged** as of 2026-09-02 (#71–#74, #90–#112): all of A·P1's code, B9.1, R2's ADR and
-its release registry, E5, E6, E7a, E7, S0c, the two posture ADRs, the `X-Forwarded-For` rate-limit
-fix, and the NATS credential fix.
+materially.
+
+### Why this roadmap no longer estimates in pull requests
+
+It used to. The table above carried a per-milestone PR count and the total read **≈82 PR**, with
+**25 merged**. Both numbers are gone, and the reason is worth keeping.
+
+**The total was passed while v1.0 was still open.** As of 2026-09-04, **85 pull requests have merged
+since this roadmap landed** — three more than the whole four-milestone estimate — and v1.0 is not
+finished. The estimate was not a little optimistic. It was measuring the wrong thing.
+
+**What it was actually measuring is slice granularity.** The count assumed one PR per named slice —
+`S0`, `E1`, `R2`, `Q3`. The tree's review rule is one reviewable behaviour per PR, so a named slice
+routinely becomes several. `Q3` is one bullet under A·P3 and **twenty-two** merged PRs
+(#120, #131–#143, #145–#147, #150–#154). ADR-0098's paging work is eight. Neither overran; both were
+sliced to be reviewable. A number that moves when you change how finely you slice is not a measure of
+remaining work, and every hour spent maintaining it bought nothing a reader could act on.
+
+**The merged figure was also wrong on the day it was written** — it said 25 where its own stated range
+(#71–#74, #90–#112) contains 27. Nothing caught it, because nothing could: a hand-typed count has no
+source to be checked against.
+
+So this roadmap states progress in slices, which it can name and whose status it already carries
+inline (**Done**, **Depends on**, **Ships with**). If you want the PR figure, recompute it rather than
+trusting a sentence:
+
+```sh
+gh pr list --state merged --limit 500 --json number \
+  --jq '[.[] | select(.number >= 71)] | length'
+```
+
+Everything from **#71** (B9.1, which landed this roadmap) onward belongs to the v3 era; **#75–#89 do
+not exist**. What is *in* those 85 is not derivable from the number, which is the other half of why it
+was never useful on its own — read `CHANGELOG.md` for that.
 
 ## Program A — Ship the Edge
 
