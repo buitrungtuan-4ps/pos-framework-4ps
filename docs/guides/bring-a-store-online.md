@@ -21,7 +21,7 @@ matters which is which:
 
 | Artefact | What it is | Where it lives | Secret? |
 |---|---|---|---|
-| **`config.toml`** | Names *which store* this machine is (`store_id`) and *which cloud* it dials (`cloud_url`) | On the store machine, on disk | No — neither a store id nor a cloud URL is a secret ([ADR-0004](../adr/0004-cloud-owned-configuration.md)) |
+| **`config.toml`** | Names *which store* this machine is (`store_id`), *which cloud* it dials (`cloud_url`), and *which event stream* it publishes into (`[nats]`) | On the store machine, on disk | No — a store id, a cloud URL and a stream name are all public facts ([ADR-0004](../adr/0004-cloud-owned-configuration.md)) |
 | **`env`** | The store's scoped sync key, and the event-bus URL when there is one | `/etc/pos-edge/env`, root-owned, mode 0600 | **Yes** — this is the file that holds a credential |
 | **Activation code** | A one-time `XXXX-XXXX-XXXX` a device trades for its credential | Handed to the device once, then spent | Treat as one — it *is* the credential until spent ([ADR-0050](../adr/0050-activation-code-exchange.md)) |
 | **API key** (optional) | A token for the public `/v1` API | Your integration's secret store | Yes — shown once, never recoverable ([ADR-0037](../adr/0037-api-keys.md)) |
@@ -48,7 +48,11 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 3. **Handoff** — the wizard produces the two files the box needs, and an installer that contains
    both. Set the listen port here if this machine cannot use the default `8787`, then download what
    the next step calls for:
-   - **`config.toml`** — `store_id`, `cloud_url`, and `bind` if you changed the port.
+   - **`config.toml`** — `store_id`, `cloud_url`, `bind` if you changed the port, and the `[nats]`
+     stream and subject the store publishes its committed events into. Those last two are the
+     **fleet's**, not this store's, and they match the `[nats]` section of `cloud.toml` on the cloud
+     box — one stream, one subject, the same on every store ([ADR-0087](../adr/0087-edge-relay-and-event-publish.md)
+     Amendment 1). Leave them alone unless you have changed the cloud's side too.
    - **`env`** — the sync key, plus a commented `POS_EDGE_NATS_URL`. Fill that line in when the
      cloud's event bus is open: `tls://:<token>@<your cloud host>:4222`, with the token from
      `deploy/secrets/nats.conf` on the VPS ([ADR-0089](../adr/0089-edge-event-bus-transport.md), and

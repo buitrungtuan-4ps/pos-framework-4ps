@@ -224,7 +224,14 @@ trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 # The ingest cursor is off until stores publish to JetStream (ADR-0031). To arm it,
 # uncomment and use the token from secrets/nats.conf. The token belongs in the URL's userinfo
 # exactly as written — link-nats lifts it into the connect options, because async-nats itself reads
-# credentials only from there and would otherwise drop it (ADR-0089's correction):
+# credentials only from there and would otherwise drop it (ADR-0089's correction).
+#
+# `stream` must be the same name every store publishes into, and the console's new-store wizard
+# generates POS_FLEET / pos.fleet.events into each store's config.toml (ADR-0087 Amendment 1). One
+# stream, one subject, fleet-wide: this cursor binds ONE stream, so a fork that renames either must
+# rename it on both sides at once — otherwise the fleet publishes into a stream nobody reads, and
+# nothing anywhere reports an error. `filter_subject` is left unset, which means every subject the
+# stream captures:
 # [nats]
 # url = "nats://:THE_NATS_TOKEN@nats:4222"
 # stream = "POS_FLEET"

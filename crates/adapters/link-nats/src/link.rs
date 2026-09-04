@@ -21,13 +21,22 @@ const MAX_BATCH_SIZE: u32 = 256;
 /// Which JetStream stream a link publishes to, and the limits the 80% alert watches.
 #[derive(Debug, Clone)]
 pub struct NatsConfig {
-    /// The stream name (one per store, e.g. `POS_STORE_<id>`).
+    /// The stream name. **One for the fleet** (`POS_FLEET`), not one per store: the cloud binds a
+    /// single durable consumer to a single named stream, so per-store streams would be ingested one
+    /// store deep ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)
+    /// Amendment 1).
     pub stream: String,
-    /// The subject every event is published to; the stream captures exactly this subject.
+    /// The subject every event is published to; the stream captures exactly this subject — which is
+    /// why it is the *same* subject on every store. [`NatsLink::ensure_stream`] is a create-or-get
+    /// and JetStream does not add a subject to a stream that already exists, so a per-store subject
+    /// in a shared stream would be captured for the first box to connect and refused for all the
+    /// rest. The store an event came from is in the event, not in the subject.
     pub subject: String,
-    /// The stream's message cap, or `-1` for unlimited.
+    /// The stream's message cap, or `-1` for unlimited. A **fleet** ceiling, per the note on
+    /// [`Self::stream`], and `discard: new` means reaching it refuses new events rather than dropping
+    /// old ones.
     pub max_messages: i64,
-    /// The stream's byte cap, or `-1` for unlimited.
+    /// The stream's byte cap, or `-1` for unlimited. A fleet ceiling, as [`Self::max_messages`].
     pub max_bytes: i64,
 }
 
@@ -82,8 +91,12 @@ impl NatsLink {
         &self.client
     }
 
-    /// Ensures this store's stream exists, `discard: new` so a full stream refuses rather than
+    /// Ensures the fleet's stream exists, `discard: new` so a full stream refuses rather than
     /// silently dropping the oldest event.
+    ///
+    /// This is a **create-or-get**: it does not reconcile the subject list of a stream that already
+    /// exists. Every store passing the identical stream *and* subject is what makes it idempotent
+    /// across the fleet rather than a race the first box wins (ADR-0087 Amendment 1).
     async fn ensure_stream(&self) -> Result<(), PortError> {
         self.jetstream
             .get_or_create_stream(StreamConfig {

@@ -35,8 +35,10 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 /// How the cloud binds its durable cursor to a stream.
 #[derive(Debug, Clone)]
 pub struct ConsumerConfig {
-    /// The stream to consume — the same stream the edge publishes to (e.g. `POS_STORE_<id>`), or an
-    /// aggregate stream capturing many stores' subjects.
+    /// The stream to consume — the same stream the edge publishes to. In this tree that is the one
+    /// fleet stream `POS_FLEET`, because a `NatsConsumer` binds one stream and this is the only
+    /// cursor the cloud runs ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)
+    /// Amendment 1).
     pub stream: String,
     /// The durable consumer name. This is what makes the cursor survive a restart, so it must be
     /// stable across the process's lifetime; changing it starts a fresh cursor.

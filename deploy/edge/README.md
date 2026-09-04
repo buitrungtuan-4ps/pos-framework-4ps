@@ -121,9 +121,21 @@ committed). Without `cloud_url` the edge runs LAN-only, exactly as before.
 ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): a `[nats]` section in
 `config.toml` naming the `stream` and `subject` — which must match the cloud consumer's `stream` and
 `filter_subject` — and the server URL in `POS_EDGE_NATS_URL`, from the same mode-0600 env file. The
-URL is the field that would carry a credential (`nats://user:pass@host`), which is why it is not in
-`config.toml`. With either missing the edge logs it and publishes nothing: the store trades and its
-outbox holds every event until a stream exists, which is also what happens while the cloud is down.
+URL is the field that would carry a credential, which is why it is not in `config.toml`. With either
+missing the edge logs it and publishes nothing: the store trades and its outbox holds every event
+until a stream exists, which is also what happens while the cloud is down.
+
+The console's new-store wizard generates the `[nats]` section, so on a provisioned box the section is
+already right and only the URL is left to fill in. Both of its values are the **fleet's**, identical
+on every store — `stream = "POS_FLEET"`, `subject = "pos.fleet.events"` ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)
+Amendment 1). Per-store streams look tidier and do not work: `pos_cloud` binds one durable consumer
+to one named stream, so it would ingest one store and ignore the rest.
+
+The URL's shape is `tls://:<token>@<your cloud host>:4222`. The `tls://` scheme is what makes the
+client require TLS — `nats://` connects in plaintext and a broker publishing `4222` refuses it — and
+the token belongs in the userinfo exactly as shown, recovered on the cloud box with
+`sudo sed -n 's/  token: //p' deploy/secrets/nats.conf`. It is one secret for the whole fleet, which
+is why the console does not put it in the file for you.
 
 **The store key needs two scopes**, `read_config` **and** `relay_orders`
 ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): the first for config-pull and the

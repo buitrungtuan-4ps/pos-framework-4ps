@@ -18,6 +18,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Every store the console has ever provisioned published none of its sales** (roadmap v3 **E3**).
+  The new-store wizard's `config.toml` generator emitted no `[nats]` section, and
+  `spawn_event_publish` returns early without one — logging that the outbox is not being published
+  and then trading normally. So a box brought online exactly as the runbook says committed every
+  sale locally, durably, and shipped nothing: the cloud's rollups, reports and reconciliation all
+  read a stream nothing published to. Nothing surfaced it, because a store that publishes nothing
+  looks exactly like a store the cloud has not heard from yet.
+
+  The generator now emits the section, and the environment file's `POS_EDGE_NATS_URL` template is
+  the shape that works — `tls://:<token>@<your cloud host>:4222`. It previously read `nats://`,
+  which connects in plaintext and is refused by the broker E7 put TLS on, against a placeholder
+  host. It stays **commented**: the broker token is one secret for the whole fleet, held on the
+  cloud box, unlike the per-store key the wizard does emit, so the console will not put it in a
+  browser and then into every machine in the estate. The generated file carries the one command
+  that recovers it. A `[nats]` section with no URL logs a warning naming the missing variable —
+  configured, not yet armed, which is the truth.
+
+  **The values are fleet-wide, and that was a decision, not a default** ([ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md)
+  Amendment 1). The tree carried two incompatible conventions: three doc comments said one stream
+  per store (`POS_STORE_<id>`), while `bootstrap.sh` documents arming the cloud with `POS_FLEET` and
+  `pos_cloud` binds exactly **one** durable consumer to **one** named stream — so a fleet of
+  per-store streams would have been ingested one store deep. Every store now publishes into
+  `POS_FLEET` on `pos.fleet.events`, the same on every box, matching `cloud.toml`. The shared
+  *subject* is the load-bearing half: the edge's handshake is a create-or-get, which does not add a
+  subject to a stream that already exists, so a per-store subject inside a shared stream would have
+  been captured for the first box to connect and refused for every one after it — a failure that
+  appears only on store number two, in production, long after the console was tested against one
+  shop.
+
+  **Upgrade note.** A store already in the field needs the `[nats]` table added to its `config.toml`
+  and `POS_EDGE_NATS_URL` set in `/etc/pos-edge/env`; re-downloading the two files from the store's
+  wizard produces both. Nothing is lost in the meantime — the outbox is durable and drains from the
+  beginning once the stream is reachable. `NATS_MAX_MESSAGES` (1 000 000) and `NATS_MAX_BYTES`
+  (1 GiB) are now a **fleet** ceiling rather than a per-store one; reaching either refuses new events
+  rather than dropping old ones, so it shows up as the 80% capacity alert and a growing outbox, not
+  as loss. Sizing them against a real estate is the A·P4 **O4** capacity probe.
+
 - **A tip can now actually be taken, and a store's refused tender is no longer offered** (roadmap v3
   **B1.3** and the **E5** residual). The domain halves of both shipped in #181 and neither could
   fire.

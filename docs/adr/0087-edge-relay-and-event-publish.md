@@ -58,3 +58,53 @@ E3 is the slice that connects both. It is one slice because they share the same 
 - **No new third-party dependency.** `link-nats` is a workspace path crate and its `async-nats` subtree is already in the lock through `pos-cloud`; `cargo deny` sees no new advisory or licence surface. The dependency rule holds — everything lands at the binary layer.
 - **One more thing a provisioning key must carry.** A store key issued with `read_config` alone now leaves the relay dark. The provisioning guide and the store-key issuance path must say `read_config` **and** `relay_orders`, and a misprovisioned key is visible as a repeated `403` in the edge log rather than as silence.
 - **Delivery shape.** This ADR is PR A. The implementation follows as: the relay wiring (`RelayHttpTransport`, the per-transport timeout, the system device id, the `serve` parameter, the loop) — then the event-publish loop (`link-nats`, `Edge::store()`, the `[nats]` config, the drain loop), each behind the same green gate, each with its own deploy-doc update.
+
+---
+
+**Amendment 1 (2026-09-04) — one fleet stream on one subject, because the cloud runs exactly one
+durable consumer.**
+
+Generating the `[nats]` section from the console (roadmap **E3**'s remaining half) needs a *value*,
+and the tree carried two conventions that cannot both be true.
+
+- The edge's `NatsConfig`, `link-nats`'s `NatsConfig` and `ConsumerConfig` all say **"one per store,
+  e.g. `POS_STORE_<id>`"**.
+- `bootstrap.sh` writes the cloud's arming instruction as **`stream = "POS_FLEET"`** with
+  `filter_subject` left empty, and `pos_cloud` binds **one** durable consumer to **one** named
+  stream. A fleet of per-store streams would therefore be ingested one store deep: whichever store
+  `cloud.toml` happens to name.
+
+This decision's own wording — "they must line up with the cloud consumer's `stream`/`filter_subject`"
+— only has one solution while the cloud reads a single stream. **Every store publishes into
+`POS_FLEET` on the subject `pos.fleet.events`.**
+
+- **The subject is shared, not per-store, and that is the load-bearing part.** `NatsLink`'s handshake
+  calls `get_or_create_stream` with `subjects: vec![subject]`, and JetStream's *create-or-get* does
+  **not** reconcile an existing stream's subject list. Had each store kept its own subject inside a
+  shared stream, the first box to connect would have fixed the capture to its own subject and every
+  other store's publish would have been refused by a broker that has no stream for it — a failure
+  that appears only on store number two, in production, weeks after the console was tested against
+  one shop. With identical stream *and* subject on every box the call is genuinely idempotent
+  fleet-wide: the first store creates the stream, the rest find it, and every event lands.
+- **Nothing needed the store id in the subject.** The cloud's `filter_subject` is empty, ingest is
+  idempotent by `event_id`, and every `EventEnvelope` already carries its `store_id` — which is what
+  the rollups and the reconciliation read. A per-store subject would have been an identity the bus
+  did not actually enforce: the broker token is one fleet-wide credential
+  ([ADR-0089](0089-edge-event-bus-transport.md) flags exactly this), so any box could publish on any
+  other box's subject. Real per-store identity on the bus arrives with per-store credentials, and
+  the subject layout is worth revisiting *then*, together with them, rather than guessed at now.
+- **The console cannot fill in `POS_EDGE_NATS_URL`, and deliberately does not try.** The broker token
+  lives in `deploy/secrets/nats.conf` on the cloud box. It is **fleet-wide**, unlike the per-store
+  scoped sync key the wizard does emit, so putting it in a browser and then into every store's env
+  file would spread one credential across every machine in the estate. The generated `env` therefore
+  carries the line commented, in the shape that works (`tls://:<token>@<host>:4222`) and with the one
+  command that recovers the token, and the operator completes it. A `[nats]` section with no URL logs
+  a **warning** naming the missing variable, which is the honest state: configured, not yet armed.
+
+**What this narrows.** `NATS_MAX_MESSAGES` (1 000 000) and `NATS_MAX_BYTES` (1 GiB) were sized as a
+*per-store* ceiling and are now a *fleet* one, and `discard: new` means a full stream refuses new
+messages rather than dropping old ones — so the fill rate is a fleet property, and the outbox is what
+holds while an operator raises the limits. That is visible (the 80% capacity alert,
+[ADR-0073](0073-alerting.md)) and lossless, not silent, but the figures now want sizing against a
+real estate rather than one shop. That is the already-planned **A·P4 O4** JetStream capacity probe,
+and this amendment is the reason it is no longer optional for a fleet above a few dozen stores.

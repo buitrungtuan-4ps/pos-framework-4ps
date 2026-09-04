@@ -33,6 +33,20 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 /// The bind port the edge defaults to when `config.toml` names none (`pos_edge`'s `DEFAULT_BIND`).
 const DEFAULT_BIND_PORT = "8787";
 
+/// The JetStream stream and subject every store publishes its committed events into
+/// (ADR-0087 Amendment 1). **Fleet-wide, and identical on every box** — `pos_cloud` binds one
+/// durable consumer to one named stream, so a per-store stream would be ingested one store deep, and
+/// a per-store subject inside a shared stream would be captured for the first box to connect and
+/// refused for every one after it (the edge's handshake is a create-or-get, which does not add a
+/// subject to a stream that already exists). They must match `cloud.toml`'s `[nats] stream` and
+/// `filter_subject` on the cloud box, which `bootstrap.sh` documents with these same two values.
+const FLEET_STREAM = "POS_FLEET";
+const FLEET_SUBJECT = "pos.fleet.events";
+
+/// The client port the broker publishes under `TLS_MODE`'s certificate-bearing postures
+/// ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)).
+const NATS_CLIENT_PORT = "4222";
+
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
 
 export function NewStore() {
@@ -122,12 +136,18 @@ export function NewStore() {
     }
   };
 
-  // The store server's bootstrap file (crates/pos-edge `EdgeConfig`): which store this box is, and
-  // which cloud it dials. It still carries no credential — that comes from the environment file below
-  // or from the OS keyring — but it MUST carry `cloud_url`, because `serve()` only composes the cloud
-  // surface `if let Some(cloud_url)`. A file without it produces a box that boots LAN-only: no
-  // config-pull, no heartbeat, no relay, and `/api/activation` answering 404 so the `/setup` screen
-  // cannot even be reached.
+  // The store server's bootstrap file (crates/pos-edge `EdgeConfig`): which store this box is, which
+  // cloud it dials, and which stream it publishes into. It still carries no credential — that comes
+  // from the environment file below or from the OS keyring — but it MUST carry `cloud_url`, because
+  // `serve()` only composes the cloud surface `if let Some(cloud_url)`. A file without it produces a
+  // box that boots LAN-only: no config-pull, no heartbeat, no relay, and `/api/activation` answering
+  // 404 so the `/setup` screen cannot even be reached.
+  //
+  // The `[nats]` table has the same character and was missing for the same reason (roadmap **E3**):
+  // `spawn_event_publish` returns early when the section is absent, logging that the outbox is not
+  // being published. Every store this wizard has ever provisioned therefore committed its sales
+  // locally and shipped none of them — the cloud's rollups, reports and reconciliation all read a
+  // stream nothing published to. Absent config is not a safe default here; it is silence.
   //
   // This generator used to omit it, on the belief — stated in this very comment — that
   // `deny_unknown_fields` would reject a cloud URL here. That was true when the wizard was written and
@@ -163,6 +183,17 @@ export function NewStore() {
       "# Optional — where the SQLite event store lives (default store.sqlite):",
       '# store_path = "store.sqlite"',
       "",
+      "# Where this store publishes its committed events. Both values are the whole fleet's, not this",
+      "# store's, and they must match the [nats] section of cloud.toml on the cloud box — which is why",
+      "# they are generated rather than typed. The server URL is NOT here: it carries the broker token,",
+      "# so it lives in the env file below.",
+      "#",
+      "# Keep this table LAST. Everything above it is a top-level key, and a commented line moved below",
+      "# this header would be read as part of [nats] and refused at load.",
+      "[nats]",
+      `stream = "${FLEET_STREAM}"`,
+      `subject = "${FLEET_SUBJECT}"`,
+      "",
     ].join("\n");
   };
 
@@ -179,9 +210,20 @@ export function NewStore() {
       "# recoverable — revoke and re-issue in the console if this file is lost.",
       key ? `POS_EDGE_SYNC_KEY=${key.token}` : "POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here",
       "",
-      "# Where this store publishes its committed events. The URL carries the broker token, which is",
-      "# why it is here and not in config.toml. Leave unset to keep the outbox local for now.",
-      "# POS_EDGE_NATS_URL=nats://<token>@cloud.example.com:4222",
+      "# Where this store publishes its committed events. config.toml already names the stream and the",
+      "# subject; this is the one part left, and it carries the broker token — which is why it is here.",
+      "#",
+      "# The console cannot fill it in. Unlike the store key above, the NATS token is ONE secret shared",
+      "# by the whole fleet, held on the cloud box, so putting it in a browser would spread it across",
+      "# every machine in the estate. Recover it on the cloud box and uncomment this line:",
+      "#",
+      "#   sudo sed -n 's/  token: //p' deploy/secrets/nats.conf",
+      "#",
+      `# POS_EDGE_NATS_URL=tls://:<that token>@${window.location.hostname}:${NATS_CLIENT_PORT}`,
+      "#",
+      "# The tls:// scheme is what makes the client require TLS; nats:// connects in plaintext and the",
+      "# broker refuses it. The token goes in the userinfo exactly as shown. Until this line is live the",
+      "# edge logs that POS_EDGE_NATS_URL is unset and the outbox holds — the store trades either way.",
       "",
     ].join("\n");
   };
