@@ -19,7 +19,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{pool_unavailable, unavailable, window_total};
 
 /// One audit-log row as stored: the acting admin snapshot, the action, the affected entity, and the
 /// before/after of the change (each still as JSON text around the `jsonb` column).
@@ -260,8 +260,10 @@ impl PostgresAudit {
     /// The same predicates as [`search`](Self::search) — both read [`AUDIT_FILTERS`], so a filter
     /// cannot be tightened on one read and left on the other — and a total `ORDER BY` either way
     /// (see [`audit_order`]). `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one
-    /// snapshot, so the count cannot disagree with the page. The order does not affect the count:
-    /// the same rows match either way, so only *which* page they land on changes.
+    /// snapshot, so the count cannot disagree with the page. An empty window carries no count at
+    /// all, which [`window_total`] answers with a second query rather than a misleading zero. The
+    /// order does not affect the count: the same rows match either way, so only *which* page they
+    /// land on changes.
     ///
     /// The count is the expensive half. `LIMIT` can stop the index scan; `count(*) OVER()` cannot —
     /// it walks every matching row. `audit_log_by_tenant_newest` (migration 0042) makes that walk
@@ -312,9 +314,24 @@ impl PostgresAudit {
             )
             .await
             .map_err(unavailable)?;
-        // Every row carries the same window count; an empty page carries none, which is the right
-        // answer both for a page past the end and for a filter that matched nothing.
-        let total = rows.first().map_or(0, |row| row.get::<_, i64>(12));
+        // The fallback repeats every predicate from the same constant, so it counts what the
+        // filters matched rather than the whole log.
+        let total = window_total(
+            &connection,
+            &rows,
+            12,
+            &format!("SELECT count(*) FROM audit_log WHERE {AUDIT_FILTERS}"),
+            &[
+                &tenant_id,
+                &entity_type,
+                &entity_id,
+                &action,
+                &actor_admin_id,
+                &since_ms,
+                &until_ms,
+            ],
+        )
+        .await?;
         Ok((rows.iter().map(audit_row).collect(), total))
     }
 }

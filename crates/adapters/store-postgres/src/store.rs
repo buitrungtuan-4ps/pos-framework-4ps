@@ -940,3 +940,37 @@ fn encode(error: serde_json::Error) -> PortError {
     )
     .with_source(error)
 }
+
+/// The `total` behind a paged read: the window count the returned rows carry, or a second count
+/// when the window returned none.
+///
+/// `count(*) OVER()` rides on the page's own `SELECT`, so every returned row carries the same total,
+/// it costs no extra round trip, and it is read from the same snapshot as the page — the count
+/// cannot disagree with the rows it labels. That is why all five paged reads use it.
+///
+/// But a window with no rows produces no output row at all, so there is nowhere for the count to
+/// ride. Reading that absence as `total = 0` is a *wrong* answer, not a missing one: a pager sitting
+/// one page past the end of a set is told the set is empty, so it renders "no results" and offers no
+/// page to go back to. The set is not empty; the caller just asked past its end.
+///
+/// So an empty window, and only an empty window, pays for a second query. `count_sql` must carry the
+/// same predicate as the page's `SELECT` — every caller builds both from the same filter constant,
+/// so the two cannot drift apart. Being a second statement it is a second snapshot, which is the
+/// usual reason to avoid it; here it is harmless, because there are no rows for the count to
+/// disagree with.
+pub(crate) async fn window_total(
+    connection: &Object,
+    rows: &[tokio_postgres::Row],
+    count_column: usize,
+    count_sql: &str,
+    count_params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+) -> Result<i64, PortError> {
+    match rows.first() {
+        Some(row) => Ok(row.get::<_, i64>(count_column)),
+        None => Ok(connection
+            .query_one(count_sql, count_params)
+            .await
+            .map_err(unavailable)?
+            .get(0)),
+    }
+}

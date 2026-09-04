@@ -14,7 +14,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{pool_unavailable, unavailable};
+use crate::store::{pool_unavailable, unavailable, window_total};
 
 /// One voucher to insert: its id, campaign, and code (all strings on the wire to the database).
 #[derive(Clone, Debug)]
@@ -118,7 +118,8 @@ impl PostgresVouchers {
     /// `COUNT(*) OVER()` rides along on the windowed `SELECT` rather than running as a second
     /// statement: one round trip, and — the reason that matters — one snapshot, so the count cannot
     /// disagree with the page it labels. Two statements could straddle a concurrent mint and report
-    /// a total that never held.
+    /// a total that never held. The exception is an empty window, which carries no count at all and
+    /// so has no rows for a second count to contradict; [`window_total`] handles it.
     ///
     /// The window itself is served by `vouchers_by_campaign_newest` (migration 0040), whose column
     /// order is this query's: the two equality columns, then `created_at DESC, voucher_id DESC`. That
@@ -152,11 +153,14 @@ impl PostgresVouchers {
             )
             .await
             .map_err(unavailable)?;
-        // Every row carries the same window count, and an empty page carries none — which is the
-        // right answer for a page past the end of a set *and* for a campaign with no codes. The
-        // caller cannot tell those apart from `total` alone, and does not need to: both mean "there
-        // is nothing here to show you".
-        let total = rows.first().map_or(0, |row| row.get::<_, i64>(5));
+        let total = window_total(
+            &connection,
+            &rows,
+            5,
+            "SELECT count(*) FROM vouchers WHERE tenant_id = $1 AND campaign_id = $2",
+            &[&tenant_id, &campaign_id],
+        )
+        .await?;
         Ok((rows.iter().map(voucher_row).collect(), total))
     }
 }

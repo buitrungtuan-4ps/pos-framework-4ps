@@ -2419,14 +2419,19 @@ mod vouchers {
                 "a full-width page is the unpaged read, in the same order"
             );
 
-            // A page past the end of the set: empty, and `total` falls back to zero because the
-            // window count rides on the rows and there are none. Both are "nothing to show".
+            // A page past the end of the set: empty, but `total` still reports the whole set. The
+            // window count rides on the rows and there are none, so the adapter falls back to a
+            // second count — without it the pager would be told the campaign has no codes and
+            // would offer no page to go back to.
             let (beyond, beyond_total) = vouchers
                 .list_by_campaign_page(TENANT_A, "camp-1", 10, 100)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
-            assert_eq!(beyond_total, 0);
+            assert_eq!(
+                beyond_total, 6,
+                "an empty window still reports the size of the set it is past the end of"
+            );
         });
     }
 
@@ -2793,14 +2798,18 @@ mod media {
                 "a full-width page is the unpaged read, in the same order"
             );
 
-            // A page past the end: empty, and `total` falls back to zero because the window count
-            // rides on the rows and there are none. Both say "nothing to show".
+            // A page past the end: empty, but `total` still reports the whole library. The window
+            // count rides on the rows and there are none, so the adapter falls back to a second
+            // count rather than claiming the tenant has no assets.
             let (beyond, beyond_total) = media
                 .fetch_summaries_page(TENANT_A, 10, 100)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
-            assert_eq!(beyond_total, 0);
+            assert_eq!(
+                beyond_total, 6,
+                "an empty window still reports the size of the set it is past the end of"
+            );
         });
     }
 
@@ -3380,6 +3389,9 @@ mod audit_log {
                 "a full-width page is the windowed read, in the same order"
             );
 
+            // A page past the end: empty, but `total` still counts what the filters matched. The
+            // window count rides on the rows and there are none, so the adapter falls back to a
+            // second count carrying the same predicates.
             let (beyond, beyond_total) = audit
                 .search_page(
                     Some("tenant-a"),
@@ -3396,7 +3408,10 @@ mod audit_log {
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
-            assert_eq!(beyond_total, 0);
+            assert_eq!(
+                beyond_total, 6,
+                "an empty window still reports how many rows the filters matched"
+            );
         });
     }
 
@@ -5382,12 +5397,18 @@ mod catalog_item_pages {
                 "a full-width page is the whole-set read, in the same order"
             );
 
+            // A page past the end: empty, but `total` still reports the whole master. The window
+            // count rides on the rows and there are none, so the adapter falls back to a second
+            // count rather than claiming the tenant has no items.
             let (beyond, beyond_total) = catalog
                 .fetch_items_page(TENANT_A, None, ItemOrder::Newest, false, 10, 100)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
-            assert_eq!(beyond_total, 0);
+            assert_eq!(
+                beyond_total, 6,
+                "an empty window still reports the size of the set it is past the end of"
+            );
         });
     }
 
@@ -5497,13 +5518,18 @@ mod catalog_item_pages {
             assert_eq!(total, 1, "the per-locale name is searched too");
             assert_eq!(rows.first().expect("a row").name, "Tiramisu");
 
-            // No match is an empty page and a zero total, not an error.
+            // No match is an empty page and a zero total, not an error — and this zero is the true
+            // one. The empty-window fallback runs here too, carrying the same search predicate, so
+            // it counts the match (none) rather than the master (six).
             let (rows, total) = catalog
                 .fetch_items_page(TENANT_A, Some("carbonara"), ItemOrder::Newest, false, 10, 0)
                 .await
                 .expect("search");
             assert!(rows.is_empty());
-            assert_eq!(total, 0);
+            assert_eq!(
+                total, 0,
+                "the fallback count is filtered, not the whole master"
+            );
 
             // `%` is a character in the needle, not a wildcard: the read uses `position`, not
             // `ILIKE`, so an operator searching for a literal percent gets a literal search.

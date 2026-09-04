@@ -391,3 +391,26 @@ by inheritance from the query that was already there, not by design.
      four adapters and four tests in a slice about employees. Noting the shape of the mistake: the
      divergence survived four slices because the fake was *better* than the adapter, so no test ever
      disagreed with itself.
+5. **B3-5** — the empty-window total, on the other four adapters.
+
+   The defect B3-4 recorded is closed here for `vouchers`, `media`, `audit` and `catalog_items`,
+   and the shape of the fix matters more than the fix. It is one function, `store::window_total`,
+   which every paged read now calls: the count rides on the page's rows when there are rows, and
+   an empty window pays for a second `count(*)` carrying the same predicate. `employees` was
+   rewritten onto it too, so the behaviour has one home rather than five, and a sixth paged read
+   added later inherits it by using the helper rather than by remembering the rule.
+
+   The two filtered reads are why the helper takes the count SQL from the caller instead of
+   deriving it. `audit` matches on seven optional columns and `catalog_items` on a search that
+   also looks inside per-locale names; a fallback that counted the table rather than the match
+   would replace one wrong number with another. Both build the fallback's `WHERE` from the same
+   constant the page's `SELECT` interpolates — `AUDIT_FILTERS`, `CATALOG_ITEM_SEARCH` — so the two
+   statements cannot drift apart without the compiler noticing. The catalog test now pins both
+   directions: a page past the end of six items reports six, and a search matching nothing reports
+   zero, which is the one zero that was always true.
+
+   **Mutation-verified, and this is the part worth keeping.** B3-4's note said the divergence
+   survived four slices because the fake was better than the adapter, so no test ever disagreed
+   with itself. Making `window_total` return `0` on the empty branch — the exact pre-fix
+   behaviour — now fails five integration tests, one per paged read. The guard is real, and the
+   next adapter to get this wrong will be told.
