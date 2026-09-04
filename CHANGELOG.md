@@ -18,6 +18,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The till assumed VND in four places** (roadmap v3 **E5 residual**,
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). The edge has always known the store's currency
+  — it comes from the synced `locale` node and the edge already served it on `GET /api/menu` — but
+  the app discarded that field and wrote `"VND"` as a literal instead. On a store outside Vietnam:
+  - the shift's **opening float** was *sent* to the edge tagged `VND`, so a store's own cash count
+    was recorded in a currency it does not trade in;
+  - the typed float and count were **parsed at VND's scale** (no minor units), which is out by a
+    factor of a hundred on any two-decimal currency;
+  - the shift screen's expected and counted figures fell back to a zero labelled `VND`;
+  - the pay pad's quick-cash keys were VND's three banknotes (50k/100k/200k), offering amounts the
+    store's guests cannot hand over.
+
+  All four now read the currency the edge reported. Banknote values moved next to the minor-unit
+  table in `ui/src/lib/money.ts`, since they are a property of a currency rather than of a screen; a
+  currency with no note table offers the exact amount alone, which is always tenderable, rather than
+  guessing denominations. The pay pad keys on *the bill's* currency, as every other figure on that
+  screen already did.
+
+  **Upgrade note:** none required. A Vietnamese store behaves identically — the edge reports `VND`
+  and the note table's first row is the same three notes. `DEFAULT_CURRENCY` in the app's store is
+  the never-blank fallback for the moment before the price book loads, in keeping with the existing
+  `DEFAULT_FLOOR`/`DEFAULT_STATION`; a fork changes that one constant.
+
 - **Tips were recorded as zero, and change was over-reported by the tip** (roadmap v3 **B1.3**,
   [ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)). `billing.payment.captured` has
   carried a `tip_amount` since P5 and it was written as a literal zero on every payment ever

@@ -57,6 +57,11 @@ interface StoreShape {
   // serves it — a store never guesses a price, so the till shows nothing to sell rather than a list
   // compiled into the app.
   menu: MenuItemResponse[];
+  // The store's currency, from the same `GET /api/menu` read as the price book (roadmap-v3 E5). The
+  // edge is the authority: it comes from the synced `locale` node (ADR-0074), which a store outside
+  // Vietnam sets to its own. `null` until the price book loads — a screen that needs a currency
+  // before then has no answer, and `storeCurrency()` says which fallback it uses and why.
+  currency: string | null;
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
@@ -86,6 +91,7 @@ const [state, setState] = createStore<StoreShape>({
   lines: {},
   openBill: {},
   menu: [],
+  currency: null,
   bumped: {},
   shift: null,
 });
@@ -396,6 +402,24 @@ export async function addItem(tableId: string, item: MenuItemResponse): Promise<
   );
 }
 
+// The currency every amount on screen is in, as the edge reported it with the price book.
+//
+// Until roadmap **E5** three places wrote `"VND"` as a literal — the shift's opening float, the
+// shift screen's expected/counted figures, and one Pay label — so a store outside Vietnam would
+// have shown and *sent* the wrong currency code on its own cash count. The edge has always known
+// the answer (`MenuResponse.currency`, from the synced `locale` node); the app simply threw it
+// away.
+//
+// `DEFAULT_CURRENCY` is the never-blank fallback for the window before the price book loads, in
+// keeping with `DEFAULT_FLOOR` and `DEFAULT_STATION`: a till that shows no currency at all is worse
+// than one showing the deployment's own, and the value is replaced wholesale by the edge's the
+// moment `loadMenu` succeeds. A fork ships its own here.
+const DEFAULT_CURRENCY = "VND";
+
+export function storeCurrency(): string {
+  return state.currency ?? DEFAULT_CURRENCY;
+}
+
 // Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
 // failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
 // empty menu is a real answer — the store has published none — and the screen says so.
@@ -403,6 +427,7 @@ export async function loadMenu(): Promise<void> {
   try {
     const response = await api.menu();
     setState("menu", response.items);
+    setState("currency", response.currency);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.
   }
@@ -470,7 +495,7 @@ export async function settle(billId: string, payments: PaymentRequest[]): Promis
 
 export async function openShift(openingFloatMinor: number): Promise<void> {
   const response = await api.openShift({
-    opening_float: { currency_code: "VND", amount_minor: openingFloatMinor },
+    opening_float: { currency_code: storeCurrency(), amount_minor: openingFloatMinor },
   });
   setState("shift", {
     shiftId: response.shift_id,

@@ -54,6 +54,30 @@ export function formatMoney(m: Money): string {
   return `${sign}${m.currency_code} ${body}`;
 }
 
+// The banknotes a cashier is most often handed, in minor units, per currency — the quick-cash keys
+// on the pay pad.
+//
+// Note values are a property of a currency, not of the app, which is why they live beside
+// `MINOR_DIGITS` rather than in the Pay screen. The screen hardcoded VND's three notes until roadmap
+// **E5**, so a store on any other currency was offered buttons for amounts its guests cannot hand
+// over.
+//
+// A currency with no entry gets **no** quick-cash keys, only the exact-amount one. That is the
+// honest answer rather than a guess: the exact amount is always tenderable, and inventing
+// denominations for a currency nobody has entered here would put wrong buttons on a real till. A
+// fork adds its own row.
+const QUICK_CASH: Record<string, readonly number[]> = {
+  VND: [50_000, 100_000, 200_000],
+  JPY: [1_000, 5_000, 10_000],
+  USD: [2_000, 5_000, 10_000],
+};
+
+// The quick-cash denominations for a currency, largest-last, excluding anything below `atLeast`
+// (a note that cannot cover the bill is not a tender the cashier can take).
+export function quickCashFor(currencyCode: string, atLeast: number): readonly number[] {
+  return (QUICK_CASH[currencyCode] ?? []).filter((note) => note >= atLeast);
+}
+
 // Parse a whole-đồng figure a cashier typed into minor units. Digits only; anything else is `null`
 // so the caller can refuse it rather than settle a wrong amount.
 export function parseWhole(text: string, currencyCode: string): number | null {
