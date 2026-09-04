@@ -2,10 +2,13 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-04
 
-Five short, task-shaped guides. Each is meant to be finished in one sitting.
+Short, task-shaped guides. Each is meant to be finished in one sitting.
+
+The first is for someone **outside** this system calling it; the rest are for someone running it.
 
 | I want to… | Guide |
 |---|---|
+| **Call the API from another system** (marketplace, ERP, analytics) | [Integrate with the API](integrate-with-the-api.md) |
 | Clone the repo and see a sale happen | [Start from zero](start-from-zero.md) |
 | Deploy the cloud to a real server | [Start from zero → Part 2](start-from-zero.md#part-2--deploy-the-cloud-to-a-vps-15-minutes), then the [deploy runbook](../deploy-runbook.md) |
 | Bring a real store online from the dashboard | [Bring a store online](bring-a-store-online.md) |

@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **An integrator guide** (roadmap v3 **Q6**): `docs/guides/integrate-with-the-api.md`, for a third
+  party connecting to the cloud rather than for someone running it. Three parts — authentication and
+  what a refusal means, a tour of what `/v1` actually offers, and a webhook quickstart with a
+  complete verifying receiver.
+
+  Written now rather than earlier because it can finally be *correct*: the webhook signature headers
+  it documents are the ones the cloud sends only as of this release, and the surface it describes no
+  longer includes the event feed and version pin that the standard advertised but nothing built. It
+  says plainly what does not exist — no public event feed, no `pos-api-version`, no writes beyond the
+  order intake — because a guide that omits the absences sends integrators looking for them.
+
+  Three things it is explicit about because getting them wrong is expensive: a `201` on an order
+  means the store accepted it, **not** that the kitchen has started; a `503` calls for the look-up
+  rather than a blind resubmit; and a webhook delivery is a **page** re-sent until accepted, so a
+  receiver must verify over raw bytes, check the ±5-minute replay window, and dedupe on each event's
+  own `event_id`. It also states that a line's `note` is personal data and what may and may not go
+  in it.
+
 - **`/v1/orders` and `/sync/*` now have a budget** (roadmap v3 **Q5**). Both were unbounded: every
   call authenticated, resolved a store and reached storage, so a caller in a retry loop cost the
   cloud that work per iteration with no ceiling. The shape is not hypothetical — the fork checklist
