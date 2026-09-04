@@ -12,7 +12,11 @@
 //! |---|---|---|
 //! | [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION) | the language the two tiers speak, including this envelope's shape | negotiated once per connection ([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md)) |
 //! | [`EventEnvelope::schema_version`] | the shape of **one event type's payload** | on every event |
-//! | `pos-api-version` header | a minor-version pin for external API callers | HTTP only |
+//!
+//! A third number used to be listed here: a `pos-api-version` header, "a minor-version pin for
+//! external API callers". Nothing ever read it, and roadmap **Q5** removed it from the published
+//! header table rather than leave a pin that pins nothing (`docs/naming-and-api.md` §4). There are
+//! two numbers, not three.
 //!
 //! # Why the payload is preserved verbatim and the envelope is not
 //!

@@ -55,6 +55,7 @@ fn a_pizza(item: u128) -> LineDraft {
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         seat: None,
         course_id: None,
+        modifier_menu_item_ids: Vec::new(),
         note_present: false,
     }
 }
@@ -80,7 +81,10 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
         let station = StationId::new(Ulid::from_u128(9));
 
         // The server seats the table.
-        let seated = edge.seat_table(device_a(), table).await.expect("seats");
+        let seated = edge
+            .seat_table(device_a(), table, None)
+            .await
+            .expect("seats");
         assert_eq!(seated.state, TableState::Occupied);
 
         // Two devices order onto the one table concurrently: device A a pizza, device B another.
@@ -127,14 +131,15 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
                         method: PaymentMethod::Cash,
                         tendered: vnd(200_000),
                         applied_to_bill: vnd(200_000),
+                        tip: vnd(0),
                     },
                     Payment {
                         method: PaymentMethod::Card,
                         tendered: vnd(295_000),
                         applied_to_bill: vnd(295_000),
+                        tip: vnd(0),
                     },
                 ],
-                vec![],
             )
             .await
             .expect("settles split across cash and card");
@@ -200,7 +205,9 @@ fn the_running_check_matches_what_the_bill_settles_against() {
         let empty = edge.check_totals(table).expect("an empty table reads");
         assert_eq!(empty.total_due, vnd(0));
 
-        edge.seat_table(device_a(), table).await.expect("seats");
+        edge.seat_table(device_a(), table, None)
+            .await
+            .expect("seats");
         edge.add_line(device_a(), table, a_pizza(600))
             .await
             .expect("adds a line");
@@ -225,8 +232,8 @@ fn the_running_check_matches_what_the_bill_settles_against() {
                     method: PaymentMethod::Cash,
                     tendered: check.total_due,
                     applied_to_bill: check.total_due,
+                    tip: vnd(0),
                 }],
-                Vec::new(),
             )
             .await
             .expect("the check's own figure settles the bill");

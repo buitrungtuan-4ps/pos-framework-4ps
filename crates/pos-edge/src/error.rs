@@ -68,4 +68,21 @@ pub enum EdgeError {
     /// or an event would not decode (a corrupt log).
     #[error("could not rebuild the projection from the log: {0}")]
     Rebuild(crate::app::AppError),
+
+    /// The async runtime could not be started.
+    ///
+    /// Its own variant because the runtime is now built by hand rather than by `#[tokio::main]`
+    /// (roadmap v3 **E4**: on Windows the main thread has to be free for the Service Control
+    /// Manager), so there is a failure here that the attribute used to swallow into a panic.
+    #[error("could not start the async runtime: {0}")]
+    Runtime(std::io::Error),
+
+    /// The Windows service handshake failed — SCM refused the control handler, or would not accept a
+    /// status report (roadmap v3 **E4**).
+    ///
+    /// A `String` rather than the crate's own error type so this enum stays the same shape on every
+    /// platform: a Linux build has no Windows error to hold, and a variant that only exists on one
+    /// target is a match arm every caller has to guess at.
+    #[error("the Windows service handshake failed: {0}")]
+    Service(String),
 }

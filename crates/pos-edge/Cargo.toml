@@ -114,6 +114,14 @@ webpki-roots   = "1"
 # `serde` so `EdgeConfig.cloud_url` (an `Option<Url>`) deserializes from the TOML string.
 url            = { version = "2", features = ["serde"] }
 
+# The Service Control Manager handshake, on the one platform that has one (roadmap E4,
+# `src/service.rs`). Target-gated, so a Linux build compiles none of it. Its whole subtree —
+# `windows-sys`, `widestring`, `bitflags` — is already in the lock (through tokio/rustls and the
+# keyring adapter), so this is one new crate rather than a platform SDK. MIT/Apache-2.0, so no new
+# cargo-deny entry.
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with
 # ServiceExt::oneshot.

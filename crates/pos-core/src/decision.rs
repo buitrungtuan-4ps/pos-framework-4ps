@@ -273,10 +273,12 @@ pub enum BillCommand {
     Settle {
         /// The amount owed, as [`billing::assemble`](crate::billing::assemble) computed it.
         total_due: Money,
-        /// The payments applied.
+        /// The payments applied, each carrying the tip taken on it.
+        ///
+        /// Tips used to arrive as a second `Vec<Money>` beside this one, unrelated to it
+        /// (roadmap **B1.3**). The totals reconciled, but nothing knew which tender a tip belonged
+        /// to — so no captured payment could record its own tip, and every one recorded zero.
         payments: Vec<Payment>,
-        /// The tips taken — a separate ledger, never part of `total_due`.
-        tips: Vec<Money>,
     },
     /// Void the whole bill. Needs [`Permission::VoidBill`], which is PIN-flagged.
     Void {
@@ -308,10 +310,15 @@ pub fn decide_bill(
         BillCommand::Settle {
             total_due,
             payments,
-            tips,
         } => {
             let next_state = Bill::step(current, BillTrigger::Settle)?;
-            let settlement = crate::billing::settle(total_due, &payments, &tips)?;
+            // A tip needs the store to be taking tips (§10, `tips_enabled`). Checked only when a
+            // tender actually carries one, so a store with tips off settles untipped bills exactly
+            // as before — the gate refuses taking the money, it does not refuse the sale.
+            if payments.iter().any(|payment| !payment.tip.is_zero()) {
+                ctx.require_capability(Capability::Tips)?;
+            }
+            let settlement = crate::billing::settle(total_due, &payments)?;
             Ok(BillDecision {
                 next_state,
                 settlement: Some(settlement),
@@ -677,6 +684,7 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(amount),
             applied_to_bill: vnd(amount),
+            tip: vnd(0),
         }
     }
 
@@ -688,7 +696,6 @@ mod tests {
             BillCommand::Settle {
                 total_due: vnd(100_000),
                 payments: vec![cash(100_000)],
-                tips: Vec::new(),
             },
             &ctx,
         )
@@ -707,7 +714,6 @@ mod tests {
                 BillCommand::Settle {
                     total_due: vnd(100_000),
                     payments: vec![cash(90_000)],
-                    tips: Vec::new(),
                 },
                 &ctx,
             ),
@@ -766,7 +772,6 @@ mod tests {
                 BillCommand::Settle {
                     total_due: vnd(100_000),
                     payments: vec![cash(100_000)],
-                    tips: Vec::new(),
                 },
                 &ctx,
             ),

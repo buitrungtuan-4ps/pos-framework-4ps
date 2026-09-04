@@ -130,7 +130,35 @@ struct Store {
 }
 
 /// Composes an edge the way `serve` does, then pairs a device and signs a person in over HTTP.
+///
+/// The store `bootstrap()` describes: every capability the reference preset turns on, including
+/// tips.
 async fn a_store() -> Store {
+    a_store_where(|session| session).await
+}
+
+/// The same store with tips turned off, for the half of the tip contract that matters more: a till
+/// told there is no tip to ask for.
+async fn a_store_without_tips() -> Store {
+    a_store_where(|session| {
+        // Rebuilt from `NONE` rather than by clearing one bit, because `CapabilityContext` is a
+        // bitset with no remove — and naming what stays is the honest way to say "everything except
+        // tips" anyway.
+        let mut capabilities = pos_core::capability::CapabilityContext::NONE;
+        for capability in pos_core::capability::Capability::ALL
+            .iter()
+            .copied()
+            .filter(|capability| *capability != pos_core::capability::Capability::Tips)
+        {
+            capabilities.insert(capability);
+        }
+        session.with_capabilities(capabilities)
+    })
+    .await
+}
+
+/// Composes a store, letting the caller adjust the session before it is applied.
+async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store {
     let mut roster = StaffRoster::new();
     roster.insert(
         STAFF_CODE,
@@ -140,10 +168,12 @@ async fn a_store() -> Store {
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
     );
-    let session = EdgeSession::bootstrap()
-        .with_staff(roster)
-        .with_menu(catalog())
-        .with_tax_rates(taxes());
+    let session = adjust(
+        EdgeSession::bootstrap()
+            .with_staff(roster)
+            .with_menu(catalog())
+            .with_tax_rates(taxes()),
+    );
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
@@ -781,6 +811,69 @@ async fn an_unpaired_caller_reaches_no_domain_route_on_the_composed_edge() {
             "{method} {uri} must refuse an unpaired caller"
         );
     }
+}
+
+/// The till learns the two published facts it has to obey: whether the store takes tips, and which
+/// tender it accepts.
+///
+/// Before this, both were live in `EdgeSession` and read by nobody. The consequences were not
+/// symmetric. `accepted_tender` made the till offer a method the edge would refuse, so a cash-only
+/// store's refusal landed as a `400` in front of the guest. Tips were worse than a bad refusal:
+/// with no entry field anywhere in the till, `tip_amount` was zero on **every** payment a real
+/// store took, whatever the capability said — the domain half shipped and the operator half did
+/// not.
+///
+/// Read through the composed router rather than by calling the handler, because the question is
+/// whether the shipped binary serves them.
+#[tokio::test]
+async fn the_till_is_told_whether_the_store_takes_tips_and_what_tender_it_accepts() {
+    let store = a_store().await;
+    let (status, menu) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/menu",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // `bootstrap()` turns Tips on (pos-core `capability.rs`), so this store takes them and the till
+    // is told so. The false case is the one below.
+    assert_eq!(
+        menu["tips_enabled"],
+        Value::Bool(true),
+        "the till must be told whether a tip is even allowed"
+    );
+    // No `tender` node published, so nothing is restricted — and `null` says exactly that, rather
+    // than listing all seven methods. A store that restricts nothing keeps accepting a method added
+    // to the enum later without a config change.
+    assert_eq!(
+        menu["accepted_tender"],
+        Value::Null,
+        "an unrestricted store publishes no list, and null is not an empty list"
+    );
+}
+
+/// And the false case, which is the one that matters: a store with tips off says so, so the till
+/// shows no tip entry instead of offering something `decide_bill` will refuse.
+#[tokio::test]
+async fn a_store_with_tips_off_tells_the_till_not_to_ask_for_one() {
+    let store = a_store_without_tips().await;
+    let (status, menu) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/menu",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        menu["tips_enabled"],
+        Value::Bool(false),
+        "with the capability off the till is told there is no tip to take"
+    );
 }
 
 /// A paired device with nobody signed in may sign someone in, and may do nothing else.

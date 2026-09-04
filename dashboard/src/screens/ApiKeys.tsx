@@ -24,9 +24,10 @@ import { toast } from "../components/Toast";
 // leaves the order relay answering 403 on every poll while config-pull works fine — a half-connected
 // store whose only symptom is a log line (roadmap-v3 E6).
 //
-// `read_events` and `manage_webhooks` are deliberately absent: they exist in the cloud's `Scope` enum
-// but gate no route, so offering them would let an operator grant an authority that does nothing.
-// They are listed as dead in docs/fork-checklist.md instead.
+// This list is now the whole vocabulary. `read_events` and `manage_webhooks` used to be absent from
+// it while still existing in the cloud's `Scope` enum — so the picker was right and the API was not:
+// `POST /admin/api-keys` accepted either name and issued a key whose scope list promised an
+// authority no route consulted. Roadmap **Q5** removed both variants, so the API refuses them too.
 const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_rollups", key: "scope.read_rollups" },
   { wire: "read_config", key: "scope.read_config" },

@@ -37,7 +37,7 @@ use crate::event_publish::EventPublisher;
 use crate::heartbeat_client::HeartbeatClient;
 use crate::installer::SystemdInstaller;
 use crate::order_in::EdgeOrderIn;
-use crate::ota_client::{BootStanding, OtaClient, RestartRequest as _};
+use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
 use crate::pairing::{Pairing, pairing_url};
 use crate::queue::QueueNumberAuthority;
@@ -95,7 +95,47 @@ pub const fn system_device_id(store_id: StoreId) -> DeviceId {
     DeviceId::new(store_id.as_ulid())
 }
 
-/// Builds the state and router, binds the configured address, and serves until a shutdown signal.
+/// Why the store stopped serving — and therefore whether the operating system should start it again.
+///
+/// Every stop drains the same way, so the *manner* of stopping carries no information; the reason
+/// does. On `systemd` the distinction is invisible, because `Restart=always` starts the binary again
+/// whatever the exit code was. On Windows it is the whole difference between a store that comes back
+/// after an update and one that sits dark (roadmap v3 **E4**), which is why this is a return value
+/// rather than a log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServeOutcome {
+    /// An operator, a `SIGTERM`, or a machine shutdown asked the store to stop. Leave it stopped.
+    Stopped,
+    /// The binary on disk is no longer the one this process is running — an update was installed, or
+    /// a version that never booted healthy was reverted — so the process ended in order to be
+    /// started again. Nothing is wrong; the store is waiting to come back.
+    RestartWanted,
+}
+
+/// Builds the state and router, binds the configured address, and serves until an operating-system
+/// signal (`SIGTERM`, or Ctrl-C) or an installed update asks it to stop.
+///
+/// For a caller that supplies its own stop — a Windows service wrapper, whose stop arrives from the
+/// Service Control Manager rather than as a signal — see [`serve_until`].
+///
+/// # Errors
+///
+/// As [`serve_until`].
+pub async fn serve<S, Q, A>(
+    config: EdgeConfig,
+    edge: Arc<Edge<S>>,
+    queue: Q,
+    ota_authority: A,
+) -> Result<ServeOutcome, EdgeError>
+where
+    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
+    A: OtaStateAuthority + 'static,
+{
+    serve_until(config, edge, queue, ota_authority, shutdown_signal()).await
+}
+
+/// As [`serve`], but the caller says what a stop is.
 ///
 /// The composed [`Edge`] is generic over the store `S`, so the same server runs against `pos-fakes`
 /// (the example) and `store-sqlite` (the real edge). The edge's fan-out is shared with the `/ws`
@@ -104,22 +144,26 @@ pub const fn system_device_id(store_id: StoreId) -> DeviceId {
 /// Graceful shutdown means an in-flight request finishes before the process exits — what keeps "kill
 /// the process mid-sale and lose only the uncommitted transaction"
 /// ([`docs/roadmap.md`](../../../docs/roadmap.md) P5) true: a committed sale is durable and an
-/// interrupted one was never acknowledged.
+/// interrupted one was never acknowledged. `stop` resolving is what starts that drain; so is the OTA
+/// loop after it has installed a release, and the two are told apart by the returned
+/// [`ServeOutcome`].
 ///
 /// # Errors
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve<S, Q, A>(
+pub async fn serve_until<S, Q, A, F>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
-) -> Result<(), EdgeError>
+    stop: F,
+) -> Result<ServeOutcome, EdgeError>
 where
     S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     // Read what binding and the startup banner need before `config` moves into the composition.
     let bind = config.bind;
@@ -133,7 +177,10 @@ where
     let installer = ota_installer(&config);
     let boot = match settle_boot(installer.as_ref()) {
         Ok(standing) => standing,
-        Err(BootGaveUp) => return Ok(()),
+        // The seam has already pointed `current` back at the version that worked, so the binary on
+        // disk is not this one: the process must end *and be started again*, which is what a
+        // reverted box coming back trading depends on.
+        Err(BootGaveUp) => return Ok(ServeOutcome::RestartWanted),
     };
 
     // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
@@ -146,10 +193,14 @@ where
     // in-flight requests exactly as a `SIGTERM` does rather than dropping a sale.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let shutdown_tx = Arc::new(shutdown_tx);
+    // The OTA loop's handle on that shutdown, which also records *why* the stop happened. The stop
+    // the caller passed is not a restart, so it flips the watch directly and leaves the intent
+    // alone: a store told to stop must stay stopped.
+    let restart = RestartIntent::new(Arc::clone(&shutdown_tx));
     let signal_tx = Arc::clone(&shutdown_tx);
     tokio::spawn(async move {
-        shutdown_signal().await;
-        signal_tx.request_restart();
+        stop.await;
+        let _ignored = signal_tx.send(true);
     });
 
     let ota_edge = Arc::clone(&edge);
@@ -166,7 +217,7 @@ where
             edge: ota_edge,
             store_id,
             boot,
-            restart: shutdown_tx,
+            restart: restart.clone(),
         },
         &shutdown_rx,
     );
@@ -211,8 +262,13 @@ where
         .await
         .map_err(EdgeError::Serve)?;
 
-    tracing::info!("pos_edge stopped");
-    Ok(())
+    let outcome = if restart.wanted() {
+        ServeOutcome::RestartWanted
+    } else {
+        ServeOutcome::Stopped
+    };
+    tracing::info!(?outcome, "pos_edge stopped");
+    Ok(outcome)
 }
 
 /// Everything [`serve`] assembles before it binds a socket: the router the shipped binary serves,
@@ -600,8 +656,10 @@ struct OtaWiring<A, S> {
     store_id: StoreId,
     /// What the boot marker said, from [`settle_boot`].
     boot: BootStanding,
-    /// The shared shutdown, which is how an installed binary becomes the running one.
-    restart: Arc<tokio::sync::watch::Sender<bool>>,
+    /// The shared shutdown, which is how an installed binary becomes the running one — and the
+    /// record of *why* the stop happened, which is how the service manager knows to start it again
+    /// (roadmap v3 **E4**).
+    restart: RestartIntent,
 }
 
 /// Reports which binary this store is running, then starts the loop that weighs the published
@@ -728,7 +786,7 @@ async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) 
 
 /// Resolves when the process is asked to stop: Ctrl-C anywhere, or `SIGTERM` on Unix (what systemd
 /// and `docker stop` send).
-async fn shutdown_signal() {
+pub async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };

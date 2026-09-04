@@ -258,9 +258,9 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
 
 /// One payment against a bill.
 ///
-/// `tendered` is what the guest handed over; `applied_to_bill` is what was put against the total.
-/// Change and over-tender live in the gap between them — the distinction ADR-0028 requires, because
-/// one field cannot be both.
+/// `tendered` is what the guest handed over; `applied_to_bill` is what was put against the total,
+/// and `tip` is what they left. Change and over-tender live in the gap between them — the
+/// distinction ADR-0028 requires, because one field cannot be all three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Payment {
     /// How it was paid.
@@ -269,6 +269,41 @@ pub struct Payment {
     pub tendered: Money,
     /// What was applied to the bill.
     pub applied_to_bill: Money,
+    /// The tip taken **on this tender**, held apart from the sale and never part of `total_due`
+    /// ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)).
+    ///
+    /// On the payment, not beside it (roadmap **B1.3**). Tips used to travel as a parallel
+    /// `Vec<Money>` alongside the payments, with no correspondence between the two: the settlement
+    /// arithmetic came out right in total, but nothing knew *which* tender a tip was taken on. Two
+    /// consequences followed. `billing.payment.captured.tip_amount` had no value to record and was
+    /// written as zero on every payment ever captured, so tip-out could not be reconstructed from
+    /// the log. And each payment's `change_given` was computed as `tendered − applied_to_bill`,
+    /// which over-reports the change by exactly the tip whenever a tip was taken on that tender —
+    /// the drawer would be told to hand back money the guest had just left behind.
+    pub tip: Money,
+}
+
+impl Payment {
+    /// The change owed back on this tender: `tendered − applied_to_bill − tip`.
+    ///
+    /// Here rather than at each caller so the rule is stated once. A guest who hands over 200,000
+    /// on a 165,000 bill and leaves 20,000 gets **15,000** back, not 35,000 — computing it as
+    /// `tendered − applied_to_bill` is the second half of the B1.3 defect, and it was computed that
+    /// way at the one place that recorded it.
+    ///
+    /// The result can be negative when a tender does not cover its own share plus its tip; that is
+    /// a caller's call to interpret, not this function's to hide. [`settle`] refuses a settlement
+    /// whose change is negative *in total*.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Money`] on a currency mismatch or overflow.
+    pub fn change(&self) -> Result<Money, DomainError> {
+        Ok(self
+            .tendered
+            .checked_sub(self.applied_to_bill)?
+            .checked_sub(self.tip)?)
+    }
 }
 
 /// The result of settling a bill: what the payments proved, and the change owed back.
@@ -298,11 +333,7 @@ pub struct Settlement {
 /// - [`DomainError::PaymentsDoNotSumToTotal`] if the applied amounts do not equal `total_due`.
 /// - [`DomainError::NegativeChange`] if tendered is less than applied plus tips, which is not a real
 ///   payment.
-pub fn settle(
-    total_due: Money,
-    payments: &[Payment],
-    tips: &[Money],
-) -> Result<Settlement, DomainError> {
+pub fn settle(total_due: Money, payments: &[Payment]) -> Result<Settlement, DomainError> {
     if payments.is_empty() {
         return Err(DomainError::Empty { what: "payments" });
     }
@@ -310,13 +341,11 @@ pub fn settle(
 
     let mut total_applied = Money::zero(currency);
     let mut total_tendered = Money::zero(currency);
+    let mut total_tips = Money::zero(currency);
     for payment in payments {
         total_applied = total_applied.checked_add(payment.applied_to_bill)?;
         total_tendered = total_tendered.checked_add(payment.tendered)?;
-    }
-    let mut total_tips = Money::zero(currency);
-    for tip in tips {
-        total_tips = total_tips.checked_add(*tip)?;
+        total_tips = total_tips.checked_add(payment.tip)?;
     }
 
     if total_applied != total_due {
@@ -558,8 +587,9 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(110_000),
             applied_to_bill: vnd(110_000),
+            tip: vnd(0),
         };
-        let settlement = settle(vnd(110_000), &[payment], &[]).expect("settles");
+        let settlement = settle(vnd(110_000), &[payment]).expect("settles");
         assert_eq!(settlement.change_given, vnd(0));
         assert_eq!(settlement.total_applied, vnd(110_000));
     }
@@ -571,8 +601,9 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(200_000),
             applied_to_bill: vnd(110_000),
+            tip: vnd(20_000),
         };
-        let settlement = settle(vnd(110_000), &[payment], &[vnd(20_000)]).expect("settles");
+        let settlement = settle(vnd(110_000), &[payment]).expect("settles");
         // change = 200k − 110k applied − 20k tip = 70k
         assert_eq!(settlement.change_given, vnd(70_000));
         assert_eq!(settlement.total_tips, vnd(20_000));
@@ -583,19 +614,52 @@ mod tests {
         );
     }
 
+    /// The second half of the B1.3 defect, in the smallest form it can be stated.
+    ///
+    /// The edge recorded each captured payment's change as `tendered − applied_to_bill`, which
+    /// over-reports it by exactly the tip. On this payment that is 35,000 against a true 15,000: a
+    /// till told to hand back 20,000 the guest had just left behind, on every tipped cash sale.
+    #[test]
+    fn a_tipped_tender_owes_change_less_the_tip() {
+        let payment = Payment {
+            method: PaymentMethod::Cash,
+            tendered: vnd(200_000),
+            applied_to_bill: vnd(165_000),
+            tip: vnd(20_000),
+        };
+        assert_eq!(
+            payment.change().expect("in range"),
+            vnd(15_000),
+            "200,000 − 165,000 applied − 20,000 tip"
+        );
+    }
+
+    #[test]
+    fn an_untipped_tender_owes_the_whole_over_tender() {
+        let payment = Payment {
+            method: PaymentMethod::Cash,
+            tendered: vnd(200_000),
+            applied_to_bill: vnd(165_000),
+            tip: vnd(0),
+        };
+        assert_eq!(payment.change().expect("in range"), vnd(35_000));
+    }
+
     #[test]
     fn several_methods_combine_on_one_bill() {
         let card = Payment {
             method: PaymentMethod::Card,
             tendered: vnd(60_000),
             applied_to_bill: vnd(60_000),
+            tip: vnd(0),
         };
         let cash = Payment {
             method: PaymentMethod::Cash,
             tendered: vnd(50_000),
             applied_to_bill: vnd(50_000),
+            tip: vnd(0),
         };
-        let settlement = settle(vnd(110_000), &[card, cash], &[]).expect("settles");
+        let settlement = settle(vnd(110_000), &[card, cash]).expect("settles");
         assert_eq!(settlement.total_applied, vnd(110_000));
         assert_eq!(settlement.change_given, vnd(0));
     }
@@ -606,8 +670,9 @@ mod tests {
             method: PaymentMethod::Card,
             tendered: vnd(100_000),
             applied_to_bill: vnd(100_000),
+            tip: vnd(0),
         };
-        let result = settle(vnd(110_000), &[payment], &[]);
+        let result = settle(vnd(110_000), &[payment]);
         assert!(matches!(
             result,
             Err(DomainError::PaymentsDoNotSumToTotal { .. })
@@ -621,15 +686,16 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(110_000),
             applied_to_bill: vnd(110_000),
+            tip: vnd(5_000),
         };
-        let result = settle(vnd(110_000), &[payment], &[vnd(5_000)]);
+        let result = settle(vnd(110_000), &[payment]);
         assert!(matches!(result, Err(DomainError::NegativeChange)));
     }
 
     #[test]
     fn settling_nothing_is_refused() {
         assert!(matches!(
-            settle(vnd(110_000), &[], &[]),
+            settle(vnd(110_000), &[]),
             Err(DomainError::Empty { what: "payments" })
         ));
     }
@@ -672,8 +738,9 @@ mod tests {
                 method: PaymentMethod::Cash,
                 tendered: vnd(total + over + tip),
                 applied_to_bill: vnd(total),
+                tip: vnd(tip),
             };
-            let settlement = settle(vnd(total), &[payment], &[vnd(tip)]).expect("settles");
+            let settlement = settle(vnd(total), &[payment]).expect("settles");
             // tendered − applied − tip == change
             prop_assert_eq!(settlement.change_given, vnd(over));
         }

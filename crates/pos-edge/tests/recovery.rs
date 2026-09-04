@@ -46,6 +46,7 @@ fn a_line() -> pos_edge::LineDraft {
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         seat: None,
         course_id: None,
+        modifier_menu_item_ids: Vec::new(),
         note_present: false,
     }
 }
@@ -60,6 +61,7 @@ fn a_priced_line() -> pos_core::menu::PricedLine {
         line_total: vnd(150_000),
         tax_class_id: EdgeSession::standard_tax_class(),
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+        modifier_menu_item_ids: Vec::new(),
         repriced: false,
     }
 }
@@ -90,7 +92,7 @@ fn a_restart_rebuilds_the_projection_from_the_log() {
                 .open_shift(actor(), vnd(500_000))
                 .await
                 .expect("opens a shift");
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             edge.fire_line(actor(), line.order_line_id, Some(station))
                 .await
@@ -104,8 +106,8 @@ fn a_restart_rebuilds_the_projection_from_the_log() {
                         method: PaymentMethod::Cash,
                         tendered: vnd(165_000),
                         applied_to_bill: vnd(165_000),
+                        tip: vnd(0),
                     }],
-                    vec![],
                 )
                 .await
                 .expect("settles");
@@ -161,7 +163,7 @@ fn rebuild_is_idempotent() {
         let table = TableId::new(Ulid::from_u128(801));
         {
             let edge = edge_over(store.clone());
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
         }
         let edge = edge_over(store.clone());
         edge.rebuild().await.expect("first rebuild");
@@ -181,7 +183,7 @@ fn a_bump_survives_a_restart() {
         let station = StationId::new(Ulid::from_u128(9));
         let line_id = {
             let edge = edge_over(store.clone());
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             edge.fire_line(actor(), line.order_line_id, Some(station))
                 .await
@@ -247,8 +249,8 @@ fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
                     method: PaymentMethod::Cash,
                     tendered: vnd(165_000),
                     applied_to_bill: vnd(165_000),
+                    tip: vnd(0),
                 }],
-                vec![],
             )
             .await
             .expect("the counter bill is still there after the restart, and settles");

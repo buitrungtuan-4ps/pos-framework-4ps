@@ -18,6 +18,353 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till is told whether its store takes tips, and which tender it accepts** (roadmap v3
+  **B1.3** and **E5**, `GET /api/menu`).
+
+  Both facts were already live in `EdgeSession`, applied from published configuration, and read by
+  **nobody**. The consequences were not symmetric.
+
+  `accepted_tender` made the till offer a method the edge would refuse, so a cash-only store's
+  refusal arrived as a `400` in front of the guest instead of a button that was never there.
+
+  Tips were worse than a bad refusal. B1.3 landed the domain, the event and the wire — a `tip` on
+  each `Payment`, gated on `Capability::Tips`, with the change arithmetic corrected — and shipped no
+  way for a cashier to enter one. There is no tip pad, no suggested-percentage row and no i18n key
+  anywhere in `ui/`, so **`tip_amount` is zero on every payment a real store takes**, whatever the
+  capability says. This entry is the first half of closing that: the till can now *know*. The pad
+  itself is the next commit.
+
+  `MenuResponse` carries them because they are the same kind of fact as a price — published from the
+  console, resolved for this store, refreshed when the price book is — and because the till already
+  reads that route on load, so nothing new is called or authorised. `GET /api/session` was the other
+  candidate and is the wrong one: it answers *who is signed in on this device*, per-device identity
+  with a per-sign-in lifetime, and hanging store-wide configuration off it would conflate the two.
+
+  **Two flags, not ten.** The session carries ten capability flags and the till could be handed all
+  of them; nine would arrive with no reader, which is the failure this repository has shipped
+  repeatedly (`docs/roadmap-v3.md` Cadence). A flag joins this response in the change that consumes
+  it; B5.3 is where the rest arrive with their gates.
+
+  `accepted_tender` is `null` rather than a list of all seven methods when a store restricts
+  nothing, so the till can tell "no restriction published" from "a restriction that happens to allow
+  everything" — and so a method added to the enum later is accepted by an unrestricted store without
+  a config change.
+
+  Verified through the composed router rather than by calling the handler, because the question is
+  whether the shipped binary serves them, and in both directions: a store with tips **off** says so.
+  Reinstating the bug fails the test with `left: Bool(false), right: Bool(true)`.
+
+- **`pos_edge` runs as a real Windows service** (roadmap v3 **E4**,
+  `crates/pos-edge/src/service.rs`). Two things were wrong, and the second is the one that mattered.
+
+  **The documented install could not work.** `deploy/edge/README.md` said to run `sc.exe create` and
+  `sc.exe start`; the Service Control Manager gives a starting service about thirty seconds to
+  connect back and report `RUNNING`, and a plain console program never does, so SCM kills it with
+  *error 1053*. Every Windows store was therefore either under a third-party shim or running in a
+  console window — which nothing restarts after a power cut. The binary now speaks SCM's protocol
+  itself: started as a service it reports `RUNNING`, a stop (and a machine shutdown) drains in-flight
+  requests exactly as a `SIGTERM` does on Linux, and started from a console it notices SCM is absent
+  and runs in the foreground, so `--self-test` and an operator's manual run are unchanged.
+
+  **Over-the-air updates could not have worked on Windows even with a shim.** An install retargets
+  `bin\current` and exits, and on Linux `Restart=always` turns that exit into a start on the new
+  binary. SCM has no such setting — it has failure actions, applied only when a service *looks* like
+  it failed, and a service that reports `STOPPED` with exit code zero has been stopped on purpose.
+  A store that installed a release at 11:40 on a Saturday would have sat dark until somebody drove to
+  the shop. So `serve` now returns a **`ServeOutcome`** — `Stopped`, or `RestartWanted` — and the
+  wrapper reports exit code `1` for the second, which the documented
+  `sc.exe failure … actions= restart/5000` acts on. An operator's own `sc.exe stop` still exits zero
+  and stays stopped.
+
+  `deploy/edge/README.md` now carries the five registration commands, says why the `failure` line is
+  not optional, and records what the symlink privilege needs (Administrators and `LocalSystem` hold
+  it; a named low-privilege account does not, and the edge reports the absence rather than failing an
+  install every ten minutes). One new dependency, `windows-service`, target-gated so a Linux build
+  compiles none of it.
+
+  **Upgrade note.** A Windows store already registered with `sc.exe` should add the failure action —
+  without it the box will not come back from an update. Nothing changes for a Linux store, where the
+  two stops were always indistinguishable and always restarted. There is no wire, migration,
+  permission or default change.
+
+  What is not proven: SCM's own behaviour. The `windows-2022` CI job compiles the wrapper, so a
+  rename or a signature change fails a pull request, but that a real service reaches `RUNNING`,
+  drains on stop and restarts on exit `1` needs a Windows box —
+  [`docs/gate-register.md`](docs/gate-register.md) P3, which this narrows rather than closes.
+
+- **A per-store installer on the new-store wizard's handoff step** (roadmap v3 **R3**).
+  The wizard already handed the operator a `config.toml` and an `env` file and then asked them to
+  follow a README on the shop floor: create a service user, get two sets of owners and modes right,
+  install a systemd unit, and lay out the update slots. **Download installer** now produces
+  `install-pos-edge.sh` for that one store, carrying both files inside it as quoted heredocs. Run it
+  as `sudo sh install-pos-edge.sh ./pos-edge ./pos-edge.service` and the box is laid out, enabled and
+  started.
+
+  The slot layout is the reason it is worth generating rather than typing. Since ADR-0055
+  Amendment 1 the unit starts `/var/lib/pos-edge/bin/current`, a symlink the edge retargets to
+  install its own updates; a box with the binary only at `/usr/local/bin/pos-edge` trades perfectly
+  well and **silently never self-updates** — the kind of mistake a hand-typed install makes and
+  nobody notices for a release or two.
+
+  A re-run refreshes the config, the unit and the rescue copy but **leaves an already-installed
+  binary alone**: a box that had updated itself over the air would otherwise have `current` pointed
+  back at whatever binary the technician was holding, which is a silent downgrade of a live shop.
+  That guard is also what makes the claimed idempotency true.
+
+  It is not a `curl | sh`: nothing in it reaches the network, and the operator can read every line
+  before running it. It **contains the store's key**, so the handoff screen says so in as many words
+  and the script's own header says to delete it once the box is up. The two separate downloads stay
+  for the cases the script cannot cover — a Windows box, a host managed some other way, or a
+  technician who wants to read the config before it is written.
+  [`docs/guides/bring-a-store-online.md`](docs/guides/bring-a-store-online.md) Step 2 now leads with
+  the installer and keeps the manual path beside it.
+
+- **The UX step budget is now measured** (roadmap v3 **Q7**, `docs/ui-ux.md` §6).
+  `docs/ui-ux.md` has said since P6 that a common action takes at most two taps from the role's home
+  screen and a rare one at most three — the rule behind design principle 1, "a normal operator sells
+  without training" — and nothing checked it. A rule nothing measures decays one convenient extra
+  dialog at a time.
+
+  `ui/scripts/step-budget.mjs` declares the tap count of **thirteen** selling tasks and resolves
+  every declared tap against the source: the route must exist in `App.tsx`, its screen must exist,
+  and an interactive element on that screen must really call the named action. `pnpm build` runs it,
+  so the `ui` CI job fails on a breach. Zero new dependencies — it uses the TypeScript compiler the
+  i18n gate already uses. Run alone with `pnpm steps`; it prints every task and marks the four
+  sitting **at** their ceiling, which are the flows to defend hardest (cash settle, both counter
+  charges, the kitchen bump).
+
+  All three of its failure modes were verified by breaking them: a renamed handler, a route that does
+  not exist, and a flow one tap over budget.
+
+  **What it cannot see is stated in the script and in the doc**: a required tap nobody declared. Add
+  a confirm dialog to the pay flow and leave the declaration alone, and the gate stays green while
+  the flow is one tap worse. Catching that needs a browser driving a running edge with a paired
+  device — a harness this repo does not have, filed with what it would take. So the gate stops a
+  budget being quietly raised and a flow being quietly renamed; a reviewer still owns "did this add a
+  step?", and the printed map is what makes that a five-second question.
+
+- **An integrator guide** (roadmap v3 **Q6**): `docs/guides/integrate-with-the-api.md`, for a third
+  party connecting to the cloud rather than for someone running it. Three parts — authentication and
+  what a refusal means, a tour of what `/v1` actually offers, and a webhook quickstart with a
+  complete verifying receiver.
+
+  Written now rather than earlier because it can finally be *correct*: the webhook signature headers
+  it documents are the ones the cloud sends only as of this release, and the surface it describes no
+  longer includes the event feed and version pin that the standard advertised but nothing built. It
+  says plainly what does not exist — no public event feed, no `pos-api-version`, no writes beyond the
+  order intake — because a guide that omits the absences sends integrators looking for them.
+
+  Three things it is explicit about because getting them wrong is expensive: a `201` on an order
+  means the store accepted it, **not** that the kitchen has started; a `503` calls for the look-up
+  rather than a blind resubmit; and a webhook delivery is a **page** re-sent until accepted, so a
+  receiver must verify over raw bytes, check the ±5-minute replay window, and dedupe on each event's
+  own `event_id`. It also states that a line's `note` is personal data and what may and may not go
+  in it.
+
+- **`/v1/orders` and `/sync/*` now have a budget** (roadmap v3 **Q5**). Both were unbounded: every
+  call authenticated, resolved a store and reached storage, so a caller in a retry loop cost the
+  cloud that work per iteration with no ceiling. The shape is not hypothetical — the fork checklist
+  already documents a store issued the wrong scope answering `403` **on every poll, every five
+  seconds**, indefinitely.
+
+  The sliding-window limiter written for `/admin/login` was already generic over an opaque key, so
+  it is reused rather than reinvented (and renamed from `LoginRateLimiter`, since it now serves
+  three surfaces). Each surface holds its **own** counter, so a store hammering `/sync` cannot lock
+  an admin out of the console — there is a test for exactly that.
+
+  The two surfaces are keyed differently, on purpose:
+  - **`/v1/orders`** by the caller's **tenant**, after authentication. The intake is shared between
+    integrators, so what is worth preventing is one marketplace's runaway loop consuming the
+    capacity the others need, and the tenant is the identity the bearer key proves. The look-up
+    (`GET /v1/orders`) spends the same budget as the submit: it is the path a caller retries when a
+    submit times out, so exempting it would leave the loop that most needs bounding unbounded.
+  - **`/sync/*`** by the **client connection**, before authentication — as a layer over the whole
+    composed service, since the store-facing surface spans more than one sub-router. Per-store would
+    read better and is deliberately not used: the store id sits in the caller-supplied path, so
+    keying on it would let anyone exhaust a named shop's budget by spelling its id, which is a
+    targeted denial of service on one restaurant. Checking before the credential is verified is the
+    point — a wedged box should cost a header comparison, not a key lookup and a database round trip.
+
+  A refusal is the usual AIP-193 `RESOURCE_EXHAUSTED` with a `Retry-After`, through one helper every
+  throttled surface now shares.
+
+  **Upgrade note:** four new optional `CloudConfig` keys, all defaulted, so an existing config file
+  boots unchanged: `orders_max_requests` (300) and `orders_window_secs` (60) — five orders a second
+  for a whole integrator; `sync_max_requests` (600) and `sync_window_secs` (60) — ten requests a
+  second per connection, roughly fifty times what a healthy store generates. Both are sized to bound
+  a runaway loop rather than to shape normal traffic; a deployment with unusual integrators can
+  raise them. Limiter state is in-process and ephemeral, so a restart clears it — which fails open,
+  never closed.
+
+### Removed
+
+- **The two API-key scopes that gated nothing** (roadmap v3 **Q5**). `read_events` and
+  `manage_webhooks` were variants of the cloud's `Scope` enum and **no route consulted either**.
+  The console's picker had already stopped offering them, but `POST /admin/api-keys` still
+  **accepted** them — so an integrator could be handed a key whose scope list promised an authority
+  the cloud would never honour, with nothing anywhere to say so. Deleting the variants is what turns
+  that into a refusal: the strict parse on the issue route now names the unknown scope back.
+
+  Wiring them instead was considered and rejected as out of scope for a tail item. `read_events`
+  named a public event feed that does not exist — a new read surface with its own PII, retention and
+  paging decisions — and `docs/naming-and-api.md` used `GET /v1/events` as its pagination example,
+  which is now corrected to say plainly that the route was never built and how events do leave the
+  cloud. `manage_webhooks` named webhook CRUD on `/v1` behind a bearer key, while the console
+  already has that CRUD behind a session and RBAC ([ADR-0067](docs/adr/0067-multi-admin-console-rbac.md));
+  a second path would be weaker auth on the same writes.
+
+  **Upgrade note:** a key already stored with either name keeps working and authorises exactly what
+  it did before — unknown scope names are dropped on read (deny-by-default), and these two granted
+  nothing to drop. What changes is issuing: a request naming either scope is refused rather than
+  silently satisfied. No migration; no stored data is rewritten. `docs/fork-checklist.md` records
+  what a fork would have to build to have either capability.
+
+### Fixed
+
+- **The published webhook headers were not the ones the cloud sent** (roadmap v3 **Q5**,
+  [ADR-0032](docs/adr/0032-webhooks.md)). `docs/naming-and-api.md` §4 is the table an integrator
+  builds a receiver from, and it listed `pos-signature` / `pos-signature-time` while the sender sent
+  `X-Pos-Webhook-Signature` / `X-Pos-Webhook-Timestamp`. A receiver written from the document
+  therefore found no signature and rejected **every** delivery as unsigned.
+
+  The code now sends the published names, which also drops the `X-` prefix
+  [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated. A test asserts both names as
+  literals, so changing either one fails until the published table changes in the same commit.
+
+  The table was wrong in the other direction too, and that half is fixed by correcting the table:
+  - `pos-event-id` and `pos-delivery-id` described a webhook that delivers **one event**. It
+    delivers a **page**, re-sent unchanged until the receiver accepts it, so there is no single
+    event to name and no delivery record with an id. Both rows are gone, and the document now says
+    what a receiver dedupes on instead: each event's own `event_id`, inside the body. A per-attempt
+    id is a real addition rather than a fix and is flagged as follow-up work, not smuggled in here.
+  - `pos-api-version` was an optional minor-version pin that **no route read**. An integrator who
+    sent it believed they had pinned a version and had not, which is worse than no header. It is
+    removed from the table and from `pos-proto`'s "three numbers" note, which is now two:
+    `PROTOCOL_VERSION` and per-event `schema_version`.
+
+  **Upgrade note:** a webhook receiver reading the old `X-Pos-Webhook-*` headers stops seeing them
+  and must read `pos-signature` / `pos-signature-time`. Nothing else about the delivery changes —
+  same `v1=<hex>` HMAC-SHA256 over the same body, same ±5-minute replay window, same signing
+  secret — so a receiver that reads the header name from configuration needs only that value
+  changed. The edge↔cloud `X-Pos-*` headers are deliberately untouched: both sides must agree on
+  those, and they are not a published contract.
+
+- **The till assumed VND in four places** (roadmap v3 **E5 residual**,
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). The edge has always known the store's currency
+  — it comes from the synced `locale` node and the edge already served it on `GET /api/menu` — but
+  the app discarded that field and wrote `"VND"` as a literal instead. On a store outside Vietnam:
+  - the shift's **opening float** was *sent* to the edge tagged `VND`, so a store's own cash count
+    was recorded in a currency it does not trade in;
+  - the typed float and count were **parsed at VND's scale** (no minor units), which is out by a
+    factor of a hundred on any two-decimal currency;
+  - the shift screen's expected and counted figures fell back to a zero labelled `VND`;
+  - the pay pad's quick-cash keys were VND's three banknotes (50k/100k/200k), offering amounts the
+    store's guests cannot hand over.
+
+  All four now read the currency the edge reported. Banknote values moved next to the minor-unit
+  table in `ui/src/lib/money.ts`, since they are a property of a currency rather than of a screen; a
+  currency with no note table offers the exact amount alone, which is always tenderable, rather than
+  guessing denominations. The pay pad keys on *the bill's* currency, as every other figure on that
+  screen already did.
+
+  **Upgrade note:** none required. A Vietnamese store behaves identically — the edge reports `VND`
+  and the note table's first row is the same three notes. `DEFAULT_CURRENCY` in the app's store is
+  the never-blank fallback for the moment before the price book loads, in keeping with the existing
+  `DEFAULT_FLOOR`/`DEFAULT_STATION`; a fork changes that one constant.
+
+- **Tips were recorded as zero, and change was over-reported by the tip** (roadmap v3 **B1.3**,
+  [ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)). `billing.payment.captured` has
+  carried a `tip_amount` since P5 and it was written as a literal zero on every payment ever
+  captured — so a store could take tips all night and its own log said nobody tipped, and tip-out
+  could not be reconstructed from it.
+
+  The cause was the shape, not the assignment. Tips travelled as a `Vec<Money>` **beside** the
+  payments, with no correspondence between the two lists. The settlement arithmetic came out right
+  in total — tips were correctly excluded from `total_due` and correctly subtracted from the total
+  change — but nothing knew *which* tender a tip was taken on, so no captured payment had a tip to
+  record. The tip now lives on `pos_core::billing::Payment` and the parallel list is gone.
+
+  That shape hid a second, worse defect. Each payment's `change_given` was computed as
+  `tendered − applied_to_bill`, which over-reports the change by exactly the tip: a guest handing
+  over 200,000 on a 165,000 bill and leaving 20,000 was recorded as owed **35,000** back rather
+  than 15,000. The arithmetic now lives in one place, `Payment::change`, which subtracts the tip.
+
+  A tip also now requires the store to have tips on (`tips_enabled`, §10). The gate refuses taking
+  the money, never the sale: a store with tips off settles untipped bills exactly as before, and a
+  tipped tender is refused rather than pocketed silently.
+
+  **Upgrade note:** `POST /api/bills/{id}/settle` takes the tip per payment
+  (`payments[].tip`, optional) instead of a request-level `tips` array. A device that sends neither
+  settles exactly as before; one that still sends `tips` has that field ignored, so its tips would
+  go unrecorded — update the caller. `Payment`, `billing::settle`, `BillCommand::Settle` and
+  `Edge::settle_bill` changed shape with it. No migration, no event-schema change (the event field
+  already existed) and no `PROTOCOL_VERSION` change: the fix is that the field is now populated.
+
+- **Every order was taxed at the store's channel, not its own** (roadmap v3 **B1.2**,
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). Tax rates are configured per tax class **per
+  channel**, and both bill reads looked the rate up with `EdgeSession.sales_channel` — a store-wide
+  constant. A store that sells dine-in *and* takeaway therefore charged one rate for everything: a
+  counter order settled on a store whose session said dine-in got dine-in tax. Nothing failed and
+  nothing logged; the only symptom was a wrong figure on a receipt, on every order that did not
+  arrive through the session's channel, for as long as the store traded.
+
+  `sales.order.opened` has carried a `channel` since P5 and nothing ever read it back, because there
+  was nowhere to read it into. Three things changed:
+  - The edge projection keeps each order's channel, folded from `sales.order.opened` on replay as
+    well as recorded live, so the rate survives a restart between an order being placed and its bill
+    being settled.
+  - `Edge::seat_table` now emits `sales.order.opened` alongside `sales.table.opened`, in one
+    transaction. It previously emitted only the table event, so a dine-in order existed with no
+    record of the channel it came in on at all.
+  - `order_totals` and `settle_bill` share one `taxable_bases` read that returns the bases and the
+    channel together, so the two paths cannot resolve the channel differently — which is how the
+    defect was written in the first place.
+
+  An order whose channel is not knowable — one opened before this change, or carrying a token this
+  build does not understand — falls back to the session channel, exactly the old behaviour and the
+  only answer available for a sale already in the ground. A newer sender's unrecognised channel is
+  recorded as "no answer" rather than failing the replay: a box that cannot rebuild cannot trade.
+
+  `POST /api/tables/{id}/seat` also accepts an optional `guest_count`, which
+  `sales.order.opened` has always carried. No screen prompts for it yet — whether tap-to-seat should
+  grow a step is roadmap **Q7**'s call — but the route carries it so that decision needs no wire
+  change. The body stays optional in both spellings devices use: absent, or `application/json` with
+  nothing after it.
+
+  **Upgrade note:** the bootstrap tax table now carries the standard class at 10% for **every**
+  channel rather than dine-in alone. A store's arithmetic is unchanged (the same 10% across the
+  board), but each cell now exists, because assembling a bill refuses a class with no rate for the
+  order's channel rather than papering over it with zero tax — and without the added rows a LAN-only
+  store could not settle a takeaway order it had already accepted, priced and fired. A store with
+  cloud-published rates is unaffected; those still override. No migration and no `PROTOCOL_VERSION`
+  change.
+
+- **A fired line consumed only its base recipe, never its modifiers** (roadmap v3 **B1.1**,
+  `docs/pos-spec.md` §8). `fire_line` passed `modifiers: Vec::new()` to `decide_line`, so a large
+  pizza deducted the base dough and never the "large" modifier's extra 50 g. Nothing failed and
+  nothing logged: the shelf simply disagreed with the books by exactly the modifiers, on every
+  fired line.
+
+  The ids had nowhere to travel, which is why the argument was empty. Three places carry them now:
+  `sales.order_line.added` gains `modifier_menu_item_ids` (additive, `#[serde(default)]` so a store
+  upgrading can still replay its own log), `pos_core::menu::PricedLine` carries them through
+  repricing instead of dropping them once their prices were summed, and the edge's line record keeps
+  them from add to fire. `POST /api/tables/{id}/lines` accepts them; a device that sends none behaves
+  exactly as before.
+
+  Also fixed in the same seam: the consumption `decide_line` computed was **discarded**. The one
+  place §8's arithmetic ran had no reader at all. It now folds into a `StockProjection` on the edge.
+  That figure is a running consumption total, not an inventory — nothing seeds it with what the store
+  received, so it reads negative until the flagged goods-in/stocktake slice lands, and nothing 86s a
+  menu from it (`EdgeSession::item_sellable` still has no production caller). What the fold buys
+  today is that the arithmetic is real and testable rather than thrown away.
+
+  **Upgrade note:** none required. The event field defaults, the route field is optional, and no
+  migration or `PROTOCOL_VERSION` change is involved. A store that upgrades keeps its history; lines
+  added before the upgrade replay with no modifiers, which is what they were recorded as.
+
+### Added
+
 - **Over-the-air updates run on the shipped edge** (roadmap v3 **R4** + **R5-d**,
   [ADR-0055](docs/adr/0055-edge-ota-updater.md) Amendment 1). The rollout decision, signature
   verification and install orchestration have been merged and tested for four releases and **nothing

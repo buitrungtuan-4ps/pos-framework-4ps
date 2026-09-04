@@ -241,6 +241,25 @@ event_catalogue! {
         seat: Option<u16>,
         /// Course, when courses are enabled.
         course_id: Option<CourseId>,
+        /// The modifiers chosen for this line, each itself a catalog item with its own
+        /// price and its own recipe (`docs/pos-spec.md` §8).
+        ///
+        /// Captured because **firing consumes them**: a large pizza is the base recipe
+        /// plus the "large" modifier's extra dough, and a line that does not record
+        /// which modifiers it carries cannot deduct them. Until this field existed the
+        /// edge fired every line with an empty modifier list, so every modifier's
+        /// ingredients were sold and never taken off the shelf.
+        ///
+        /// Their *prices* are already inside `unit_price`, which is the summed figure
+        /// the guest is charged; these ids are what the kitchen and the stock ledger
+        /// need, not a second source of truth for money.
+        ///
+        /// `#[serde(default)]` because this is an additive field on a published payload:
+        /// a store upgrading replays its own log at start-up, and every line written
+        /// before this release has no such key. Without the default that replay fails
+        /// and the box will not boot.
+        #[serde(default)]
+        modifier_menu_item_ids: Vec<MenuItemId>,
         /// Whether a guest note was written.
         ///
         /// The note's **text** deliberately never enters the log — see `crate::text`.

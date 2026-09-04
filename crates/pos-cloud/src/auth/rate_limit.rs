@@ -1,20 +1,32 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! A sliding-window rate limiter for the interactive sign-in
-//! ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+//! A sliding-window rate limiter, shared by every surface that needs one.
 //!
-//! Online password/TOTP guessing is throttled here, before the expensive Argon2id verify even runs,
-//! so a flood of attempts costs the attacker a `429` rather than the server a hashing storm. The
-//! window is *sliding* (a deque of recent attempt instants per key, pruned to the window on each
-//! check) rather than fixed, so an attacker cannot burst a fresh allowance the instant a fixed window
-//! rolls over.
+//! It began as the interactive sign-in's
+//! ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5): online password/TOTP
+//! guessing is throttled before the expensive Argon2id verify even runs, so a flood of attempts
+//! costs the attacker a `429` rather than the server a hashing storm. The window is *sliding* (a
+//! deque of recent attempt instants per key, pruned to the window on each check) rather than fixed,
+//! so an attacker cannot burst a fresh allowance the instant a fixed window rolls over.
+//!
+//! Roadmap **Q5** gave it two more callers, which is why it is no longer named after login:
+//!
+//! - **`POST`/`GET /v1/orders`**, keyed on the caller's **tenant** — the proven identity behind the
+//!   bearer key, checked after authentication. Per-tenant rather than per-connection because
+//!   fairness between integrators is the point: one marketplace hot-looping must not consume the
+//!   intake other marketplaces need.
+//! - **`/sync/*`**, keyed on the **client connection**, checked *before* authentication. Per-store
+//!   would read better and is deliberately not used: the store id sits in the caller-supplied path,
+//!   so keying on it would let anyone exhaust a named store's budget by spelling its id — a
+//!   targeted denial of service on one shop. The connection is the only identity available before
+//!   the credential is verified, which is exactly where a limiter belongs.
 //!
 //! The limiter is keyed by an opaque string, and a single check may present several keys — the
-//! attempt is refused if *any* key is over its limit. Today the `/admin/login` route presents only
-//! the client IP; when per-admin email login lands, the same call adds an `email:…` key, so the
-//! "per email and per IP" limit the ADR calls for needs no change here. State is in-process (the
-//! cloud is a single box, P8) and ephemeral — a restart clears it, which fails open, never closed.
+//! attempt is refused if *any* key is over its limit. When per-admin email login lands, the login
+//! call adds an `email:…` key beside its `ip:…` one, so the "per email and per IP" limit the ADR
+//! calls for needs no change here. State is in-process (the cloud is a single box, P8) and
+//! ephemeral — a restart clears it, which fails open, never closed.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -27,9 +39,11 @@ use pos_proto::time::Timestamp;
 const SWEEP_LIMIT: usize = 4096;
 
 /// A per-key sliding-window limiter over a shared, in-process map. Cloneable: every clone shares the
-/// same window state (an `Arc`), so all request handlers throttle against one counter.
+/// same window state (an `Arc`), so all request handlers throttle against one counter. Each surface
+/// holds its **own** limiter, so their budgets are independent — a flood of `/sync` polls cannot
+/// lock an admin out of the console.
 #[derive(Clone, Debug)]
-pub struct LoginRateLimiter {
+pub struct SlidingRateLimiter {
     /// key → the instants (Unix ms) of the attempts still inside the window.
     inner: Arc<Mutex<HashMap<String, VecDeque<i64>>>>,
     /// The most attempts allowed per key within one window.
@@ -38,7 +52,7 @@ pub struct LoginRateLimiter {
     window_ms: i64,
 }
 
-impl LoginRateLimiter {
+impl SlidingRateLimiter {
     /// A limiter allowing `max_attempts` per key within a `window_secs` sliding window.
     #[must_use]
     pub fn new(max_attempts: usize, window_secs: u64) -> Self {
@@ -123,7 +137,7 @@ fn prune(times: &mut VecDeque<i64>, cutoff: i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::LoginRateLimiter;
+    use super::SlidingRateLimiter;
 
     use pos_proto::time::Timestamp;
 
@@ -139,7 +153,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_the_limit_then_refuses_with_a_retry_after() {
-        let limiter = LoginRateLimiter::new(3, 60);
+        let limiter = SlidingRateLimiter::new(3, 60);
         for _ in 0..3 {
             assert!(
                 limiter.check_and_record(&key("ip:a"), at(0)).is_ok(),
@@ -157,7 +171,7 @@ mod tests {
 
     #[test]
     fn the_window_is_per_key() {
-        let limiter = LoginRateLimiter::new(1, 60);
+        let limiter = SlidingRateLimiter::new(1, 60);
         limiter
             .check_and_record(&key("ip:a"), at(0))
             .expect("first for a");
@@ -173,7 +187,7 @@ mod tests {
 
     #[test]
     fn a_refusal_does_not_extend_the_window() {
-        let limiter = LoginRateLimiter::new(2, 60);
+        let limiter = SlidingRateLimiter::new(2, 60);
         limiter
             .check_and_record(&key("ip:a"), at(0))
             .expect("first");
@@ -192,7 +206,7 @@ mod tests {
 
     #[test]
     fn any_over_limit_key_refuses_the_attempt() {
-        let limiter = LoginRateLimiter::new(2, 60);
+        let limiter = SlidingRateLimiter::new(2, 60);
         // Exhaust the shared "email" key via two IPs, then a third IP sharing that email is refused.
         limiter
             .check_and_record(&["ip:a".to_owned(), "email:x".to_owned()], at(0))

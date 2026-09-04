@@ -64,6 +64,13 @@ pub struct PricedLine {
     pub tax_class_id: TaxClassId,
     /// The tax rate in force for this class on this channel, as a ratio for money arithmetic.
     pub tax_rate: Ratio,
+    /// The modifiers this line carries, carried through from the request.
+    ///
+    /// Their prices are already summed into [`Self::unit_price`], so this is not a second source of
+    /// truth for money. It is here because **firing consumes them**: `consumption_for_fire` deducts
+    /// the base recipe plus one recipe per modifier, and a priced line that dropped the ids could
+    /// only ever be fired as though the guest had ordered the bare item.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
     /// Whether the caller's quoted unit price differed from the store's. Reported, not refused: a
     /// stale quote loses a sale if refused and loses margin if honoured, so it is only surfaced.
     pub repriced: bool,
@@ -182,6 +189,7 @@ pub fn reprice_line(
         line_total,
         tax_class_id: base.tax_class_id,
         tax_rate: tax_rate.as_ratio(),
+        modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
         repriced,
     })
 }

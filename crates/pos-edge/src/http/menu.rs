@@ -19,6 +19,28 @@
 //! rate is a configuration error, and quietly charging no tax on an unclassified item is the kind of
 //! bug found by an audit rather than a test. The till shows such an item as unsellable instead.
 //!
+//! # Two store facts ride along with the price book
+//!
+//! `tips_enabled` and `accepted_tender` are published configuration the till has to obey, and until
+//! this route carried them the till obeyed neither. Both were live in the session and read by
+//! nobody: the edge refused a tip on a store with the capability off
+//! ([`decide_bill`](pos_core::decision::decide_bill)) and refused a method outside
+//! `accepted_tender`, but the till had no way to know, so it offered the action and the refusal
+//! landed as a `400` in front of the guest. Worse for tips: with no entry field at all, `tip_amount`
+//! was zero on every payment a real store took, whatever the capability said.
+//!
+//! They ride here rather than on a route of their own because they are the same *kind* of fact as a
+//! price — published from the console, resolved for this store, refreshed when the price book is —
+//! and because the till already reads this route on load, so nothing new has to be called or
+//! authorised. `GET /api/session` was the other candidate and is the wrong one: it answers *who is
+//! signed in on this device*, which is per-device identity with a per-sign-in lifetime, and hanging
+//! store-wide published configuration off it would conflate the two.
+//!
+//! **Only these two.** The session carries ten capability flags and the till could be handed all of
+//! them; nine would arrive with no reader, which is the failure this repository has shipped
+//! repeatedly (`docs/roadmap-v3.md` Cadence). A flag joins this response in the change that consumes
+//! it, and B5.3 is where the rest arrive with their gates.
+//!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 
 use std::sync::Arc;
@@ -29,11 +51,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use pos_core::capability::Capability;
 use pos_ports::event_store::EventStore;
 use pos_proto::ids::{MenuItemId, TaxClassId};
 use pos_proto::menu::MenuEntry;
 use pos_proto::money::{CurrencyCode, Money, Ratio};
-use pos_proto::{SalesChannel, locale::TaxRateTable, text::DisplayName};
+use pos_proto::{SalesChannel, WireEnum as _, locale::TaxRateTable, text::DisplayName};
 
 use crate::app::Edge;
 
@@ -45,6 +68,18 @@ pub(crate) struct MenuResponse {
     /// The items, in the order the store published them. Each rate is already resolved for the
     /// channel a walk-in sale arrives on, so the till never picks a channel of its own.
     items: Vec<MenuItemResponse>,
+    /// Whether this store takes tips (§10 `Capability::Tips`, authored on the `capabilities` node).
+    ///
+    /// The till shows no tip entry when this is false, which is the difference between a guest being
+    /// offered something the edge will refuse and the action simply not being there.
+    tips_enabled: bool,
+    /// The payment methods this store accepts, as their wire names, or `None` when the store
+    /// restricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).
+    ///
+    /// `None` rather than "all seven listed" so the till can tell "no restriction published" from "a
+    /// restriction that happens to allow everything" — and so a method added to the enum later is
+    /// accepted by an unrestricted store without a config change.
+    accepted_tender: Option<Vec<&'static str>>,
 }
 
 /// One sellable item, priced and taxed as this store sells it.
@@ -103,6 +138,11 @@ where
         Json(MenuResponse {
             currency: session.currency,
             items,
+            tips_enabled: session.capabilities.enabled(Capability::Tips),
+            accepted_tender: session
+                .accepted_tender
+                .as_ref()
+                .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
         }),
     )
         .into_response()

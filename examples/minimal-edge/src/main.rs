@@ -44,6 +44,8 @@ async fn main() -> Result<(), EdgeError> {
     // the example has no `bin/current` layout, so no over-the-air updater is composed at all
     // (ADR-0055 Amendment 1). A real store passes its SQLite writer, which survives the restart an
     // install performs.
+    // The outcome says whether the stop was an update's restart; here it never is — no updater is
+    // composed — so Ctrl-C is the only way this ends and there is nothing to act on.
     serve(
         EdgeConfig::new(bind, store_id),
         edge,
@@ -51,4 +53,5 @@ async fn main() -> Result<(), EdgeError> {
         InMemoryOtaState::new(),
     )
     .await
+    .map(|_outcome| ())
 }

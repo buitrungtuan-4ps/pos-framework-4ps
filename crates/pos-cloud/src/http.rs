@@ -133,7 +133,7 @@ use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
 };
 use crate::auth::password::hash_password;
-use crate::auth::rate_limit::LoginRateLimiter;
+use crate::auth::rate_limit::SlidingRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::campaigns::{CampaignStore, CampaignStoreError, to_node as campaigns_to_node};
 use crate::catalog::{
@@ -222,6 +222,25 @@ const DEFAULT_ADMIN_INVITE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
 /// configured value in via [`CloudApp::with_admin_session_idle_ttl_secs`].
 const DEFAULT_ADMIN_SESSION_IDLE_TTL_SECS: u64 = 30 * 60;
 
+/// How many `/v1/orders` calls one tenant may make within the window before a `429`, when the binary
+/// does not override it (roadmap **Q5**). Sized for a marketplace at a real lunch rush with room to
+/// spare — a busy store takes single-digit orders a minute, and this is a whole tenant's allowance.
+const DEFAULT_ORDERS_MAX_REQUESTS: usize = 300;
+
+/// The sliding rate-limit window for `/v1/orders`, in seconds, when the config does not say — one
+/// minute, so [`DEFAULT_ORDERS_MAX_REQUESTS`] reads as "five orders a second per integrator".
+const DEFAULT_ORDERS_WINDOW_SECS: u64 = 60;
+
+/// How many store-facing `/sync/*` requests one client connection may make within the window before
+/// a `429`, when the binary does not override it (roadmap **Q5**).
+const DEFAULT_SYNC_MAX_REQUESTS: usize = 600;
+
+/// The sliding rate-limit window for `/sync/*`, in seconds, when the config does not say — one
+/// minute. With [`DEFAULT_SYNC_MAX_REQUESTS`] that is ten requests a second sustained from one
+/// connection: roughly fifty times what a healthy store generates (a five-second relay poll plus
+/// occasional config and heartbeat traffic), and far below what a tight retry loop does.
+const DEFAULT_SYNC_WINDOW_SECS: u64 = 60;
+
 /// How many `/admin/login` attempts one client may make within the window before a `429`, when the
 /// binary does not override it ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
 const DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS: usize = 10;
@@ -278,7 +297,14 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     /// before it is supplied; `CloudConfig::validate` refuses to boot without it, and a `None` here
     /// refuses every `/internal` request rather than admitting one.
     internal_shared_secret: Option<InternalSecret>,
-    login_rate_limiter: LoginRateLimiter,
+    login_rate_limiter: SlidingRateLimiter,
+    /// The `/sync/*` limiter (roadmap **Q5**), keyed on the client connection and checked before
+    /// authentication. Its own limiter, not the login one: a store polling hard must not be able to
+    /// lock an admin out of the console.
+    sync_rate_limiter: SlidingRateLimiter,
+    /// The `/v1/orders` limiter (roadmap **Q5**), keyed on the caller's tenant and checked after
+    /// authentication. Handed to the intake sub-router through [`Self::orders_rate_limiter`].
+    orders_rate_limiter: SlidingRateLimiter,
     /// How many proxies in front of this process are trusted to have appended to `X-Forwarded-For`
     /// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)). It is the rate limit's client key, so
     /// it belongs to the deployment's TLS posture rather than to this code.
@@ -321,6 +347,8 @@ where
             admin_setup_token: self.admin_setup_token.clone(),
             internal_shared_secret: self.internal_shared_secret.clone(),
             login_rate_limiter: self.login_rate_limiter.clone(),
+            sync_rate_limiter: self.sync_rate_limiter.clone(),
+            orders_rate_limiter: self.orders_rate_limiter.clone(),
             trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
         }
@@ -353,9 +381,17 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             admin_invite_ttl_secs: DEFAULT_ADMIN_INVITE_TTL_SECS,
             admin_setup_token: None,
             internal_shared_secret: None,
-            login_rate_limiter: LoginRateLimiter::new(
+            login_rate_limiter: SlidingRateLimiter::new(
                 DEFAULT_ADMIN_LOGIN_MAX_ATTEMPTS,
                 DEFAULT_ADMIN_LOGIN_WINDOW_SECS,
+            ),
+            sync_rate_limiter: SlidingRateLimiter::new(
+                DEFAULT_SYNC_MAX_REQUESTS,
+                DEFAULT_SYNC_WINDOW_SECS,
+            ),
+            orders_rate_limiter: SlidingRateLimiter::new(
+                DEFAULT_ORDERS_MAX_REQUESTS,
+                DEFAULT_ORDERS_WINDOW_SECS,
             ),
             trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
             audit: Arc::new(NoopAuditRecorder),
@@ -395,8 +431,64 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     /// [`crate::config::CloudConfig::admin_login_window_secs`]).
     #[must_use]
     pub fn with_login_rate_limit(mut self, max_attempts: usize, window_secs: u64) -> Self {
-        self.login_rate_limiter = LoginRateLimiter::new(max_attempts, window_secs);
+        self.login_rate_limiter = SlidingRateLimiter::new(max_attempts, window_secs);
         self
+    }
+
+    /// Sets the `/sync/*` rate limit — at most `max_requests` store-facing requests per client
+    /// connection within a `window_secs` sliding window (roadmap **Q5**); the binary threads the
+    /// configured values in ([`crate::config::CloudConfig::sync_max_requests`],
+    /// [`crate::config::CloudConfig::sync_window_secs`]).
+    ///
+    /// Sized for a **wedged** store, not a busy one: a healthy box polls the relay every five
+    /// seconds and pulls config far less often, so the default leaves an order of magnitude of
+    /// headroom. What it stops is a box stuck in a tight retry loop — the shape the fork checklist
+    /// already documents as "`403` on every poll, every five seconds" — costing the cloud a
+    /// database round trip per iteration for every shop that ends up in that state.
+    /// Sets the `/v1/orders` rate limit — at most `max_requests` intake calls per **tenant** within
+    /// a `window_secs` sliding window (roadmap **Q5**); the binary threads the configured values in
+    /// ([`crate::config::CloudConfig::orders_max_requests`],
+    /// [`crate::config::CloudConfig::orders_window_secs`]).
+    ///
+    /// Per tenant rather than per connection because the intake is a shared resource between
+    /// integrators: the thing worth preventing is one marketplace's runaway retry loop consuming the
+    /// capacity the others need, and a tenant is the identity the bearer key proves.
+    #[must_use]
+    pub fn with_orders_rate_limit(mut self, max_requests: usize, window_secs: u64) -> Self {
+        self.orders_rate_limiter = SlidingRateLimiter::new(max_requests, window_secs);
+        self
+    }
+
+    /// Sets the `/sync/*` rate limit — see [`Self::with_orders_rate_limit`] for why the two
+    /// surfaces are keyed differently.
+    #[must_use]
+    pub fn with_sync_rate_limit(mut self, max_requests: usize, window_secs: u64) -> Self {
+        self.sync_rate_limiter = SlidingRateLimiter::new(max_requests, window_secs);
+        self
+    }
+
+    /// The state [`throttle_sync`] runs on, for the binary to layer over the composed service.
+    ///
+    /// Handed out rather than layered inside [`router`] because the `/sync` routes are merged into a
+    /// service the binary assembles: layering here would throttle only the routes this router owns
+    /// and silently miss the relay's, which live in their own sub-router.
+    #[must_use]
+    pub fn sync_throttle(&self) -> SyncThrottle<C>
+    where
+        C: Clone,
+    {
+        SyncThrottle {
+            limiter: self.sync_rate_limiter.clone(),
+            trusted_proxy_hops: self.trusted_proxy_hops,
+            clock: self.clock.clone(),
+        }
+    }
+
+    /// The `/v1/orders` limiter, for [`crate::orders::orders_router`] — the intake carries its own
+    /// state, so it takes a clone rather than reaching into [`CloudApp`].
+    #[must_use]
+    pub fn orders_rate_limiter(&self) -> SlidingRateLimiter {
+        self.orders_rate_limiter.clone()
     }
 
     /// Sets how long a console-admin invitation stays acceptable, in seconds — the binary threads the
@@ -927,7 +1019,8 @@ where
 /// The response header carrying an artifact's detached signature, as lowercase hex
 /// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)).
 ///
-/// It must stay byte-identical to `cloud-sync-http`'s `SIGNATURE_HEADER`: the edge refuses an
+/// It must name the same header as `cloud-sync-http`'s `SIGNATURE_HEADER` — the spellings differ in
+/// case only, which HTTP treats as the same name. The edge refuses an
 /// artifact whose signature header is missing, so a rename on one side alone stops every update in
 /// the fleet — loudly, but only once a rollout reaches a real box.
 const ARTIFACT_SIGNATURE_HEADER: &str = "x-pos-artifact-signature";
@@ -15352,7 +15445,9 @@ fn client_ip(headers: &HeaderMap, trusted_hops: usize) -> Option<&str> {
 /// Its own header rather than `Authorization`, because that space is `pos_<ULID>_<secret>` and
 /// resolves to a `Grant` carrying the tenant every `/sync` handler reads. A tenantless shared secret
 /// has no `Grant` to be, so reusing the header would put a second parse branch inside the one
-/// function that answers *who is calling*. `X-Pos-Webhook-Signature` set the naming convention.
+/// function that answers *who is calling*. The `X-Pos-` spelling is the edge↔cloud family's, kept
+/// because both sides must agree on it; the **published** header table drops the `X-` prefix
+/// (roadmap **Q5**, RFC 6648), and a header an integrator writes against belongs to that table.
 pub(crate) const INTERNAL_KEY_HEADER: &str = "X-Pos-Internal-Key";
 
 /// Refuses a request to an `/internal` route that does not carry the shared secret.
@@ -15398,14 +15493,82 @@ fn header_str<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
 /// nothing about whether the credential was right, and the throttle runs before the credential check,
 /// so it cannot become an oracle.
 fn too_many_login_attempts(retry_after_secs: u64) -> Response {
-    let mut response = api_error(
-        ErrorStatus::ResourceExhausted,
+    too_many_requests(
         "too many sign-in attempts; try again later",
-    );
+        retry_after_secs,
+    )
+}
+
+/// A `429` on the AIP-193 envelope with a `Retry-After` the caller can honour.
+///
+/// One helper for every throttled surface, so a client that learns to back off on one learns it for
+/// all of them: same `RESOURCE_EXHAUSTED` status, same header, only the message differs. The
+/// `Retry-After` is whole seconds and never below one, so a sub-second wait still tells a caller to
+/// hold rather than retry immediately.
+pub(crate) fn too_many_requests(message: &str, retry_after_secs: u64) -> Response {
+    let mut response = api_error(ErrorStatus::ResourceExhausted, message);
     if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
         response.headers_mut().insert(RETRY_AFTER, value);
     }
     response
+}
+
+/// The prefix [`throttle_sync`] guards. Every store-facing route sits under it (ADR-0097 moved the
+/// two that did not), so one prefix check covers config-pull, the heartbeat, the update report, the
+/// artifact fetch, the device proposals and the order relay.
+const SYNC_PREFIX: &str = "/sync/";
+
+/// Throttles the store-facing `/sync/*` surface before authentication (roadmap **Q5**).
+///
+/// A layer rather than a check in each handler: there are six `/sync` routes and "the store-facing
+/// surface has a budget" is one behaviour, not six. It runs before the credential is verified,
+/// which is the point — a wedged or hostile box should cost a header comparison, not a key lookup
+/// and a database round trip, per iteration.
+///
+/// Keyed on the client connection, **not** the store. The store id is in the caller-supplied path,
+/// so keying on it would let anyone spell a shop's id and exhaust that shop's budget; the
+/// connection is the only identity that exists this early. Behind the P8 reverse proxy the real
+/// client arrives in `X-Forwarded-For`, which is why the key goes through [`client_ip`] and its
+/// `trusted_proxy_hops` ([ADR-0090](../../../docs/adr/0090-tls-postures.md)) rather than the socket
+/// peer — otherwise every store would share the proxy's one budget.
+///
+/// Requests to any other prefix pass straight through, so the layer can be applied to the whole
+/// composed service without touching `/admin`, `/v1` or the console SPA.
+pub async fn throttle_sync<C>(
+    State(throttle): State<SyncThrottle<C>>,
+    request: Request,
+    next: Next,
+) -> Response
+where
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if !request.uri().path().starts_with(SYNC_PREFIX) {
+        return next.run(request).await;
+    }
+    let ip = client_ip(request.headers(), throttle.trusted_proxy_hops);
+    let keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
+    if let Err(retry_after_secs) = throttle
+        .limiter
+        .check_and_record(&keys, throttle.clock.now())
+    {
+        return too_many_requests(
+            "too many requests to the store sync surface; try again later",
+            retry_after_secs,
+        );
+    }
+    next.run(request).await
+}
+
+/// What [`throttle_sync`] needs: the limiter, how many proxies to trust when reading the client
+/// address, and the clock.
+///
+/// The clock is the port, read once per request, not a captured instant — a captured one would
+/// freeze the window at start-up and the limit would never drain.
+#[derive(Clone, Debug)]
+pub struct SyncThrottle<C> {
+    limiter: SlidingRateLimiter,
+    trusted_proxy_hops: usize,
+    clock: C,
 }
 
 /// Adds the admin-console security headers to every response

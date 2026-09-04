@@ -62,6 +62,35 @@ const fn default_retention_sweep_interval_secs() -> u64 {
 /// before `/admin/login` refuses with a `429`, when the config does not say — ten, generous for a
 /// fat-fingered password/TOTP yet far below what an online brute-force needs
 /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
+/// How many `/v1/orders` calls one tenant may make within the window, when the config does not say
+/// — 300, which at the one-minute default window is five orders a second for a whole integrator.
+/// A busy store takes single-digit orders a minute, so this is generous by design; it exists to
+/// bound a runaway retry loop, not to shape normal traffic (roadmap **Q5**).
+const fn default_orders_max_requests() -> usize {
+    300
+}
+
+/// The sliding rate-limit window for `/v1/orders`, in seconds, when the config does not say — one
+/// minute, so the limit reads as a per-second rate (roadmap **Q5**).
+const fn default_orders_window_secs() -> u64 {
+    60
+}
+
+/// How many `/sync/*` requests one client connection may make within the window, when the config
+/// does not say — 600, ten a second. A healthy store polls the relay every five seconds and pulls
+/// config far less often, so this is around fifty times its normal rate; what it stops is a box
+/// wedged in a tight retry loop costing the cloud a database round trip per iteration
+/// (roadmap **Q5**).
+const fn default_sync_max_requests() -> usize {
+    600
+}
+
+/// The sliding rate-limit window for `/sync/*`, in seconds, when the config does not say — one
+/// minute (roadmap **Q5**).
+const fn default_sync_window_secs() -> u64 {
+    60
+}
+
 const fn default_admin_login_max_attempts() -> usize {
     10
 }
@@ -176,6 +205,24 @@ pub struct CloudConfig {
     /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5).
     #[serde(default = "default_admin_login_window_secs")]
     pub admin_login_window_secs: u64,
+    /// How many `POST`/`GET /v1/orders` calls one **tenant** may make within
+    /// [`Self::orders_window_secs`] before the intake refuses with a `429` (roadmap **Q5**).
+    /// Per tenant, not per connection: the intake is shared between integrators, so what is worth
+    /// preventing is one marketplace's runaway loop consuming the capacity the others need.
+    #[serde(default = "default_orders_max_requests")]
+    pub orders_max_requests: usize,
+    /// The sliding rate-limit window for `/v1/orders`, in seconds (roadmap **Q5**).
+    #[serde(default = "default_orders_window_secs")]
+    pub orders_window_secs: u64,
+    /// How many store-facing `/sync/*` requests one **client connection** may make within
+    /// [`Self::sync_window_secs`] before a `429` (roadmap **Q5**). Per connection, and checked
+    /// before authentication: the store id lives in the caller-supplied path, so keying on it would
+    /// let anyone exhaust a named shop's budget.
+    #[serde(default = "default_sync_max_requests")]
+    pub sync_max_requests: usize,
+    /// The sliding rate-limit window for `/sync/*`, in seconds (roadmap **Q5**).
+    #[serde(default = "default_sync_window_secs")]
+    pub sync_window_secs: u64,
     /// How long a console-admin invitation stays acceptable, in seconds
     /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
     #[serde(default = "default_admin_invite_ttl_secs")]

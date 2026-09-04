@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import type { BillResponse, CheckResponse, PaymentRequest } from "../api/types";
 import { t } from "../i18n";
-import { formatMoney, money } from "../lib/money";
+import { formatMoney, money, quickCashFor } from "../lib/money";
 import { loadCheck, openBill, openBillFor, settle } from "../state/store";
 
 // The pay screen: the amount owed large, a cash pad with the VND quick-cash denominations and its
@@ -50,8 +50,13 @@ export function Pay() {
     return chosen !== null && chosen >= total() ? chosen - total() : 0;
   };
 
-  // The archive's VND quick-cash: 50k / 100k / 200k, plus the exact amount.
-  const quickCash = () => [total(), 50_000, 100_000, 200_000].filter((amount) => amount >= total());
+  // The exact amount, plus this bill's own currency's banknotes that would cover it (roadmap E5).
+  // These were VND's three notes regardless of where the store was, so a store on any other
+  // currency was offered keys for amounts its guests cannot hand over. Keyed on `currency()` — the
+  // bill's, not the store's — for the same reason every other figure here is: it is the edge's
+  // answer for *this* bill. Before the check loads that is `""`, which has no note table and so
+  // offers the exact amount alone; the total is zero then anyway.
+  const quickCash = () => [total(), ...quickCashFor(currency(), total())];
 
   const pay = async (payments: PaymentRequest[]) => {
     const id = billId();

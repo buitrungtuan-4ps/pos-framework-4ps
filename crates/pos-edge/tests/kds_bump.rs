@@ -38,6 +38,7 @@ fn a_pizza(item: u128) -> LineDraft {
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         seat: None,
         course_id: None,
+        modifier_menu_item_ids: Vec::new(),
         note_present: false,
     }
 }
@@ -60,7 +61,7 @@ fn a_bump_is_durable_fanned_out_and_read_back_by_a_late_kds() {
         let station = StationId::new(Ulid::from_u128(9));
 
         // Seat, add two lines, fire them to the kitchen.
-        edge.seat_table(device(), table).await.expect("seats");
+        edge.seat_table(device(), table, None).await.expect("seats");
         let line_a = edge
             .add_line(device(), table, a_pizza(500))
             .await

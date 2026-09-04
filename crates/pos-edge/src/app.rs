@@ -29,7 +29,7 @@ use pos_core::decision::{
     decide_line, decide_shift, decide_table,
 };
 use pos_core::error::DomainError;
-use pos_core::inventory::{RecipeBook, StockProjection};
+use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
 use pos_core::menu::PricedLine;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
@@ -47,6 +47,9 @@ use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
     ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+// Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
+#[cfg(test)]
+use pos_proto::ids::IngredientId;
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::MenuCatalog;
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
@@ -290,6 +293,30 @@ impl EdgeSession {
         TaxClassId::new(Ulid::from_u128(1))
     }
 
+    /// The bootstrap tax table: the standard class at 10% on **every** channel a store can sell
+    /// through.
+    ///
+    /// Every channel, not just dine-in, because roadmap **B1.2** made the rate a per-order lookup:
+    /// a bill is now assembled at the rate of the channel *its own order* came in on, and
+    /// [`billing::assemble`] refuses a class with no rate for that channel rather than papering
+    /// over it with zero tax. A table carrying dine-in alone would therefore have stopped a
+    /// LAN-only store from settling a takeaway order it had already accepted, priced and fired.
+    ///
+    /// Same 10% across the board, so a bootstrap store's arithmetic is unchanged by B1.2; the
+    /// point is that each cell now *exists* and the cloud can override any one of them
+    /// independently (M4's class × channel grid, [ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    fn bootstrap_tax_rates() -> TaxRateTable {
+        let standard = Self::standard_tax_class();
+        let rate = TaxRate::from_percent(10);
+        <SalesChannel as pos_proto::WireEnum>::ALL
+            .iter()
+            .copied()
+            .filter(|channel| *channel != <SalesChannel as pos_proto::WireEnum>::UNSPECIFIED)
+            .fold(TaxRateTable::new(), |table, channel| {
+                table.with(standard, channel, rate)
+            })
+    }
+
     /// Bootstrap defaults until the cloud config tree ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
     /// P7) supplies the real values: a full-service store, every permission granted, VND, UTC with a
     /// 04:00 cut-off, offline. Enough for the edge to sell on fakes and for the dine-in flow to run.
@@ -307,11 +334,7 @@ impl EdgeSession {
             cutoff: CutoffHour::new(4).expect("4 is a valid cut-off hour"),
             connectivity: Connectivity::Offline,
             recipes: RecipeBook::default(),
-            tax_rates: TaxRateTable::new().with(
-                Self::standard_tax_class(),
-                SalesChannel::DineIn,
-                TaxRate::from_percent(10),
-            ),
+            tax_rates: Self::bootstrap_tax_rates(),
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
@@ -517,6 +540,9 @@ pub struct LineDraft {
     pub seat: Option<u16>,
     /// Course, when courses are enabled.
     pub course_id: Option<CourseId>,
+    /// The modifiers chosen for this line. Their prices are already inside `unit_price`; these ids
+    /// are what the kitchen prints and what a fire consumes (§8).
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
     /// Whether a guest note was written — its text never enters the log.
     pub note_present: bool,
 }
@@ -623,7 +649,10 @@ pub struct ShiftView {
 
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
 /// computed, and a bill assembled, without re-reading the event log.
-#[derive(Debug, Clone, Copy)]
+/// `Clone`, not `Copy`: the modifier list is a `Vec`. Cloning a record is a handful of words plus a
+/// list that is empty on almost every line, and the alternative — keeping the ids somewhere other
+/// than beside the line they belong to — is how they got lost in the first place.
+#[derive(Debug, Clone)]
 struct LineRecord {
     order_id: OrderId,
     state: OrderLineState,
@@ -635,6 +664,27 @@ struct LineRecord {
     line_total: Money,
     /// The tax class captured at add time, which keys the line into a rate on the bill.
     tax_class_id: TaxClassId,
+    /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
+    modifier_menu_item_ids: Vec<MenuItemId>,
+}
+
+impl From<SalesOrderLineAdded> for LineRecord {
+    /// The replay's view of an added line.
+    ///
+    /// `state` is [`OrderLineState::Added`] and not read off the event because the event *is* the
+    /// add; a later `sales.order_line.fired` moves it on, and the fold applies those in order.
+    fn from(event: SalesOrderLineAdded) -> Self {
+        Self {
+            order_id: event.order_id,
+            state: OrderLineState::Added,
+            menu_item_id: event.menu_item_id,
+            quantity: event.quantity,
+            course_id: event.course_id,
+            line_total: event.line_total,
+            tax_class_id: event.tax_class_id,
+            modifier_menu_item_ids: event.modifier_menu_item_ids,
+        }
+    }
 }
 
 /// What the projection remembers about one bill: the order it bills, the table that order sits on
@@ -684,6 +734,34 @@ struct Projection {
     tables: HashMap<TableId, TableState>,
     table_orders: HashMap<TableId, OrderId>,
     lines: HashMap<OrderLineId, LineRecord>,
+    /// The channel each order came in on (roadmap **B1.2**), so a bill is taxed at the rate its own
+    /// order came in on rather than at whatever [`EdgeSession::sales_channel`] happens to be
+    /// store-wide. A session-wide channel is a store-wide constant, so a store serving more than one
+    /// channel taxed **every** order at the session's rate: a takeaway order settled on a store
+    /// whose session said dine-in got dine-in tax, and the only symptom was a wrong figure on a
+    /// receipt. `sales.order.opened` has carried a `channel` since P5; nothing read it back, because
+    /// there was nowhere to read it into.
+    ///
+    /// The value is `Option` because the channel is not always knowable: an `UNSPECIFIED` or
+    /// unrecognised token from a newer sender records as `None`, and the caller falls back to the
+    /// session channel rather than guessing a variant and taxing a bill at a rate nobody chose.
+    ///
+    /// The guest count `sales.order.opened` also carries is deliberately **not** here. It is
+    /// reporting data (average check per cover) whose readers are the event log and the cloud
+    /// rollups; no edge decision consults it, and a cached copy no code reads is a field that rots.
+    orders: HashMap<OrderId, Option<SalesChannel>>,
+    /// What firing has consumed, folded from each fire's `stock_movements` (§8).
+    ///
+    /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
+    /// the one place §8's arithmetic ran had no reader at all. They land here now.
+    ///
+    /// It is a running consumption total, not yet an inventory: nothing seeds it with what the
+    /// store actually received, so on-hand reads negative until the flagged goods-in/stocktake
+    /// slice lands. That is deliberate and safe — [`EdgeSession::item_sellable`] is the auto-86
+    /// decision and it has no production caller, so nothing 86s a trading store's menu from these
+    /// figures. What the fold buys today is that the consumption is real and testable rather than
+    /// discarded, and that goods-in has something to seed.
+    stock: StockProjection,
     bills: HashMap<BillId, BillRecord>,
     /// The bill open on each order, so a second bill on one order is refused (ADR-0093). See
     /// [`Projection::bill_for_order`] for why this has to be explicit.
@@ -727,12 +805,51 @@ impl Projection {
             .map(|(table, _)| *table)
     }
 
+    /// Records the channel an order came in on, from a live open or from the fold on rebuild.
+    fn open_order_channel(&mut self, order_id: OrderId, channel: Option<SalesChannel>) {
+        self.orders.insert(order_id, channel);
+    }
+
+    /// The channel an order came in on.
+    ///
+    /// `None` for an order opened before B1.2, whose log carries no `sales.order.opened`, and for
+    /// one whose channel token this build does not understand — the caller falls back to the
+    /// session's channel in both cases, which is exactly the old behaviour and the only answer
+    /// available for a line already in the ground.
+    fn order_channel(&self, order_id: OrderId) -> Option<SalesChannel> {
+        self.orders.get(&order_id).copied().flatten()
+    }
+
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
         self.lines.insert(line_id, record);
     }
 
     fn line(&self, line_id: OrderLineId) -> Option<LineRecord> {
-        self.lines.get(&line_id).copied()
+        self.lines.get(&line_id).cloned()
+    }
+
+    /// Folds one fire's consumption into the stock projection.
+    ///
+    /// A movement whose running total would leave `i64` is dropped with a warning rather than
+    /// failing the fire: the sale is already committed and durable at this point, and refusing to
+    /// update a cache is not a reason to tell the kitchen a line did not fire.
+    fn consume(&mut self, movements: &[StockMovement]) {
+        for movement in movements {
+            if let Err(error) = self.stock.apply(movement) {
+                tracing::warn!(%error, "a stock movement overflowed the projection; not folded");
+            }
+        }
+    }
+
+    /// The on-hand figure for an ingredient — negative until goods-in seeds the projection.
+    ///
+    /// `#[cfg(test)]` because the *fold* has a production caller (every fire) and the *read* does
+    /// not yet: `EdgeSession::item_sellable` is the auto-86 decision and nothing calls it outside
+    /// tests. Shipping a reader with no reader would be dead code; the goods-in slice that needs it
+    /// removes this attribute rather than adding the method.
+    #[cfg(test)]
+    fn on_hand(&self, ingredient: IngredientId) -> Quantity {
+        self.stock.on_hand(ingredient)
     }
 
     fn set_line_state(&mut self, line_id: OrderLineId, state: OrderLineState) {
@@ -761,7 +878,7 @@ impl Projection {
             .lines
             .iter()
             .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, record)| (*id, *record))
+            .map(|(id, record)| (*id, record.clone()))
             .collect();
         lines.sort_by_key(|(id, _)| *id);
         lines.into_iter().map(|(_, record)| record).collect()
@@ -1082,6 +1199,9 @@ impl<S: EventStore> Edge<S> {
         let mut envelopes = Vec::with_capacity(lines.len() + 1);
         let mut messages = Vec::with_capacity(lines.len() + 1);
 
+        // Read the channel out before the event takes ownership: the projection needs it too, so
+        // the bill is taxed at this order's rate rather than the session's (B1.2).
+        let order_channel = channel.require().ok();
         let opened = SalesOrderOpened {
             order_id,
             channel,
@@ -1107,6 +1227,7 @@ impl<S: EventStore> Edge<S> {
                 tax_rate: priced.tax_rate,
                 seat: None,
                 course_id: None,
+                modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
                 note_present: *note_present,
             };
             let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
@@ -1122,6 +1243,7 @@ impl<S: EventStore> Edge<S> {
                     course_id: None,
                     line_total: priced.line_total,
                     tax_class_id: priced.tax_class_id,
+                    modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
                 },
             ));
         }
@@ -1164,6 +1286,10 @@ impl<S: EventStore> Edge<S> {
                 projection.set_table(table_id, TableState::Occupied);
                 projection.open_order(table_id, order_id);
             }
+            // The channel this order actually came in on, so the bill is taxed at its rate rather
+            // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
+            // no table and still has a channel.
+            projection.open_order_channel(order_id, order_channel);
             for (line_id, record) in line_records {
                 projection.add_line(line_id, record);
             }
@@ -1201,26 +1327,59 @@ impl<S: EventStore> Edge<S> {
             .table_state(table_id)
     }
 
-    /// Seats guests at a table, opening an order on it (`sales.table.opened`).
+    /// Seats guests at a table, opening an order on it (`sales.table.opened` **and**
+    /// `sales.order.opened`).
+    ///
+    /// # Two events, not one
+    ///
+    /// Until roadmap **B1.2** this emitted only `sales.table.opened`, so a dine-in order existed
+    /// with no record of the channel it came in on and no guest count — and the bill was taxed at
+    /// whatever `EdgeSession.sales_channel` happened to be store-wide. The channel is
+    /// [`SalesChannel::DineIn`] by construction here: seating a table *is* dine-in, whatever the
+    /// session says, which is why it is not a parameter.
+    ///
+    /// `guest_count` is optional because staff may not record it and a missing count must never
+    /// stop a table being seated. It is reporting data (average check per cover), not a gate.
     ///
     /// # Errors
     ///
     /// [`AppError`] if the transition is illegal, the store cannot be written, or the business date
     /// cannot be derived.
-    pub async fn seat_table(&self, actor: Actor, table_id: TableId) -> Result<TableView, AppError> {
+    pub async fn seat_table(
+        &self,
+        actor: Actor,
+        table_id: TableId,
+        guest_count: Option<u16>,
+    ) -> Result<TableView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let current = self.table_state(table_id);
         let decision = decide_table(current, TableCommand::Seat, &ctx)?;
 
         let order_id = self.next_order_id();
-        let payload = SalesTableOpened { table_id, order_id };
-        self.commit_and_publish(&ctx, &payload).await?;
+        let channel = SalesChannel::DineIn;
+        // Both events in one transaction: a table occupied with no order behind it, or an order
+        // with no channel, are each a state a screen would have to guess at.
+        let table_opened = SalesTableOpened { table_id, order_id };
+        let order_opened = SalesOrderOpened {
+            order_id,
+            channel: Open::from_known(channel),
+            table_id: Some(table_id),
+            guest_count,
+        };
+        let (table_envelope, table_message) = self.prepare(&ctx, &table_opened)?;
+        let (order_envelope, order_message) = self.prepare(&ctx, &order_opened)?;
+        self.append_and_publish(
+            vec![table_envelope, order_envelope],
+            vec![table_message, order_message],
+        )
+        .await?;
 
         // After the commit the change is durable, so it is safe to show and to remember.
         {
             let mut projection = self.lock_projection();
             projection.set_table(table_id, decision.next_state);
             projection.open_order(table_id, order_id);
+            projection.open_order_channel(order_id, Some(channel));
         }
         Ok(TableView {
             table_id,
@@ -1292,6 +1451,7 @@ impl<S: EventStore> Edge<S> {
             tax_rate: draft.tax_rate,
             seat: draft.seat,
             course_id: draft.course_id,
+            modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             note_present: draft.note_present,
         };
         self.commit_and_publish(&ctx, &payload).await?;
@@ -1306,6 +1466,7 @@ impl<S: EventStore> Edge<S> {
                 course_id: draft.course_id,
                 line_total: draft.line_total,
                 tax_class_id: draft.tax_class_id,
+                modifier_menu_item_ids: draft.modifier_menu_item_ids,
             },
         );
         Ok(LineView {
@@ -1352,9 +1513,14 @@ impl<S: EventStore> Edge<S> {
             .or(station_id)
             .ok_or(AppError::UnroutableLine)?;
 
+        // The modifiers the line was added with, not an empty list. This argument was
+        // `Vec::new()` until roadmap B1.1: `consumption_for_fire` deducts the base recipe plus one
+        // recipe per modifier, so an empty list meant every modifier's ingredients were sold and
+        // never taken off the shelf — the stock ledger drifted by exactly the modifiers, silently,
+        // on every fired line.
         let command = LineCommand::Fire {
             base_item: record.menu_item_id,
-            modifiers: Vec::new(),
+            modifiers: record.modifier_menu_item_ids.clone(),
             quantity: record.quantity,
             course: record.course_id,
         };
@@ -1368,8 +1534,13 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
-        self.lock_projection()
-            .set_line_state(order_line_id, decision.next_state);
+        {
+            let mut projection = self.lock_projection();
+            projection.set_line_state(order_line_id, decision.next_state);
+            // §8: stock leaves at fire, not at payment. Folded here rather than discarded — see
+            // `Projection::stock` for what this figure is and is not yet.
+            projection.consume(&decision.stock_movements);
+        }
         Ok(LineView {
             order_id: record.order_id,
             order_line_id,
@@ -1507,8 +1678,7 @@ impl<S: EventStore> Edge<S> {
     /// caller surfaces rather than papers over with zero tax.
     pub fn order_totals(&self, order_id: OrderId) -> Result<BillTotals, AppError> {
         let session = self.session();
-        let lines = self.lock_projection().lines_for_order(order_id);
-        let class_bases = Self::class_bases(&lines)?;
+        let (class_bases, channel) = self.taxable_bases(order_id, &session)?;
         if class_bases.is_empty() {
             // Nothing ordered — a seated table before its first line, or one whose every line was
             // voided. `assemble` refuses an empty bill (there is nothing to allocate across), and
@@ -1518,6 +1688,7 @@ impl<S: EventStore> Edge<S> {
         Ok(billing::assemble(&Self::bill_input(
             &session,
             &class_bases,
+            channel,
         ))?)
     }
 
@@ -1678,7 +1849,6 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         bill_id: BillId,
         payments: Vec<Payment>,
-        tips: Vec<Money>,
     ) -> Result<BillView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let bill = self
@@ -1686,11 +1856,11 @@ impl<S: EventStore> Edge<S> {
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
 
-        // Assemble the amount owed from the order's captured line totals, grouped per tax class.
-        let lines = self.lock_projection().lines_for_order(bill.order_id);
-        let class_bases = Self::class_bases(&lines)?;
+        // Assemble the amount owed from the order's captured line totals, grouped per tax class, at
+        // the rate for the channel *this order* came in on (B1.2).
         let session = self.session();
-        let totals = billing::assemble(&Self::bill_input(&session, &class_bases))?;
+        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
+        let totals = billing::assemble(&Self::bill_input(&session, &class_bases, channel))?;
 
         // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
         // order has no table, so there is no floor move to prove and no tables capability to
@@ -1723,7 +1893,6 @@ impl<S: EventStore> Edge<S> {
             BillCommand::Settle {
                 total_due: totals.total_due,
                 payments: payments.clone(),
-                tips,
             },
             &ctx,
         )?;
@@ -1741,16 +1910,17 @@ impl<S: EventStore> Edge<S> {
 
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse). The
-        // captured payments are what let the shift cash roll-up be rebuilt from the log; each records
-        // its own change, and tips are held apart from the sale (per-payment tip capture is P7).
+        // captured payments are what let the shift cash roll-up and the tip-out be rebuilt from the
+        // log; each records its own change and its own tip, held apart from the sale.
         let zero = Money::zero(self.session().currency);
         let mut envelopes = Vec::with_capacity(payments.len() + 1);
         let mut messages = Vec::with_capacity(payments.len() + 1);
         for payment in &payments {
-            let change = payment
-                .tendered
-                .checked_sub(payment.applied_to_bill)
-                .map_err(DomainError::from)?;
+            // `Payment::change` subtracts the tip; computing it here as `tendered − applied` was the
+            // arithmetic half of B1.3 and over-reported the change by exactly the tip. The clamp
+            // stays: a tender that does not cover its own share plus its tip owes no change, and
+            // `settle` has already refused the settlement if that is true in total.
+            let change = payment.change().map_err(AppError::Domain)?;
             let captured = BillingPaymentCaptured {
                 bill_id,
                 payment_id: PaymentId::new(self.next_ulid()),
@@ -1759,7 +1929,7 @@ impl<S: EventStore> Edge<S> {
                 tendered: payment.tendered,
                 applied_to_bill: payment.applied_to_bill,
                 change_given: if change.is_negative() { zero } else { change },
-                tip_amount: zero,
+                tip_amount: payment.tip,
             };
             let (envelope, message) = self.prepare(&ctx, &captured)?;
             envelopes.push(envelope);
@@ -1991,6 +2161,13 @@ impl<S: EventStore> Edge<S> {
                 projection.set_table(event.table_id, TableState::Occupied);
                 projection.open_order(event.table_id, event.order_id);
             }
+            EventType::SalesOrderOpened => {
+                let event: SalesOrderOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                // An unrecognised channel from a newer sender is recorded as "no answer" rather
+                // than failing the whole replay: a box that cannot rebuild does not trade, and a
+                // guessed variant would tax a bill at a rate nobody chose.
+                projection.open_order_channel(event.order_id, event.channel.require().ok());
+            }
             EventType::SalesTableClosed => {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_table(event.table_id, TableState::Free);
@@ -1998,18 +2175,7 @@ impl<S: EventStore> Edge<S> {
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
                     envelope.data.decode().map_err(AppError::Encode)?;
-                projection.add_line(
-                    event.order_line_id,
-                    LineRecord {
-                        order_id: event.order_id,
-                        state: OrderLineState::Added,
-                        menu_item_id: event.menu_item_id,
-                        quantity: event.quantity,
-                        course_id: event.course_id,
-                        line_total: event.line_total,
-                        tax_class_id: event.tax_class_id,
-                    },
-                );
+                projection.add_line(event.order_line_id, LineRecord::from(event));
             }
             EventType::SalesOrderLineFired => {
                 let event: SalesOrderLineFired =
@@ -2088,6 +2254,38 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// What an order owes before tax, grouped per tax class, and the channel to tax it **at**.
+    ///
+    /// One function returns both because every caller needs both, and — since roadmap **B1.2** —
+    /// both must be derived from the *same* order: the channel comes from the order's own
+    /// `sales.order.opened`, falling back to the session's only when the order has no answer (a
+    /// pre-B1.2 order, or a token this build does not understand). Two callers resolving that
+    /// separately is two chances to reach for `session.sales_channel` and reintroduce the defect,
+    /// which is exactly how it was written before.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if a line's amounts cannot be summed.
+    fn taxable_bases(
+        &self,
+        order_id: OrderId,
+        session: &EdgeSession,
+    ) -> Result<(Vec<ClassBase>, SalesChannel), AppError> {
+        // The guard is taken and dropped inside the block: `class_bases` does arithmetic that can
+        // fail, and holding the projection lock across a `?` is how a poisoned lock happens.
+        let (lines, channel) = {
+            let projection = self.lock_projection();
+            (
+                projection.lines_for_order(order_id),
+                projection.order_channel(order_id),
+            )
+        };
+        Ok((
+            Self::class_bases(&lines)?,
+            channel.unwrap_or(session.sales_channel),
+        ))
+    }
+
     /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
     /// takes. A voided line is owed nothing, so it contributes nothing.
     fn class_bases(lines: &[LineRecord]) -> Result<Vec<ClassBase>, AppError> {
@@ -2117,7 +2315,11 @@ impl<S: EventStore> Edge<S> {
     /// Builds the bill-assembly input from the session's tax configuration. The P5 bootstrap runs
     /// with no bill-level discount, no service charge and no cash rounding; the cloud config tree
     /// (P7) supplies those, and the shape here is ready for them.
-    fn bill_input<'a>(session: &'a EdgeSession, class_bases: &'a [ClassBase]) -> BillInput<'a> {
+    fn bill_input<'a>(
+        session: &'a EdgeSession,
+        class_bases: &'a [ClassBase],
+        sales_channel: SalesChannel,
+    ) -> BillInput<'a> {
         let currency = session.currency;
         BillInput {
             currency_code: currency,
@@ -2128,7 +2330,9 @@ impl<S: EventStore> Edge<S> {
             service_charge_taxable: true,
             service_charge_tax_class: None,
             rates: &session.tax_rates,
-            sales_channel: session.sales_channel,
+            // The order's channel, passed in — not `session.sales_channel`, which is a store-wide
+            // constant and therefore the wrong rate for every order that did not come in on it.
+            sales_channel,
             cash_rounding_increment: None,
             rounding_mode: Rounding::HalfUp,
         }
@@ -2290,23 +2494,32 @@ impl<S: EventStore> Edge<S> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::num::NonZeroU32;
     use std::sync::Arc;
 
     use super::{Edge, EdgeSession, LineDraft, StoreIdentity};
     use crate::queue::{InMemoryQueueNumbers, QueueNumberAuthority};
     use crate::receipt::InMemoryReceipts;
     use pos_core::billing::Payment;
+    use pos_core::capability::{Capability, CapabilityContext};
     use pos_core::decision::Actor;
+    use pos_core::inventory::{Recipe, RecipeBook, RecipeLine};
     use pos_fakes::FakeStore;
+    use pos_ports::event_store::{EventQuery, EventStore};
+    use pos_proto::events::BillingPaymentCaptured;
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
-    use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, OrderId, StationId, StoreId, TableId};
+    use pos_proto::ids::{
+        DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
+    };
+    use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use pos_proto::{
-        BillState, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState, TableState,
+        BillState, EventType, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
+        TableState,
     };
 
     fn identity() -> StoreIdentity {
@@ -2368,6 +2581,7 @@ mod tests {
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
             seat: None,
             course_id: None,
+            modifier_menu_item_ids: Vec::new(),
             note_present: false,
         }
     }
@@ -2379,7 +2593,7 @@ mod tests {
             let table = TableId::new(Ulid::from_u128(100));
 
             assert_eq!(edge.table_state(table), TableState::Free);
-            let view = edge.seat_table(actor(), table).await.expect("seats");
+            let view = edge.seat_table(actor(), table, None).await.expect("seats");
             assert_eq!(view.state, TableState::Occupied);
             assert_eq!(edge.table_state(table), TableState::Occupied);
         });
@@ -2393,7 +2607,7 @@ mod tests {
             let mut device_a = edge.fanout().subscribe();
             let mut device_b = edge.fanout().subscribe();
 
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
 
             for device in [&mut device_a, &mut device_b] {
                 let frame = device.try_recv().expect("a frame reached the device");
@@ -2429,7 +2643,7 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(200));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
 
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             assert_eq!(line.state, OrderLineState::Added);
@@ -2462,12 +2676,119 @@ mod tests {
         });
     }
 
+    /// The regression B1.1 exists for: a fired line consumes the base recipe **and** every
+    /// modifier's.
+    ///
+    /// Before the fix `fire_line` passed `modifiers: Vec::new()` to `decide_line`, so a large pizza
+    /// deducted the base dough and never the "large" modifier's extra. Nothing failed, nothing
+    /// logged, and the shelf quietly disagreed with the books by exactly the modifiers — on every
+    /// fired line, forever. Reverting either half of the fix (the `Vec::new()`, or the modifier
+    /// field on the record) turns the 150 g below back into 100 g.
+    #[test]
+    fn a_fired_line_consumes_its_modifier_recipe_as_well_as_the_base() {
+        pos_fakes::executor::run_ready(async {
+            let base = MenuItemId::new(Ulid::from_u128(500));
+            let large = MenuItemId::new(Ulid::from_u128(501));
+            let dough = IngredientId::new(Ulid::from_u128(900));
+
+            // The base takes 100 g of dough; the "large" modifier adds 50 g of the same.
+            let mut recipes = RecipeBook::new();
+            recipes.insert(
+                base,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(100_000),
+                }]),
+            );
+            recipes.insert(
+                large,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(50_000),
+                }]),
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.recipes = recipes;
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+
+            let table = TableId::new(Ulid::from_u128(220));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let mut draft = a_line();
+            draft.modifier_menu_item_ids = vec![large];
+            let line = edge.add_line(actor(), table, draft).await.expect("adds");
+            edge.fire_line(
+                actor(),
+                line.order_line_id,
+                Some(StationId::new(Ulid::from_u128(9))),
+            )
+            .await
+            .expect("fires");
+
+            // Negative because nothing has seeded what the store received yet: this is a
+            // consumption total, and goods-in is the flagged follow-up that turns it into stock.
+            assert_eq!(
+                edge.lock_projection().on_hand(dough),
+                Quantity::from_milli(-150_000),
+                "base 100 g + modifier 50 g must both leave the shelf at fire (§8)"
+            );
+        });
+    }
+
+    /// And the other direction, so the test above cannot pass by summing something unrelated: a
+    /// line with no modifiers consumes only its base.
+    #[test]
+    fn a_fired_line_with_no_modifiers_consumes_only_its_base() {
+        pos_fakes::executor::run_ready(async {
+            let base = MenuItemId::new(Ulid::from_u128(500));
+            let dough = IngredientId::new(Ulid::from_u128(900));
+            let mut recipes = RecipeBook::new();
+            recipes.insert(
+                base,
+                Recipe::new(vec![RecipeLine {
+                    ingredient: dough,
+                    per_unit: Quantity::from_milli(100_000),
+                }]),
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.recipes = recipes;
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+
+            let table = TableId::new(Ulid::from_u128(221));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.fire_line(
+                actor(),
+                line.order_line_id,
+                Some(StationId::new(Ulid::from_u128(9))),
+            )
+            .await
+            .expect("fires");
+
+            assert_eq!(
+                edge.lock_projection().on_hand(dough),
+                Quantity::from_milli(-100_000),
+            );
+        });
+    }
+
     #[test]
     fn firing_an_already_fired_line_is_refused() {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(202));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             let station = StationId::new(Ulid::from_u128(9));
             edge.fire_line(actor(), line.order_line_id, Some(station))
@@ -2503,7 +2824,7 @@ mod tests {
             edge.apply_session(EdgeSession::bootstrap().with_stations(plan));
 
             let table = TableId::new(Ulid::from_u128(210));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
             let mut device = edge.fanout().subscribe();
 
@@ -2532,7 +2853,7 @@ mod tests {
             // has nowhere to route and is refused rather than published with a blank station.
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(211));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
 
             let refused = edge.fire_line(actor(), line.order_line_id, None).await;
@@ -2551,6 +2872,7 @@ mod tests {
             line_total: vnd(150_000),
             tax_class_id: EdgeSession::standard_tax_class(),
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+            modifier_menu_item_ids: Vec::new(),
             repriced: false,
         }
     }
@@ -2576,6 +2898,7 @@ mod tests {
             method: PaymentMethod::Cash,
             tendered: vnd(minor),
             applied_to_bill: vnd(minor),
+            tip: vnd(0),
         }
     }
 
@@ -2584,7 +2907,7 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(300));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
 
             // Opening the bill requests it: the table moves to awaiting payment.
@@ -2595,7 +2918,7 @@ mod tests {
 
             // One 150k line at the 10% standard rate is 165k owed.
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -2621,7 +2944,7 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(301));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
 
@@ -2630,9 +2953,10 @@ mod tests {
                 method: PaymentMethod::Card,
                 tendered: vnd(100_000),
                 applied_to_bill: vnd(100_000),
+                tip: vnd(0),
             };
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card])
                 .await
                 .expect("settles across two tenders");
             assert_eq!(settled.state, BillState::Settled);
@@ -2645,16 +2969,16 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(302));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("first settle");
 
             // A settled bill is terminal: a second settle is refused (a refund is a new movement).
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
         });
@@ -2665,18 +2989,18 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let table = TableId::new(Ulid::from_u128(303));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
 
             // 150k applied against 165k owed does not sum to the total — the invariant refuses it.
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)])
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
             // Nothing settled, so no receipt was consumed and the bill is still open.
             let again = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("the still-open bill settles");
             assert_eq!(
@@ -2726,7 +3050,7 @@ mod tests {
             );
 
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], vec![])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
                 .await
                 .expect("and the counter sale settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -2737,6 +3061,211 @@ mod tests {
             );
             assert_eq!(settled.total_due, Some(vnd(165_000)));
             assert_eq!(settled.table_state, None, "and cycles no table");
+        });
+    }
+
+    /// The defect roadmap **B1.3** closes, proved against the durable log rather than a return
+    /// value — the log is what the shift roll-up and the tip-out are rebuilt from, and it was the
+    /// half that was wrong.
+    ///
+    /// Two figures were broken on every tipped sale ever captured. `tip_amount` was written as a
+    /// literal zero, because tips arrived as a `Vec<Money>` beside the payments and no payment knew
+    /// which tip was its own — so a store could take tips all night and its own log said nobody
+    /// tipped. And `change_given` was `tendered − applied_to_bill`, which ignores the tip: on this
+    /// sale it read 35,000 against a true 15,000, telling the till to hand back money the guest had
+    /// just left behind.
+    #[test]
+    fn a_captured_payment_records_its_own_tip_and_the_change_left_after_it() {
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            let edge = Edge::new(
+                store.clone(),
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let order_id = a_counter_order(&edge).await;
+            let opened = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("opens");
+
+            // 165,000 owed. The guest hands over 200,000 and leaves 20,000.
+            let tipped = Payment {
+                method: PaymentMethod::Cash,
+                tendered: vnd(200_000),
+                applied_to_bill: vnd(165_000),
+                tip: vnd(20_000),
+            };
+            edge.settle_bill(actor(), opened.bill_id, vec![tipped])
+                .await
+                .expect("a tipped cash sale settles");
+
+            let captured = only_captured_payment(&store).await;
+            assert_eq!(
+                captured.tip_amount,
+                vnd(20_000),
+                "the tip the guest left, not a hardcoded zero"
+            );
+            assert_eq!(
+                captured.change_given,
+                vnd(15_000),
+                "200,000 − 165,000 applied − 20,000 tip; not 35,000"
+            );
+            assert_eq!(captured.applied_to_bill, vnd(165_000));
+            assert_eq!(captured.tendered, vnd(200_000));
+        });
+    }
+
+    /// A store that has not turned tips on refuses to take one (§10, `tips_enabled`).
+    ///
+    /// The untipped settle in the same test is the half that matters as much: the gate refuses
+    /// *taking the money*, never the sale, so a store with tips off trades exactly as it did.
+    #[test]
+    fn a_store_with_tips_disabled_refuses_a_tip_but_still_settles() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let order_id = a_counter_order(&edge).await;
+            let opened = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("opens");
+
+            let refused = edge
+                .settle_bill(
+                    actor(),
+                    opened.bill_id,
+                    vec![Payment {
+                        method: PaymentMethod::Cash,
+                        tendered: vnd(185_000),
+                        applied_to_bill: vnd(165_000),
+                        tip: vnd(20_000),
+                    }],
+                )
+                .await;
+            assert!(
+                matches!(refused, Err(super::AppError::Domain(_))),
+                "a store that does not take tips refuses one, rather than pocketing it silently"
+            );
+
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .await
+                .expect("and the same bill settles untipped, exactly as before");
+        });
+    }
+
+    /// The single `billing.payment.captured` in a store's log.
+    ///
+    /// Read back through the [`EventStore`] port rather than from a return value: the captured
+    /// payment is not in `BillView`, and the log is what the cloud's roll-ups and the store's own
+    /// replay actually consume.
+    async fn only_captured_payment(store: &FakeStore) -> BillingPaymentCaptured {
+        let envelopes = store
+            .read(&EventQuery::first(
+                identity().store_id,
+                NonZeroU32::new(1_000).expect("1000 is not zero"),
+            ))
+            .await
+            .expect("the log reads");
+        let mut captured: Vec<BillingPaymentCaptured> = envelopes
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.known() == Some(EventType::BillingPaymentCaptured)
+            })
+            .map(|envelope| envelope.data.decode().expect("a captured payment decodes"))
+            .collect();
+        assert_eq!(captured.len(), 1, "one tender, one captured payment");
+        captured.remove(0)
+    }
+
+    /// A store that taxes takeaway at 5% and dine-in at 10%, over a caller-supplied log.
+    ///
+    /// [`EdgeSession::bootstrap`] leaves `sales_channel` at [`SalesChannel::DineIn`] and this
+    /// builder does not touch it, which is the whole point: the only way a takeaway order can come
+    /// out at 5% is if the rate is looked up from *that order's* channel rather than the session's.
+    fn edge_taxing_takeaway_at_five(store: FakeStore) -> Edge<FakeStore> {
+        let standard = EdgeSession::standard_tax_class();
+        let rates = TaxRateTable::new()
+            .with(standard, SalesChannel::DineIn, TaxRate::from_percent(10))
+            .with(standard, SalesChannel::Takeaway, TaxRate::from_percent(5));
+        Edge::new(
+            store,
+            identity(),
+            EdgeSession::bootstrap().with_tax_rates(rates),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds")
+    }
+
+    /// The defect roadmap **B1.2** closes: two orders on one store, taxed at two rates.
+    ///
+    /// Before the fix both bills read `session.sales_channel` — a store-wide constant — so the
+    /// takeaway order was charged dine-in tax. Nothing failed and nothing logged; the only symptom
+    /// was 7,500 dong of tax the store did not owe, on every counter sale, for as long as it
+    /// traded. Reinstating the bug (passing `session.sales_channel` in `order_totals`) makes the
+    /// first assertion below read 165,000.
+    #[test]
+    fn each_order_is_taxed_at_the_rate_of_the_channel_it_came_in_on() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge_taxing_takeaway_at_five(FakeStore::default());
+
+            // A relayed counter order: channel Takeaway, no table, on a session that says dine-in.
+            let takeaway = a_counter_order(&edge).await;
+            assert_eq!(
+                edge.order_totals(takeaway).expect("assembles").total_due,
+                vnd(157_500),
+                "150,000 plus takeaway's 5% — not the session's dine-in 10%"
+            );
+
+            // The same store, the same menu item, seated at a table: dine-in's rate.
+            let table = TableId::new(Ulid::from_u128(361));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let dine_in = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            assert_eq!(
+                edge.order_totals(dine_in.order_id)
+                    .expect("assembles")
+                    .total_due,
+                vnd(165_000),
+                "150,000 plus dine-in's 10%, from the same store and the same session"
+            );
+        });
+    }
+
+    /// The replay arm, which is the half a restart depends on.
+    ///
+    /// The channel lives in the projection, and the projection is a cache rebuilt from the log
+    /// ([ADR-0025](../../docs/adr/0025-event-sourced-edge.md)). If `sales.order.opened` were not
+    /// folded back, a box that restarted between a takeaway order being placed and its bill being
+    /// settled would fall back to the session channel and charge dine-in tax — the original defect,
+    /// surviving the fix and appearing only after a crash.
+    #[test]
+    fn a_restart_still_knows_which_channel_an_order_came_in_on() {
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            let takeaway = {
+                let edge = edge_taxing_takeaway_at_five(store.clone());
+                a_counter_order(&edge).await
+            };
+
+            // "Restart": a fresh edge over the same log, then the replay.
+            let edge = edge_taxing_takeaway_at_five(store.clone());
+            edge.rebuild().await.expect("rebuilds from the log");
+            assert_eq!(
+                edge.order_totals(takeaway).expect("assembles").total_due,
+                vnd(157_500),
+                "the channel came back off the log, so the rate did too"
+            );
         });
     }
 
@@ -2762,7 +3291,7 @@ mod tests {
             );
 
             let table = TableId::new(Ulid::from_u128(305));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             edge.open_bill(actor(), table).await.expect("opens a bill");
             let refused = edge.open_bill(actor(), table).await;
@@ -2789,7 +3318,7 @@ mod tests {
             // A floor order. It must NOT appear: the floor screen already shows it, and listing it
             // here would give staff two places to charge one meal.
             let table = TableId::new(Ulid::from_u128(306));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
 
             // A counter order that has been given a queue number, as intake does.
@@ -2809,7 +3338,7 @@ mod tests {
                 .open_bill_for_order(actor(), paid)
                 .await
                 .expect("opens");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles");
 
@@ -2952,7 +3481,6 @@ mod tests {
                     actor(),
                     pos_proto::ids::BillId::new(Ulid::from_u128(999)),
                     vec![cash(1)],
-                    vec![],
                 )
                 .await;
             assert!(matches!(refused, Err(super::AppError::UnknownBill)));
@@ -3000,16 +3528,16 @@ mod tests {
 
             // A cash sale of 165k lands in the drawer.
             let table = TableId::new(Ulid::from_u128(400));
-            edge.seat_table(actor(), table).await.expect("seats");
+            edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], vec![])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
                 .await
                 .expect("settles in cash");
 
             // A card sale does not: it never touches the drawer.
             let table2 = TableId::new(Ulid::from_u128(401));
-            edge.seat_table(actor(), table2).await.expect("seats");
+            edge.seat_table(actor(), table2, None).await.expect("seats");
             edge.add_line(actor(), table2, a_line())
                 .await
                 .expect("adds");
@@ -3018,8 +3546,9 @@ mod tests {
                 method: PaymentMethod::Card,
                 tendered: vnd(165_000),
                 applied_to_bill: vnd(165_000),
+                tip: vnd(0),
             };
-            edge.settle_bill(actor(), bill2.bill_id, vec![card], vec![])
+            edge.settle_bill(actor(), bill2.bill_id, vec![card])
                 .await
                 .expect("settles on card");
 

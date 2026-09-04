@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatMoney, money, parseWhole } from "../lib/money";
-import { closeShift, countShift, openShift, state } from "../state/store";
+import { closeShift, countShift, openShift, state, storeCurrency } from "../state/store";
 
 // The cash shift: open with a float, enter the blind count (the screen shows nothing about what is
 // expected), then close to reveal the variance. The blindness is the control — counting before the
@@ -26,7 +26,10 @@ export function Shift() {
     }
   };
 
-  const parsed = () => parseWhole(amount(), "VND");
+  // Parsed in the store's own currency, not a literal (roadmap E5): the minor-unit scale differs
+  // between currencies, so parsing a typed figure as VND on a two-decimal currency would be out by
+  // a factor of a hundred on the store's own cash count.
+  const parsed = () => parseWhole(amount(), storeCurrency());
 
   return (
     <section class="mx-auto max-w-md p-4">
@@ -116,11 +119,11 @@ export function Shift() {
             <p class="font-semibold">{t("shift.closed")}</p>
             <p class="mt-2 text-ink-muted">
               {t("shift.expected")}{" "}
-              <span class="tabular-nums">{formatMoney(shift()?.expected ?? money("VND", 0))}</span>
+              <span class="tabular-nums">{formatMoney(shift()?.expected ?? money(storeCurrency(), 0))}</span>
             </p>
             <p class="text-ink-muted">
               {t("shift.counted")}{" "}
-              <span class="tabular-nums">{formatMoney(shift()?.counted ?? money("VND", 0))}</span>
+              <span class="tabular-nums">{formatMoney(shift()?.counted ?? money(storeCurrency(), 0))}</span>
             </p>
             <p
               classList={{

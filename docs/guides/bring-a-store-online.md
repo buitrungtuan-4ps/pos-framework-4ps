@@ -45,8 +45,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
    together and you should keep both: with only `read_config` the box syncs its configuration and
    looks healthy while the order relay answers `403` on every poll, so orders placed in the cloud
    never reach the kitchen. The key is shown **once** — the next step embeds it in a file for you.
-3. **Handoff** — the wizard produces **two** files. Set the listen port here if this machine cannot
-   use the default `8787`, then download both:
+3. **Handoff** — the wizard produces the two files the box needs, and an installer that contains
+   both. Set the listen port here if this machine cannot use the default `8787`, then download what
+   the next step calls for:
    - **`config.toml`** — `store_id`, `cloud_url`, and `bind` if you changed the port.
    - **`env`** — the sync key, plus a commented `POS_EDGE_NATS_URL`. Fill that line in when the
      cloud's event bus is open: `tls://:<token>@<your cloud host>:4222`, with the token from
@@ -54,6 +55,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
      the *store event bus* section of the [deploy runbook](../deploy-runbook.md)). Without it the
      store still sells and still keeps every event durably in its outbox — but the cloud receives
      nothing, so rollups and reports read empty.
+   - **`install-pos-edge.sh`** — a Linux installer for *this* store, carrying both files above
+     inside it. Prefer it; Step 2 says why. It therefore **contains the store's key**: treat it as a
+     password and delete it once the box is up.
 
 > `config.toml` carries no secret, so it can sit beside the binary with ordinary permissions. `env`
 > carries the one secret and must be installed root-owned and mode 0600. Do not merge them, and do not
@@ -65,11 +69,34 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 ## Step 2 — Install the store server and drop the config
 
-Install `pos_edge` as an operating-system service so it starts on boot and restarts on crash — the
-step-by-step for systemd and Windows is in **[`deploy/edge/README.md`](../../deploy/edge/README.md)**.
-Put the downloaded `config.toml` where `POS_EDGE_CONFIG` points (the systemd unit uses
-`/var/lib/pos-edge/config.toml`; the Windows example uses `C:\pos\config.toml`), then install the `env`
-file with restricted permissions:
+`pos_edge` runs as an operating-system service so it starts on boot and restarts on crash. On Linux,
+let the wizard's installer do it; do it by hand on Windows, or on a host you manage some other way.
+
+### The installer (Linux, recommended)
+
+Copy the `pos_edge` binary, the unit file from
+[`deploy/edge/pos-edge.service`](../../deploy/edge/pos-edge.service), and the downloaded
+`install-pos-edge.sh` onto the machine, then:
+
+```
+sudo sh install-pos-edge.sh ./pos-edge ./pos-edge.service
+```
+
+It creates the `pos` service account, lays out the update slots, writes both files with the right
+owners and modes, installs and enables the unit, and prints the status. Read it first if you like —
+every line is plain `sh` and nothing in it reaches the network. Running it again is safe: it
+refreshes the config, the unit and the rescue copy, and deliberately **leaves an already-installed
+binary alone** so a box that has updated itself over the air is not quietly rolled back to whatever
+binary you happened to be holding.
+
+Then **delete the script** — it carries the store's key.
+
+### By hand (Windows, or a host you manage yourself)
+
+The step-by-step for both platforms is in
+**[`deploy/edge/README.md`](../../deploy/edge/README.md)**. Put the downloaded `config.toml` where
+`POS_EDGE_CONFIG` points (the systemd unit uses `/var/lib/pos-edge/config.toml`; the Windows example
+uses `C:\pos\config.toml`), then install the `env` file with restricted permissions:
 
 ```
 sudo install -o root -g root -m 0600 env /etc/pos-edge/env
@@ -78,8 +105,15 @@ sudo install -o root -g root -m 0600 env /etc/pos-edge/env
 The service unit reads it through `EnvironmentFile=-/etc/pos-edge/env` — the leading `-` means a
 missing file is not an error, so a LAN-only demo box needs no env file at all. Then start the service.
 
-The machine now knows which store it is, opens its SQLite event log, and serves the store UI on the LAN
-(`0.0.0.0:8787` by default).
+One thing the manual path gets wrong more often than any other: since
+[ADR-0055](../adr/0055-edge-ota-updater.md) Amendment 1 the unit starts
+`/var/lib/pos-edge/bin/current`, a symlink the edge retargets to install its own updates. A box with
+the binary only at `/usr/local/bin/pos-edge` trades perfectly well and silently never self-updates.
+`deploy/edge/README.md` has the layout; the installer above exists because typing it is easy to get
+wrong.
+
+Either way, the machine now knows which store it is, opens its SQLite event log, and serves the store
+UI on the LAN (`0.0.0.0:8787` by default).
 
 ## Step 3 — Start selling
 
