@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The OTA artifact route moves off `/internal` before it is built** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Amendment 1, roadmap `docs/roadmap-v3.md` **R2**). [ADR-0054](docs/adr/0054-edge-cloud-http-client.md)
+  pinned the edge's artifact fetch at `POST /internal/ota/artifact`, calling `/internal/` "the
+  store-facing surface". It is not, and has not been since the proxy was taught to deny that whole
+  prefix — `/internal/*` is the cloud's own trusted-network surface and answers **404 to every request
+  from outside the box**.
+
+  A store reaches its cloud through that proxy, so the pinned path is unreachable by the only client it
+  has. The route is `POST /sync/stores/{store_id}/artifact` instead, on the store-facing family where
+  the cloud resolves the tenant from the scoped key rather than trusting a body field.
+
+  **It requires the `read_config` scope**, so no store needs re-provisioning: every box already carries
+  it. The trade accepted is that `read_config` also authorises downloading a release artifact — broader
+  than its name, and bounded by the fact that the scope exists to stop the VPS being an open download
+  host, not to keep the binary secret. The artifact is signed and the edge verifies it against a
+  build-baked anchor regardless.
+
+  **No `PROTOCOL_VERSION` bump** — `/sync` is unversioned, the added `arch` field is additive, and the
+  route has no existing server to break.
+
+  **Upgrade note** For a fork that has implemented against ADR-0054's pinned path: it never worked from
+  a store, and this is why. No code shipped at the old path, so nothing to migrate.
+
 ### Fixed
 - **The shipped edge has no over-the-air update path, and its own source said otherwise.** Two
   docstrings in `crates/pos-edge/src/ota.rs` described the `UpdateInstaller` seam as the part "the
