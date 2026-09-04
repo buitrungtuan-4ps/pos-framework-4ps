@@ -18,6 +18,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Every order was taxed at the store's channel, not its own** (roadmap v3 **B1.2**,
+  [ADR-0074](docs/adr/0074-localization-and-tax.md)). Tax rates are configured per tax class **per
+  channel**, and both bill reads looked the rate up with `EdgeSession.sales_channel` — a store-wide
+  constant. A store that sells dine-in *and* takeaway therefore charged one rate for everything: a
+  counter order settled on a store whose session said dine-in got dine-in tax. Nothing failed and
+  nothing logged; the only symptom was a wrong figure on a receipt, on every order that did not
+  arrive through the session's channel, for as long as the store traded.
+
+  `sales.order.opened` has carried a `channel` since P5 and nothing ever read it back, because there
+  was nowhere to read it into. Three things changed:
+  - The edge projection keeps each order's channel, folded from `sales.order.opened` on replay as
+    well as recorded live, so the rate survives a restart between an order being placed and its bill
+    being settled.
+  - `Edge::seat_table` now emits `sales.order.opened` alongside `sales.table.opened`, in one
+    transaction. It previously emitted only the table event, so a dine-in order existed with no
+    record of the channel it came in on at all.
+  - `order_totals` and `settle_bill` share one `taxable_bases` read that returns the bases and the
+    channel together, so the two paths cannot resolve the channel differently — which is how the
+    defect was written in the first place.
+
+  An order whose channel is not knowable — one opened before this change, or carrying a token this
+  build does not understand — falls back to the session channel, exactly the old behaviour and the
+  only answer available for a sale already in the ground. A newer sender's unrecognised channel is
+  recorded as "no answer" rather than failing the replay: a box that cannot rebuild cannot trade.
+
+  `POST /api/tables/{id}/seat` also accepts an optional `guest_count`, which
+  `sales.order.opened` has always carried. No screen prompts for it yet — whether tap-to-seat should
+  grow a step is roadmap **Q7**'s call — but the route carries it so that decision needs no wire
+  change. The body stays optional in both spellings devices use: absent, or `application/json` with
+  nothing after it.
+
+  **Upgrade note:** the bootstrap tax table now carries the standard class at 10% for **every**
+  channel rather than dine-in alone. A store's arithmetic is unchanged (the same 10% across the
+  board), but each cell now exists, because assembling a bill refuses a class with no rate for the
+  order's channel rather than papering over it with zero tax — and without the added rows a LAN-only
+  store could not settle a takeaway order it had already accepted, priced and fired. A store with
+  cloud-published rates is unaffected; those still override. No migration and no `PROTOCOL_VERSION`
+  change.
+
 - **A fired line consumed only its base recipe, never its modifiers** (roadmap v3 **B1.1**,
   `docs/pos-spec.md` §8). `fire_line` passed `modifiers: Vec::new()` to `decide_line`, so a large
   pizza deducted the base dough and never the "large" modifier's extra 50 g. Nothing failed and

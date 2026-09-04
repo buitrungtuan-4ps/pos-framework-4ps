@@ -81,7 +81,10 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
         let station = StationId::new(Ulid::from_u128(9));
 
         // The server seats the table.
-        let seated = edge.seat_table(device_a(), table).await.expect("seats");
+        let seated = edge
+            .seat_table(device_a(), table, None)
+            .await
+            .expect("seats");
         assert_eq!(seated.state, TableState::Occupied);
 
         // Two devices order onto the one table concurrently: device A a pizza, device B another.
@@ -201,7 +204,9 @@ fn the_running_check_matches_what_the_bill_settles_against() {
         let empty = edge.check_totals(table).expect("an empty table reads");
         assert_eq!(empty.total_due, vnd(0));
 
-        edge.seat_table(device_a(), table).await.expect("seats");
+        edge.seat_table(device_a(), table, None)
+            .await
+            .expect("seats");
         edge.add_line(device_a(), table, a_pizza(600))
             .await
             .expect("adds a line");

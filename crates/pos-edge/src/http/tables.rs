@@ -10,9 +10,10 @@
 use std::sync::Arc;
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
@@ -40,11 +41,32 @@ impl From<TableView> for TableResponse {
     }
 }
 
+/// How many guests were seated, if whoever seated them said.
+///
+/// Reporting data (average check per cover), never a gate: a seat with no body at all is the
+/// request every device sent before B1.2 and still means "seat the table, count unknown".
+#[derive(Debug, Deserialize)]
+pub(crate) struct SeatRequest {
+    #[serde(default)]
+    guest_count: Option<u16>,
+}
+
 /// `POST /api/tables/{id}/seat` — seat guests and open an order.
+///
+/// The body is optional, and read as raw [`Bytes`] rather than through `Json` so that it is
+/// optional in the way devices actually behave: `Option<Json<_>>` treats a body as absent only when
+/// the `content-type` header is missing, and plenty of clients send `application/json` with nothing
+/// after it. Both spellings of "no count" are accepted; a body that is present but malformed is
+/// refused rather than silently ignored, because a device that meant to send a count and got the
+/// shape wrong should be told.
+///
+/// No screen prompts for the count yet — whether tap-to-seat should grow a step is roadmap **Q7**'s
+/// call, not this slice's; the route carries it so that decision does not also need a wire change.
 pub(crate) async fn seat<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
+    body: Bytes,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
@@ -52,7 +74,17 @@ where
     let Some(table_id) = parse_table(&id) else {
         return bad_request("a table id is a ULID");
     };
-    respond(edge.seat_table(actor, table_id).await)
+    let guest_count = if body.iter().all(u8::is_ascii_whitespace) {
+        None
+    } else {
+        match serde_json::from_slice::<SeatRequest>(&body) {
+            Ok(request) => request.guest_count,
+            Err(_ignored) => {
+                return bad_request("a seat body is {\"guest_count\": <number>}, or empty");
+            }
+        }
+    };
+    respond(edge.seat_table(actor, table_id, guest_count).await)
 }
 
 /// `POST /api/tables/{id}/clean` — clean the table down and release it.
