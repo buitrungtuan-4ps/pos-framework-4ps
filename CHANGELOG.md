@@ -16,6 +16,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **The shipped edge has no over-the-air update path, and its own source said otherwise.** Two
+  docstrings in `crates/pos-edge/src/ota.rs` described the `UpdateInstaller` seam as the part "the
+  shipped binary implements against the OS". No such implementation exists: the only one in the
+  workspace is a test double, `OtaUpdater` is constructed only in `crates/pos-edge/tests/ota.rs`, and
+  `crates/pos-edge/src/main.rs` does not mention OTA at all.
+
+  This matters to a fork deciding whether it can ship updates to its fleet. The answer is **not
+  yet**, and it is now written where a reader looks: the module says it is unreachable and names the
+  two things that gate wiring it — the cloud does not serve `/internal/ota/artifact` (roadmap
+  `docs/roadmap-v3.md` **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)), and that path is
+  in any case proxy-denied to anything off the box, so R2 has to move it to the store-facing `/sync`
+  surface first; and a real Linux installer is **R4**. Releases are still built and signed
+  (see [`docs/release-runbook.md`](docs/release-runbook.md)); what is missing is the fleet delivering
+  them to itself.
+
+  **No behaviour changed** — there was none to change, which is the point.
+
 ### Added
 - **Two documents for taking a fork into production** (roadmap `docs/roadmap-v3.md` A·P5, WS-F).
   [`docs/go-live.md`](docs/go-live.md) sequences the five runbooks that already existed — fork, cloud

@@ -8,9 +8,36 @@
 //! signature *verification* (the [`Signer`] port, [ADR-0047](../../../docs/adr/0047-minisign-verification.md)),
 //! and artifact *fetch* ([`CloudSync`], [ADR-0053](../../../docs/adr/0053-cloud-sync-port.md)). The real
 //! machine operations — the `.pre-update` database copy, writing the binary, the self-test, the reboot,
-//! the revert — sit behind the [`UpdateInstaller`] seam, which the shipped binary implements against
-//! the OS and which is the one part not exercised in the pull-request gate (it needs a real box; see
-//! `docs/roadmap.md` P9).
+//! the revert — sit behind the [`UpdateInstaller`] seam.
+//!
+//! # Nothing here runs in the shipped binary yet
+//!
+//! [`OtaUpdater`] is constructed in exactly one place — `crates/pos-edge/tests/ota.rs` — and
+//! `crates/pos-edge/src/main.rs` does not mention OTA at all. There is **no production
+//! [`UpdateInstaller`]**: the only implementor in the tree is that test's `RecordingInstaller`. So
+//! the module is complete, tested, and unreachable.
+//!
+//! Two things gate wiring it, and neither is here.
+//!
+//! **The artifact route does not exist, and the path it would be built at is the wrong one.**
+//! [`CloudSync::fetch_update`] posts to `/internal/ota/artifact`, pinned by
+//! [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md); `pos_cloud` does not serve it
+//! (roadmap v3 **R2**, [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)). Adding the
+//! handler there would not be enough: `deploy/Caddyfile.d/site.caddy` answers **404 to every
+//! `/internal/*` request from outside the box**, deliberately, because those handlers are the
+//! cloud's own trusted-network surface. A store dials its cloud over that proxy, so the pinned path
+//! is unreachable *by the caller it exists for* — and the deny's own comment says where store
+//! traffic belongs: `/sync/stores/{id}/…`, where the tenant comes from the scoped key rather than a
+//! body field. The pin predates the deny and nobody reconciled them; doing so is R2's first step.
+//!
+//! **There is no real installer.** One for Linux is roadmap **R4**, and it needs a box to validate
+//! against.
+//!
+//! This paragraph replaces one that said the seam is what "the shipped binary implements against the
+//! OS". That was never true, and it is the sentence a reader would have trusted to decide the wiring
+//! was somebody else's finished work. Roadmap v3 indicts this program for merging written, tested,
+//! unreachable code seven times; a docstring that describes the intended end state in the present
+//! tense is how the eighth would hide.
 //!
 //! # Verify before the disk is touched
 //!
@@ -87,8 +114,10 @@ pub enum UpdateOutcome {
 /// The real-machine steps of an install, behind a seam so the orchestration can be tested without a
 /// box ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md)).
 ///
-/// The shipped binary implements these against the OS; they are the one part not run in the
-/// pull-request gate.
+/// **No production implementor exists.** The only one in the tree is `RecordingInstaller` in
+/// `crates/pos-edge/tests/ota.rs`. Writing one for Linux — systemd swap, self-test, rollback — is
+/// roadmap v3 **R4**, and it ships with **R5** rather than before it, because an installer with no
+/// caller is the same unreachable-code gap again.
 pub trait UpdateInstaller: Send + Sync {
     /// Copies the live database to a `.pre-update` sidecar before staging (`docs/roadmap.md` P9).
     ///
