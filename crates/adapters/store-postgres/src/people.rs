@@ -58,7 +58,51 @@ const EMPLOYEE_COLUMNS: &str =
 ///
 /// One const rather than a literal per query, so the unpaged read and the page cannot drift onto
 /// different sequences — which would make "page 2" name rows from an order nothing else uses.
-const EMPLOYEE_ORDER: &str = "ORDER BY created_at DESC, id DESC";
+/// Which order a roster read imposes. `pos-cloud`'s `EmployeeSort` maps onto this in one place.
+///
+/// Its own enum rather than a string from the caller, for the reason `ItemOrder` gives: the
+/// `ORDER BY` fragments are the one place a SQL injection could live, so they are `&'static str`
+/// literals selected by an exhaustive match and nothing else. `clippy::wildcard_enum_match_arm` is
+/// denied workspace-wide, so a new variant breaks the mapping at compile time rather than silently
+/// falling back to the default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EmployeeOrder {
+    /// By `created_at` — newest first when not reversed, and the roster's long-standing order.
+    #[default]
+    Newest,
+    /// By `name`, alphabetically when not reversed.
+    Name,
+    /// By staff `code`, which is what a badge carries and what an operator often sorts by.
+    Code,
+}
+
+/// The `ORDER BY` for one order and direction — always total, and always a literal.
+///
+/// Every variant ends in `id`, the primary key, because none of the leading columns orders rows on
+/// its own: `created_at` is transaction time (decision 9), and two employees can share a `name`.
+/// `code` is in fact unique per tenant, so its tiebreaker never fires — it is written anyway, so
+/// that the totality rule holds by construction here rather than by a reader remembering which
+/// column happens to have a unique index behind it.
+///
+/// The tiebreaker flips with the direction, so a reversed page really is the reverse of the forward
+/// one rather than a different total order that shares a first column.
+const fn employee_order(order: EmployeeOrder, descending: bool) -> &'static str {
+    match (order, descending) {
+        (EmployeeOrder::Newest, false) => "ORDER BY created_at DESC, id DESC",
+        (EmployeeOrder::Newest, true) => "ORDER BY created_at ASC, id ASC",
+        (EmployeeOrder::Name, false) => "ORDER BY name ASC, id ASC",
+        (EmployeeOrder::Name, true) => "ORDER BY name DESC, id DESC",
+        (EmployeeOrder::Code, false) => "ORDER BY code ASC, id ASC",
+        (EmployeeOrder::Code, true) => "ORDER BY code DESC, id DESC",
+    }
+}
+
+/// The order the whole-roster read imposes, and the paged read's default.
+///
+/// Derived from [`employee_order`] rather than written twice: a page has to be a window onto the
+/// *same* sequence the unpaged read returns, and an `ORDER BY` that drifted on one of them would
+/// make "page 2" name rows from a sequence nothing else uses.
+const EMPLOYEE_ORDER: &str = employee_order(EmployeeOrder::Newest, false);
 
 /// The paged read's optional filter: a case-insensitive substring of the person's **name or staff
 /// code**, or everything when the parameter is `NULL`.
@@ -156,7 +200,13 @@ impl PostgresPeople {
     ///
     /// `search` narrows on [`EMPLOYEE_SEARCH`], and the total narrows with it: the count answers
     /// "how many matched", not "how big is the roster", because that is the number a pager over the
-    /// results has to size itself from.
+    /// results has to size itself from. The order does not affect the count — the same rows match
+    /// either way, so only *which* page they land on changes.
+    ///
+    /// `order`/`descending` pick one of [`employee_order`]'s literals. `employees_by_tenant_newest`
+    /// (0045) covers the default and `employees_by_tenant_name` (0046) the name order; the code
+    /// order rides `employees_code_key` (0023). Every one of them is walked rather than sorted, in
+    /// both directions, because a btree scans backwards as cheaply as forwards.
     ///
     /// # Errors
     ///
@@ -165,16 +215,19 @@ impl PostgresPeople {
         &self,
         tenant_id: &str,
         search: Option<&str>,
+        order: EmployeeOrder,
+        descending: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<EmployeeRow>, i64), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let order_by = employee_order(order, descending);
         let rows = connection
             .query(
                 &format!(
                     "SELECT {EMPLOYEE_COLUMNS}, count(*) OVER() FROM employees \
                      WHERE tenant_id = $1 AND {EMPLOYEE_SEARCH} \
-                     {EMPLOYEE_ORDER} LIMIT $3 OFFSET $4"
+                     {order_by} LIMIT $3 OFFSET $4"
                 ),
                 &[&tenant_id, &search, &limit, &offset],
             )

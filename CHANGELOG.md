@@ -108,6 +108,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `employees_by_tenant` is kept. No wire change, no `PROTOCOL_VERSION` bump, no permission change.
 
 ### Changed
+- **The employee roster page can be ordered by name or staff code.** `GET /admin/employees` takes
+  `?sort=newest|name|code` and `?order=asc|desc`; an unrecognised token is refused by name rather
+  than quietly answered with the default order.
+
+  This is groundwork rather than a visible change: the People screen's table sorts its headers
+  client-side today, and once that table is paged, headers that reordered only the visible rows
+  would be showing the operator something false. The orders have to exist on the server before the
+  table can move.
+
+  Both parameters need `?limit=`, like the search beside them. Every order ends in the employee's
+  id, so a window over people who share a name cannot show one of them on two pages or on neither.
+
+  **Upgrade note** Migration `0046_employee_name_index.sql` adds `employees_by_tenant_name
+  (tenant_id, name, id)`; additive, `IF NOT EXISTS`. No index is added for the code order —
+  `employees_code_key` from migration 0023 already covers it. No wire removal, no
+  `PROTOCOL_VERSION` bump, no permission change.
+
 - **The assign picker on the People screen searches the roster instead of holding it.** Typing part
   of a name or a staff code asks the server for the matches; `GET /admin/employees` takes a `?q=`
   now, which it did not before — the search the other four paged reads got in an earlier release

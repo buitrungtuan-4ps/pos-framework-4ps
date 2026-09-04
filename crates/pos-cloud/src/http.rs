@@ -174,9 +174,10 @@ use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
-    Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeStore, EmployeeUpdate,
-    NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate, RoleTemplateId,
-    RoleTemplateStore, RoleTemplateUpdate, is_known_permission, permission_catalogue,
+    Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeListFilter,
+    EmployeeSort, EmployeeStore, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
+    PermissionInfo, RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate,
+    is_known_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
@@ -1397,12 +1398,14 @@ struct EmployeeListQuery {
     /// Only meaningful with `limit`: on the unpaged read the route refuses rather than quietly
     /// returning the whole roster, the same as every other search on this surface.
     ///
-    /// There is no `sort`/`order` here, and that is deliberate rather than an omission. The other
-    /// four paged reads got them in B3-3 because their screens have sortable table headers; the
-    /// People table sorts client-side and has no server field to sort on yet. They belong to the
-    /// slice that pages that table, where the headers are what make them necessary.
     #[serde(default)]
     q: Option<String>,
+    /// Which order to return the page in — one of [`EmployeeSort::tokens`]. Only with `limit`.
+    #[serde(default)]
+    sort: Option<String>,
+    /// `asc` or `desc`, inverting `sort`'s natural direction. Only with `limit`.
+    #[serde(default)]
+    order: Option<String>,
 }
 
 /// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
@@ -1626,11 +1629,17 @@ where
     // missing whoever fell off it (ADR-0098). The console's table is what wants a page — and gets
     // strictly less T1 data per response than the read beside it (ADR-0070).
     let Some(page) = parse_page(query.limit.as_deref(), query.offset.as_deref()) else {
-        // `q` narrows a *page*. Honouring it on the whole-roster read would answer a different
-        // question than the caller asked; ignoring it would answer the wrong one silently. The
-        // route names the missing parameter instead.
-        if present_param(query.q.as_deref()).is_some() {
-            return page_shaping_needs_a_limit_refusal("q");
+        // `q`/`sort`/`order` shape a *page*. Honouring them on the whole-roster read would answer a
+        // different question than the caller asked; ignoring them would answer the wrong one
+        // silently. The route names the missing parameter instead.
+        for (field, value) in [
+            ("q", query.q.as_deref()),
+            ("sort", query.sort.as_deref()),
+            ("order", query.order.as_deref()),
+        ] {
+            if present_param(value).is_some() {
+                return page_shaping_needs_a_limit_refusal(field);
+            }
         }
         return match state.people.list(tenant_id).await {
             Ok(employees) => (StatusCode::OK, Json(employees)).into_response(),
@@ -1641,11 +1650,58 @@ where
         Ok(page) => page,
         Err(refusal) => return refusal,
     };
-    let search = present_param(query.q.as_deref());
-    match state.people.list_page(tenant_id, page, search).await {
+    let filter = match employee_list_filter(
+        query.q.as_deref(),
+        query.sort.as_deref(),
+        query.order.as_deref(),
+    ) {
+        Ok(filter) => filter,
+        Err(refusal) => return refusal,
+    };
+    match state.people.list_page(tenant_id, page, &filter).await {
         Ok(read) => paged_ok(read, page),
         Err(error) => people_error_response(&error),
     }
+}
+
+/// Reads `?q=`, `?sort=` and `?order=` into an [`EmployeeListFilter`], refusing a token outside the
+/// route's own closed sets.
+///
+/// The refusal names the field and lists what it accepts (ADR-0096's shape), so a caller that sent
+/// `?sort=hired` is told `sort` must be `newest`, `name` or `code` rather than being handed the
+/// default order and left to wonder why nothing moved.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the route returns, the same \
+              shape `item_list_filter` and the other route helpers carry"
+)]
+fn employee_list_filter(
+    search: Option<&str>,
+    sort: Option<&str>,
+    order: Option<&str>,
+) -> Result<EmployeeListFilter, Response> {
+    let search = present_param(search).map(str::to_owned);
+    let sort = match present_param(sort) {
+        None => EmployeeSort::default(),
+        Some(token) => match EmployeeSort::from_token(token) {
+            Some(sort) => sort,
+            None => {
+                return Err(enum_refusal("sort", EmployeeSort::tokens().iter().copied()));
+            }
+        },
+    };
+    let descending = match present_param(order) {
+        // Absent is ascending — the same reading `?order=asc` has, so a caller that omits the
+        // parameter and one that spells out the default get the same page.
+        None | Some("asc") => false,
+        Some("desc") => true,
+        Some(_unknown) => return Err(enum_refusal("order", ["asc", "desc"])),
+    };
+    Ok(EmployeeListFilter {
+        search,
+        sort,
+        descending,
+    })
 }
 
 /// A super-admin reads one employee within its tenant.
