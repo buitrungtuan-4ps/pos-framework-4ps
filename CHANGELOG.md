@@ -26,8 +26,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   This matters to a fork deciding whether it can ship updates to its fleet. The answer is **not
   yet**, and it is now written where a reader looks: the module says it is unreachable and names the
   two things that gate wiring it — the cloud does not serve `/internal/ota/artifact` (roadmap
-  `docs/roadmap-v3.md` **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)), so a wired updater
-  would loop on a `404`; and a real Linux installer is **R4**. Releases are still built and signed
+  `docs/roadmap-v3.md` **R2**, [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)), and that path is
+  in any case proxy-denied to anything off the box, so R2 has to move it to the store-facing `/sync`
+  surface first; and a real Linux installer is **R4**. Releases are still built and signed
   (see [`docs/release-runbook.md`](docs/release-runbook.md)); what is missing is the fleet delivering
   them to itself.
 

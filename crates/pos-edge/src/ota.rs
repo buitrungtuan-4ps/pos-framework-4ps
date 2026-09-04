@@ -17,10 +17,21 @@
 //! [`UpdateInstaller`]**: the only implementor in the tree is that test's `RecordingInstaller`. So
 //! the module is complete, tested, and unreachable.
 //!
-//! Two things gate wiring it, and neither is here. [`CloudSync::fetch_update`] posts to
-//! `/internal/ota/artifact`, which `pos_cloud` does not serve (roadmap v3 **R2**,
-//! [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)) — so a wired updater would loop on a
-//! 404. And a real installer for Linux is roadmap **R4**, which needs a box to validate against.
+//! Two things gate wiring it, and neither is here.
+//!
+//! **The artifact route does not exist, and the path it would be built at is the wrong one.**
+//! [`CloudSync::fetch_update`] posts to `/internal/ota/artifact`, pinned by
+//! [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md); `pos_cloud` does not serve it
+//! (roadmap v3 **R2**, [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)). Adding the
+//! handler there would not be enough: `deploy/Caddyfile.d/site.caddy` answers **404 to every
+//! `/internal/*` request from outside the box**, deliberately, because those handlers are the
+//! cloud's own trusted-network surface. A store dials its cloud over that proxy, so the pinned path
+//! is unreachable *by the caller it exists for* — and the deny's own comment says where store
+//! traffic belongs: `/sync/stores/{id}/…`, where the tenant comes from the scoped key rather than a
+//! body field. The pin predates the deny and nobody reconciled them; doing so is R2's first step.
+//!
+//! **There is no real installer.** One for Linux is roadmap **R4**, and it needs a box to validate
+//! against.
 //!
 //! This paragraph replaces one that said the seam is what "the shipped binary implements against the
 //! OS". That was never true, and it is the sentence a reader would have trusted to decide the wiring
