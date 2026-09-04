@@ -10,8 +10,10 @@ use core::time::Duration;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use axum::Router;
 use tracing_subscriber::EnvFilter;
 
+use blob_garage::S3Blobs;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
 use pos_cloud::alerts::AlertThresholds;
@@ -303,6 +305,36 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
     }
 
+    // The OTA artifact route exists only where an object store is configured (ADR-0088). A cloud that
+    // ships no edge releases needs none, and the alternative — a route answering with an empty
+    // success — would tell a store it is up to date when nothing was ever published. An absent
+    // endpoint is a `404`, which the adapter already reads as "the cloud publishes no such release".
+    let artifacts = match config.artifacts.as_ref() {
+        None => {
+            tracing::info!(
+                "no [artifacts] configured; the OTA artifact route is off and stores cannot fetch releases"
+            );
+            None
+        }
+        Some(artifacts) => match S3Blobs::new(
+            &artifacts.endpoint,
+            &artifacts.bucket,
+            &artifacts.region,
+            &artifacts.access_key_id,
+            &artifacts.secret_access_key,
+        ) {
+            Ok(blobs) => Some(blobs),
+            // Configured but unusable is a boot-time mistake worth being loud about, and not worth
+            // refusing to start over: selling, config delivery and reporting are unaffected, and a
+            // cloud that will not boot because OTA is misconfigured takes the fleet's dashboards
+            // down with it.
+            Err(error) => {
+                tracing::error!(%error, "the [artifacts] endpoint is unusable; the OTA artifact route is off");
+                None
+            }
+        },
+    };
+
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
@@ -318,6 +350,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             config.internal_shared_secret.clone(),
         ))
+        .merge(match artifacts {
+            Some(blobs) => {
+                http::ota_artifact_router(store.api_keys(), SystemClock, blobs, store.releases())
+            }
+            None => Router::new(),
+        })
         .merge(http::device_router(
             store.device_proposals(),
             store.admin(),

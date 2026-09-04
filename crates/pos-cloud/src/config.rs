@@ -293,6 +293,47 @@ pub struct CloudConfig {
     /// collapsing every request onto one shared bucket while reading like "trust nothing".
     #[serde(default = "default_trusted_proxy_hops")]
     pub trusted_proxy_hops: usize,
+    /// Where OTA release artifacts are stored, over the `BlobStore` port
+    /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
+    ///
+    /// **No default, and absent is a valid deployment**: a cloud that never ships an edge release
+    /// needs no object store, and the artifact route is simply off — a store asking for bytes gets a
+    /// refusal that says the cloud hosts no artifacts, rather than a confusing empty success. That
+    /// matches how `table_token_secret` gates QR ordering and `retention_days` gates the masking
+    /// cron: a capability nobody configured is a capability that does not run.
+    ///
+    /// `bootstrap.sh` fills this in. Garage mints its own S3 credentials — they cannot be generated
+    /// ahead of time the way the database password can — so the script creates the bucket, mints a
+    /// key, grants it, and writes the result here. It is not a step anyone performs by hand.
+    #[serde(default)]
+    pub artifacts: Option<ArtifactsConfig>,
+}
+
+/// The object store OTA release artifacts live in
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
+///
+/// Four values, all of which Garage produces on the box: the cloud reaches its own object store over
+/// the box's private network, so the endpoint is plain `http://` — TLS terminates at the proxy, and
+/// this connection never leaves the machine.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactsConfig {
+    /// The S3 endpoint, as `http://host:port`.
+    pub endpoint: String,
+    /// The bucket artifacts are written to and read from.
+    pub bucket: String,
+    /// The S3 region name. Garage's own default is `garage`; it is a signing input, not a location.
+    #[serde(default = "default_artifacts_region")]
+    pub region: String,
+    /// The access key id `garage key create` minted.
+    pub access_key_id: String,
+    /// The secret half of that key.
+    pub secret_access_key: String,
+}
+
+/// Garage's own default region name. It participates in the `SigV4` signature and has to match what
+/// the server was configured with; it does not name a geography.
+fn default_artifacts_region() -> String {
+    "garage".to_owned()
 }
 
 /// The optional monitoring profile: where the sparse metrics heartbeat imports, and how often.
