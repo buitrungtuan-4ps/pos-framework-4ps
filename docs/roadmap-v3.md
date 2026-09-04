@@ -289,7 +289,12 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **PF4** — Long-run durability: SNTP `ClockSource` + clock-drift alert; prune synced events (the log must not grow without bound); disk-space guard + early alert.
 
 ### A·P5 — Pilot (ops, gated)
-- **P1** — WS-F security review + human/hardware gate register.
+- **P1** — WS-F security review + human/hardware gate register. **The register is done**
+  ([`gate-register.md`](gate-register.md)), together with the go-live sequence it sits inside
+  ([`go-live.md`](go-live.md)): thirty gates, each citing the file that already made the claim,
+  across human decision, per-store provisioning, privacy/legal, real hardware, and external
+  registration. **The pre-production security review is not** — [`security-review-ws-d.md`](security-review-ws-d.md)
+  covers WS-D's ops hardening, not this.
 - **P2** — Real-hardware pilot (including sudden power loss) + soak at 222 ev/s.
 
 ## Program B — Complete the Domain

@@ -101,6 +101,8 @@ New here, or picking a task? The four short [**guides**](docs/guides/) each fini
 |---|---|
 | [docs/guides/](docs/guides/) | Task-shaped how-tos: start from zero, write an adapter, add a country, run the simulator |
 | [docs/deploy-runbook.md](docs/deploy-runbook.md) | Fork → set secrets → live admin UI: the deployment checklist and every secret |
+| [docs/go-live.md](docs/go-live.md) | Fork → trading store, in order, with every point the sequence stops for a human |
+| [docs/gate-register.md](docs/gate-register.md) | The gates only a person, a credential, real hardware or an outside body can clear |
 | [AGENTS.md](AGENTS.md) | The rules. **Read before writing any code.** |
 | [docs/architecture.md](docs/architecture.md) | How the system is built and why |
 | [docs/pos-spec.md](docs/pos-spec.md) | What the product does (business behaviour) |

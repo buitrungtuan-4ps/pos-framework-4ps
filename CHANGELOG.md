@@ -17,6 +17,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Added
+- **Two documents for taking a fork into production** (roadmap `docs/roadmap-v3.md` A·P5, WS-F).
+  [`docs/go-live.md`](docs/go-live.md) sequences the five runbooks that already existed — fork, cloud
+  up, event bus, organisation, store box, publish, trade — and marks the twelve points where the
+  sequence **stops for a human**. [`docs/gate-register.md`](docs/gate-register.md) is those gates as
+  a standing reference: thirty of them, across human decision, per-store provisioning, privacy and
+  legal, real hardware, and outside registration.
+
+  Neither adds a requirement. Every row cites the file that already made the claim, because a
+  register that invents obligations becomes a second source of truth and drifts from the first. What
+  they add is **ordering and visibility**: each of these gates is silent — CI stays green, `main`
+  stays green, the acceptance suite passes — and the failure surfaces at the first release, the first
+  power cut, or the first audit.
+
+  Also included: a pilot checklist, which is the subset that can only be answered on real hardware.
+
+### Security
+- **The release runbook told you to put the OTA trust anchor in the cloud's configuration tree.** Step
+  3 said to record the public signing key "wherever the fleet's trust set is configured (the OTA trust
+  configuration)". That is the tree the cloud publishes, and a key taken from there is a key an
+  attacker who controls the cloud can choose — the verifier would check their artifact against their
+  key. [ADR-0092](docs/adr/0092-artifact-trust-chain.md) settled this and
+  [`fork-checklist.md`](docs/fork-checklist.md) was corrected at the time; the release runbook was
+  not, so the two documents disagreed and the wrong one was the one an operator follows at the moment
+  it matters.
+
+  It now says what the code enforces: `POS_EDGE_TRUSTED_KEYS`, a repository **variable**, read at
+  compile time. `pos-edge` exposes no runtime path for a trusted key at all — `trusted_keys()` takes
+  no arguments and its parser is private — so an operator who followed the old step would have got a
+  fleet that **cannot install an update**, refusing rather than trusting nothing, and would have hunted
+  for it in configuration rather than in the build.
+
+  **No code changed.** Nothing was ever built the wrong way; the instruction for doing so was.
+
+### Added
 - **A console link now carries the tenant it was read under** (roadmap `docs/cloud-admin-ux-plan.md`
   Track F1). Screens moved from `/people` to `/t/<tenant>/people`, and where a screen uses a store,
   it rides along as `?store=<id>`. Two consequences an operator will notice: a link pasted into a

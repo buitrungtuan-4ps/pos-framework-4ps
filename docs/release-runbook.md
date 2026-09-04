@@ -1,6 +1,6 @@
 # Release runbook — building and signing an edge release
 
-**Status** Accepted · **Owner** @maintainers-edge · **Last reviewed** 2026-09-01
+**Status** Accepted · **Owner** @maintainers-edge · **Last reviewed** 2026-09-04
 **Relates to** [ADR-0047](adr/0047-minisign-verification.md) (how the edge verifies a signature) ·
 [ADR-0052](adr/0052-ota-rollout-config.md) (how the cloud advertises a release) ·
 [deploy-runbook.md](deploy-runbook.md) (the cloud cell it is distributed from) ·
@@ -33,9 +33,30 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    a password, add `MINISIGN_PASSWORD` the same way. **Never commit the secret key**; the
    secret-scanning gate (`gitleaks`) will reject it if you try.
 
-3. **Publish the public half.** `minisign.pub` is not a secret. Record it wherever the fleet's trust
-   set is configured (the OTA trust configuration, ADR-0052) so the edge's minisign verifier
-   (ADR-0047) accepts signatures from this key. Keep a copy with the ops keys for manual verification.
+3. **Publish the public half — as a build input, and only as a build input.** `minisign.pub` is not a
+   secret. Set the repository **variable** `POS_EDGE_TRUSTED_KEYS` to the **second line** of the file,
+   verbatim; `release.yml` **fails before it builds** without it, and `pos-edge` bakes it in at compile
+   time ([ADR-0092](adr/0092-artifact-trust-chain.md)):
+
+   ```
+   POS_EDGE_TRUSTED_KEYS="$(sed -n 2p minisign.pub)"
+   ```
+
+   A variable rather than a secret, deliberately: it is visible in the run log, where an operator can
+   see which anchor a release was built against.
+
+   **Not the cloud's configuration tree.** An earlier version of this step said to record the key
+   "wherever the fleet's trust set is configured (the OTA trust configuration)". That is the config
+   tree the cloud publishes — and a key taken from there is a key an attacker who controls the cloud
+   can choose, which makes the verifier check *their* artifact against *their* key. A trust anchor
+   cannot live inside the channel it protects, so `pos-edge` exposes no runtime way to supply one:
+   `trusted_keys()` takes no arguments and its parser is private. Following the old instruction would
+   not have produced a weaker fleet so much as one that cannot install an update at all — the binary
+   refuses rather than trusting nothing — but it would have looked like a configuration problem
+   instead of a build one.
+
+   Keep a copy of `minisign.pub` with the ops keys for manual verification, and comma-separate two
+   keys in the variable to keep a retirement path open ([ADR-0047](adr/0047-minisign-verification.md)).
 
 4. **Custody.** Keep `minisign.key` offline (a password manager or an HSM/hardware key). Rotating it
    means generating a new pair, adding the new public key to the trust set *before* it signs a
