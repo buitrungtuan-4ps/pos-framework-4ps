@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use pos_edge::{
-    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts,
-    StoreIdentity, serve, telemetry,
+    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryOtaState, InMemoryQueueNumbers,
+    InMemoryReceipts, StoreIdentity, serve, telemetry,
 };
 use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;
@@ -40,10 +40,15 @@ async fn main() -> Result<(), EdgeError> {
     tracing::info!("minimal-edge is coming up — open http://{bind}/ (Ctrl-C to stop)");
     // The queue-number authority the relay's intake would use; the example has no `cloud_url`, so no
     // relay runs and it is never allocated from — a real store passes its SQLite writer (ADR-0064).
+    // The OTA self-test authority. In memory, like everything else here — and it is never read:
+    // the example has no `bin/current` layout, so no over-the-air updater is composed at all
+    // (ADR-0055 Amendment 1). A real store passes its SQLite writer, which survives the restart an
+    // install performs.
     serve(
         EdgeConfig::new(bind, store_id),
         edge,
         InMemoryQueueNumbers::default(),
+        InMemoryOtaState::new(),
     )
     .await
 }

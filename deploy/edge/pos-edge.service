@@ -6,10 +6,24 @@
 # stop as well as a crash.
 #
 # Install (as root):
-#   cp pos-edge /usr/local/bin/pos-edge
-#   install -d -o pos -g pos /var/lib/pos-edge
+#   install -d -o pos -g pos /var/lib/pos-edge /var/lib/pos-edge/bin
+#   install -o pos -g pos -m 0755 pos-edge /var/lib/pos-edge/bin/slot-a
+#   ln -sfn slot-a /var/lib/pos-edge/bin/current
+#   chown -h pos:pos /var/lib/pos-edge/bin/current
+#   cp pos-edge /usr/local/bin/pos-edge          # the operator's copy, for --self-test and rescue
 #   cp pos-edge.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now pos-edge
+#
+# Why the binary lives under the state directory (ADR-0055 Amendment 1): this unit runs the store as
+# an unprivileged user under ProtectSystem=strict and NoNewPrivileges, which between them make the
+# whole filesystem read-only to the process except StateDirectory — deliberately, so a compromised
+# till cannot replace system binaries. An over-the-air update therefore cannot write
+# /usr/local/bin/pos-edge, and must not be given the privilege to. So ExecStart is a symlink the edge
+# owns inside its own state, which it retargets with a single atomic rename; the sandbox stays as
+# strict as it is. The two slot files alternate, and `previous` is where a rollback goes back to.
+#
+# A box laid out the old way — ExecStart=/usr/local/bin/pos-edge, no bin/current — keeps trading and
+# simply does not self-update; the edge logs that it found no layout and starts no updater.
 
 [Unit]
 Description=Pizza 4P's POS edge (store server)
@@ -33,10 +47,15 @@ Environment=RUST_LOG=info
 # Both optional — the leading '-' means the file may be absent. If used: root-owned, mode 0600,
 # never committed.
 EnvironmentFile=-/etc/pos-edge/env
-ExecStart=/usr/local/bin/pos-edge
+# The symlink, not a slot: the edge retargets it on a successful install, and systemd
+# resolves it afresh on each start (Restart=always is what turns an exit into that start).
+ExecStart=/var/lib/pos-edge/bin/current
 # SIGTERM triggers graceful shutdown; give in-flight requests time to drain before SIGKILL.
 KillSignal=SIGTERM
 TimeoutStopSec=30
+# A clean exit is how the edge asks to be restarted into a binary it just installed — and how it
+# steps back onto the previous one when a new version never reaches a healthy boot. `always`, not
+# `on-failure`, is therefore load-bearing: `on-failure` would leave a store stopped after an update.
 Restart=always
 RestartSec=2
 

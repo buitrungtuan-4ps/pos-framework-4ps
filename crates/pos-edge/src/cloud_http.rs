@@ -71,6 +71,19 @@ impl CloudHttpError {
     }
 }
 
+/// One response from the store's cloud: the status, the body, and the headers as `(name, value)`
+/// with names lowercased.
+///
+/// Private, because only [`OtaHttpTransport`] needs the headers and it converts straight into
+/// `cloud-sync-http`'s own `HttpResponse` — which is the type the artifact parser reads them
+/// through.
+#[derive(Debug)]
+struct CloudResponse {
+    status: u16,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
 /// One HTTPS client to the store's own cloud, reused across calls.
 ///
 /// Cheap to clone — it holds a shared rustls [`ClientConfig`], the parsed base URL, and the bearer
@@ -160,20 +173,42 @@ impl CloudHttpClient {
         query: Option<&str>,
         body: Vec<u8>,
     ) -> Result<(u16, Vec<u8>), CloudHttpError> {
+        let response = self.request_full(method, path, query, body).await?;
+        Ok((response.status, response.body))
+    }
+
+    /// The same request, keeping the response headers.
+    ///
+    /// Config-pull, heartbeat and the relay read nothing but the status and the body, so
+    /// [`Self::request`] drops the headers for them. The OTA artifact fetch cannot: its signature
+    /// travels in `X-Pos-Artifact-Signature` while the body stays the raw binary
+    /// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)), and a fetch that could not read
+    /// that header would come back as bytes with nothing to judge them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::request`].
+    async fn request_full(
+        &self,
+        method: &hyper::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Vec<u8>,
+    ) -> Result<CloudResponse, CloudHttpError> {
         match tokio::time::timeout(self.timeout, self.send(method, path, query, body)).await {
             Ok(result) => result,
             Err(_elapsed) => Err(CloudHttpError::new("the request to the cloud timed out")),
         }
     }
 
-    /// The unbounded body of one request; [`Self::request`] wraps it in the timeout.
+    /// The unbounded body of one request; [`Self::request_full`] wraps it in the timeout.
     async fn send(
         &self,
         method: &hyper::Method,
         path: &str,
         query: Option<&str>,
         body: Vec<u8>,
-    ) -> Result<(u16, Vec<u8>), CloudHttpError> {
+    ) -> Result<CloudResponse, CloudHttpError> {
         let target = self.target(path, query);
         let host = target
             .host_str()
@@ -221,6 +256,19 @@ impl CloudHttpClient {
             .await
             .map_err(|error| CloudHttpError::new(format!("sending the request failed: {error}")))?;
         let status = response.status().as_u16();
+        // Collected before the body is consumed, because `into_body` takes the response. A value
+        // that is not valid UTF-8 is dropped rather than failing the whole response: a header no
+        // caller reads must not be able to break a fetch.
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|text| (name.as_str().to_ascii_lowercase(), text.to_owned()))
+            })
+            .collect();
         let bytes = response
             .into_body()
             .collect()
@@ -229,7 +277,11 @@ impl CloudHttpClient {
                 CloudHttpError::new(format!("reading the response body failed: {error}"))
             })?
             .to_bytes();
-        Ok((status, bytes.to_vec()))
+        Ok(CloudResponse {
+            status,
+            body: bytes.to_vec(),
+            headers,
+        })
     }
 
     /// Connects to the first resolved address that accepts a TCP connection.
@@ -516,6 +568,67 @@ impl RelayTransport for RelayHttpTransport {
     }
 }
 
+// -------------------------------------------------------------------------------------------------
+// OTA transport
+// -------------------------------------------------------------------------------------------------
+
+/// The bearer-carrying [`HttpTransport`](cloud_sync_http::HttpTransport) the OTA loop's `CloudSync`
+/// runs on
+/// ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md),
+/// [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
+///
+/// `cloud-sync-http`'s own [`TlsHttpTransport`](cloud_sync_http::TlsHttpTransport) exists for the
+/// activation exchange, which is deliberately unauthenticated — a box has no key yet. The artifact
+/// fetch and the update report are on `/sync`, which requires the store's scoped key, and this
+/// client already attaches it to every request. So the OTA loop composes `HttpCloudSync` over *this*
+/// transport rather than that one; nothing else changes about the adapter.
+///
+/// It is the one transport that needs the response headers, which is why
+/// [`CloudHttpClient::request_full`] exists: the artifact's signature rides
+/// `X-Pos-Artifact-Signature` and the body stays the raw binary.
+#[derive(Debug, Clone)]
+pub struct OtaHttpTransport {
+    client: CloudHttpClient,
+}
+
+/// How long an artifact fetch may take.
+///
+/// Five minutes rather than the ordinary fifteen seconds: the response body is a whole edge binary,
+/// and a store on a slow shop connection would otherwise time out every attempt and never update —
+/// while the ordinary timeout stays short for the request-sized routes, which is what keeps a
+/// black-hole cloud from wedging them.
+pub const ARTIFACT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+impl OtaHttpTransport {
+    /// Builds an OTA transport over `client`, lengthening its timeout to allow for a binary-sized
+    /// body.
+    #[must_use]
+    pub fn new(client: CloudHttpClient) -> Self {
+        Self {
+            client: client.with_timeout(ARTIFACT_REQUEST_TIMEOUT),
+        }
+    }
+}
+
+impl cloud_sync_http::HttpTransport for OtaHttpTransport {
+    async fn post_json(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+    ) -> Result<cloud_sync_http::HttpResponse, cloud_sync_http::TransportError> {
+        let response = self
+            .client
+            .request_full(&hyper::Method::POST, path, None, body)
+            .await
+            .map_err(|error| cloud_sync_http::TransportError::new(error.to_string()))?;
+        Ok(cloud_sync_http::HttpResponse {
+            status: response.status,
+            body: response.body,
+            headers: response.headers,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::time::Duration;
@@ -524,8 +637,9 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{
-        CloudHttpClient, ConfigPull, ConfigSyncWire, RELAY_REQUEST_TIMEOUT, REQUEST_TIMEOUT,
-        RelayHttpTransport, interpret, relay_ack_path, relay_pull_path, request_line,
+        ARTIFACT_REQUEST_TIMEOUT, CloudHttpClient, ConfigPull, ConfigSyncWire, OtaHttpTransport,
+        RELAY_REQUEST_TIMEOUT, REQUEST_TIMEOUT, RelayHttpTransport, interpret, relay_ack_path,
+        relay_pull_path, request_line,
     };
     use crate::relay_client::StoreOutcome;
 
@@ -644,6 +758,22 @@ mod tests {
         );
         // The other transports are untouched: only the parked route pays for the longer wait.
         assert_eq!(client().timeout, REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn the_ota_transport_allows_for_a_binary_sized_body() {
+        // The regression this guards: an edge binary over a shop's uplink does not arrive inside the
+        // fifteen seconds a config pull is given, so a fetch on an unmodified client would time out
+        // on every attempt and the store would never update — with a timeout, not a refusal, in the
+        // log, which reads like a network fault rather than a misconfiguration.
+        let transport = OtaHttpTransport::new(client());
+        assert_eq!(transport.client.timeout, ARTIFACT_REQUEST_TIMEOUT);
+        assert!(ARTIFACT_REQUEST_TIMEOUT > RELAY_REQUEST_TIMEOUT);
+        assert_eq!(
+            client().timeout,
+            REQUEST_TIMEOUT,
+            "and nothing else changes"
+        );
     }
 
     #[test]
