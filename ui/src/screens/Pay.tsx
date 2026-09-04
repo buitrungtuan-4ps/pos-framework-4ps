@@ -5,17 +5,36 @@ import { ApiError } from "../api/client";
 import type { BillResponse, CheckResponse, PaymentRequest } from "../api/types";
 import { t } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
-import { loadCheck, openBill, openBillFor, settle } from "../state/store";
+import {
+  loadCheck,
+  openBill,
+  openBillFor,
+  settle,
+  tenderAccepted,
+  tipsEnabled,
+} from "../state/store";
 
-// The pay screen: the amount owed large, a cash pad with the VND quick-cash denominations and its
-// change, or card for the exact amount. On settlement it shows the gapless receipt number and the
-// change to hand back; the table is now the floor's to clean.
+// The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
+// and its change, an optional tip, or card for the exact amount. On settlement it shows the gapless
+// receipt number and the change to hand back; the table is now the floor's to clean.
+//
+// # The tip is optional, and that is a budget decision as much as a design one
+//
+// `docs/ui-ux.md` §6 caps a cash settle at three taps and this flow already spends all three
+// (pay -> note -> take). A tip pad behind a button would be a fourth *required* tap and the step
+// budget would fail the build, correctly. So the tip row sits in the flow already visible: a
+// cashier who takes no tip taps nothing extra, and the tip's own taps are declared as their own
+// task in `ui/scripts/step-budget.mjs`.
 export function Pay() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [billId, setBillId] = createSignal<string | null>(openBillFor(params.id) ?? null);
   const [error, setError] = createSignal<string | null>(null);
   const [tender, setTender] = createSignal<number | null>(null);
+  // The tip, in minor units. Zero rather than null: there is no difference between "no tip" and "a
+  // tip of nothing", and `Payment.tip` is optional on the wire so zero is what the edge would have
+  // defaulted to anyway.
+  const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
   // What the guest owes, as the edge assembled it (E5). Null until it arrives; the screen shows no
   // amount rather than a guess, because the till no longer has the means to guess one.
@@ -45,10 +64,20 @@ export function Pay() {
   // Change is a subtraction of two amounts the operator can see — the edge's total and the note they
   // chose — shown as they tap. The authoritative figure is the one the settle records per payment
   // (`change_given`), which the receipt carries.
+  // The tip comes out of the change, not out of the bill: the guest hands over one amount, the sale
+  // takes its total and the tip is what is left behind on purpose. Subtracting it here is what makes
+  // the figure on screen the same one the edge records — B1.3's second defect was exactly this
+  // subtraction missing on the edge, so a till told a cashier to hand back money the guest had left.
   const change = () => {
     const chosen = tender();
-    return chosen !== null && chosen >= total() ? chosen - total() : 0;
+    const owed = total() + tip();
+    return chosen !== null && chosen >= owed ? chosen - owed : 0;
   };
+
+  // Tip keys as a share of the bill, plus a clear. Percentages rather than fixed amounts so they
+  // scale with the check, and computed in minor units with integer arithmetic — the workspace bans
+  // floats in a money path, and rounding a tip by accident is the kind of cent nobody can explain.
+  const tipKeys = () => [5, 10, 15].map((percent) => (total() * percent) / 100);
 
   // The exact amount, plus this bill's own currency's banknotes that would cover it (roadmap E5).
   // These were VND's three notes regardless of where the store was, so a store on any other
@@ -56,7 +85,12 @@ export function Pay() {
   // bill's, not the store's — for the same reason every other figure here is: it is the edge's
   // answer for *this* bill. Before the check loads that is `""`, which has no note table and so
   // offers the exact amount alone; the total is zero then anyway.
-  const quickCash = () => [total(), ...quickCashFor(currency(), total())];
+  // Keyed on the sale *plus* the tip: with a tip added, a note that only covers the sale is not
+  // enough money, and offering it would hand the cashier a key that cannot settle.
+  const quickCash = () => {
+    const owed = total() + tip();
+    return [owed, ...quickCashFor(currency(), owed)];
+  };
 
   const pay = async (payments: PaymentRequest[]) => {
     const id = billId();
@@ -72,12 +106,15 @@ export function Pay() {
   };
 
   const payCash = () => {
-    const chosen = tender() ?? total();
+    // No note chosen means "exact", and exact now means the sale plus the tip — otherwise adding a
+    // tip and tapping straight through would tender less than the guest owes.
+    const chosen = tender() ?? total() + tip();
     void pay([
       {
         method: "PAYMENT_METHOD_CASH",
         tendered: money(currency(), chosen),
         applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
       },
     ]);
   };
@@ -86,8 +123,11 @@ export function Pay() {
     void pay([
       {
         method: "PAYMENT_METHOD_CARD",
-        tendered: money(currency(), total()),
+        // A card takes the sale plus whatever tip was added — there is no note to choose and no
+        // change to give, so the tendered amount is the whole of what the terminal will capture.
+        tendered: money(currency(), total() + tip()),
         applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
       },
     ]);
 
@@ -116,6 +156,33 @@ export function Pay() {
               )}
             </Show>
 
+            <Show when={tipsEnabled()}>
+              <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
+              <div class="grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface"
+                  classList={{ "border-accent": tip() === 0 }}
+                  onClick={() => setTip(0)}
+                >
+                  {t("pay.tip_none")}
+                </button>
+                <For each={tipKeys()}>
+                  {(amount) => (
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
+                      classList={{ "border-accent": tip() === amount && amount > 0 }}
+                      onClick={() => setTip(amount)}
+                    >
+                      {formatMoney(money(currency(), amount))}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+
+            <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
             <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
             <div class="grid grid-cols-2 gap-2">
               <For each={quickCash()}>
@@ -134,8 +201,10 @@ export function Pay() {
             <p class="mt-2 text-sm text-ink-muted">
               {t("pay.change")}: <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
             </p>
+            </Show>
 
             <div class="mt-4 flex flex-col gap-2">
+              <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button
                 type="button"
                 class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
@@ -143,13 +212,16 @@ export function Pay() {
               >
                 {t("pay.take_cash")}
               </button>
-              <button
-                type="button"
-                class="min-h-touch rounded-token border border-line bg-surface"
-                onClick={() => payCard()}
-              >
-                {t("pay.card")}
-              </button>
+              </Show>
+              <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface"
+                  onClick={() => payCard()}
+                >
+                  {t("pay.card")}
+                </button>
+              </Show>
             </div>
           </>
         }

@@ -16,6 +16,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tip can now actually be taken, and a store's refused tender is no longer offered** (roadmap v3
+  **B1.3** and the **E5** residual). The domain halves of both shipped in #181 and neither could
+  fire.
+
+  **Tips.** `Payment.tip` reached the edge, `decide_bill` required `Capability::Tips`, and the
+  settled event recorded the amount — but the till had **no tip entry anywhere**, so `tip_amount`
+  was zero on every payment a real store took, whatever the capability said. The Pay and counter
+  screens now carry a tip row (no tip · 5% · 10% · 15%), shown only when the store takes tips.
+
+  The tip comes out of the **change**, not out of the sale: the quick-cash keys, the exact-amount
+  default and the change on screen are all computed against sale + tip, so the figure the cashier
+  reads is the one the edge records. B1.3's second defect was exactly this subtraction missing on
+  the edge — a till telling a cashier to hand back money the guest had just left — and getting it
+  wrong on the screen would have been the same lie from the other side.
+
+  **Tender.** No route serialized the store's `accepted_tender`, so a cash-only store still showed a
+  Card button and the edge's refusal landed as a `400` in front of the guest. Both pay screens now
+  hide a method the store does not accept. An unrestricted store (`null`, not an empty list) keeps
+  accepting everything, including a method added to the enum later.
+
+  **And the fifth hardcoded `VND`.** `ui/src/screens/Takeaway.tsx` still offered VND's three
+  banknotes on any currency — the same defect fixed one file over in `Pay.tsx`, written the same way
+  and missed. E5 named three sites, #181 said four; there were five.
+
+### Changed
+
+- **`docs/ui-ux.md` §6: the step budget governs the steps a task *requires*.** An optional
+  enhancement — a tip on a settle — is declared as its own task with its own ceiling rather than
+  counted against the flow it sits inside. Without the distinction the rule pushes an optional
+  control behind a button to keep a number down, which costs a tap in the case the operator wants it
+  and buys nothing in the case they do not. The two tipped settles are declared at **four** on that
+  basis, each with its reason in its own note; `ui/scripts/step-budget.mjs` now resolves 15 tasks
+  and 27 taps.
+
 ### Added
 
 - **The till is told whether its store takes tips, and which tender it accepts** (roadmap v3

@@ -62,6 +62,28 @@ const TASKS = [
     ],
   },
   {
+    task: "Settle a dine-in table in cash, taking a tip",
+    budget: 4,
+    note: "Four, and §6's ceiling for a rare action is three — declared anyway because the alternative is the blind spot this script warns about. The tip is *optional*: the flow above is what a settle costs, and this is what it costs when a guest leaves something. Shortening it would mean choosing the note for the cashier, which is the one thing on this screen nobody should guess.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "setTip" },
+      { route: "/table/:id/pay", action: "setTender" },
+      { route: "/table/:id/pay", action: "payCash" },
+    ],
+  },
+  {
+    task: "Charge a counter order in cash, taking a tip",
+    budget: 4,
+    note: "The counter's twin of the case above, for the same reason.",
+    steps: [
+      { route: "/counter", action: "charge" },
+      { route: "/counter", action: "setTip" },
+      { route: "/counter", action: "setTender" },
+      { route: "/counter", action: "payCash" },
+    ],
+  },
+  {
     task: "Settle a dine-in table by card",
     budget: 3,
     note: "One tap fewer than cash: a card takes the exact amount, so there is no note to choose.",

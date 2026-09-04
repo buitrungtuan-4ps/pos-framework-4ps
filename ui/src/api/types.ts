@@ -97,6 +97,14 @@ export interface MenuItemResponse {
 export interface MenuResponse {
   currency: string;
   items: MenuItemResponse[];
+  // Whether this store takes tips (§10 `Capability::Tips`). The till shows no tip entry when it is
+  // false: the edge refuses a tip on such a store, and offering the guest something that will be
+  // refused is worse than not offering it.
+  tips_enabled: boolean;
+  // The payment methods this store accepts, as their wire names, or `null` when nothing is
+  // restricted. `null` is not an empty list — it means "no restriction published", so a method added
+  // to the enum later keeps working on an unrestricted store.
+  accepted_tender: string[] | null;
 }
 
 // What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the

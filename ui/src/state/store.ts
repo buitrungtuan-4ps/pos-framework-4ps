@@ -62,6 +62,12 @@ interface StoreShape {
   // Vietnam sets to its own. `null` until the price book loads — a screen that needs a currency
   // before then has no answer, and `storeCurrency()` says which fallback it uses and why.
   currency: string | null;
+  // The two published store facts the till has to obey, from the same `GET /api/menu` read as the
+  // price book. `tipsEnabled` gates the tip entry; `acceptedTender` gates the tender buttons.
+  // `null` for either means "the price book has not loaded yet"; for `acceptedTender` a loaded
+  // `null` means the store restricts nothing, which is why the accessor below distinguishes them.
+  tipsEnabled: boolean;
+  acceptedTender: string[] | null;
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
@@ -92,6 +98,10 @@ const [state, setState] = createStore<StoreShape>({
   openBill: {},
   menu: [],
   currency: null,
+  // Closed until the edge says otherwise: a till that offers a tip the store does not take is worse
+  // than one that waits a moment for the price book.
+  tipsEnabled: false,
+  acceptedTender: null,
   bumped: {},
   shift: null,
 });
@@ -404,8 +414,9 @@ export async function addItem(tableId: string, item: MenuItemResponse): Promise<
 
 // The currency every amount on screen is in, as the edge reported it with the price book.
 //
-// Until roadmap **E5** three places wrote `"VND"` as a literal — the shift's opening float, the
-// shift screen's expected/counted figures, and one Pay label — so a store outside Vietnam would
+// Until roadmap **E5** five places wrote `"VND"` as a literal — the shift's opening float, the
+// shift screen's expected/counted figures, one Pay label, the Pay screen's quick-cash notes and the
+// takeaway counter's — so a store outside Vietnam would
 // have shown and *sent* the wrong currency code on its own cash count. The edge has always known
 // the answer (`MenuResponse.currency`, from the synced `locale` node); the app simply threw it
 // away.
@@ -420,6 +431,26 @@ export function storeCurrency(): string {
   return state.currency ?? DEFAULT_CURRENCY;
 }
 
+// Whether this store takes tips, as the edge reported it with the price book (roadmap-v3 **B1.3**).
+//
+// The domain half of B1.3 shipped first: `Payment.tip` reaches the edge, `decide_bill` requires
+// `Capability::Tips`, and the settled event records the amount. None of it could ever fire, because
+// the till had no tip entry at all — so `tip_amount` was zero on every payment a real store took.
+// This is the gate that field is behind.
+export function tipsEnabled(): boolean {
+  return state.tipsEnabled;
+}
+
+// Whether the store accepts `method` (a `PAYMENT_METHOD_*` wire name).
+//
+// An unloaded or unrestricted store accepts everything, which is why both are `true` rather than
+// only the unrestricted one: refusing every tender while the price book loads would leave a till
+// with no way to take money at all, and the edge is the authority that refuses either way.
+export function tenderAccepted(method: string): boolean {
+  const accepted = state.acceptedTender;
+  return accepted === null || accepted.includes(method);
+}
+
 // Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
 // failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
 // empty menu is a real answer — the store has published none — and the screen says so.
@@ -428,6 +459,8 @@ export async function loadMenu(): Promise<void> {
     const response = await api.menu();
     setState("menu", response.items);
     setState("currency", response.currency);
+    setState("tipsEnabled", response.tips_enabled);
+    setState("acceptedTender", response.accepted_tender);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.
   }
