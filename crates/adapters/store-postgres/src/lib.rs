@@ -68,7 +68,7 @@ pub use inventory::{InventoryRow, PostgresInventory};
 pub use media::{MediaAssetRow, PostgresMedia};
 pub use order_queue::{OrderQueueRow, PendingOrderRow, PostgresOrderQueue, PostgresStoreDirectory};
 pub use ota::{PostgresReleases, ReleaseArtifactRow};
-pub use people::{AssignmentRow, EmployeeRow, PostgresPeople, RoleTemplateRow};
+pub use people::{AssignmentRow, EmployeeOrder, EmployeeRow, PostgresPeople, RoleTemplateRow};
 pub use reconcile::{PostgresReconcile, ReconcileRunRow};
 pub use registry::{BrandRow, DeviceRow, PostgresRegistry, StoreRow, TenantRow};
 pub use rollups::PostgresRollups;

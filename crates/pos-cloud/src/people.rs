@@ -116,6 +116,77 @@ pub struct EmployeeUpdate {
     pub status: EntityStatus,
 }
 
+/// The orders `GET /admin/employees` offers a page in.
+///
+/// A closed set rather than a column name from the caller: the wire token maps to a `&'static str`
+/// `ORDER BY` in the adapter through an exhaustive match, so a caller can never name a column, and a
+/// new variant here breaks that mapping at compile time.
+///
+/// Every variant's order is *total* — each ends with the primary key. `ORDER BY name` is no more
+/// total than `ORDER BY created_at` was: two employees can share a name, which is one of the reasons
+/// a staff code exists, and a window over that tie can repeat or skip a row across pages just the
+/// same. [ADR-0098](../../docs/adr/0098-paged-admin-reads.md) decision 9 applies to every sort a
+/// route offers, not only its default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EmployeeSort {
+    /// Newest first — the order the unpaged roster read has always used, and the default.
+    #[default]
+    Newest,
+    /// By name, for finding a person rather than reviewing recent hires.
+    Name,
+    /// By staff code, which is what a badge carries.
+    Code,
+}
+
+impl EmployeeSort {
+    /// The wire token for this order, as `?sort=` sends it.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Name => "name",
+            Self::Code => "code",
+        }
+    }
+
+    /// Reads a wire token, or `None` when it is not one this read offers.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "newest" => Some(Self::Newest),
+            "name" => Some(Self::Name),
+            "code" => Some(Self::Code),
+            _unknown => None,
+        }
+    }
+
+    /// Every token, for the refusal that tells a caller what it may send.
+    #[must_use]
+    pub const fn tokens() -> &'static [&'static str] {
+        &["newest", "name", "code"]
+    }
+}
+
+/// What a caller wants of a page of employees beyond its bounds: which rows, in what order.
+///
+/// Separate from [`PageRequest`] for the reason [`ItemListFilter`](crate::catalog::ItemListFilter)
+/// gives: `PageRequest` is the vocabulary every paged read shares, and the reads that cannot search
+/// or sort would silently ignore these — the class of quiet wrong answer ADR-0098 exists to prevent.
+///
+/// **This is T1 personal data on both sides.** The search runs over a person's name and code, and
+/// the page it shapes carries them back. Neither the filter nor the order reaches a log: an audit
+/// entry for a read would record that a roster was read, never what was typed to find someone
+/// ([ADR-0070](../../docs/adr/0070-people-and-access.md)).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct EmployeeListFilter {
+    /// Case-insensitive substring the person's name or staff code must contain. `None` matches all.
+    pub search: Option<String>,
+    /// The order the page comes back in.
+    pub sort: EmployeeSort,
+    /// Whether `sort` runs the other way. `Newest` is newest-first by nature; this inverts it.
+    pub descending: bool,
+}
+
 /// Persists and reads a tenant's employees. The PIN is **set/reset, never read**: the caller hashes
 /// it with Argon2id and passes the PHC to [`set_pin`](Self::set_pin); [`pin_phc`](Self::pin_phc)
 /// returns the stored hash only for the trusted publish path (compiling the store's permission node)
@@ -157,15 +228,15 @@ pub trait EmployeeStore {
     /// be: an import writes a whole roster in one transaction, and PostgreSQL's `now()` is
     /// transaction time, so `created_at` alone does not order those rows (decision 9).
     ///
-    /// `search`, when given, is a case-insensitive substring the person's **name or staff code**
-    /// must contain — the two things an operator knows about someone they are looking for. It is
-    /// what lets a picker offer the right person out of a roster too long to render, which is the
-    /// prerequisite for paging the People screen's table at all
-    /// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4). `total` counts what the search
-    /// matched, not the whole roster, so a pager sizes itself to the result rather than the set.
+    /// `filter` carries the search and the order. Its `search` is a case-insensitive substring the
+    /// person's **name or staff code** must contain — the two things an operator knows about someone
+    /// they are looking for — and `total` counts what it matched rather than the whole roster, so a
+    /// pager sizes itself to the result. It does not search `pin_phc`, which is not selected by any
+    /// read and would be meaningless to match a substring against besides.
     ///
-    /// It does not search `pin_phc`, which is not selected by any read and would be meaningless to
-    /// match a substring against besides.
+    /// `sort`/`descending` pick the order. Every one of them is total
+    /// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md) decision 9): the default order is not
+    /// the only one a window can straddle a tie in.
     ///
     /// # Errors
     ///
@@ -174,7 +245,7 @@ pub trait EmployeeStore {
         &self,
         tenant: TenantId,
         page: PageRequest,
-        search: Option<&str>,
+        filter: &EmployeeListFilter,
     ) -> impl Future<Output = Result<Page<Versioned<Employee>>, EmployeeStoreError>> + Send;
 
     /// Reads one employee within its tenant, or `None` if there is no such id.

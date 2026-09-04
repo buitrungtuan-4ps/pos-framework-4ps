@@ -65,9 +65,9 @@ use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::paging::{Page, PageRequest};
 use pos_cloud::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
-    RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
-    is_known_permission, permission_catalogue,
+    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
+    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
+    RoleTemplateStoreError, RoleTemplateUpdate, is_known_permission, permission_catalogue,
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
@@ -10799,14 +10799,14 @@ impl EmployeeStore for FakeEmployees {
         &self,
         tenant: TenantId,
         page: PageRequest,
-        search: Option<&str>,
+        filter: &EmployeeListFilter,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
-        // The whole matching roster first, then the window over it — the order the adapter's
-        // `WHERE … ORDER BY … LIMIT … OFFSET` applies. Windowing before ordering would flip a page's
-        // rows in place and leave every page holding the rows it already held; filtering after the
-        // window would make `total` count the roster instead of the match.
-        let needle = search.map(str::to_lowercase);
-        let matched: Vec<Versioned<Employee>> = self
+        // Filter, then order, then window — the order the adapter's `WHERE … ORDER BY … LIMIT …
+        // OFFSET` applies, and each step has to happen where it does. Windowing before ordering
+        // would leave every page holding the rows it already held; filtering after the window would
+        // make `total` count the roster instead of the match.
+        let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+        let mut matched: Vec<Versioned<Employee>> = self
             .list(tenant)
             .await?
             .into_iter()
@@ -10817,6 +10817,27 @@ impl EmployeeStore for FakeEmployees {
                 })
             })
             .collect();
+        // `list` already hands them back newest-first, so `Newest` is a no-op here. Every order ends
+        // in the employee id, matching the adapter's tiebreaker: without it two rows sharing a name
+        // could land on two pages or on neither.
+        match filter.sort {
+            EmployeeSort::Newest => {}
+            EmployeeSort::Name => matched.sort_by(|a, b| {
+                a.record
+                    .name
+                    .cmp(&b.record.name)
+                    .then_with(|| a.record.employee_id.cmp(&b.record.employee_id))
+            }),
+            EmployeeSort::Code => matched.sort_by(|a, b| {
+                a.record
+                    .code
+                    .cmp(&b.record.code)
+                    .then_with(|| a.record.employee_id.cmp(&b.record.employee_id))
+            }),
+        }
+        if filter.descending {
+            matched.reverse();
+        }
         let total = u32::try_from(matched.len()).unwrap_or(u32::MAX);
         let items = matched
             .into_iter()
@@ -11037,7 +11058,11 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
     let mut stitched = Vec::new();
     for offset in [0, 2, 4] {
         let page = store
-            .list_page(mine, PageRequest::new(2, offset).expect("bounds"), None)
+            .list_page(
+                mine,
+                PageRequest::new(2, offset).expect("bounds"),
+                &EmployeeListFilter::default(),
+            )
             .await
             .expect("a page");
         assert_eq!(
@@ -11060,7 +11085,11 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
 
     // A page past the end is empty and still counts the roster — not an error, and not a zero total.
     let beyond = store
-        .list_page(mine, PageRequest::new(10, 50).expect("bounds"), None)
+        .list_page(
+            mine,
+            PageRequest::new(10, 50).expect("bounds"),
+            &EmployeeListFilter::default(),
+        )
         .await
         .expect("a page past the end");
     assert!(beyond.items.is_empty());
@@ -11069,7 +11098,11 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
     // No page carries a PIN hash, the same as the unpaged read: paging changes how much of the
     // roster crosses the wire, never which fields do (ADR-0070).
     let page = store
-        .list_page(mine, PageRequest::new(5, 0).expect("bounds"), None)
+        .list_page(
+            mine,
+            PageRequest::new(5, 0).expect("bounds"),
+            &EmployeeListFilter::default(),
+        )
         .await
         .expect("the whole roster as one page");
     assert!(
@@ -12171,9 +12204,9 @@ impl EmployeeStore for FakePeople {
         &self,
         tenant: TenantId,
         page: PageRequest,
-        search: Option<&str>,
+        filter: &EmployeeListFilter,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
-        self.employees.list_page(tenant, page, search).await
+        self.employees.list_page(tenant, page, filter).await
     }
     async fn get(
         &self,
@@ -13317,6 +13350,119 @@ async fn the_roster_search_narrows_the_page_and_its_total_by_name_or_code() {
     );
     let body = json_body(unpaged).await;
     assert_eq!(body["error"]["details"][0]["field"], "q");
+}
+
+/// `?sort=` and `?order=` reorder the roster page, and an unknown token is refused by name.
+///
+/// The table's headers are what need this: they sort `name` and `code` client-side today, and a
+/// server-paged table whose headers reordered only the visible twelve rows would be telling the
+/// operator something false. A refusal that lists the tokens beats silently handing back the
+/// default order (ADR-0096).
+#[tokio::test]
+async fn the_roster_page_sorts_by_name_or_code_and_refuses_an_unknown_token() {
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    // Created in an order that matches neither sort, so a page that came back in insertion order
+    // would fail both.
+    for (code, name) in [("C03", "Bao"), ("C01", "Mai"), ("C02", "An")] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/employees",
+                &serde_json::json!({ "tenant_id": tenant_ulid, "code": code, "name": name }),
+                &cookie,
+            ))
+            .await
+            .expect("route create employee");
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    // The URL is built outside the async block so the closure borrows `tenant_ulid` rather than
+    // moving it, leaving it usable by the refusal cases below.
+    let page_of = |query: &str| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let url = format!("/admin/employees?tenant_id={tenant_ulid}&limit=10&{query}");
+        async move {
+            let response = router
+                .oneshot(get_with_cookie(&url, &cookie))
+                .await
+                .expect("route a sorted page");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .map(|row| row["name"].as_str().expect("a name").to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    assert_eq!(
+        page_of("sort=name").await,
+        vec!["An".to_owned(), "Bao".to_owned(), "Mai".to_owned()],
+        "by name, ascending"
+    );
+    assert_eq!(
+        page_of("sort=name&order=desc").await,
+        vec!["Mai".to_owned(), "Bao".to_owned(), "An".to_owned()],
+        "and `desc` is the exact reverse, not a different order sharing a first column"
+    );
+    assert_eq!(
+        page_of("sort=code").await,
+        vec!["Mai".to_owned(), "An".to_owned(), "Bao".to_owned()],
+        "by staff code — a different sequence from the name order, so one cannot pass for the other"
+    );
+    assert_eq!(
+        page_of("sort=newest&order=asc").await.len(),
+        3,
+        "the default order names a token too, so a caller can ask for it explicitly"
+    );
+
+    // An unknown token is refused, naming the field and what it accepts.
+    for (query, field) in [
+        ("sort=hired", "sort"),
+        ("sort=name&order=sideways", "order"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/employees?tenant_id={tenant_ulid}&limit=10&{query}"),
+                &cookie,
+            ))
+            .await
+            .expect("route a bad token");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{query} is refused"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], field);
+        assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+    }
+
+    // Both shape a page, so both are refused on the unpaged read rather than ignored.
+    for (query, field) in [("sort=name", "sort"), ("order=desc", "order")] {
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/employees?tenant_id={tenant_ulid}&{query}"),
+                &cookie,
+            ))
+            .await
+            .expect("route an unpaged shaping param");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            field
+        );
+    }
 }
 
 #[tokio::test]

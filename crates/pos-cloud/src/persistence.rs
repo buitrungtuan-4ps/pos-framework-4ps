@@ -26,8 +26,8 @@ use store_postgres::{
     AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
     AuditOrder, BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
     CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
-    CatalogTaxonomyRow, DeviceRow, EmployeeRow, FleetStoreRow, InventoryRow, ItemOrder,
-    MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow,
+    CatalogTaxonomyRow, DeviceRow, EmployeeOrder, EmployeeRow, FleetStoreRow, InventoryRow,
+    ItemOrder, MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow,
     PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
     PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
     PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
@@ -100,8 +100,9 @@ use crate::ota::{
 use crate::paging::{Page, PageRequest};
 use crate::people::{
     Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeStore, EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
-    RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
+    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
+    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
+    RoleTemplateStoreError, RoleTemplateUpdate,
 };
 use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
@@ -2629,12 +2630,22 @@ impl EmployeeStore for PostgresPeople {
         &self,
         tenant: TenantId,
         page: PageRequest,
-        search: Option<&str>,
+        filter: &EmployeeListFilter,
     ) -> Result<Page<Versioned<Employee>>, EmployeeStoreError> {
+        // The one place the wire's sort token becomes an `ORDER BY`. `wildcard_enum_match_arm` is
+        // denied workspace-wide, so a new `EmployeeSort` variant fails here rather than quietly
+        // ordering by `created_at`.
+        let order = match filter.sort {
+            EmployeeSort::Newest => EmployeeOrder::Newest,
+            EmployeeSort::Name => EmployeeOrder::Name,
+            EmployeeSort::Code => EmployeeOrder::Code,
+        };
         let (rows, total) = self
             .fetch_page(
                 &tenant.to_string(),
-                search,
+                filter.search.as_deref(),
+                order,
+                filter.descending,
                 i64::from(page.limit()),
                 i64::from(page.offset()),
             )

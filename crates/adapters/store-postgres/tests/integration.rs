@@ -3579,6 +3579,8 @@ mod audit_log {
 mod employees_store {
     use core::fmt::Write as _;
 
+    use store_postgres::EmployeeOrder;
+
     use super::{TENANT_A, block_on, prepared};
     use store_postgres::RowUpdate;
 
@@ -3774,7 +3776,7 @@ mod employees_store {
             let mut stitched = Vec::new();
             for offset in [0, 2, 4] {
                 let (page, total) = people
-                    .fetch_page(TENANT_A, None, 2, offset)
+                    .fetch_page(TENANT_A, None, EmployeeOrder::Newest, false, 2, offset)
                     .await
                     .expect("page over the tied batch");
                 assert_eq!(
@@ -3795,7 +3797,7 @@ mod employees_store {
 
             // A page past the end is empty and still counts the roster — not an error, not zero.
             let (beyond, beyond_total) = people
-                .fetch_page(TENANT_A, None, 10, 50)
+                .fetch_page(TENANT_A, None, EmployeeOrder::Newest, false, 10, 50)
                 .await
                 .expect("a page past the end still reads");
             assert!(beyond.is_empty());
@@ -3803,7 +3805,7 @@ mod employees_store {
 
             // The other tenant's page sees only its own row, and counts only its own.
             let (theirs, their_total) = people
-                .fetch_page("tenant-b", None, 10, 0)
+                .fetch_page("tenant-b", None, EmployeeOrder::Newest, false, 10, 0)
                 .await
                 .expect("the other tenant's page");
             assert_eq!(their_total, 1, "a headcount is per tenant");
@@ -3842,7 +3844,7 @@ mod employees_store {
             }
 
             let (matched, matched_total) = people
-                .fetch_page(TENANT_A, Some("mai"), 10, 0)
+                .fetch_page(TENANT_A, Some("mai"), EmployeeOrder::Newest, false, 10, 0)
                 .await
                 .expect("the searched page");
             assert_eq!(
@@ -3860,7 +3862,14 @@ mod employees_store {
             // No match is an empty page and a zero total — and this zero is the true one, because
             // the empty-window fallback carries the same predicate the page did.
             let (none, none_total) = people
-                .fetch_page(TENANT_A, Some("nobody"), 10, 0)
+                .fetch_page(
+                    TENANT_A,
+                    Some("nobody"),
+                    EmployeeOrder::Newest,
+                    false,
+                    10,
+                    0,
+                )
                 .await
                 .expect("a search that matches nothing");
             assert!(none.is_empty());
@@ -3873,7 +3882,7 @@ mod employees_store {
             // `ILIKE`, so an operator searching for a literal percent gets a literal search rather
             // than every row.
             let (wild, wild_total) = people
-                .fetch_page(TENANT_A, Some("%"), 10, 0)
+                .fetch_page(TENANT_A, Some("%"), EmployeeOrder::Newest, false, 10, 0)
                 .await
                 .expect("a literal percent");
             assert!(wild.is_empty(), "no name or code contains a percent sign");
@@ -3881,7 +3890,7 @@ mod employees_store {
 
             // An unsearched page is still the whole roster.
             let (all, all_total) = people
-                .fetch_page(TENANT_A, None, 10, 0)
+                .fetch_page(TENANT_A, None, EmployeeOrder::Newest, false, 10, 0)
                 .await
                 .expect("the unsearched page");
             assert_eq!(all.len(), 3);
@@ -3889,6 +3898,175 @@ mod employees_store {
             assert!(
                 all.iter().all(|row| !row.has_pin),
                 "a searched or unsearched page carries whether a PIN exists, never the hash"
+            );
+
+            drop(admin);
+        });
+    }
+
+    /// `?sort=` reorders the page, every order is total, and `?order=desc` is the exact reverse.
+    ///
+    /// The three orders are asserted against data whose three sequences differ, so no two can pass
+    /// for one another: a name order that quietly fell back to `created_at` would fail rather than
+    /// coincide. The `desc` case is the reverse of the `asc` one *element by element*, which is what
+    /// the flipped tiebreaker in [`employee_order`] buys — without it, reversing only the leading
+    /// column would give a different total order that happens to share a first row.
+    #[test]
+    fn the_roster_page_orders_by_name_or_code_and_reverses_exactly() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            // Inserted in an order matching neither sort, so insertion order cannot pass for either.
+            // Two people share the name "Bao" — the ordinary case a staff code exists to
+            // disambiguate — so the `id` tiebreaker actually fires and the reversal has something to
+            // get wrong.
+            for (id, code, name) in [
+                ("01EMPSORT00000000000000A1", "C03", "Bao"),
+                ("01EMPSORT00000000000000A2", "C01", "Mai"),
+                ("01EMPSORT00000000000000A3", "C02", "An"),
+                ("01EMPSORT00000000000000A4", "C04", "Bao"),
+            ] {
+                people
+                    .insert(id, TENANT_A, code, name)
+                    .await
+                    .expect("insert the employee");
+            }
+
+            // Codes rather than names, because two rows share a name: only the code distinguishes
+            // them, so only a code-level assertion can see the tiebreaker do its job.
+            let codes = |rows: Vec<store_postgres::EmployeeRow>| {
+                rows.into_iter().map(|row| row.code).collect::<Vec<_>>()
+            };
+
+            // "Bao"/C03 before "Bao"/C04, because the tiebreaker is the id and A1 precedes A4.
+            let ascending = vec![
+                "C02".to_owned(),
+                "C03".to_owned(),
+                "C04".to_owned(),
+                "C01".to_owned(),
+            ];
+            let (by_name, _) = people
+                .fetch_page(TENANT_A, None, EmployeeOrder::Name, false, 10, 0)
+                .await
+                .expect("by name");
+            assert_eq!(codes(by_name), ascending);
+
+            let (by_name_desc, _) = people
+                .fetch_page(TENANT_A, None, EmployeeOrder::Name, true, 10, 0)
+                .await
+                .expect("by name, reversed");
+            let mut reversed = ascending.clone();
+            reversed.reverse();
+            assert_eq!(
+                codes(by_name_desc),
+                reversed,
+                "reversed is the exact reverse, element by element — which needs the tiebreaker to \
+                 flip with the direction, not only the leading column"
+            );
+
+            let (by_code, _) = people
+                .fetch_page(TENANT_A, None, EmployeeOrder::Code, false, 10, 0)
+                .await
+                .expect("by code");
+            assert_eq!(
+                codes(by_code),
+                vec![
+                    "C01".to_owned(),
+                    "C02".to_owned(),
+                    "C03".to_owned(),
+                    "C04".to_owned()
+                ],
+                "a different sequence from the name order, so one cannot pass for the other"
+            );
+
+            // A sorted page still partitions the set: four pages of one, no repeat and no gap —
+            // across the shared name, which is where a non-total order would drop or double a row.
+            let mut stitched = Vec::new();
+            for offset in [0, 1, 2, 3] {
+                let (page, total) = people
+                    .fetch_page(TENANT_A, None, EmployeeOrder::Name, false, 1, offset)
+                    .await
+                    .expect("a page of the name order");
+                assert_eq!(total, 4, "the total is the set, whatever the order");
+                stitched.extend(codes(page));
+            }
+            assert_eq!(
+                stitched, ascending,
+                "windows over the name order stitch back into it"
+            );
+
+            // The search composes with the order rather than replacing it.
+            let (searched, searched_total) = people
+                .fetch_page(TENANT_A, Some("bao"), EmployeeOrder::Name, false, 10, 0)
+                .await
+                .expect("searched and sorted");
+            assert_eq!(searched_total, 2, "both people named Bao");
+            assert_eq!(
+                codes(searched),
+                vec!["C03".to_owned(), "C04".to_owned()],
+                "and the tiebreaker orders them inside the search too"
+            );
+
+            drop(admin);
+        });
+    }
+
+    /// The name order rides `employees_by_tenant_name` (migration 0046) rather than sorting.
+    ///
+    /// The same reasoning as the default order's plan test, applied to the order a query parameter
+    /// introduced: `?sort=name` that fell back to a sort of the tenant's whole roster would
+    /// reintroduce, through a parameter, exactly the cost migration 0045 exists to avoid.
+    #[test]
+    fn the_name_ordered_roster_page_is_served_by_its_own_index() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            for index in 0..30_i32 {
+                people
+                    .insert(
+                        &format!("01EMPNAME00000000000000{index:03}"),
+                        TENANT_A,
+                        &format!("Q{index:03}"),
+                        &format!("Name {index:03}"),
+                    )
+                    .await
+                    .expect("insert");
+            }
+            admin
+                .batch_execute("ANALYZE employees")
+                .await
+                .expect("analyze");
+
+            let plan = {
+                admin
+                    .batch_execute("SET enable_seqscan = off")
+                    .await
+                    .expect("prefer an index if one fits");
+                let rows = admin
+                    .query(
+                        "EXPLAIN SELECT id FROM employees WHERE tenant_id = $1 \
+                         ORDER BY name ASC, id ASC LIMIT $2 OFFSET $3",
+                        &[&TENANT_A, &10_i64, &0_i64],
+                    )
+                    .await
+                    .expect("explain");
+                admin
+                    .batch_execute("RESET enable_seqscan")
+                    .await
+                    .expect("restore");
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(
+                plan.contains("employees_by_tenant_name"),
+                "the name order walks its own index: {plan}"
+            );
+            assert!(
+                !plan.contains("Sort"),
+                "and walking it *is* the sort, so no Sort node sits above the scan: {plan}"
             );
 
             drop(admin);

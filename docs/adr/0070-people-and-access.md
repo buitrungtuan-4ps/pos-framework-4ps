@@ -176,3 +176,34 @@ person" from "that person is archived". The disabled row answers the question th
 
 What is left for step three is the employees table itself — now the screen's only reader of the whole
 roster.
+
+## Delivery note — the roster page can be ordered (2026-09-04)
+
+`GET /admin/employees` takes `?sort=newest|name|code` and `?order=asc|desc`. Nothing in the console
+calls them yet, and that is deliberate: this is the half of the third step that has to exist before
+the other half can be written.
+
+**Why it is not speculative now, having been exactly that a slice ago.** The previous note argued
+against adding these because no screen needed them. Building the picker made the need concrete:
+`employeeColumns()` gives `name` and `code` a `sortValue`, so the People table's headers sort
+client-side today, and `DataTable` decides a table is server-sorted by whether the caller offered
+`onSort`. Server-paging the table without these parameters would therefore not "defer" header
+sorting — it would silently delete it, or worse, leave headers that reorder twelve visible rows and
+look like they reordered the roster. The requirement was discovered by reading the consumer, not
+predicted.
+
+**Every order is total, and the tiebreaker flips with the direction.** `ORDER BY name` is no more
+total than `ORDER BY created_at` was: two employees sharing a name is ordinary — it is one of the
+reasons a staff code exists — so each order ends in the primary key. The descending variants reverse
+the tiebreaker too, so `?order=desc` is the exact reverse of the ascending page rather than a
+different total order that happens to share a first row. That distinction is invisible until two
+rows tie, which is why the test seeds a shared name: with distinct names the mutation that stops
+flipping the tiebreaker passes.
+
+**The `code` order gets no new index and the `name` order does.** `employees_code_key (tenant_id,
+code)` from migration 0023 already covers the code order, and because it is UNIQUE the `id`
+tiebreaker there can never fire — `code` alone already orders a tenant's rows totally. The read
+appends it anyway, so that the totality rule holds by construction rather than by a reader
+remembering which column happens to have a unique index behind it. Names are not unique, so
+migration 0046 adds `employees_by_tenant_name (tenant_id, name, id)`; an `EXPLAIN` test asserts the
+plan walks it with no `Sort` node above the scan, and deleting the migration fails that test.
