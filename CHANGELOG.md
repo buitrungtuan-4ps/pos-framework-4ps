@@ -16,6 +16,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Tenants, brands and devices can be renamed and archived** (production-readiness **O2**). The
+  registry has had `PATCH /admin/tenants/{id}`, `/admin/brands/{id}` and
+  `/admin/stores/{id}/devices/{id}` since WS-C — audited, etag-guarded, and with **no client calling
+  any of them**. An org, a brand or a device typed in wrong stayed wrong, and one that closed stayed
+  active forever. Only stores had the buttons.
+
+  All three now have the same three verbs the stores table has had all along. The organisation in
+  context is renamed from a new **Organisation** card on the Stores screen (archiving it is offered
+  too, behind a confirm that says plainly it is the org you are standing in); brands get their own
+  table beside the stores one; registry devices get a **Registered devices** roster on the
+  Activation screen, with rename, a kind correction, and archive — and an archived device is no
+  longer offered a fresh activation code, which it silently was before.
+
+  Every save carries the row's `ETag` back as `If-Match`, so an edit made against a version somebody
+  else has already replaced is refused rather than overwriting them
+  ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)). Archiving a *registry* device is
+  not the same as retiring a *paired till* — different credential, different tier — and the confirm
+  says so, pointing at the till's own Devices screen.
+
 - **A store can retire a lost till** (production-readiness **O1**). Pairings are durable by design
   ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md)) — a restart no longer unpairs the shop —
   which also means a tablet that walks out of the building keeps working until somebody retires it.

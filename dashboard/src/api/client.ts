@@ -976,10 +976,29 @@ export const api = {
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
   createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),
+  // Rename or archive a tenant (ADR-0065, production-readiness O2). `etag` is the version the caller
+  // read it at (ADR-0094): a save against a version the registry no longer holds is refused `412`
+  // rather than overwriting whoever edited in between.
+  updateTenant: (tenantId: string, fields: { name: string; status: EntityStatus }, etag: ETag) =>
+    requestJsonIfMatch<Tenant>("PATCH", `/admin/tenants/${encodeURIComponent(tenantId)}`, etag, {
+      name: fields.name,
+      status: fields.status,
+    }),
   listBrands: (tenantId: string) =>
     requestJson<Brand[]>("GET", `/admin/brands?${tenantQuery(tenantId)}`),
   createBrand: (tenantId: string, name: string) =>
     requestJson<Brand>("POST", "/admin/brands", { tenant_id: tenantId, name }),
+  updateBrand: (
+    brandId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<Brand>("PATCH", `/admin/brands/${encodeURIComponent(brandId)}`, etag, {
+      tenant_id: tenantId,
+      name: fields.name,
+      status: fields.status,
+    }),
   listStores: (tenantId: string) =>
     requestJson<Store[]>("GET", `/admin/stores?${tenantQuery(tenantId)}`),
   createStore: (tenantId: string, name: string, brandId?: string) =>
@@ -1014,6 +1033,22 @@ export const api = {
       name,
       kind,
     }),
+  // Rename, re-kind, or archive a registry device (ADR-0065, production-readiness O2). Archiving is
+  // how a device that was replaced leaves the roster — it does not retire a paired *till*, which is
+  // the store server's own `POST /api/pair/revoke`, a different credential in a different tier.
+  updateDevice: (
+    deviceId: string,
+    tenantId: string,
+    storeId: string,
+    fields: { name: string; kind: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<Device>(
+      "PATCH",
+      `/admin/stores/${encodeURIComponent(storeId)}/devices/${encodeURIComponent(deviceId)}`,
+      etag,
+      { tenant_id: tenantId, name: fields.name, kind: fields.kind, status: fields.status },
+    ),
 
   // --- catalog authoring (ADR-0066): items, tax classes, menus with inheritance, and placements ---
   listTaxClasses: (tenantId: string) =>
