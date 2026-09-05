@@ -10230,7 +10230,10 @@ async fn a_lease_bump_advances_the_authority_and_publishes_the_node_the_store_re
         .effective;
     let parsed: pos_core::lease::LeaseConfig = serde_json::from_value(effective["lease"].clone())
         .expect("the edge's own type reads the effective node back");
-    assert_eq!(parsed.generation(), pos_core::lease::LeaseGeneration::new(1));
+    assert_eq!(
+        parsed.generation(),
+        pos_core::lease::LeaseGeneration::new(1)
+    );
 }
 
 #[tokio::test]
