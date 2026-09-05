@@ -6,7 +6,7 @@ import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { ApiKeySummary, Store } from "../api/types";
-import { type MessageKey, t } from "../i18n";
+import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
@@ -127,6 +127,28 @@ export function ApiKeys() {
     return stores().find((store) => store.store_id === row.store_id)?.name ?? row.store_id;
   };
 
+  const formatMoment = (ms: number) =>
+    new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
+      new Date(ms),
+    );
+
+  // A key past its expiry stops working, and the console said "Active" (production-readiness O4):
+  // `expires_at_ms` was served from the day the key store was written and this screen never read it.
+  // Revoked outranks expired — a revoked key was deliberately killed, which is the more useful thing
+  // to know about it.
+  const isExpired = (row: ApiKeySummary) =>
+    row.expires_at_ms !== null && row.expires_at_ms <= Date.now();
+
+  const statusTone = (row: ApiKeySummary) =>
+    row.revoked || isExpired(row) ? ("disabled" as const) : ("active" as const);
+
+  const statusLabel = (row: ApiKeySummary): MessageKey => {
+    if (row.revoked) {
+      return "status.revoked";
+    }
+    return isExpired(row) ? "status.expired" : "status.active";
+  };
+
   const columns = (): Column<ApiKeySummary>[] => [
     {
       key: "store",
@@ -142,12 +164,19 @@ export function ApiKeys() {
     {
       key: "status",
       header: t("apiKeys.status"),
+      cell: (row) => <StatusBadge tone={statusTone(row)} label={t(statusLabel(row))} />,
+      sortValue: (row) => statusLabel(row),
+    },
+    {
+      key: "expires",
+      header: t("apiKeys.expires"),
       cell: (row) => (
-        <StatusBadge
-          tone={row.revoked ? "disabled" : "active"}
-          label={row.revoked ? t("status.revoked") : t("status.active")}
-        />
+        <span class="text-ink-muted">
+          {row.expires_at_ms === null ? t("apiKeys.neverExpires") : formatMoment(row.expires_at_ms)}
+        </span>
       ),
+      // Never-expiring keys sort last: a key with an end date is the one an operator is looking for.
+      sortValue: (row) => row.expires_at_ms ?? Number.MAX_SAFE_INTEGER,
     },
     {
       key: "id",

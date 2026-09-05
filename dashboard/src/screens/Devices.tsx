@@ -97,6 +97,21 @@ export function Devices() {
   };
 
   const columns = (): Column<DeviceProposalSummary>[] => [
+    // The two facts that identify the thing being approved (production-readiness O3). The cloud has
+    // always served them and this screen dropped both, so an operator was asked to approve a kind
+    // and a ULID — with no way to tell the counter's printer from the oven's.
+    {
+      key: "name",
+      header: t("devices.name"),
+      cell: (row) => <span class="text-ink">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "address",
+      header: t("devices.address"),
+      cell: (row) => <span class="font-mono text-sm text-ink-muted">{row.address}</span>,
+      sortValue: (row) => row.address,
+    },
     {
       key: "store",
       header: t("devices.store"),
@@ -137,7 +152,7 @@ export function Devices() {
               <DataTable
                 columns={columns()}
                 rows={loaded()}
-                searchText={(row) => `${storeName(row.store_id)} ${row.kind}`}
+                searchText={(row) => `${row.name} ${row.address} ${storeName(row.store_id)} ${row.kind}`}
                 pageSize={12}
                 empty={<EmptyState title={t("devices.empty")} />}
                 actionsHeader={t("common.actions")}

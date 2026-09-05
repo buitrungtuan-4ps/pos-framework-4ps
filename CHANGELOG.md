@@ -14,6 +14,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **The device-approval screen shows what it is approving** (production-readiness **O3**). A
+  proposal's `name` and `address` — the two facts that say which printer this is — have been served
+  since the flow was built and were dropped by the dashboard's own type, so the screen asked an
+  operator to approve a *kind* and a ULID. Both are now columns and both are searchable, along with
+  the `connection`, `station_id` and `status` the same type had been discarding.
+
+- **An expired API key no longer renders as "Active"** (production-readiness **O4**).
+  `expires_at_ms` has been served since the key store was written; the dashboard type omitted it, so
+  a key that stopped working still showed a green badge. The status now reads `Expired`, and a new
+  **Expires** column shows when — with never-expiring keys sorted last, because a key with an end
+  date is the one someone is looking for. Revoked still outranks expired: a revoked key was killed on
+  purpose, which is the more useful thing to know about it. Setting an expiry *from the create form*
+  is a separate, smaller gap and is still open.
+
 ### Security
 
 - **The cloud stamps an ingested event's tenant; the store no longer claims one**
