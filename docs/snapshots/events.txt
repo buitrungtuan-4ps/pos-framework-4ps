@@ -11,6 +11,7 @@ billing.bill.opened	field=bill_id
 billing.bill.opened	field=order_id
 billing.bill.opened	schema_version=1
 billing.bill.settled	field=bill_id
+billing.bill.settled	field=buyer_subject_id
 billing.bill.settled	field=receipt_number
 billing.bill.settled	field=reduction_total
 billing.bill.settled	field=rounding_adjustment

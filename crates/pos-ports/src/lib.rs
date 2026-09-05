@@ -1,15 +1,17 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The nineteen boundaries between the framework and the outside world.
+//! The twenty boundaries between the framework and the outside world.
 //!
 //! Every external system — database, broker, printer, terminal, marketplace, tax
 //! authority — is one implementation of one trait defined here. The list is fixed
 //! by `docs/adr/0021-corrected-port-list.md` and its amendments —
 //! `docs/adr/0053-cloud-sync-port.md` added the seventeenth, `docs/adr/0091-durable-edge-auth-state.md`
-//! the eighteenth, and `docs/adr/0064-edge-order-in.md` Amendment the nineteenth — `IntakeLedger`,
-//! which shipped as a trait its own record called a port and was registered late. A twentieth needs
-//! an ADR merged first, and the count here is checkable against `PortName::ALL`.
+//! the eighteenth, `docs/adr/0064-edge-order-in.md` Amendment the nineteenth — `IntakeLedger`,
+//! which shipped as a trait its own record called a port and was registered late — and
+//! `docs/adr/0107-the-buyer-is-a-subject.md` the twentieth, `SubjectStore`, the place a store keeps
+//! personal data so the immutable log never has to. A twenty-first needs an ADR merged first, and
+//! the count here is checkable against `PortName::ALL`.
 //!
 //! # Shape
 //!
@@ -17,9 +19,9 @@
 //! `unimplemented!()` means the port is wrong, not the adapter
 //! (`docs/design-principles.md`, interface segregation).
 //!
-//! Two of the nineteen are synchronous and are re-exported from `pos-proto`
+//! Two of the twenty are synchronous and are re-exported from `pos-proto`
 //! rather than defined here, so that there is exactly one definition of each:
-//! `ClockSource` and `IdGenerator`. The other seventeen are asynchronous,
+//! `ClockSource` and `IdGenerator`. The other eighteen are asynchronous,
 //! declared with native `async fn` in trait — no procedural macro, no boxing on
 //! the happy path. Where a family needs runtime selection between several
 //! compiled-in adapters, this crate also carries a hand-written object-safe
@@ -59,6 +61,7 @@ pub mod payment;
 pub mod printer;
 pub mod shipping;
 pub mod signer;
+pub mod subject_store;
 pub mod tx;
 
 pub use blob_store::{BlobKey, BlobKeyError, BlobStore};
@@ -94,6 +97,7 @@ pub use shipping::{
     CourierJobRef, DeliveryContact, DeliveryRequest, Shipment, ShipmentUpdate, ShippingDispatch,
 };
 pub use signer::{KeyId, PublicKey, Signature, Signer};
+pub use subject_store::{REDACTION, SubjectRecord, SubjectStore};
 pub use tx::{Transactional, TxContext};
 
 /// The two synchronous ports, re-exported so the port list has one definition of each rather than

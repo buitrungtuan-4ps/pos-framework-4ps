@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use pos_core::billing::Payment;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
 use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
@@ -27,7 +28,7 @@ use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use pos_proto::ids::EventId;
 
-use crate::app::{BillView, Edge};
+use crate::app::{BillView, BuyerDetails, Edge};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers};
 
@@ -68,10 +69,60 @@ impl PaymentRequest {
 }
 
 /// A settle request: the payments applied, each carrying the tip taken on it (a separate ledger,
-/// never part of the total).
-#[derive(Debug, Deserialize)]
+/// never part of the total), and — for a B2B sale — who the tax invoice is for.
+///
+/// No `Debug`: it can carry a buyer, and a derived one would put that person's name into any log
+/// line or rejection message that touched the request (`AGENTS.md` §2).
+#[derive(Deserialize)]
 pub(crate) struct SettleRequest {
     payments: Vec<PaymentRequest>,
+    /// The corporate customer the invoice is issued to
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). Absent on every ordinary
+    /// retail sale, and `#[serde(default)]` so a till built before this field existed settles
+    /// exactly as it did.
+    #[serde(default)]
+    buyer: Option<BuyerRequest>,
+}
+
+/// The buyer a till captured for a corporate invoice.
+///
+/// Personal data, every field of it, so it goes to the store's subject store and never into an
+/// event — `Deserialize` only, with no `Debug`, because a derived one would put a buyer's name into
+/// the axum rejection message for a malformed body.
+#[derive(Deserialize)]
+pub(crate) struct BuyerRequest {
+    name: String,
+    #[serde(default)]
+    tax_code: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+}
+
+impl BuyerRequest {
+    /// Resolves the wire buyer into the application layer's, trimming each field and dropping the
+    /// ones left empty — a blank line on a legal document reads as a value somebody forgot to type.
+    ///
+    /// Returns `None` when the name is blank, because a buyer with no name is not a buyer: the one
+    /// field both Japan's qualified invoice and India's Rule 46 require is the name.
+    fn into_details(self) -> Option<BuyerDetails> {
+        let trimmed = |value: Option<String>| {
+            value
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        };
+        let name = self.name.trim().to_owned();
+        if name.is_empty() {
+            return None;
+        }
+        Some(BuyerDetails {
+            name,
+            tax_code: trimmed(self.tax_code),
+            address: trimmed(self.address),
+            email: trimmed(self.email),
+        })
+    }
 }
 
 /// A bill as returned to a device after a command.
@@ -156,7 +207,7 @@ pub(crate) async fn settle<S>(
     Json(request): Json<SettleRequest>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
         return bad_request("a bill id is a ULID");
@@ -179,7 +230,22 @@ where
     {
         return bad_request("this store does not accept one of those payment methods as tender");
     }
-    let outcome = edge.settle_bill(actor, bill_id, payments).await;
+    // The buyer, when this is a B2B sale (ADR-0107). Its registration number is checked for
+    // *shape* by the compiled-in country module and never for existence: existence is a call to the
+    // authority, and a cashier has to be able to take a corporate customer's number with the line
+    // down. A country this build does not carry stores the number unchecked, which is the same
+    // posture the cloud takes for a store profile it cannot validate.
+    let buyer = request.buyer.and_then(BuyerRequest::into_details);
+    if let Some(buyer) = buyer.as_ref()
+        && let Some(tax_code) = buyer.tax_code.as_ref()
+        && !tax_code_is_well_formed(tax_code)
+    {
+        return bad_request("that is not a well-formed tax code for this country");
+    }
+
+    let outcome = edge
+        .settle_bill(actor, bill_id, payments, buyer.as_ref())
+        .await;
     let Ok(view) = outcome else {
         return respond(outcome);
     };
@@ -188,10 +254,21 @@ where
     // rolled-back settle must never have printed (ADR-0100, `Edge::settle_bill`).
     let mut response = BillResponse::from(view.clone());
     if view.print_receipt {
-        let printed = print_receipt_for(printers.as_deref(), &edge, &view).await;
+        let printed = print_receipt_for(printers.as_deref(), &edge, &view, buyer.as_ref()).await;
         response.receipt_print = Some(printed.as_wire().to_owned());
     }
     Json(response).into_response()
+}
+
+/// Whether a buyer's registration number is well formed for the country this binary carries.
+///
+/// A build with no `country-*` feature carries an empty registry and accepts anything: refusing
+/// every corporate invoice because nobody compiled a country in would make the store *less* able to
+/// trade than before the field existed. A build that does carry one applies it — format only.
+fn tax_code_is_well_formed(tax_code: &str) -> bool {
+    crate::countries::registry()
+        .modules()
+        .all(|module| module.is_valid_tax_code(tax_code))
 }
 
 /// Runs the receipt effect and says what came of it.
@@ -202,6 +279,7 @@ async fn print_receipt_for<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
     view: &BillView,
+    buyer: Option<&BuyerDetails>,
 ) -> PrintOutcome
 where
     S: EventStore + Send + Sync + 'static,
@@ -221,6 +299,7 @@ where
             EventId::new(view.bill_id.as_ulid()),
             receipt_number,
             totals,
+            buyer,
         )
         .await
 }

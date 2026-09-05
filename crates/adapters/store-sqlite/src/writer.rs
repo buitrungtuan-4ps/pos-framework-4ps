@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigUpdate};
 use pos_ports::event_store::{OutboxPosition, OutboxRecord};
+use pos_ports::subject_store::REDACTION;
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, EventId, OrderId, StoreId};
@@ -33,6 +34,19 @@ pub(crate) struct IntakeWrite {
     pub(crate) sales_channel: String,
     pub(crate) external_reference: String,
     pub(crate) record_json: String,
+}
+
+/// A subject row buffered for the settle's transaction
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
+/// to JSON by the store, so the writer thread stays free of `pos_ports` types — and so this file
+/// never has to know that the JSON it is moving is somebody's name.
+#[derive(Debug)]
+pub(crate) struct SubjectWrite {
+    pub(crate) store_id: StoreId,
+    pub(crate) subject_id: String,
+    pub(crate) collected_at_ms: i64,
+    pub(crate) fields_json: String,
+    pub(crate) masked_at_ms: Option<i64>,
 }
 
 /// A device-registry row in the writer thread's own terms (ADR-0091).
@@ -59,12 +73,13 @@ pub(crate) struct DeviceSessionRow {
 
 /// A unit of work for the writer thread. Every variant carries the channel its result returns on.
 pub(crate) enum Command {
-    /// Flush a transaction's buffered events, config update, and intake row in one SQLite
-    /// transaction.
+    /// Flush a transaction's buffered events, config update, intake row and subject rows in one
+    /// SQLite transaction.
     Commit {
         events: Vec<EventEnvelope<RawPayload>>,
         config: Option<ConfigUpdate>,
         intake: Option<IntakeWrite>,
+        subjects: Vec<SubjectWrite>,
         reply: oneshot::Sender<Result<(), PortError>>,
     },
     /// Read a store's events, ascending by `event_id`, after an optional cursor.
@@ -148,6 +163,22 @@ pub(crate) enum Command {
         store_id: StoreId,
         reply: oneshot::Sender<Result<Option<SelfTestRow>, PortError>>,
     },
+    /// One subject's stored row (ADR-0107), or `None`. Deliberately by id: there is no
+    /// read-them-all, because a query that could enumerate personal data is a query that can export
+    /// it.
+    FetchSubject {
+        store_id: StoreId,
+        subject_id: String,
+        reply: oneshot::Sender<Result<Option<SubjectWrite>, PortError>>,
+    },
+    /// The retention sweep: scrub every unmasked subject collected at or before a cutoff, returning
+    /// how many rows changed (ADR-0107, ADR-0035).
+    MaskSubjects {
+        store_id: StoreId,
+        cutoff_ms: i64,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<u64, PortError>>,
+    },
     /// Anything in the device registry (ADR-0091), grouped because it is a distinct concern from
     /// the event store and keeps this enum's dispatch readable.
     Registry(RegistryCommand),
@@ -228,9 +259,25 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 events,
                 config,
                 intake,
+                subjects,
                 reply,
             } => {
-                let _ = reply.send(commit(&mut conn, &events, config, intake));
+                let _ = reply.send(commit(&mut conn, &events, config, intake, &subjects));
+            }
+            Command::FetchSubject {
+                store_id,
+                subject_id,
+                reply,
+            } => {
+                let _ = reply.send(fetch_subject(&conn, store_id, &subject_id));
+            }
+            Command::MaskSubjects {
+                store_id,
+                cutoff_ms,
+                now_ms,
+                reply,
+            } => {
+                let _ = reply.send(mask_subjects(&conn, store_id, cutoff_ms, now_ms));
             }
             Command::Read {
                 store_id,
@@ -382,6 +429,7 @@ fn commit(
     events: &[EventEnvelope<RawPayload>],
     config: Option<ConfigUpdate>,
     intake: Option<IntakeWrite>,
+    subjects: &[SubjectWrite],
 ) -> Result<(), PortError> {
     let port = PortName::EventStore;
     let tx = conn
@@ -469,7 +517,83 @@ fn commit(
         }
     }
 
+    for subject in subjects {
+        // Upsert rather than a plain insert: ids are minted fresh per record, so this is not a merge
+        // policy anyone relies on — it is the absence of a failure mode, because a retried write must
+        // not be able to fail a transaction that is otherwise sound (ADR-0107).
+        tx.execute(
+            "INSERT INTO subjects (store_id, subject_id, collected_at, fields, masked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (store_id, subject_id) DO UPDATE SET
+                 collected_at = excluded.collected_at,
+                 fields       = excluded.fields,
+                 masked_at    = excluded.masked_at",
+            params![
+                subject.store_id.to_string(),
+                subject.subject_id,
+                subject.collected_at_ms,
+                subject.fields_json,
+                subject.masked_at_ms,
+            ],
+        )
+        .map_err(|error| db_error(PortName::SubjectStore, error))?;
+    }
+
     tx.commit().map_err(|error| db_error(port, error))
+}
+
+/// One subject row, by id, scoped to the store that recorded it.
+fn fetch_subject(
+    conn: &Connection,
+    store_id: StoreId,
+    subject_id: &str,
+) -> Result<Option<SubjectWrite>, PortError> {
+    let port = PortName::SubjectStore;
+    let mut statement = conn
+        .prepare_cached(
+            "SELECT collected_at, fields, masked_at FROM subjects
+             WHERE store_id = ?1 AND subject_id = ?2",
+        )
+        .map_err(|error| db_error(port, error))?;
+    let mut rows = statement
+        .query(params![store_id.to_string(), subject_id])
+        .map_err(|error| db_error(port, error))?;
+    let Some(row) = rows.next().map_err(|error| db_error(port, error))? else {
+        return Ok(None);
+    };
+    Ok(Some(SubjectWrite {
+        store_id,
+        subject_id: subject_id.to_owned(),
+        collected_at_ms: row.get(0).map_err(|error| db_error(port, error))?,
+        fields_json: row.get(1).map_err(|error| db_error(port, error))?,
+        masked_at_ms: row.get(2).map_err(|error| db_error(port, error))?,
+    }))
+}
+
+/// The retention sweep (ADR-0107, ADR-0035): replace every field *value* with the redaction
+/// sentinel and stamp `masked_at`, for unmasked rows collected at or before the cutoff.
+///
+/// `json_group_object` rebuilds the document from its own keys, so the field names survive and the
+/// values do not — which is what keeps "what kind of data was held" knowable after the data is gone.
+/// The `masked_at IS NULL` guard is what makes a second sweep report zero rather than re-stamping
+/// yesterday's masking.
+fn mask_subjects(
+    conn: &Connection,
+    store_id: StoreId,
+    cutoff_ms: i64,
+    now_ms: i64,
+) -> Result<u64, PortError> {
+    let port = PortName::SubjectStore;
+    let changed = conn
+        .execute(
+            "UPDATE subjects SET
+                 fields = (SELECT json_group_object(key, ?4) FROM json_each(subjects.fields)),
+                 masked_at = ?3
+             WHERE store_id = ?1 AND collected_at <= ?2 AND masked_at IS NULL",
+            params![store_id.to_string(), cutoff_ms, now_ms, REDACTION],
+        )
+        .map_err(|error| db_error(port, error))?;
+    Ok(u64::try_from(changed).unwrap_or(0))
 }
 
 /// A failed intake insert is either the key already existing — the concurrent-duplicate case the

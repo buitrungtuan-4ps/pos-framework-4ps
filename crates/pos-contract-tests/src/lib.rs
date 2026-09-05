@@ -71,6 +71,7 @@ pub mod payment;
 pub mod printer;
 pub mod shipping;
 pub mod signer;
+pub mod subject_store;
 
 /// Re-exported for the suite macros, which expand in the adapter's crate and so cannot name
 /// `pos_ports` unless the adapter happens to depend on it.
@@ -101,6 +102,8 @@ pub const __PORT_ID_GENERATOR: PortName = PortName::IdGenerator;
 pub const __PORT_INTAKE_LEDGER: PortName = PortName::IntakeLedger;
 #[doc(hidden)]
 pub const __PORT_KEY_VAULT: PortName = PortName::KeyVault;
+#[doc(hidden)]
+pub const __PORT_SUBJECT_STORE: PortName = PortName::SubjectStore;
 #[doc(hidden)]
 pub const __PORT_METRICS_SINK: PortName = PortName::MetricsSink;
 #[doc(hidden)]
@@ -375,7 +378,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Nineteen entries, matching `PortName::ALL`.
+/// Twenty entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -396,6 +399,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::CloudSync, "cloud_sync_suite"),
     (PortName::DeviceRegistry, "device_registry_suite"),
     (PortName::IntakeLedger, "intake_ledger_suite"),
+    (PortName::SubjectStore, "subject_store_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.

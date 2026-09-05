@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Harness implementations, so `tests/contract.rs` can run all eighteen suites.
+//! Harness implementations, so `tests/contract.rs` can run all nineteen suites.
 //!
 //! Each one is thin, and that is the point: the destructive operations a suite needs — losing power,
 //! severing a link, emptying a paper roll, staging an ambiguous card result — are methods on the
@@ -18,7 +18,7 @@ use pos_contract_tests::harness::{
     DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
     FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyVaultHarness,
     MessageLinkHarness, MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness,
-    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
+    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness, SubjectStoreHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -92,6 +92,18 @@ impl IntakeLedgerHarness for StoreHarness {
     type Ledger = FakeStore;
 
     async fn fresh(&self) -> Setup<Self::Ledger> {
+        Ok(FakeStore::new())
+    }
+
+    fn store_id(&self) -> StoreId {
+        store_id()
+    }
+}
+
+impl SubjectStoreHarness for StoreHarness {
+    type Store = FakeStore;
+
+    async fn fresh(&self) -> Setup<Self::Store> {
         Ok(FakeStore::new())
     }
 

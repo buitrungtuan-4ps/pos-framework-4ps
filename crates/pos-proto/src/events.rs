@@ -31,7 +31,7 @@ use crate::envelope::{DecodeError, EventEnvelope, EventPayload, RawPayload};
 use crate::ids::{
     BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId,
     OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId,
-    StockLedgerEntryId, SupplierId, TableId, TaxClassId, VoucherId,
+    StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
 };
 use crate::money::{Money, Ratio};
 use crate::quantity::Quantity;
@@ -449,6 +449,25 @@ event_catalogue! {
         rounding_adjustment: Money,
         /// What the guest owes: subtotal − reductions + service charge + tax + rounding.
         total_due: Money,
+        /// The buyer this invoice was issued to, for a B2B tax invoice
+        /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+        ///
+        /// A Japanese qualified invoice and an Indian tax invoice both have to name their
+        /// buyer, and the buyer's name and registration number may not enter this log —
+        /// `crate::pii` makes that a compile error, and `docs/pos-spec.md` §15 explains
+        /// why: the log is immutable, so anything personal in it could never be erased.
+        ///
+        /// So the event carries the **identifier** and the details live in the store's
+        /// subject store keyed by it, written in the settle's own transaction. Erasing a
+        /// buyer is then scrubbing one row, and this event keeps its subtotal, its tax
+        /// lines and its total — the figures still reconcile with the person gone.
+        ///
+        /// `None` on every ordinary retail sale, which is nearly every bill.
+        /// `#[serde(default)]` for the same reason `modifier_menu_item_ids` carries one:
+        /// a store upgrading replays its own log at start-up, and every bill settled
+        /// before this release has no such key.
+        #[serde(default)]
+        buyer_subject_id: Option<SubjectId>,
     },
     /// A settled bill was voided, which requires a manager and a reason.
     BillingBillVoided => "billing.bill.voided", version = 1 {

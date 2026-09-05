@@ -41,6 +41,11 @@ mod intake_ledger {
     pos_contract_tests::intake_ledger_suite!(StoreHarness, run_ready);
 }
 
+mod subject_store {
+    use super::{StoreHarness, run_ready};
+    pos_contract_tests::subject_store_suite!(StoreHarness, run_ready);
+}
+
 mod message_link {
     use super::{LinkHarness, run_ready};
     pos_contract_tests::message_link_suite!(LinkHarness, run_ready);
@@ -121,7 +126,7 @@ mod device_registry {
     pos_contract_tests::device_registry_suite!(RegistryHarness, run_ready);
 }
 
-/// Eighteen suites are invoked above, matching `PortName::ALL`.
+/// Twenty suites are invoked above, matching `PortName::ALL`.
 ///
 /// `pos_contract_tests` asserts that every port *has* a suite; this asserts that this crate *runs*
 /// every one. Without it a suite could be added and quietly never invoked here, which would look
@@ -148,6 +153,7 @@ fn every_suite_is_invoked_here() {
         "cloud_sync",
         "device_registry",
         "intake_ledger",
+        "subject_store",
     ];
     assert_eq!(invoked.len(), pos_contract_tests::SUITES.len());
     for (port, _) in pos_contract_tests::SUITES {

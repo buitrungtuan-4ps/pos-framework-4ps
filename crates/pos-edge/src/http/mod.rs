@@ -41,6 +41,7 @@ use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
 use pos_ports::event_store::EventStore;
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::ulid::Ulid;
 
 use crate::app::{AppError, Edge};
@@ -127,7 +128,7 @@ pub fn domain_router<S, Q>(
     sessions: Arc<Sessions>,
 ) -> Router
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
     Q: crate::queue::QueueNumberAuthority + 'static,
 {
     let lockout = Arc::new(Lockout::new());

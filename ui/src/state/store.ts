@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   BillResponse,
+  BuyerRequest,
   CheckResponse,
   LineRequest,
   LayoutCategory,
@@ -554,8 +555,12 @@ export async function openBill(tableId: string): Promise<string> {
   return response.bill_id;
 }
 
-export async function settle(billId: string, payments: PaymentRequest[]): Promise<BillResponse> {
-  const response = await api.settleBill(billId, { payments });
+export async function settle(
+  billId: string,
+  payments: PaymentRequest[],
+  buyer?: BuyerRequest,
+): Promise<BillResponse> {
+  const response = await api.settleBill(billId, { payments, buyer });
   const table = Object.keys(state.openBill).find((key) => state.openBill[key] === billId);
   if (table !== undefined) {
     setState(

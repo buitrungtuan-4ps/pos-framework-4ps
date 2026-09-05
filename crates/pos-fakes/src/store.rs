@@ -28,9 +28,10 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
+use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId};
+use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId, SubjectId};
 use pos_proto::time::Timestamp;
 
 use crate::infra::FakeDeviceRegistry;
@@ -67,9 +68,14 @@ struct StoreState {
     /// (ADR-0064). Written in the order's own transaction, so a committed record always has its
     /// order.
     intake: BTreeMap<(StoreId, String, String), IntakeRecord>,
+    /// The store-local subject store, keyed by `(store, subject)`
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)) — where personal data lives so
+    /// the immutable log never has to. Written in the settle's own transaction, so a committed
+    /// buyer always has its bill.
+    subjects: BTreeMap<(StoreId, SubjectId), SubjectRecord>,
 }
 
-/// An in-memory `EventStore`, `ConfigStore`, `IntakeLedger` and `DeviceRegistry`.
+/// An in-memory `EventStore`, `ConfigStore`, `IntakeLedger`, `SubjectStore` and `DeviceRegistry`.
 ///
 /// The device registry is a delegated [`FakeDeviceRegistry`] rather than more fields on
 /// [`StoreState`], because the real `store-sqlite` adapter keeps it in the same database but shares
@@ -117,6 +123,10 @@ pub struct FakeTx {
     /// The inbound-order idempotency row to write with the order (ADR-0064), if any:
     /// `(store, sales_channel, external_reference, record)`.
     intake: Option<(StoreId, String, String, IntakeRecord)>,
+    /// The subject rows to write with the events that reference them (ADR-0107), if any. A `Vec`
+    /// rather than an `Option` because one transaction may record more than one person, and the
+    /// port promises all of them land together.
+    subjects: Vec<(StoreId, SubjectId, SubjectRecord)>,
 }
 
 impl TxContext for FakeTx {
@@ -191,6 +201,10 @@ impl TxContext for FakeTx {
                 .insert((store_id, sales_channel, external_reference), record);
         }
 
+        for (store_id, subject_id, record) in self.subjects {
+            state.subjects.insert((store_id, subject_id), record);
+        }
+
         Ok(())
     }
 
@@ -211,6 +225,7 @@ impl Transactional for FakeStore {
             events: Vec::new(),
             config: None,
             intake: None,
+            subjects: Vec::new(),
         })
     }
 }
@@ -396,6 +411,47 @@ impl IntakeLedger for FakeStore {
                 external_reference.to_owned(),
             ))
             .cloned())
+    }
+}
+
+impl SubjectStore for FakeStore {
+    async fn record(
+        &self,
+        tx: &mut FakeTx,
+        store_id: StoreId,
+        subject_id: SubjectId,
+        record: &SubjectRecord,
+    ) -> Result<(), PortError> {
+        tx.subjects.push((store_id, subject_id, record.clone()));
+        Ok(())
+    }
+
+    async fn fetch(
+        &self,
+        store_id: StoreId,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, PortError> {
+        let state = lock(&self.state);
+        Ok(state.subjects.get(&(store_id, subject_id)).cloned())
+    }
+
+    async fn mask_before(
+        &self,
+        store_id: StoreId,
+        cutoff: Timestamp,
+        now: Timestamp,
+    ) -> Result<u64, PortError> {
+        let mut state = lock(&self.state);
+        let mut swept: u64 = 0;
+        for ((owner, _), record) in &mut state.subjects {
+            // Scoped, in the window, and not already scrubbed. The last condition is what makes a
+            // second sweep report zero rather than re-stamping yesterday's masking.
+            if *owner == store_id && record.collected_at <= cutoff && !record.is_masked() {
+                *record = record.masked(now);
+                swept = swept.saturating_add(1);
+            }
+        }
+        Ok(swept)
     }
 }
 

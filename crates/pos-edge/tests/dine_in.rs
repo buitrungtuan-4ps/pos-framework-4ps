@@ -140,6 +140,7 @@ fn a_dine_in_service_runs_end_to_end_offline_across_two_devices() {
                         tip: vnd(0),
                     },
                 ],
+                None,
             )
             .await
             .expect("settles split across cash and card");
@@ -234,6 +235,7 @@ fn the_running_check_matches_what_the_bill_settles_against() {
                     applied_to_bill: check.total_due,
                     tip: vnd(0),
                 }],
+                None,
             )
             .await
             .expect("the check's own figure settles the bill");

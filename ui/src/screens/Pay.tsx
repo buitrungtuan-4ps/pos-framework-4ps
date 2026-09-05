@@ -2,7 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
-import type { BillResponse, CheckResponse, PaymentRequest } from "../api/types";
+import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
 import {
@@ -57,6 +57,14 @@ export function Pay() {
   // defaulted to anyway.
   const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
+  // The corporate buyer, when a company asks for a tax invoice (ADR-0107). Behind a disclosure the
+  // cashier only opens on request, so an ordinary sale costs no extra tap and the step budget for
+  // the cash flow is untouched. Held here for the length of one settle and never stored: the till
+  // keeps no customer list, which is the point — a cross-bill index of buyers is a profiling
+  // feature with its own consent posture, not a side effect of issuing invoices.
+  const [buyerName, setBuyerName] = createSignal("");
+  const [buyerTaxCode, setBuyerTaxCode] = createSignal("");
+  const [buyerAddress, setBuyerAddress] = createSignal("");
   // What the guest owes, as the edge assembled it (E5). Null until it arrives; the screen shows no
   // amount rather than a guess, because the till no longer has the means to guess one.
   const [check, setCheck] = createSignal<CheckResponse | null>(null);
@@ -113,6 +121,22 @@ export function Pay() {
     return [owed, ...quickCashFor(cashDenominations(), owed)];
   };
 
+  // What the cashier typed, or nothing. A blank name means no buyer: the one field both Japan's
+  // qualified invoice and India's Rule 46 require is the name, so a tax code with no name beside it
+  // is an incomplete document rather than a partial one.
+  const buyer = (): BuyerRequest | undefined => {
+    const name = buyerName().trim();
+    if (name === "") {
+      return undefined;
+    }
+    const optional = (value: string) => (value.trim() === "" ? undefined : value.trim());
+    return {
+      name,
+      tax_code: optional(buyerTaxCode()),
+      address: optional(buyerAddress()),
+    };
+  };
+
   const pay = async (payments: PaymentRequest[]) => {
     const id = billId();
     if (id === null) {
@@ -120,7 +144,7 @@ export function Pay() {
     }
     setError(null);
     try {
-      setDone(await settle(id, payments));
+      setDone(await settle(id, payments, buyer()));
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
@@ -202,6 +226,40 @@ export function Pay() {
                 </For>
               </div>
             </Show>
+
+            <details class="mt-6 rounded-token border border-line bg-surface px-3 py-2">
+              <summary class="min-h-touch cursor-pointer text-sm font-semibold text-ink-muted">
+                {t("pay.buyer")}
+              </summary>
+              <p class="mt-1 text-sm text-ink-muted">{t("pay.buyer_hint")}</p>
+              <label class="mt-3 block text-sm">
+                {t("pay.buyer_name")}
+                <input
+                  type="text"
+                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                  value={buyerName()}
+                  onInput={(event) => setBuyerName(event.currentTarget.value)}
+                />
+              </label>
+              <label class="mt-2 block text-sm">
+                {t("pay.buyer_tax_code")}
+                <input
+                  type="text"
+                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                  value={buyerTaxCode()}
+                  onInput={(event) => setBuyerTaxCode(event.currentTarget.value)}
+                />
+              </label>
+              <label class="mt-2 block text-sm">
+                {t("pay.buyer_address")}
+                <input
+                  type="text"
+                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                  value={buyerAddress()}
+                  onInput={(event) => setBuyerAddress(event.currentTarget.value)}
+                />
+              </label>
+            </details>
 
             <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
             <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>

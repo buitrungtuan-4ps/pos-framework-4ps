@@ -17,6 +17,7 @@
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -35,6 +36,7 @@ use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
+use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, TxContext};
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
@@ -47,7 +49,7 @@ use pos_proto::events::{
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
-    ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
+    ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::store_profile::StoreProfile;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
@@ -70,6 +72,11 @@ use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
+
+/// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap
+/// seconds and no daylight saving: a retention window is a duration, not a calendar walk, and being
+/// an hour out twice a year on a 365-day window changes nothing anyone can observe.
+const MILLISECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
 
 /// Which tenant, brand and store this edge is — the envelope context every event carries. All three
 /// are identifiers, not PII.
@@ -235,6 +242,17 @@ pub struct EdgeSession {
     /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
     /// unconditionally until the `locale` node could say otherwise.
     pub cash_rounding_increment: Option<i64>,
+    /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
+    /// the `default_retention_days` a `LocalePack` has carried since
+    /// [ADR-0027](../../../docs/adr/0027-country-modules.md) and which, until
+    /// [ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md), no edge read.
+    ///
+    /// The clock the store's own subject store runs on: a B2B invoice's buyer is scrubbed this many
+    /// days after the sale, whether or not the box has ever reached the cloud — which is the point,
+    /// because a retention obligation that only discharges while the link is up is not one.
+    /// Defaults to a year, the same figure `LocalePack::default` carries, so a store that has synced
+    /// no locale still forgets.
+    pub retention_days: u16,
     /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
     ///
     /// Empty means "offer the exact amount only", which is the honest answer for a store whose
@@ -413,6 +431,9 @@ impl EdgeSession {
             // till that has not synced yet (ADR-0105).
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
+            // "forever until somebody publishes a locale" is the wrong default for personal data.
+            retention_days: 365,
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
@@ -671,6 +692,63 @@ pub struct BumpView {
     pub station_id: StationId,
     /// The lines now marked prepared.
     pub order_line_ids: Vec<OrderLineId>,
+}
+
+/// The buyer a corporate invoice is issued to, as the cashier typed it
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+///
+/// Personal data, every field of it. It never enters an event — `pos_proto::pii` makes that a
+/// compile error — and [`Edge::settle_bill`] files it in the store's subject store under a freshly
+/// minted [`SubjectId`], which is what the settled event carries instead.
+///
+/// The tax code is here rather than treated as business data because for a sole trader it is not:
+/// Japan's 登録番号 for a sole proprietor is issued to the individual, and an Indian GSTIN embeds a
+/// PAN. A framework that got that wrong would be wrong in the direction that cannot be undone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BuyerDetails {
+    /// The buyer's name, as it must appear on the invoice.
+    pub name: String,
+    /// Their registration number — a 登録番号, a GSTIN, an MST. Format-checked by the country
+    /// module at the route, never checked for existence: that is a call to the authority, and a
+    /// cashier must be able to take a corporate customer's number with the line down.
+    pub tax_code: Option<String>,
+    /// Their address, which India's Rule 46 requires and Japan's qualified invoice does not.
+    pub address: Option<String>,
+    /// Where to send a copy, when the store offers one.
+    pub email: Option<String>,
+}
+
+/// Deliberately hand-written: `AGENTS.md` §2 forbids personal data in logs, and a derived `Debug`
+/// would put a buyer's name and address into any span that carried this — including the request
+/// span of the settle itself.
+impl fmt::Debug for BuyerDetails {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BuyerDetails").finish_non_exhaustive()
+    }
+}
+
+impl BuyerDetails {
+    /// The fields as the subject store holds them: a map of name to value, with the absent ones
+    /// left out rather than stored empty.
+    ///
+    /// Absent rather than empty because masking keeps the **keys** — they are the record of what
+    /// kind of data was held — so writing an empty `address` would leave a store claiming it once
+    /// held an address it never had.
+    #[must_use]
+    pub fn fields(&self) -> BTreeMap<String, String> {
+        let mut fields = BTreeMap::new();
+        fields.insert("name".to_owned(), self.name.clone());
+        for (key, value) in [
+            ("tax_code", self.tax_code.as_ref()),
+            ("address", self.address.as_ref()),
+            ("email", self.email.as_ref()),
+        ] {
+            if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+                fields.insert(key.to_owned(), value.clone());
+            }
+        }
+        fields
+    }
 }
 
 /// What a bill looks like to a caller after a command.
@@ -1963,6 +2041,20 @@ impl<S: EventStore> Edge<S> {
     /// the caller to run after commit; the edge holds no printer, so a rolled-back settle prints
     /// nothing.
     ///
+    /// # The buyer, when the sale is a B2B one
+    ///
+    /// `buyer` is the corporate customer a tax invoice is issued to
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)) and is `None` on every
+    /// ordinary retail sale. When it is present a [`SubjectId`] is minted, the buyer's details are
+    /// filed in the store's subject store **in this settle's own transaction**, and the settled
+    /// event carries the identifier alone — never the name or the registration number, which
+    /// `pos_proto::pii` would refuse and `docs/pos-spec.md` §15 explains at length.
+    ///
+    /// One transaction is what makes both halves impossible to get wrong: a settle that committed
+    /// without its buyer would print a compliant invoice with no record of who it was for, and a
+    /// buyer that committed without its settle would hold a person's tax code for a sale that never
+    /// happened.
+    ///
     /// # Errors
     ///
     /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the bill
@@ -1973,7 +2065,11 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         bill_id: BillId,
         payments: Vec<Payment>,
-    ) -> Result<BillView, AppError> {
+        buyer: Option<&BuyerDetails>,
+    ) -> Result<BillView, AppError>
+    where
+        S: SubjectStore,
+    {
         let ctx = self.decision_ctx(actor)?;
         let bill = self
             .lock_projection()
@@ -2033,32 +2129,12 @@ impl<S: EventStore> Edge<S> {
             .map_err(DomainError::from)?;
 
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
-        // transaction so a crash never leaves a receipt without its payments (or the reverse). The
-        // captured payments are what let the shift cash roll-up and the tip-out be rebuilt from the
-        // log; each records its own change and its own tip, held apart from the sale.
-        let zero = Money::zero(self.session().currency);
-        let mut envelopes = Vec::with_capacity(payments.len() + 1);
-        let mut messages = Vec::with_capacity(payments.len() + 1);
-        for payment in &payments {
-            // `Payment::change` subtracts the tip; computing it here as `tendered − applied` was the
-            // arithmetic half of B1.3 and over-reported the change by exactly the tip. The clamp
-            // stays: a tender that does not cover its own share plus its tip owes no change, and
-            // `settle` has already refused the settlement if that is true in total.
-            let change = payment.change().map_err(AppError::Domain)?;
-            let captured = BillingPaymentCaptured {
-                bill_id,
-                payment_id: PaymentId::new(self.next_ulid()),
-                method: Open::from_known(payment.method),
-                outcome: Open::from_known(PaymentOutcome::Captured),
-                tendered: payment.tendered,
-                applied_to_bill: payment.applied_to_bill,
-                change_given: if change.is_negative() { zero } else { change },
-                tip_amount: payment.tip,
-            };
-            let (envelope, message) = self.prepare(&ctx, &captured)?;
-            envelopes.push(envelope);
-            messages.push(message);
-        }
+        // transaction so a crash never leaves a receipt without its payments (or the reverse).
+        let (mut envelopes, mut messages) = self.capture_payments(&ctx, bill_id, &payments)?;
+
+        // The buyer's id is minted here and the details go to the subject store below. The event
+        // gets the identifier and nothing else (ADR-0107).
+        let buyer_subject_id = buyer.map(|_ignored| SubjectId::new(self.next_ulid()));
 
         let settled = BillingBillSettled {
             bill_id,
@@ -2069,12 +2145,28 @@ impl<S: EventStore> Edge<S> {
             tax_total: totals.tax_total,
             rounding_adjustment: totals.rounding_adjustment,
             total_due: totals.total_due,
+            buyer_subject_id,
         };
         let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
         envelopes.push(settled_envelope);
         messages.push(settled_message);
 
-        self.append_and_publish(envelopes, messages).await?;
+        // The events AND the buyer's record commit in ONE transaction (ADR-0107), which is why this
+        // settle drives the transaction itself instead of calling `append_and_publish`.
+        let mut tx = self.store.begin().await?;
+        self.store.append(&mut tx, &envelopes).await?;
+        if let (Some(subject_id), Some(buyer)) = (buyer_subject_id, buyer) {
+            // `ctx.now` rather than a second clock read: the retention period counts from the moment
+            // the sale is stamped with, so the record and the event it belongs to age together.
+            let record = SubjectRecord::new(ctx.now, buyer.fields());
+            self.store
+                .record(&mut tx, self.identity.store_id, subject_id, &record)
+                .await?;
+        }
+        tx.commit().await?;
+        for message in &messages {
+            self.fanout.publish(message);
+        }
 
         {
             let mut projection = self.lock_projection();
@@ -2093,6 +2185,82 @@ impl<S: EventStore> Edge<S> {
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
         })
+    }
+
+    /// One `billing.payment.captured` per tender, prepared for the settle's transaction.
+    ///
+    /// The captured payments are what let the shift cash roll-up and the tip-out be rebuilt from the
+    /// log; each records its own change and its own tip, held apart from the sale. Returned as
+    /// envelopes and messages so the caller appends the settled event to the same pair and commits
+    /// them together.
+    fn capture_payments(
+        &self,
+        ctx: &DecisionCtx,
+        bill_id: BillId,
+        payments: &[Payment],
+    ) -> Result<(Vec<EventEnvelope<RawPayload>>, Vec<ServerMessage>), AppError> {
+        let zero = Money::zero(self.session().currency);
+        let mut envelopes = Vec::with_capacity(payments.len() + 1);
+        let mut messages = Vec::with_capacity(payments.len() + 1);
+        for payment in payments {
+            // `Payment::change` subtracts the tip; computing it here as `tendered − applied` was the
+            // arithmetic half of B1.3 and over-reported the change by exactly the tip. The clamp
+            // stays: a tender that does not cover its own share plus its tip owes no change, and
+            // `settle` has already refused the settlement if that is true in total.
+            let change = payment.change().map_err(AppError::Domain)?;
+            let captured = BillingPaymentCaptured {
+                bill_id,
+                payment_id: PaymentId::new(self.next_ulid()),
+                method: Open::from_known(payment.method),
+                outcome: Open::from_known(PaymentOutcome::Captured),
+                tendered: payment.tendered,
+                applied_to_bill: payment.applied_to_bill,
+                change_given: if change.is_negative() { zero } else { change },
+                tip_amount: payment.tip,
+            };
+            let (envelope, message) = self.prepare(ctx, &captured)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        Ok((envelopes, messages))
+    }
+
+    /// Scrubs every personal record past the store's retention period, and says how many went
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md),
+    /// [ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+    ///
+    /// The cutoff is `now − retention_days`, from the store's own published locale. One-way and
+    /// idempotent: a record the sweep has already scrubbed is never touched again, so this is safe
+    /// on a timer, safe after a restart, and safe after a clock step backwards.
+    ///
+    /// The **store** runs this, not the cloud, because the store is the only party holding these
+    /// records and because ADR-0001's store sells with no internet — a retention obligation that
+    /// only discharges while the link is up is not a retention obligation.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the store cannot be written.
+    pub async fn sweep_expired_subjects(&self) -> Result<u64, AppError>
+    where
+        S: SubjectStore,
+    {
+        let now = self.clock.now();
+        let days = i64::from(self.session().retention_days);
+        // Saturating rather than wrapping: a cutoff that underflowed would land in the far future
+        // and scrub every record the store holds, which is the one failure mode here that cannot be
+        // undone.
+        let cutoff_ms = now
+            .as_milliseconds_since_epoch()
+            .saturating_sub(days.saturating_mul(MILLISECONDS_PER_DAY));
+        let Ok(cutoff) = Timestamp::from_milliseconds_since_epoch(cutoff_ms) else {
+            // Before the epoch: the store's retention period is longer than the box has existed, so
+            // nothing is due. Not an error, and not a reason to sweep with a cutoff of "now".
+            return Ok(0);
+        };
+        self.store
+            .mask_before(self.identity.store_id, cutoff, now)
+            .await
+            .map_err(AppError::Port)
     }
 
     /// Opens a cash shift with a starting float (`cash.shift.opened`).
@@ -2623,7 +2791,7 @@ mod tests {
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
-    use super::{Edge, EdgeSession, LineDraft, StoreIdentity};
+    use super::{BuyerDetails, Edge, EdgeSession, LineDraft, StoreIdentity};
     use crate::queue::{InMemoryQueueNumbers, QueueNumberAuthority};
     use crate::receipt::InMemoryReceipts;
     use pos_core::billing::Payment;
@@ -2632,7 +2800,10 @@ mod tests {
     use pos_core::inventory::{Recipe, RecipeBook, RecipeLine};
     use pos_fakes::FakeStore;
     use pos_ports::event_store::{EventQuery, EventStore};
-    use pos_proto::events::BillingPaymentCaptured;
+    use pos_ports::subject_store::{SubjectRecord, SubjectStore};
+    use pos_ports::{Transactional, TxContext};
+    use pos_proto::envelope::EventPayload;
+    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
         DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
@@ -2642,6 +2813,7 @@ mod tests {
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
+    use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
     use pos_proto::{
         BillState, EventType, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
@@ -3044,7 +3216,7 @@ mod tests {
 
             // One 150k line at the 10% standard rate is 165k owed.
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -3065,6 +3237,190 @@ mod tests {
         });
     }
 
+    /// A corporate buyer is filed beside the log, and the settled event carries only the id.
+    ///
+    /// The property [ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md) exists for: the
+    /// name and the 登録番号 are in the subject store, the event has a `SubjectId`, and the money
+    /// figures are on the event where they can never be scrubbed.
+    #[test]
+    fn a_b2b_settle_files_the_buyer_beside_the_log_and_puts_only_an_id_on_the_event() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(320));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+
+            let buyer = BuyerDetails {
+                name: "Kabushiki Kaisha Reiwa".to_owned(),
+                tax_code: Some("T1234567890123".to_owned()),
+                address: Some("1-1 Marunouchi, Chiyoda".to_owned()),
+                email: None,
+            };
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], Some(&buyer))
+                .await
+                .expect("settles");
+
+            let settled = settled_payload(&edge).await;
+            let subject_id = settled
+                .buyer_subject_id
+                .expect("the settled event names the buyer's subject");
+
+            let record = edge
+                .store
+                .fetch(edge.identity.store_id, subject_id)
+                .await
+                .expect("the subject store answers")
+                .expect("the buyer was filed in the same transaction as the settle");
+            assert_eq!(
+                record.fields.get("name").map(String::as_str),
+                Some("Kabushiki Kaisha Reiwa")
+            );
+            assert_eq!(
+                record.fields.get("tax_code").map(String::as_str),
+                Some("T1234567890123")
+            );
+            assert!(
+                !record.fields.contains_key("email"),
+                "a field the cashier left blank is absent, not stored empty"
+            );
+            assert_eq!(
+                settled.total_due,
+                vnd(165_000),
+                "the money is on the event, where erasing the buyer cannot reach it"
+            );
+        });
+    }
+
+    /// An ordinary retail sale records nobody. The overwhelming majority of bills, and they must
+    /// stay exactly as cheap as they were before ADR-0107.
+    #[test]
+    fn an_ordinary_sale_records_no_subject_at_all() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(321));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles");
+
+            assert!(
+                settled_payload(&edge).await.buyer_subject_id.is_none(),
+                "a retail sale creates no processing activity nobody asked for"
+            );
+        });
+    }
+
+    /// The retention sweep scrubs a buyer past the store's window, and the bill still reconciles.
+    ///
+    /// This is the guarantee that lets an immutable financial log and a right to erasure coexist:
+    /// the person goes, the takings stay.
+    #[test]
+    fn the_retention_sweep_scrubs_a_buyer_and_the_takings_still_add_up() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                // Zero days would mean "scrub on print" and the config path refuses it; one day is
+                // the shortest window a store can actually publish, and the fake clock is fixed well
+                // past the epoch, so a one-day window is already expired.
+                retention_days: 1,
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(322));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            let buyer = BuyerDetails {
+                name: "Reliance Retail Limited".to_owned(),
+                tax_code: Some("29ABCDE1234F1Z5".to_owned()),
+                address: None,
+                email: None,
+            };
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], Some(&buyer))
+                .await
+                .expect("settles");
+
+            // The record is collected at the settle's instant, which is `now`, so nothing is due yet.
+            assert_eq!(
+                edge.sweep_expired_subjects().await.expect("sweeps"),
+                0,
+                "a record inside the window is left alone"
+            );
+
+            // Age it past the window by rewriting its collection stamp — the clock cannot be moved
+            // and the point under test is the cutoff, not the clock.
+            let settled = settled_payload(&edge).await;
+            let subject_id = settled.buyer_subject_id.expect("a buyer was recorded");
+            let aged = SubjectRecord::new(
+                Timestamp::from_milliseconds_since_epoch(0).expect("the epoch is representable"),
+                buyer.fields(),
+            );
+            let mut tx = edge.store.begin().await.expect("begins");
+            edge.store
+                .record(&mut tx, edge.identity.store_id, subject_id, &aged)
+                .await
+                .expect("re-files the aged record");
+            tx.commit().await.expect("commits");
+
+            assert_eq!(
+                edge.sweep_expired_subjects().await.expect("sweeps"),
+                1,
+                "a record past the window is scrubbed"
+            );
+            let scrubbed = edge
+                .store
+                .fetch(edge.identity.store_id, subject_id)
+                .await
+                .expect("the subject store answers")
+                .expect("the row survives, scrubbed rather than deleted");
+            assert!(scrubbed.is_masked());
+            assert!(
+                scrubbed
+                    .fields
+                    .values()
+                    .all(|value| value == pos_ports::subject_store::REDACTION)
+            );
+            assert_eq!(
+                settled_payload(&edge).await.total_due,
+                vnd(165_000),
+                "the day's takings are unchanged by erasing the buyer"
+            );
+        });
+    }
+
+    /// The one `billing.bill.settled` in this store's log.
+    async fn settled_payload(edge: &Edge<FakeStore>) -> BillingBillSettled {
+        let events = edge
+            .store
+            .read(&EventQuery::first(
+                edge.identity.store_id,
+                NonZeroU32::new(100).expect("100 is not zero"),
+            ))
+            .await
+            .expect("reads the log");
+        events
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.as_str() == BillingBillSettled::EVENT_TYPE.as_str()
+            })
+            .map(|envelope| {
+                envelope
+                    .data
+                    .decode::<BillingBillSettled>()
+                    .expect("the settled payload decodes")
+            })
+            .next()
+            .expect("the log holds a settled bill")
+    }
+
     #[test]
     fn a_bill_settles_split_across_cash_and_card() {
         pos_fakes::executor::run_ready(async {
@@ -3082,7 +3438,7 @@ mod tests {
                 tip: vnd(0),
             };
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card])
+                .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card], None)
                 .await
                 .expect("settles across two tenders");
             assert_eq!(settled.state, BillState::Settled);
@@ -3098,13 +3454,13 @@ mod tests {
             edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("first settle");
 
             // A settled bill is terminal: a second settle is refused (a refund is a new movement).
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
         });
@@ -3121,12 +3477,12 @@ mod tests {
 
             // 150k applied against 165k owed does not sum to the total — the invariant refuses it.
             let refused = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)])
+                .settle_bill(actor(), opened.bill_id, vec![cash(150_000)], None)
                 .await;
             assert!(matches!(refused, Err(super::AppError::Domain(_))));
             // Nothing settled, so no receipt was consumed and the bill is still open.
             let again = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("the still-open bill settles");
             assert_eq!(
@@ -3176,7 +3532,7 @@ mod tests {
             );
 
             let settled = edge
-                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("and the counter sale settles");
             assert_eq!(settled.state, BillState::Settled);
@@ -3224,7 +3580,7 @@ mod tests {
                 applied_to_bill: vnd(165_000),
                 tip: vnd(20_000),
             };
-            edge.settle_bill(actor(), opened.bill_id, vec![tipped])
+            edge.settle_bill(actor(), opened.bill_id, vec![tipped], None)
                 .await
                 .expect("a tipped cash sale settles");
 
@@ -3278,6 +3634,7 @@ mod tests {
                         applied_to_bill: vnd(165_000),
                         tip: vnd(20_000),
                     }],
+                    None,
                 )
                 .await;
             assert!(
@@ -3285,7 +3642,7 @@ mod tests {
                 "a store that does not take tips refuses one, rather than pocketing it silently"
             );
 
-            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)])
+            edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("and the same bill settles untipped, exactly as before");
         });
@@ -3464,7 +3821,7 @@ mod tests {
                 .open_bill_for_order(actor(), paid)
                 .await
                 .expect("opens");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("settles");
 
@@ -3607,6 +3964,7 @@ mod tests {
                     actor(),
                     pos_proto::ids::BillId::new(Ulid::from_u128(999)),
                     vec![cash(1)],
+                    None,
                 )
                 .await;
             assert!(matches!(refused, Err(super::AppError::UnknownBill)));
@@ -3657,7 +4015,7 @@ mod tests {
             edge.seat_table(actor(), table, None).await.expect("seats");
             edge.add_line(actor(), table, a_line()).await.expect("adds");
             let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
-            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)])
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("settles in cash");
 
@@ -3674,7 +4032,7 @@ mod tests {
                 applied_to_bill: vnd(165_000),
                 tip: vnd(0),
             };
-            edge.settle_bill(actor(), bill2.bill_id, vec![card])
+            edge.settle_bill(actor(), bill2.bill_id, vec![card], None)
                 .await
                 .expect("settles on card");
 

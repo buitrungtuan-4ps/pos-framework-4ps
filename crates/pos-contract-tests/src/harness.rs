@@ -43,7 +43,7 @@ use core::future::Future;
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
     Fiscalization, IntakeLedger, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal,
-    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, UpdateReport,
+    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, SubjectStore, UpdateReport,
 };
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
@@ -226,6 +226,23 @@ pub trait IntakeLedgerHarness: Send + Sync {
 
     /// A ledger with nothing recorded in it.
     fn fresh(&self) -> impl Future<Output = Setup<Self::Ledger>> + Send;
+
+    /// A store identifier the cases may use.
+    fn store_id(&self) -> StoreId;
+}
+
+/// Supplies a fresh [`SubjectStore`] holding nobody.
+///
+/// Like the intake ledger, the subject store shares its transaction with the event store
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)), so the harness hands back the
+/// whole store and the suite owns the transaction boundary — "the buyer's details commit with the
+/// settle, or not at all" is only observable across a commit.
+pub trait SubjectStoreHarness: Send + Sync {
+    /// The implementation under test.
+    type Store: SubjectStore;
+
+    /// A store with no subject recorded in it.
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Store>> + Send;
 
     /// A store identifier the cases may use.
     fn store_id(&self) -> StoreId;

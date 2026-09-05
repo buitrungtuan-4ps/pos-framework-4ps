@@ -16,6 +16,54 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The buyer on a B2B tax invoice, and the twentieth port to keep them in**
+  ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)). [ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)
+  put the **seller** on the receipt. A Japanese qualified invoice issued to a company must also carry
+  that company's name and 登録番号, and an Indian tax invoice under Rule 46 the buyer's name, address
+  and GSTIN — without them the buyer cannot claim input tax, which is the reason a business asks for
+  the document at all.
+
+  The obvious shape — two more fields on `billing.bill.settled` — is one the framework forbids, and is
+  right to: `pos_proto::pii` makes a name in an event payload a compile error, and `docs/pos-spec.md`
+  §15 explains why (the log is immutable, so anything personal inside it could never be erased). A
+  buyer's tax code is not safely business data either: Japan's 登録番号 for a sole proprietor is issued
+  to the individual, and an Indian GSTIN embeds a PAN.
+
+  So **the settled event gains one optional `buyer_subject_id`, and nothing else**. The buyer's name,
+  registration number and address go in a new store-local **subject store** — `SubjectStore`, the
+  twentieth port — written in the settle's *own transaction*, so a settle and the buyer it was issued
+  to land together or not at all. Erasing a buyer is scrubbing one row, and the settled event keeps
+  its subtotal, its tax lines and its total: **the day's takings still add up with the person gone.**
+
+  The till captures the buyer behind a disclosure on the Pay screen that a cashier only opens when a
+  company asks, so an ordinary sale costs no extra tap and the cash flow's step budget is untouched.
+  The registration number's **shape** is checked by the compiled-in country module — format only,
+  never existence, so a cashier can take a corporate customer's number with the line down. The
+  receipt prints a `Bill to:` block between the seller's details and the figures, and omits it
+  entirely when there is no buyer.
+
+  Retention runs **at the till**, hourly, against the store's published `default_retention_days` —
+  a `LocalePack` field that has existed since ADR-0027 and which no edge read until now. Masking is
+  the same one-way `[REDACTED]` the cloud's sweep applies ([ADR-0035](docs/adr/0035-retention-and-pii-masking.md)),
+  keeps the subject id and the collection stamp as an audit trail, and is idempotent. The store does
+  it because the store is the only party holding these records, and because ADR-0001's store sells
+  with no internet: a retention obligation that only discharges while the link is up is not one.
+
+  **What this deliberately does not do:** deduplicate buyers across bills (a cross-bill customer index
+  is a profiling feature with its own consent posture, not a side effect of issuing invoices); check
+  that a registration number is *registered*; decide India's inter-state IGST case; put the buyer on a
+  kitchen ticket, a QR order or a rollup; or sync the buyer record to the cloud. That last one, and
+  pushing a cloud-originated erasure request down to the store holding a subject, are the same missing
+  wire and are named in the ADR as the follow-up.
+
+  **Upgrade note.** No `PROTOCOL_VERSION` bump: `buyer_subject_id` is `#[serde(default)]`, so an older
+  consumer ignores it and every bill settled before this release reads back as a sale with no buyer —
+  which is what it was. New edge migration `0007_subjects.sql` (additive; a table and one partial
+  index). Recording a buyer is processing personal data: the operator owes the lawful basis, the
+  notice, the retention period and — where volume warrants — the assessment. The field is optional and
+  off by default, so a store that never issues a B2B invoice never records anybody.
+
+
 - **A receipt names who sold, and prints the tax it charged**
   ([ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)). The receipt this framework printed was
   three lines: an optional header, a number, and a total — and the header was `None` at every call

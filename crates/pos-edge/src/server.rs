@@ -18,6 +18,7 @@ use pos_ports::device_registry::DeviceRegistry;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
 use pos_ports::key_vault::{KeyVault, SecretName};
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, StoreId};
 use updater_minisign::MinisignVerifier;
@@ -86,6 +87,14 @@ const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// still reads as online in the fleet view ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How often the store scrubs personal records past its retention period
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+///
+/// Hourly rather than nightly, and deliberately not aligned to a clock hour: retention is measured
+/// in days, so the exact minute a record goes does not matter, and a sweep that only ran at 03:00
+/// would skip a whole day on a till that is switched off overnight — which is most of them.
+const RETENTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 /// How long the activation exchange (`POST /activate`) may take end to end
 /// ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)). Generous — activation is a
 /// one-time, operator-driven action, not a hot path.
@@ -140,7 +149,14 @@ pub async fn serve<S, Q, A>(
     ota_authority: A,
 ) -> Result<ServeOutcome, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
+    S: EventStore
+        + IntakeLedger
+        + DeviceRegistry
+        + ConfigStore
+        + SubjectStore
+        + Send
+        + Sync
+        + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
 {
@@ -172,7 +188,14 @@ pub async fn serve_until<S, Q, A, F>(
     stop: F,
 ) -> Result<ServeOutcome, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
+    S: EventStore
+        + IntakeLedger
+        + DeviceRegistry
+        + ConfigStore
+        + SubjectStore
+        + Send
+        + Sync
+        + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
     F: Future<Output = ()> + Send + 'static,
@@ -335,7 +358,14 @@ pub async fn compose<S, Q>(
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Composed, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
+    S: EventStore
+        + IntakeLedger
+        + DeviceRegistry
+        + ConfigStore
+        + SubjectStore
+        + Send
+        + Sync
+        + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
@@ -420,6 +450,11 @@ where
             Arc::clone(&sessions),
         ))
         .layer(axum::Extension(printers));
+
+    // The store's own retention sweep (ADR-0107). Spawned here, outside the cloud gate, because it
+    // is the store's obligation and not the cloud's: a box that has never been activated, or whose
+    // link has been down for a month, still has to forget a buyer on time.
+    spawn_retention_sweep(&config_edge, shutdown_rx);
 
     // Compose the cloud surface when the store is provisioned for a cloud (ADR-0086). A `cloud_url`
     // means: mount the activation routes so a fresh box can be set up at `/setup`, and — once the box
@@ -533,6 +568,46 @@ where
         }
     }
     (app, keyed_client)
+}
+
+/// Runs the store's retention sweep on a timer until shutdown
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md),
+/// [ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+///
+/// Nothing here can stop the box trading: a sweep that fails is logged and retried next hour, and a
+/// store that holds no personal data sweeps nothing every hour for as long as it runs, which costs
+/// one indexed query.
+fn spawn_retention_sweep<S>(edge: &Arc<Edge<S>>, shutdown_rx: &tokio::sync::watch::Receiver<bool>)
+where
+    S: EventStore + SubjectStore + Send + Sync + 'static,
+{
+    let edge = Arc::clone(edge);
+    let mut shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let mut ticks = tokio::time::interval(RETENTION_SWEEP_INTERVAL);
+        // The first tick fires immediately, which is what makes a box that was off for a week catch
+        // up at boot rather than an hour after it.
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = wait_for_shutdown(shutdown.clone()) => break,
+                _instant = ticks.tick() => match edge.sweep_expired_subjects().await {
+                    // Logged only when something actually went, so the ordinary case — a store that
+                    // issues no corporate invoices — is silent rather than hourly noise. The count
+                    // is a count: no identifier is logged, because a subject id in a log is a
+                    // pointer at the person the sweep just scrubbed.
+                    Ok(0) => {}
+                    Ok(swept) => tracing::info!(swept, "retention sweep scrubbed expired personal records"),
+                    Err(error) => tracing::warn!(%error, "retention sweep failed; retrying next interval"),
+                },
+            }
+            // `shutdown` is only read through the select above; this keeps the borrow honest for the
+            // next iteration.
+            if *shutdown.borrow_and_update() {
+                break;
+            }
+        }
+    });
 }
 
 /// The scoped `read_config` key the config-pull and heartbeat loops present: the vault first
