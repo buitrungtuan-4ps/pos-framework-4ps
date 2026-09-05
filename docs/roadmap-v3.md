@@ -83,8 +83,8 @@ exit `1` is a Windows box's job to prove. The same is true of the `systemd` rest
 keyring across a reboot, power loss mid-transaction and the 222 ev/s soak.
 
 The next code is **v1.1** — `B·W2` + `B·W3` + `B·W7` + `B·W8` + `A·P4` + `A·PF`, of which A·P4 has
-three of five open (`A·P4 O2` printer transport, `A·P4 O3` store-side WAL shipping, `A·P4 O4` JetStream
-capacity probe) and all four of A·PF is open.
+two of five open (`A·P4 O2` printer transport, `A·P4 O3` store-side WAL shipping) and all four of
+A·PF is open.
 
 Rough sequential estimate: v1.0 ≈ 6–8 wk · v1.1 ≈ +8–10 wk · v1.2 ≈ +5–7 wk · v1.3 ≈ +2–3 wk of
 code (calendar set by legal/device lead time). The two lanes running in parallel shortens this
@@ -351,7 +351,7 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **O1** — Alert delivery webhook. **Done** — the `AlertChannel` abstraction with a webhook channel over the existing TLS sender, plus the evaluator loop that fills it.
 - **O2** — TCP `:9100` printer transport + a "test print" button.
 - **O3** — Store-side WAL-shipping backup.
-- **O4** — JetStream capacity probe.
+- **O4** — JetStream capacity probe. **Done** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md) Amendment 2) — the ceiling is the cloud's `cloud.toml` `[nats] max_messages`/`max_bytes`, reconciled against the live stream on each alert pass, because `ensure_stream` is a create-or-get: until now the ceiling in force was whatever the *first* box that ever connected asked for, and no edge release could move it. The reading that pass takes is what finally gives `AlertKind::JetstreamCapacity` a producer. The edge constants stay, demoted to a first-boot floor.
 - **O5** — In-code auth for `/internal/*` (a shared-secret header; defence in depth over the network boundary). **Done** ([ADR-0097](adr/0097-internal-route-authentication.md)) — and it recorded what a fleet-wide secret cannot buy: attributability. The two routes a *store* called moved to `/sync` in R5 instead, where the tenant comes from the scoped key rather than from the body.
 
 ### A·PF — Performance & durability (turns principle 4 into gates)

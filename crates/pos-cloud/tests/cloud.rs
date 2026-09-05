@@ -6039,6 +6039,10 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
         FakeTaskHealth::default(),
         FakeAlerts::default(),
         Some(channel.clone()),
+        // No stream probe: this exercises the delivery seam, and a deployment with no `[nats]`
+        // section passes `None` here exactly as it did before the probe existed (ADR-0087
+        // Amendment 2).
+        None::<pos_cloud::alerts::probe::CursorProbe>,
         clock(),
         pos_cloud::alerts::AlertThresholds {
             store_offline_secs: 300,
@@ -6105,6 +6109,7 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
         FakeTaskHealth::default(),
         alerts.clone(),
         None::<SpyAlertChannel>,
+        None::<pos_cloud::alerts::probe::CursorProbe>,
         clock(),
         pos_cloud::alerts::AlertThresholds {
             store_offline_secs: 300,

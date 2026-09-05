@@ -7,7 +7,7 @@ use core::num::NonZeroU32;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use async_nats::jetstream;
-use async_nats::jetstream::stream::{Config as StreamConfig, DiscardPolicy};
+use async_nats::jetstream::stream::{Config as StreamConfig, DiscardPolicy, State as StreamState};
 
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
 use pos_ports::{PortError, PortName};
@@ -120,12 +120,7 @@ impl NatsLink {
             .await
             .map_err(unavailable)?;
         let info = stream.info().await.map_err(unavailable)?;
-        Ok(LinkCapacity {
-            messages: info.state.messages,
-            message_limit: positive_limit(info.config.max_messages),
-            bytes: info.state.bytes,
-            byte_limit: positive_limit(info.config.max_bytes),
-        })
+        Ok(capacity_of(&info.config, &info.state))
     }
 }
 
@@ -199,8 +194,21 @@ impl MessageLink for NatsLink {
     }
 }
 
+/// A stream's fill against its limits, from a configuration and a state read together.
+///
+/// Shared by the store's own reading and the cloud's reconcile so both describe the same stream the
+/// same way ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+pub(crate) fn capacity_of(config: &StreamConfig, state: &StreamState) -> LinkCapacity {
+    LinkCapacity {
+        messages: state.messages,
+        message_limit: positive_limit(config.max_messages),
+        bytes: state.bytes,
+        byte_limit: positive_limit(config.max_bytes),
+    }
+}
+
 /// Maps a JetStream `-1` (unlimited) to `None`, any positive cap to `Some`.
-fn positive_limit(limit: i64) -> Option<u64> {
+pub(crate) fn positive_limit(limit: i64) -> Option<u64> {
     if limit <= 0 {
         None
     } else {

@@ -65,18 +65,30 @@ const SYNC_KEY_ENV: &str = "POS_EDGE_SYNC_KEY";
 /// the line commented and the operator completes it (ADR-0087 Amendment 1).
 const NATS_URL_ENV: &str = "POS_EDGE_NATS_URL";
 
-/// The stream limits the edge asks for when it ensures the fleet's stream exists. Matched to the
-/// store-box envelope in `docs/capacity-and-reliability.md`: a few days of a busy store's events, so
-/// a weekend of cloud downtime drains rather than discards.
+/// The message limit a store asks for **when it is the one that creates the fleet's stream** — a
+/// first-boot floor, not the estate's ceiling
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
 ///
-/// **This is a fleet ceiling, not a per-store one** (ADR-0087 Amendment 1): every store publishes
-/// into `POS_FLEET`, so the fill rate is the whole estate's. Reaching it refuses new events rather
-/// than dropping old ones, and the outbox holds — visible as the 80% capacity alert (ADR-0073), not
-/// as loss. Sizing these two against a real estate is the A·P4 **O4** capacity probe.
+/// # Editing this does not move an existing stream
+///
+/// `NatsLink::ensure_stream` is a **create-or-get**, which by design does not reconcile a stream that
+/// already exists (Amendment 1 leans on exactly that to make the call idempotent fleet-wide). So the
+/// limits actually in force are whatever the *first* box that ever connected asked for, and no
+/// release of this binary can change them. The estate's real ceiling is `cloud.toml`'s
+/// `[nats] max_messages` / `max_bytes`, which the cloud reconciles onto the stream on every alert
+/// tick — because how much stream a fleet needs is a property of the fleet, and only the cloud knows
+/// one.
+///
+/// What this value is still for: a fresh deployment, where some store has to create the stream before
+/// any cloud has reconciled it, and a deployment with no `[nats]` section at all — a LAN-only estate,
+/// or a fork mid-bring-up — which must not end up with an unbounded stream quietly filling a disk.
+/// A conservative default the cloud can raise is safe in both directions; an unlimited one is only
+/// safe in the managed case. It matches `cloud.toml`'s own default, so an operator who never edits
+/// either sees no change.
 const NATS_MAX_MESSAGES: i64 = 1_000_000;
 
-/// The byte ceiling for the same stream — 1 GiB, sized alongside [`NATS_MAX_MESSAGES`], and a fleet
-/// ceiling for the same reason.
+/// The byte floor for the same stream — 1 GiB, and a first-boot floor for the same reason as
+/// [`NATS_MAX_MESSAGES`].
 const NATS_MAX_BYTES: i64 = 1_073_741_824;
 
 /// How often the config-pull loop pulls when nothing is failing. The cloud answers immediately (no

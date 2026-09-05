@@ -29,6 +29,7 @@ use async_nats::jetstream::consumer::{AckPolicy, Consumer, pull};
 use async_nats::jetstream::{self, AckKind, Message};
 use futures_util::StreamExt as _;
 
+use pos_ports::message_link::LinkCapacity;
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 
@@ -58,6 +59,10 @@ pub struct ConsumerConfig {
 #[derive(Debug)]
 pub struct NatsConsumer {
     consumer: Consumer<pull::Config>,
+    /// Kept so the cursor can also *reconcile* the stream's limits, which is how a fleet ceiling
+    /// becomes settable at all ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)
+    /// Amendment 2). The consumer handle above cannot reach the stream's configuration.
+    context: jetstream::Context,
     config: ConsumerConfig,
 }
 
@@ -111,7 +116,61 @@ impl NatsConsumer {
             )
             .await
             .map_err(unavailable)?;
-        Ok(Self { consumer, config })
+        Ok(Self {
+            consumer,
+            context,
+            config,
+        })
+    }
+
+    /// Reconciles the fleet stream's limits to `max_messages` / `max_bytes` and reports its fill
+    /// ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+    ///
+    /// # Why the cloud does this at all
+    ///
+    /// The edge's `ensure_stream` is a **create-or-get**, which by design does not reconcile a stream
+    /// that already exists. So the limits actually in force are whatever the first box that ever
+    /// connected asked for, and no edge release can move them. The cloud is the one process that
+    /// knows the whole estate and runs once for it, so the ceiling is set here.
+    ///
+    /// # Why it reads before it writes
+    ///
+    /// It fetches the stream's existing configuration and changes **only** the two limits. Sending a
+    /// `StreamConfig` composed here would carry an empty `subjects` list and silently drop the
+    /// fleet's subject capture — the mirror image of the failure ADR-0087 Amendment 1 exists to
+    /// prevent, and one that would stop every store publishing. A reconcile that can un-capture the
+    /// subject is not a reconcile.
+    ///
+    /// A limit of `-1` means unlimited, and is passed through unchanged; the update is skipped
+    /// entirely when both limits already match, so a steady fleet does no write at all.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the stream cannot be read or updated.
+    pub async fn reconcile_capacity(
+        &self,
+        max_messages: i64,
+        max_bytes: i64,
+    ) -> Result<LinkCapacity, PortError> {
+        let mut stream = self
+            .context
+            .get_stream(&self.config.stream)
+            .await
+            .map_err(unavailable)?;
+        let info = stream.info().await.map_err(unavailable)?;
+        let mut config = info.config.clone();
+        let state = info.state.clone();
+        if config.max_messages == max_messages && config.max_bytes == max_bytes {
+            return Ok(crate::link::capacity_of(&config, &state));
+        }
+        config.max_messages = max_messages;
+        config.max_bytes = max_bytes;
+        let updated = self
+            .context
+            .update_stream(&config)
+            .await
+            .map_err(unavailable)?;
+        Ok(crate::link::capacity_of(&updated.config, &state))
     }
 
     /// Pulls the next batch: up to `config.batch` messages, waiting at most `config.expires`.

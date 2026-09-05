@@ -13,6 +13,7 @@ pub mod channel;
 pub mod eval;
 pub mod evaluator;
 pub mod model;
+pub mod probe;
 pub mod store;
 
 pub use channel::{AlertChannel, ChannelError, WebhookAlertChannel};
