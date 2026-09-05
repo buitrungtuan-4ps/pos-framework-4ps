@@ -49,7 +49,9 @@ export function Floor() {
           </p>
         )}
       </Show>
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+      {/* The floor drawn is what proves a sign-in took, so it carries the outcome mark for that
+          task (ADR-0109). It is present whenever this screen renders, which is the claim. */}
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" data-outcome="floor">
         <For each={floorTables()}>
           {(table) => {
             const currentState = () => tableState(table.id);

@@ -76,7 +76,10 @@ export function Order() {
           <a href="/" class="text-sm text-ink-muted no-underline">
             {t("common.back_floor")}
           </a>
-          <h1 class="text-lg font-semibold">{t("common.table", { label: label() })}</h1>
+          {/* Seating a table ends here, on this table's order screen (ADR-0109). */}
+          <h1 class="text-lg font-semibold" data-outcome="order-open">
+            {t("common.table", { label: label() })}
+          </h1>
           <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
         </div>
 
@@ -94,12 +97,19 @@ export function Order() {
             fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
           >
             {(line) => (
-              <li class="flex items-center gap-3 rounded-token border border-line bg-surface p-3">
+              <li
+                class="flex items-center gap-3 rounded-token border border-line bg-surface p-3"
+                data-outcome="line-added"
+              >
                 <span class="flex-1">{line.name}</span>
                 <span class="tabular-nums">{formatMoney(line.lineTotal)}</span>
                 <Show
                   when={line.state === "ORDER_LINE_STATE_ADDED"}
-                  fallback={<span class="text-sm text-ok">{t("order.fired")}</span>}
+                  fallback={
+                    <span class="text-sm text-ok" data-outcome="line-fired">
+                      {t("order.fired")}
+                    </span>
+                  }
                 >
                   <button
                     type="button"

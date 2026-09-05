@@ -513,6 +513,23 @@ export async function loadLayout(): Promise<void> {
   }
 }
 
+// Everything the till has to read from the edge before it can sell: the floor, the price book, the
+// button plan and the money settings.
+//
+// One function rather than four call sites, because there are two moments a device becomes able to
+// sell and both have to load the same set. The boot gate is the obvious one; **signing in is the
+// other**, and it was missing. A device that pairs and signs in navigates client-side to the floor,
+// so `App`'s `onMount` does not run again — the till drew the fallback floor, an empty price book
+// and no quick-cash keys until somebody reloaded the page. Found by the browser step gate
+// ([ADR-0109](../../../docs/adr/0109-counting-the-taps-an-operator-makes.md)), which could not add
+// an item to an order for exactly this reason.
+//
+// Every loader is individually forgiving, so this is too: a blip leaves whatever was already loaded
+// rather than emptying the till.
+export async function loadStore(): Promise<void> {
+  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale()]);
+}
+
 export async function fire(lineId: string): Promise<void> {
   // The edge derives the fired line's station from the published routing (ADR-0072); the station we
   // send is only the fallback it uses when the store has published no station plan yet.

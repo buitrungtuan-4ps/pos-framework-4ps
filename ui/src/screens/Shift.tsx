@@ -71,7 +71,9 @@ export function Shift() {
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_OPEN"}>
-        <p class="text-ink-muted">{t("shift.open_hint")}</p>
+        <p class="text-ink-muted" data-outcome="shift-open">
+          {t("shift.open_hint")}
+        </p>
         <label class="mt-3 block text-sm text-ink-muted" for="count">
           {t("shift.count_label")}
         </label>
@@ -100,7 +102,9 @@ export function Shift() {
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_COUNTED"}>
-        <p class="text-ink-muted">{t("shift.counted_hint")}</p>
+        <p class="text-ink-muted" data-outcome="shift-counted">
+          {t("shift.counted_hint")}
+        </p>
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
@@ -118,7 +122,7 @@ export function Shift() {
 
       <Show when={phase() === "SHIFT_STATE_CLOSED" && shift()?.variance}>
         {(variance) => (
-          <div class="mt-4 rounded-token border border-line bg-surface p-4">
+          <div class="mt-4 rounded-token border border-line bg-surface p-4" data-outcome="shift-closed">
             <p class="font-semibold">{t("shift.closed")}</p>
             <p class="mt-2 text-ink-muted">
               {t("shift.expected")}{" "}

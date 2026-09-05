@@ -292,7 +292,9 @@ export function Takeaway() {
             >
               {(settled) => (
                 <>
-                  <p class="mt-4 text-lg font-semibold">{t("pay.settled")}</p>
+                  <p class="mt-4 text-lg font-semibold" data-outcome="settled">
+                    {t("pay.settled")}
+                  </p>
                   <Show when={settled().receipt_number}>
                     {(number) => (
                       <p class="tabular-nums">{t("pay.receipt", { number: number() })}</p>
