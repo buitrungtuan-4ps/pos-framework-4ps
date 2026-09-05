@@ -20,6 +20,7 @@ use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_proto::SalesChannel;
+use pos_proto::devices::{DeviceConnection, DeviceKind};
 use pos_proto::ids::{MenuItemId, StoreId, TaxClassId};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
@@ -190,4 +191,101 @@ fn a_config_version_that_is_not_a_ulid_is_applied_but_not_stored() {
     let after = edge_over(store);
     let restored = run_ready(restore_session_from_store(&after)).expect("restore");
     assert_eq!(restored, None, "nothing was stored, so nothing is restored");
+}
+
+#[test]
+fn a_published_device_reaches_the_live_session_and_survives_a_restart() {
+    // The whole point of delivering printers as configuration (ADR-0100): the box knows where they
+    // are after a reboot with no cloud, because the node rides the same rail C1 made durable. So this
+    // asserts both halves on one store rather than only the hot swap.
+    let store = FakeStore::default();
+    let before = edge_over(store.clone());
+    assert!(
+        before.session().devices.is_empty(),
+        "a fresh edge addresses no device"
+    );
+
+    let document = serde_json::json!({
+        "devices": {
+            "devices": [{
+                "device_id": "00000000000000000000000001",
+                "kind": "DEVICE_KIND_PRINTER",
+                "connection": "DEVICE_CONNECTION_USB",
+                "address": "/dev/usb/lp0",
+                "name": "Counter"
+            }]
+        }
+    });
+    let client = ConfigClient::new(
+        FakeConfigTransport {
+            version: version(),
+            document,
+        },
+        before.clone(),
+        None,
+    );
+    run_ready(client.pump_once()).expect("pump");
+    let live = before.session();
+    let printer = live.devices.devices().first().expect("the counter printer");
+    assert_eq!(printer.address, "/dev/usb/lp0");
+    assert_eq!(printer.connection.known(), DeviceConnection::Usb);
+
+    let after = edge_over(store);
+    run_ready(restore_session_from_store(&after)).expect("restore");
+    let restored = after.session();
+    assert_eq!(
+        restored
+            .devices
+            .devices()
+            .first()
+            .expect("the printer")
+            .address,
+        "/dev/usb/lp0",
+        "the restarted store still knows where its printer is, with no cloud reachable"
+    );
+}
+
+#[test]
+fn a_device_node_naming_a_kind_this_build_predates_does_not_cost_the_store_its_printer() {
+    // The forward-compatibility rule, asserted where it actually bites: a newer cloud publishing a
+    // label printer beside the receipt printer must not take the receipt printer with it.
+    let edge = edge();
+    let document = serde_json::json!({
+        "devices": {
+            "devices": [
+                {
+                    "device_id": "00000000000000000000000001",
+                    "kind": "DEVICE_KIND_LABEL",
+                    "connection": "DEVICE_CONNECTION_NETWORK",
+                    "address": "192.0.2.11:9100",
+                    "name": "Labels"
+                },
+                {
+                    "device_id": "00000000000000000000000002",
+                    "kind": "DEVICE_KIND_PRINTER",
+                    "connection": "DEVICE_CONNECTION_USB",
+                    "address": "/dev/usb/lp0",
+                    "name": "Counter"
+                }
+            ]
+        }
+    });
+    let client = ConfigClient::new(
+        FakeConfigTransport {
+            version: version(),
+            document,
+        },
+        edge.clone(),
+        None,
+    );
+    run_ready(client.pump_once()).expect("pump");
+    let live = edge.session();
+    assert_eq!(live.devices.devices().len(), 2, "the whole node applied");
+    let receipt = live
+        .devices
+        .devices()
+        .iter()
+        .find(|device| device.kind.known() == DeviceKind::Printer)
+        .expect("the receipt printer survived the unfamiliar one");
+    assert_eq!(receipt.address, "/dev/usb/lp0");
 }

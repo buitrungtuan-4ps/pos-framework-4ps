@@ -45,6 +45,7 @@ use pos_ports::event_store::EventStore;
 use pos_ports::tx::TxContext;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::devices::PublishedDevices;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::inventory::PublishedInventory;
@@ -201,6 +202,16 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<StationPlan>(&text).ok())
     {
         session.stations = stations;
+    }
+    // The `devices` node the device publish writes (ADR-0100): the printers and kitchen displays this
+    // store may address. Absent leaves the session's set as the base has it — which for a box that
+    // has never synced means empty, and empty means "print nothing", not "print blind".
+    if let Some(devices) = document
+        .get("devices")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedDevices>(&text).ok())
+    {
+        session.devices = devices;
     }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap

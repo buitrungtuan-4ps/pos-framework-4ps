@@ -36,6 +36,7 @@ use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, TxContext};
+use pos_proto::devices::PublishedDevices;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
@@ -220,6 +221,14 @@ pub struct EdgeSession {
     /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
     /// own fallback.
     pub stations: StationPlan,
+    /// The printers and kitchen displays this store may address, as published on the `devices`
+    /// config node ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    ///
+    /// Empty in the bootstrap, and an empty node is an ordinary state rather than a fault: a
+    /// LAN-only box that has never synced, and a shop with no printer at all, both look like this.
+    /// What the dispatcher must never do is the thing the till did before this existed — claim
+    /// "Printing receipt…" while nothing is wired.
+    pub devices: PublishedDevices,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -340,6 +349,7 @@ impl EdgeSession {
             staff: StaffRoster::new(),
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
+            devices: PublishedDevices::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,

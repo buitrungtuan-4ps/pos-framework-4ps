@@ -16,6 +16,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The store applies the `devices` node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
+  production-readiness **C2** slice 3). `EdgeSession` gains the printers and kitchen displays this
+  store may address, rebuilt from the config document beside `menu`, `permissions`, `floor` and
+  `stations` — so a box learns them from the pull it already runs, and still knows after a reboot
+  with the WAN down, because that node is now persisted locally and restored at boot.
+
+  Empty is an ordinary state, not a fault: a LAN-only box that has never synced and a shop with no
+  printer both look like this, and both mean "print nothing" rather than "print blind". A `kind` this
+  build predates keeps its token and its neighbours: a newer cloud publishing a label printer beside
+  the receipt printer must not cost the shop the receipt printer, which is asserted rather than
+  assumed.
+
+  Nothing prints yet — the dispatcher is the last slice.
+
 - **The cloud compiles a store's approved devices into its `devices` config node**
   ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2b).
   `POST /admin/devices/publish` reads the store's *approved* proposals and versions them onto the
