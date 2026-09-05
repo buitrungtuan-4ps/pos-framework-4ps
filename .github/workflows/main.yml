@@ -1,15 +1,23 @@
 name: main
 
-# What runs once a change has landed. Everything here is too slow or too stateful
-# for the ten-minute pull-request gate, and none of it is a substitute for it.
+# What runs once a change has landed, and none of it is a substitute for the
+# pull-request gate.
 #
 # The `integration` job runs the code that needs a real backing service against
 # one — `store-postgres` against PostgreSQL, `blob-garage` against S3 (MinIO),
 # `link-nats` and the `pos_cloud` ingest cursor against NATS JetStream (all P7). The
 # service image is pinned by digest, not tag: a tag is mutable, and a silently
-# changed database version is a long afternoon. These tests are behind each
-# adapter's `integration` Cargo feature, so the ten-minute pull-request gate
-# neither compiles nor runs them.
+# changed database version is a long afternoon.
+#
+# **The PostgreSQL third of this now also runs pre-merge**, in `pr.yml`'s
+# `postgres` job. This header used to say the whole job was "too slow or too
+# stateful" for the ten-minute gate; the clock disagreed for that third — 92
+# cases in about twenty seconds — and two broken statements reached `main`
+# because nothing checked SQL before it landed. It stays here too: this job is
+# what proves the three adapters together on one runner, and a duplicate twenty
+# seconds after merge is not a cost worth reasoning about. MinIO and NATS are a
+# different matter and stay post-merge only: both need a `docker run` with a
+# command a service block cannot pass.
 
 on:
   push:

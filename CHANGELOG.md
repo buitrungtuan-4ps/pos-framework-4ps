@@ -120,6 +120,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store's heartbeat and every tax-rate save were broken against a real database, and the gate
+  that would have caught it ran only after merge.**
+
+  Two statements in `store-postgres` compile, satisfy every fake, and fail on the first real
+  connection. Both had been on `main` for two merges.
+
+  * **The heartbeat.** `record_heartbeat` writes `last_seen_at` and, only when the store reported
+    them, the outbox depth and lease generation with the same timestamp:
+    `CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3 END`. Both arms of that `CASE` are
+    unknown-typed — `NULL`, and a bare `$3` — so PostgreSQL resolves the expression to `text` and
+    deduces `$3` as `text`, while the column list deduces the same parameter as `bigint`. The server
+    refuses the statement: *inconsistent types deduced for parameter $3*. Every heartbeat from every
+    store failed, so the fleet console's liveness, the reported publish backlog and the lease
+    standing all had no writer at all. Fixed by pinning the arm: `ELSE $3::bigint`.
+  * **The tax-rate save.** The insert cast its components column as `$5::jsonb`, with a comment
+    saying the cast keeps the adapter free of a JSON type. It does the opposite: PostgreSQL deduces
+    the *parameter* as `jsonb`, and `tokio-postgres` then refuses to serialise the Rust `String` the
+    adapter binds — *error serializing parameter 4*. Every tax-rate save from the console failed.
+    Fixed to `$5::text::jsonb`, which is the idiom `role_templates.permissions` already used one
+    file over.
+
+  **The reason both shipped is the more useful finding.** The pull-request gate deliberately touches
+  no database — that is the point of the sans-I/O core, and it is right for the domain. But
+  `store-postgres` is nothing but SQL, and a statement is only checked by a server that parses it.
+  The one job that does ran *after* merge, and nothing watches it. So the pull-request gate gains a
+  **`postgres` job**: the same digest-pinned PostgreSQL 16 service, the same single-threaded run, as
+  a job of its own so the workspace suite keeps its no-services property and neither waits on the
+  other. `main`'s header called that suite too slow for a ten-minute gate; it is 92 cases in about
+  twenty seconds. MinIO and NATS stay post-merge — both need a `docker run` with a command a service
+  block cannot pass, which is a real cost rather than an assumed one.
+
+  **Upgrade note.** None. No schema, wire or configuration change; a deployment that could not record
+  heartbeats or save tax rates simply starts doing both. Forks gain a tenth required check on their
+  pull requests.
+
 - **The fleet's stream ceiling is now the cloud's to set, and something finally reads how full it is**
   ([ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2, roadmap **A·P4 O4**,
   production-readiness **D7**).
