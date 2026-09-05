@@ -151,6 +151,14 @@ by this page, and that is deliberate: a register that *adds* obligations becomes
 truth and drifts from the first. When a gate is cleared, record the answer where the *Recorded in*
 column points, and mark it here — this page tracks whether a gate is open, not what the answer was.
 
-When a gate stops needing a human — H13 disappears the day artifact credentials are provisioned by
-bootstrap, P1 disappears the day someone runs `nc -zv` against a real box and writes down the result
-— delete the row. A register that only grows is one nobody reads.
+When a gate stops needing a human, delete the row. **P1** disappears the day someone runs `nc -zv`
+against a real box and writes down the result. That has already happened twice: **H11** (add the
+certificate-export cron line) and **H13** (mint the Garage S3 access keys on the box) were published
+here as human gates, moved to §8 when the owner asked why so much of a deploy is manual, and H13's
+successor **A1** then closed outright — `bootstrap.sh` creates the layout, the bucket and the key
+itself. A register that only grows is one nobody reads.
+
+**The numbers are not reused, and the sequence therefore has gaps** — there is no H11 or H13 today.
+Renumbering would silently redirect every link and every note that cites a gate by number, including
+the ones in `deploy-runbook.md` and this page's own §8. A gap means a row was removed; the history is
+in git, and the reason is usually recorded in §8.

@@ -11,7 +11,9 @@ secrets belong to GitHub, and which belong to a machine.**
 Everything below is derived from the workflows themselves (`grep -rno "secrets\.[A-Z_]*" .github/workflows/`),
 not from prose, so it stays checkable.
 
-## 1. GitHub Actions secrets — 13, of which 6 are optional
+## 1. GitHub Actions secrets — 13: **6 required**, 2 conditional, 5 optional
+
+The heading said "6 are optional" and the tables below have never agreed with it: six carry *yes*, two are **conditional** on `TLS_MODE`, and five are genuinely optional. The distinction is the whole point of the page — a conditional secret is required for the posture a fork picked and unused for the other three, which is not the same as optional.
 
 Repository → Settings → Secrets and variables → Actions.
 

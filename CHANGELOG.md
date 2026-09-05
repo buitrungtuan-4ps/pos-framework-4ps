@@ -14,6 +14,47 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **Thirteen documents that contradicted the tree** (production-readiness **Wave 6**). Each was
+  verified against source before being touched; none was refuted, and two were worse than reported.
+  The user-visible ones:
+
+  - The **README** described a tree that no longer exists: adapters that were never written
+    (`payment-*`, `vendor-*`) while seven real ones went unlisted, no mention of `dashboard/` — the
+    cloud console — at all, `countries/vn/` shown as present when only the reference module `zz` is,
+    "12 architecture decision records" against **101**, and "4–6 GitHub Secrets" against the fork
+    checklist's thirteen. Its status line now points at the current roadmap and the readiness list
+    rather than the original phase plan.
+  - **`pos-ports`' crate documentation** said eighteen ports in three places and "seventeen" in a
+    fourth; `PortName::ALL` has **nineteen**. `IntakeLedger` — the port that shipped as a trait its
+    own record called a port, and was registered late — is now named as the nineteenth.
+  - The **port table** credited `ConfigStore` to "SQLite / PostgreSQL". There is no PostgreSQL
+    implementation of that port and never was: what the cloud has is its own authoring-side config
+    tree, a different thing that also stores configuration. Naming both in one cell implied a
+    swappable adapter a fork could pick.
+  - **`ui-ux.md` §5** listed shipped console screens as backlog — four of six shipped whole, and a
+    fifth as the Fleet store drawer. What is genuinely still missing is now named instead: per-store
+    last backup, installed version and invoice-queue depth; unknown-result payments; and the
+    recovery actions, whose lease half cannot be built until a box learns its own lease standing.
+  - **`roadmap.md`'s ADR table** marked four Accepted, shipped ADRs as Open (0016, 0019, 0020, 0022).
+  - **`fork-checklist.md` §1** said "13, of which 6 are optional"; the tables carry six required, two
+    conditional on `TLS_MODE`, and five optional — and the difference between conditional and
+    optional is exactly what the page exists to make visible.
+  - **[ADR-0061](docs/adr/0061-order-relay.md)** was "Extended by ADR-0062", an ADR nobody wrote. The
+    header now says so, that `MessageLink` stays one-directional until it exists, and that 0062 is
+    reserved rather than missing.
+  - Three sets of slice ids collided on `O1`–`O4` across three planning documents. They are
+    disambiguated at the point of use rather than renumbered, because two references outside those
+    files already carried the qualifying prefix and renumbering would have broken them.
+  - Four smaller number-vs-tree disagreements: the step budget's task count (thirteen against
+    fifteen, in three places), E5's residual count (three against the five actually closed), the
+    debate log's declared range (D1–D22 against a list running to D25), and the gate register citing
+    a gate `H13` it no longer contains — that one because the row did what the register asks rows to
+    do: it stopped needing a human and left.
+
+  No code behaviour changes here beyond the `pos-ports` documentation.
+
 ### Removed
 
 - **The edge's `DurableAuth` mirror drops `device_for_token`, which nothing called**

@@ -109,13 +109,13 @@ ADR-before-code is the one heavy process rule active from commit one. Beyond tra
 | 0013 | **Async strategy across the boundary** — sans-I/O synchronous `pos-core` vs async ports; native `async fn` in trait vs `async-trait`; how multi-vendor families dispatch when AFIT blocks `dyn`. | P2 | **Merged** |
 | 0014 | Date/time and timezone library (business-date derivation, DST at the cutoff hour). | P1 | **Merged** |
 | 0015 | SQLite access strategy — `rusqlite` + a dedicated single-writer thread vs `sqlx`. | P4 | **Merged** |
-| 0016 | PostgreSQL access crate — `sqlx` (compile-time checked, needs a build-time DB or offline cache) vs `tokio-postgres` + pool. | P7 | Open |
+| 0016 | PostgreSQL access crate — `sqlx` (compile-time checked, needs a build-time DB or offline cache) vs `tokio-postgres` + pool. | P7 | **Merged** |
 | 0017 | Migration tooling for both tiers, plus how additive-only is enforced. | P4 | **Merged** |
 | 0018 | HTTP/WebSocket stack (axum + tower) and UI embedding. | P5 | **Merged** |
-| 0019 | OpenAPI generation from code (generated, never transcribed). | P7 | Open |
-| 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | Open |
+| 0019 | OpenAPI generation from code (generated, never transcribed). | P7 | **Merged** |
+| 0020 | i18n runtime — ICU MessageFormat implementation and CLDR plural data. | P3 | **Merged** |
 | 0021 | Corrected 16-port list, superseding ADR-0006 (see D4). | P2 | **Merged** |
-| 0022 | Events partition strategy (see D7). | P7 | Open |
+| 0022 | Events partition strategy (see D7). | P7 | **Merged** |
 | 0025 | Receipt-number authority as configuration, not a fixed guarantee. | P3 | **Merged** |
 | 0028 | Settlement and payment invariant — tendered vs applied, tips a separate ledger, explicit rounding adjustment, tax per tax-class subtotal, service-charge taxability as config (issue #9). | P3 | **Merged** |
 | 0029 | Append-command merge semantics — terminal states win, other fields last-writer-wins on `(event_time, device_id)`, commutative and associative (issue #10). | P3 | **Merged** |

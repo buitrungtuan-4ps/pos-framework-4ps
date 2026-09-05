@@ -199,6 +199,11 @@ per-route latency histograms exist before the fleet does.
 
 v1's A0–A8 maps into this; nothing is dropped. Sizes: S ≈ one PR · M ≈ a few · L ≈ many.
 **Recommended order: F0 → F1 → F2 → G1 → O1 → G2 → M1 → M8 → M2 → O2 → M4 → M5 → M3 → O3 → M6 → M7 → O4 → P2 → F3.**
+
+> **These `O` ids are this plan's own.** [`roadmap-v3.md`](roadmap-v3.md) §A·P4 uses `O1`–`O5` for a different
+> set — alert-delivery webhook, printer transport, WAL shipping, JetStream probe, `/internal` auth — and always
+> writes them with the `A·P4` prefix; [`production-readiness.md`](production-readiness.md) uses `O1`–`O6` for a
+> third. A bare `O2` is ambiguous across the three; say which document you mean.
 (F-track first because every later screen is built from its parts; G1 before G2 because audit needs
 actors; O1 early because fleet blindness is the operational risk.)
 

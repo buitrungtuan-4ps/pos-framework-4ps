@@ -2,7 +2,7 @@
 
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-24
 **Relates to** [ADR-0056](0056-public-order-intake.md) · [ADR-0026](0026-port-shapes.md) · [ADR-0001](0001-offline-first-store-autonomy.md) · [ADR-0033](0033-config-tree.md) · [ADR-0037](0037-api-keys.md) · [ADR-0039](0039-config-delivery.md)
-**Extended by** ADR-0062 (the optional low-latency `live` mode — forthcoming, in the follow-up PR)
+**Extension not written** — the optional low-latency `live` mode was to be ADR-0062. That ADR does not exist: the follow-up PR was never opened, so `0062` is a hole in an otherwise dense sequence and this line pointed at a decision nobody made. Until it is written, `MessageLink` stays one-directional and the relay stays long-poll, which [`production-readiness.md`](../production-readiness.md) Wave 8 records as the remaining work (issue #97). The number is reserved for it.
 
 **Context.** [ADR-0056](0056-public-order-intake.md) built the public intake *library* — `POST /v1/orders`
 mapping a request to an [`InboundOrder`], binding the store to the caller's tenant, and calling the
@@ -79,9 +79,9 @@ Two fixed facts shape it:
   internal `queued_id` exists only for the store's ack path.
 - **A synchronous request/reply over a store-held live connection (Mức 2)** — *deferred*, not rejected:
   it lowers latency below what long-poll gives but requires the store to hold a live channel and reply,
-  which amends `MessageLink`'s one-directional rule. It is a conscious, separate decision (ADR-0062,
-  forthcoming) layered behind a `store.order_relay.mode` config flag, over this same queue as the
-  durable fallback.
+  which amends `MessageLink`'s one-directional rule. It is a conscious, separate decision — ADR-0062,
+  **still unwritten** (see the header) — to be layered behind a `store.order_relay.mode` config flag,
+  over this same queue as the durable fallback.
 
 **Consequences.**
 

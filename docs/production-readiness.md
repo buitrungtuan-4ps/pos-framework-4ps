@@ -100,18 +100,25 @@ Code closes the waves below. It does not close either of these, and no pull requ
 
 ## Wave 6 — Documents that contradict the tree
 
-`README` records neither the shipped console nor the current roadmap · `O1`–`O4` name two disjoint
-slice sets across `roadmap-v3.md` and `cloud-admin-ux-plan.md` · `roadmap.md`'s ADR table marks four
-Accepted ADRs Open · `ui-ux.md` §5 lists five shipped console screens as backlog · the gate register
-cites a gate `H13` it no longer contains · `roadmap-v3`'s A·P3 reads open for Q5/Q6/Q7 while its own
-v1.0 table says they landed, and its Q7 ceiling contradicts the measurement · `fork-checklist` §1's
-count is off by one · E5's entry still claims three residuals against five closed · the debate log
-declares D1–D22 and lists D25 · `pos-ports`' header says eighteen ports against nineteen · the port
-table credits `ConfigStore` to an adapter that does not exist · both step-budget documents say
-thirteen tasks against fifteen · [ADR-0061](adr/0061-order-relay.md) is "Extended by ADR-0062", an
-ADR that was never written, leaving a hole at 0062 in an otherwise dense sequence — **found while
-writing this page, by the `links` gate**. *(13 items, all reported except the last, which is
-verified.)*
+**All thirteen verified against source and fixed.** None was refuted; two were worse than reported.
+Every one is a document that would have sent a reader — a fork, a new maintainer, an integrator — to
+a wrong conclusion with nothing in CI to stop it.
+
+| # | Item | Evidence |
+| --- | --- | --- |
+| W1 | `README` records neither the shipped console nor the current roadmap. **Worse than reported:** it also credits the tree with adapters that do not exist (`payment-*`, `vendor-*`) while omitting seven that do, hides `dashboard/` entirely, lists `countries/vn/` as present when only `zz` is, says "12 architecture decision records" against **101**, and promises "4–6 GitHub Secrets" against the checklist's thirteen. **Fixed:** the layout matches `crates/adapters/`, the console has a line, the status points at `production-readiness.md` and `roadmap-v3.md`, and the documentation map carries the four pages that now hold the work | **done** |
+| W2 | `O1`–`O4` name two disjoint slice sets across `roadmap-v3.md` and `cloud-admin-ux-plan.md` — and a **third** set in this page. **Fixed by disambiguating rather than renumbering:** both documents now say so at the point of use, and `roadmap-v3` writes its own as `A·P4 O2` … , which is what the two references outside that file (ADR-0087, the CHANGELOG) already did. Renumbering would have broken those | **done** |
+| W3 | `roadmap.md`'s ADR table marks four Accepted ADRs Open — 0016, 0019, 0020, 0022, all Accepted and all shipped. **Fixed** to the table's own **Merged** vocabulary | **done** |
+| W4 | `ui-ux.md` §5 lists shipped console screens as backlog. **Verified screen by screen:** four of the six shipped whole (OTA with the kill switch, the reconciliation viewer, date-ranged reports, tenant-wide staff), and the fifth — store detail — shipped as the Fleet drawer. **Fixed, and the remainder named honestly:** last backup, installed version and invoice-queue depth (the cloud holds none per store), unknown-result payments (needs a projection that does not exist), and recovery actions — whose lease half is blocked by **R4**, since a box that never learns its lease standing has nothing for a button to reset | **done** |
+| W5 | The gate register cites a gate `H13` it no longer contains. **Verified in git:** H13 was *mint the Garage S3 access keys on the box*, and H11 *add the certificate-export cron line*; both moved to §8 when the owner asked why so much of a deploy is manual, and H13's successor **A1** then closed outright. **Fixed:** the sentence now uses what actually happened as its example, and states that gate numbers are never reused — so a gap is a removed row, not a typo | **done** |
+| W6 | `roadmap-v3`'s A·P3 reads open for Q5/Q6/Q7 while its own v1.0 table says they landed. **Fixed:** all three carry their delivery note, including that Q5's header work struck two headers rather than renaming them — and that one of the two, `pos-delivery-id`, has since returned as **R6** with the semantics the transport actually supports | **done** |
+| W7 | `fork-checklist` §1's count is off. The heading said "13, of which 6 are optional"; the tables carry six *required*, two **conditional** on `TLS_MODE`, and five optional. **Fixed**, keeping the distinction the page exists to make: a conditional secret is mandatory for the posture a fork chose | **done** |
+| W8 | E5's entry still claims three residual hardcoded-`VND` sites. Five were closed: the three named, a fourth that was the only *wrong number* rather than a wrong label (out by 100× on any two-decimal currency), and a fifth in `Takeaway.tsx` — the same defect one file over, written the same way and missed. **Fixed** | **done** |
+| W9 | The debate log declares D1–D22 and lists through D25. **Fixed** to D1–D25 | **done** |
+| W10 | `pos-ports`' header says eighteen ports against nineteen — and a fourth number, "the seventeen-port list", further down. **Verified against `PortName::ALL`** (nineteen variants). **Fixed**, naming `IntakeLedger` as the nineteenth and the ADR that registered it | **done** |
+| W11 | The port table credits `ConfigStore` to an adapter that does not exist: the row read "SQLite / PostgreSQL" and the only `impl ConfigStore` outside the fakes is `store-sqlite`. **Fixed, with the reason:** what the cloud has is a different thing that also stores configuration — `pos-cloud`'s authoring-side config tree — and naming both in one cell implied a swappable adapter a fork could pick | **done** |
+| W12 | Both step-budget documents say thirteen tasks against fifteen; `roadmap-v3`'s A·P3 said "~12", a third number. **Fixed** in all three places | **done** |
+| W13 | [ADR-0061](adr/0061-order-relay.md) is "Extended by ADR-0062", an ADR that was never written, leaving a hole at 0062 in an otherwise dense sequence — **found while writing this page, by the `links` gate**. **Fixed:** the header says the extension was never written, that `MessageLink` stays one-directional until it is, and that the number is reserved; the body's forward reference says the same. The work itself is Wave 8 (issue #97) | **done** |
 
 ## Wave 7 — Dead and unreachable code
 
