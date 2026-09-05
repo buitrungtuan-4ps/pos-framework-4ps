@@ -24,6 +24,19 @@ const fn default_expires_secs() -> u64 {
     5
 }
 
+/// The fleet stream's message ceiling when the config does not say — the same figure the edge
+/// creates a fresh stream with, so an operator who never edits it sees no change
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+const fn default_nats_max_messages() -> i64 {
+    1_000_000
+}
+
+/// The fleet stream's byte ceiling when the config does not say — 1 GiB, matching the edge's
+/// first-boot floor for the same reason.
+const fn default_nats_max_bytes() -> i64 {
+    1_073_741_824
+}
+
 /// How often the rollup projector sweeps the fleet, in seconds, when the config does not say.
 const fn default_projector_interval_secs() -> u64 {
     30
@@ -415,6 +428,20 @@ pub struct NatsIngestConfig {
     /// How long one pull waits for a full batch before returning what it has, in seconds.
     #[serde(default = "default_expires_secs")]
     pub expires_secs: u64,
+    /// The fleet stream's message ceiling, or `-1` for unlimited
+    /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+    ///
+    /// **The ceiling belongs here rather than on the till** because it is a property of the estate —
+    /// how many stores, and how long an outage they must ride out — and only this box knows that.
+    /// The edge's constants create the stream on a fresh deployment and cannot move it afterwards:
+    /// its `ensure_stream` is a create-or-get, which by design does not reconcile a stream that
+    /// already exists. The cloud reconciles it on every alert tick.
+    #[serde(default = "default_nats_max_messages")]
+    pub max_messages: i64,
+    /// The fleet stream's byte ceiling, or `-1` for unlimited. Same ownership as
+    /// [`max_messages`](Self::max_messages).
+    #[serde(default = "default_nats_max_bytes")]
+    pub max_bytes: i64,
 }
 
 impl CloudConfig {

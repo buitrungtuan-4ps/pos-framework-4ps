@@ -108,18 +108,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
     // cloud still serves and still ingests re-pushes — useful for a reconciliation-only deployment.
+    // The probe shares this connection: the fleet stream's ceiling is reconciled and its fill read
+    // on the alert tick (ADR-0087 Amendment 2), and opening a second connection to ask the same
+    // broker the same question would be a second thing to configure and to fail.
+    let mut stream_probe = None;
     let cursor_task = if let Some(nats) = config.nats.clone() {
-        let consumer = NatsConsumer::connect(&nats.url, consumer_config(&nats))
-            .await
-            .map_err(|error| error.to_string())?;
-        tracing::info!(stream = %nats.stream, durable = %nats.durable, "ingest cursor started");
+        let consumer = Arc::new(
+            NatsConsumer::connect(&nats.url, consumer_config(&nats))
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+        tracing::info!(
+            stream = %nats.stream,
+            durable = %nats.durable,
+            max_messages = nats.max_messages,
+            max_bytes = nats.max_bytes,
+            "ingest cursor started"
+        );
+        stream_probe = Some(alerts::probe::CursorProbe::new(
+            Arc::clone(&consumer),
+            nats.max_messages,
+            nats.max_bytes,
+        ));
         Some(tokio::spawn(cursor::run(
             consumer,
             cloud.clone(),
             shutdown_signal(),
         )))
     } else {
-        tracing::info!("no [nats] config; ingest cursor off (reconciliation re-push only)");
+        tracing::info!(
+            "no [nats] config; ingest cursor off (reconciliation re-push only), and the fleet \
+             stream's ceiling is left as the stores created it"
+        );
         None
     };
 
@@ -241,6 +261,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.task_health(),
         store.alerts(),
         alert_channel,
+        stream_probe,
         SystemClock,
         alert_thresholds,
         alert_interval,

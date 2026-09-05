@@ -254,10 +254,20 @@ trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 # rename it on both sides at once — otherwise the fleet publishes into a stream nobody reads, and
 # nothing anywhere reports an error. `filter_subject` is left unset, which means every subject the
 # stream captures:
+#
+# `max_messages` and `max_bytes` are the **fleet's** ceiling, and this is the only place that can set
+# it (ADR-0087 Amendment 2). Every store publishes into one stream, so the fill rate is the whole
+# estate's — and the stores cannot size it: the edge creates the stream with a conservative default
+# and its `get_or_create_stream` never reconciles an existing one, so whatever the first box to
+# connect asked for stays in force until this cloud changes it. It is reconciled onto the stream on
+# each alert tick, and the 80% alert watches the same reading. Raise both when the estate grows;
+# `-1` is unlimited, which is a decision about the disk this broker sits on:
 # [nats]
 # url = "tls://:THE_NATS_TOKEN@YOUR_DOMAIN:4222"
 # stream = "POS_FLEET"
 # durable = "cloud_ingest"
+# max_messages = 1000000
+# max_bytes = 1073741824
 
 # retention_days is a legal decision, never a code default (ADR-0035). Set it from the
 # country's configured retention period to arm the PII-masking cron; absent = cron off.

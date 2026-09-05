@@ -9,9 +9,12 @@
 //! [`AlertStore`] — opening new alerts, refreshing live ones, and resolving those that have cleared —
 //! then records its own `task_health` tick, so the watcher is itself watched.
 //!
-//! The store→cloud JetStream capacity condition is supported by [`evaluate`] but not yet fed here: a
-//! cloud-side stream-info probe is a flagged follow-up (ADR-0073), so this loop passes `None` for the
-//! capacity reading and the other conditions fire live.
+//! The store→cloud JetStream capacity is read — and the fleet stream's ceiling *reconciled* — by the
+//! optional [`StreamCapacityProbe`] ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)
+//! Amendment 2). A deployment with no `[nats]` section has no probe and passes `None`, exactly as
+//! every deployment did before the probe existed; a probe that cannot read the stream logs and passes
+//! `None` too, because one unreachable broker must not stop the store-offline and webhook conditions
+//! firing.
 
 use core::future::Future;
 use core::time::Duration;
@@ -21,8 +24,11 @@ use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
 use super::channel::AlertChannel;
+use pos_ports::message_link::LinkCapacity;
+
 use super::eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
 use super::model::FiringAlert;
+use super::probe::StreamCapacityProbe;
 use super::store::{AlertRecord, AlertStore, AlertStoreError};
 use crate::fleet::FleetStore;
 use crate::health::{ALERT_EVALUATOR, TaskHealthStore, tick_detail};
@@ -173,13 +179,20 @@ where
 
 /// One full pass: gather, evaluate, reconcile. Split out so the loop body stays small and the errors
 /// collapse to one string for the tick's health detail.
-async fn pass<Rg, Fl, Wh, Th, Al, Ch>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one pass over the five read seams a snapshot needs, plus the optional delivery channel \
+              and stream probe, the instant, and the thresholds. Every one is read exactly once here \
+              and passed straight to the pure `evaluate`"
+)]
+async fn pass<Rg, Fl, Wh, Th, Al, Ch, Pr>(
     registry: &Rg,
     fleet: &Fl,
     webhooks: &Wh,
     task_health: &Th,
     alerts: &Al,
     channel: Option<&Ch>,
+    probe: Option<&Pr>,
     now: Timestamp,
     thresholds: &AlertThresholds,
 ) -> Result<PassSummary, String>
@@ -190,11 +203,12 @@ where
     Th: TaskHealthStore + Sync,
     Al: AlertStore + Sync,
     Ch: AlertChannel + Sync,
+    Pr: StreamCapacityProbe + Sync,
 {
     let tenants = gather(registry, fleet, webhooks).await?;
     let health = task_health.list_health().await.map_err(|e| e.to_string())?;
-    // The JetStream capacity probe is a flagged follow-up (ADR-0073), so no reading is fed yet.
-    let firing = evaluate(now, thresholds, &tenants, &health, None);
+    let capacity = stream_capacity(probe).await;
+    let firing = evaluate(now, thresholds, &tenants, &health, capacity.as_ref());
     let now_ms = now.as_milliseconds_since_epoch();
     let mut salt = 0_u128;
     let (opened, resolved) = reconcile(alerts, now, &firing, || {
@@ -210,6 +224,30 @@ where
         resolved,
         delivery_error,
     })
+}
+
+/// Reconciles the fleet stream's ceiling and reads its fill, or `None` when there is nothing to read
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+///
+/// **A probe failure is not a pass failure**, for the same reason a delivery failure is not: the
+/// other conditions are computed from the read model and do not need the broker. A cloud whose NATS
+/// is down would otherwise stop reporting that its *stores* are offline — which is exactly when an
+/// operator most wants the fleet view. The commonest failure is also entirely ordinary: a deployment
+/// whose stores have never connected has no stream to read, because the edge creates it.
+async fn stream_capacity<Pr: StreamCapacityProbe + Sync>(
+    probe: Option<&Pr>,
+) -> Option<LinkCapacity> {
+    let probe = probe?;
+    match probe.reconcile().await {
+        Ok(capacity) => Some(capacity),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "could not read the fleet stream; its capacity alert is not evaluated this pass"
+            );
+            None
+        }
+    }
 }
 
 /// Pushes the newly-opened alerts to `channel`, returning why it did not work — never an error.
@@ -242,16 +280,18 @@ async fn deliver_opened<Ch: AlertChannel + Sync>(
 /// the conditions, reconciles them against the store, and records its own health.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each store the loop reads is its own seam handle, plus the clock, thresholds, interval \
-              and shutdown; bundling them would just be unpacked here, as the sibling loops' runs are"
+    reason = "each store the loop reads is its own seam handle, plus the optional channel and stream \
+              probe, the clock, thresholds, interval and shutdown; bundling them would just be \
+              unpacked here, as the sibling loops' runs are"
 )]
-pub async fn run<Rg, Fl, Wh, Th, Al, Ch, C>(
+pub async fn run<Rg, Fl, Wh, Th, Al, Ch, Pr, C>(
     registry: Rg,
     fleet: Fl,
     webhooks: Wh,
     task_health: Th,
     alerts: Al,
     channel: Option<Ch>,
+    probe: Option<Pr>,
     clock: C,
     thresholds: AlertThresholds,
     interval: Duration,
@@ -263,6 +303,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, Ch, C>(
     Th: TaskHealthStore + Sync,
     Al: AlertStore + Sync,
     Ch: AlertChannel + Sync,
+    Pr: StreamCapacityProbe + Sync,
     C: ClockSource,
 {
     tokio::pin!(shutdown);
@@ -275,6 +316,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, Ch, C>(
             &task_health,
             &alerts,
             channel.as_ref(),
+            probe.as_ref(),
             now,
             &thresholds,
         )

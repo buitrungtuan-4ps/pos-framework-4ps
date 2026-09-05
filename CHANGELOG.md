@@ -14,6 +14,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **The fleet's stream ceiling is now the cloud's to set, and something finally reads how full it is**
+  ([ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2, roadmap **A·P4 O4**,
+  production-readiness **D7**).
+
+  How much stream the estate needs is a property of the estate, but the two limits were `const`s
+  compiled into the *till* — and the smaller half of the problem. The larger half: the call that
+  applies them, `ensure_stream`, is a **create-or-get**, which by design does not reconcile a stream
+  that already exists. So the limits actually in force were whatever the **first box that ever
+  connected** asked for. Editing the constants and shipping the release to every store in the fleet
+  would have changed nothing at all, with no error anywhere to say so.
+
+  The ceiling now lives in `cloud.toml` as `[nats] max_messages` / `max_bytes`, and the cloud
+  reconciles it onto the live stream on each alert pass: it **reads the stream's own configuration
+  first** and changes only those two fields, because composing a fresh `StreamConfig` would carry an
+  empty subject list and quietly un-capture the very subject the fleet publishes to. The till's
+  constants stay, demoted to a documented **first-boot floor** — some store has to create the stream
+  before any cloud has reconciled it, and an estate with no `[nats]` section at all must not end up
+  with an unbounded stream filling a disk.
+
+  The same call returns how full the stream is, which is what gives `AlertKind::JetstreamCapacity` a
+  producer at last: the alert kind and its 80%-of-capacity arm shipped with
+  [ADR-0073](docs/adr/0073-alerting.md) and had been handed `None` ever since, so the estate could
+  reach its ceiling and refuse new events with no warning raised. A stream the cloud cannot reach is
+  treated as a **missing reading**, not as a passing one — an unreachable broker already has its own
+  alert, and inventing a healthy number from a failed call is how a capacity alert learns to lie.
+
+  **Deliberately not in this change:** per-store fairness. One store cannot be stopped from consuming
+  the fleet's headroom, which needs per-store credentials the fleet does not yet issue — deferred by
+  Amendment 1 and still deferred.
+
+  **Upgrade note.** Two new **optional** `cloud.toml` keys, `[nats] max_messages` and
+  `[nats] max_bytes`, whose defaults are exactly today's values (1,000,000 messages and 1 GiB), so an
+  operator who edits nothing sees no change in behaviour. No migration and no `PROTOCOL_VERSION`
+  change. An estate whose stream was created long ago with different limits will be reconciled to
+  these on the first alert pass after upgrade — set the keys before starting the cloud if the
+  existing limits were deliberate.
+
 ### Added
 
 - **A superseded machine stops taking updates, because the store's lease finally has two ends**

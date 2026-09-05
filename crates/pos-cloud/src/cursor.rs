@@ -133,7 +133,7 @@ where
 /// Never returns `Err`; the signature keeps `?` ergonomic and leaves room for a future fatal case.
 /// The result is `Ok(())` on a clean shutdown.
 pub async fn run<S>(
-    consumer: NatsConsumer,
+    consumer: std::sync::Arc<NatsConsumer>,
     cloud: Cloud<S>,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), PortError>

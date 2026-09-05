@@ -108,3 +108,52 @@ holds while an operator raises the limits. That is visible (the 80% capacity ale
 [ADR-0073](0073-alerting.md)) and lossless, not silent, but the figures now want sizing against a
 real estate rather than one shop. That is the already-planned **A·P4 O4** JetStream capacity probe,
 and this amendment is the reason it is no longer optional for a fleet above a few dozen stores.
+
+**Amendment 2 (2026-09-05) — a fleet ceiling is the cloud's to set, because the cloud is the only
+party that knows the fleet.**
+
+Amendment 1 made `NATS_MAX_MESSAGES` and `NATS_MAX_BYTES` a *fleet* ceiling and left them where they
+were: two `const` in `pos-edge`'s binary. Its own closing paragraph said the figures "now want sizing
+against a real estate rather than one shop" and named the **A·P4 O4** capacity probe. This is that
+work, and the reason it could not be only a resizing.
+
+**The number is the operator's, not the till's.** How much stream an estate needs is a function of
+how many stores it runs and how long a cloud outage it must ride out — facts only the operator has,
+and ones that change every time a shop opens. Compiled into the edge, raising the ceiling is a new
+release rolled out to every box in the fleet.
+
+**And that roll-out would not raise it.** `ensure_stream` is `get_or_create_stream`, a *create-or-get*
+that does not reconcile an existing stream — the same property Amendment 1 leaned on to make the call
+idempotent across the fleet. So the ceiling actually in force is whatever the **first box that ever
+connected** asked for, and it stays that way for the life of the stream. A constant that reads as the
+fleet's ceiling and cannot change one is worse than no constant: an operator raises it, redeploys the
+estate, watches nothing happen, and has no way to tell that the value they edited was never consulted.
+
+- **The cloud reconciles the limits, from `cloud.toml`.** It is the one process that knows the whole
+  estate, runs exactly once for it, and already holds a JetStream connection for the ingest cursor.
+  `[nats] max_messages` / `max_bytes` are edited on the same box, in the same file, by the same person
+  who sizes the disk.
+- **It reconciles by reading first, never by asserting a whole config.** The cloud fetches the stream's
+  existing configuration, changes **only** the two limits, and updates. Sending a `StreamConfig` it
+  composed itself would carry an empty `subjects` list and silently drop the capture — which is
+  precisely the "first box fixes it and every other store is refused" failure Amendment 1 exists to
+  prevent, arriving from the other end. A reconcile that can un-capture the fleet's subject is not a
+  reconcile.
+- **The edge keeps its constants, renamed to what they are: a first-boot floor.** Some box has to
+  create the stream before any cloud has reconciled it, and a deployment with no `[nats]` section in
+  `cloud.toml` — a LAN-only estate, a fork mid-bring-up — must not end up with an unbounded stream
+  quietly filling a disk. A conservative default that the cloud then raises is safe in both
+  directions; an unlimited one is only safe in the managed case. Their doc comment now says plainly
+  that editing them does not move an existing stream.
+- **The 80% alert finally has a producer.** `AlertKind::JetstreamCapacity` and `evaluate`'s
+  `jetstream` arm shipped with [ADR-0073](0073-alerting.md) and have been fed `None` ever since; the
+  evaluator's own module doc names the missing probe. The reconcile returns the stream's fill, so the
+  same tick that enforces the ceiling also reports the approach to it. Enforcing and observing are one
+  call because they read the same `stream.info()`, and splitting them would mean two round trips to
+  answer one question.
+
+**What this does not do.** It does not give the bus per-store fairness: one stream on one subject
+means a single store draining a long backlog still consumes fleet headroom, and `discard: new` refuses
+*everyone* when it is full. That is the honest consequence of one durable consumer, it is bounded and
+lossless (the outbox holds, ADR-0026 §4), and buying fairness means per-store credentials and streams
+— which Amendment 1 already defers to the day the bus carries a real per-store identity.
