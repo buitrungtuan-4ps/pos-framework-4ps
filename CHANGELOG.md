@@ -14,6 +14,55 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A Windows till gets the same one-command install a Linux one has, and every generated installer
+  is finally checked before it ships** (roadmap **R3**'s Windows half, production-readiness **D5**,
+  [issue #182](https://github.com/buitrungtuan-4ps/pos-framework-4ps/issues/182)).
+
+  Linux stores have had a generated `install-pos-edge.sh` on the new-store wizard's Handoff screen
+  since R3. Windows got the two files and a README, so the install was five `sc.exe` lines typed by
+  hand — and the one easiest to skip, `sc.exe failure`, is the one that decides whether the box comes
+  back from an over-the-air update. Windows has no `Restart=always`; it has failure actions, and an
+  install deliberately exits `1` so that they fire. A store that skipped that line installs its
+  update and stays dark until somebody drives there.
+
+  The reason nobody had written one was said to be verification: the shell script was checked with
+  `sh -n` and nothing here could do the same for PowerShell. **`sh -n` appears nowhere in this
+  repository.** The generated script a technician runs as root was checked by nothing at all, on
+  either platform, so the fix starts with the gate rather than the script. All four artifacts moved
+  out of the wizard screen into one module, and a new check renders them with deliberately hostile
+  values — a store name carrying an unbalanced quote and an unbalanced backtick, because a store is
+  named by a person in a form — then runs `sh -n` during the dashboard build and PowerShell's own
+  parser on the `build (windows-2022)` job, the one runner in the estate that has one. It is provably
+  not vacuous: take the escaping out and it fails.
+
+  On top of that gate, Windows gets **both** installers: a per-store one beside the `.sh` on the
+  Handoff screen, and a parameterised `deploy/edge/install-pos-edge.ps1` for a box the console never
+  created. They are the same script — one generator emits both, and CI regenerates the checked-in
+  copy to prove it has not drifted, because two definitions of a service registration means the one
+  that drifts is the one nobody runs until a store will not open.
+
+  **Two silent Windows failures went with it.** The documented install registered the service on
+  `pos-edge.exe` rather than on `bin\current`, the symlink the edge retargets — so a Windows box
+  traded perfectly well and *never self-updated*, exactly the mistake the Linux installer was written
+  to prevent. And nothing set an absolute `store_path`: SCM starts a service in `C:\Windows\System32`
+  and a relative path resolves against the working directory, so a Windows store put its database —
+  and the `bin\` update slots derived from that database's parent — under `System32`. The systemd
+  unit sets `WorkingDirectory=` and never had either problem.
+
+  The store's key goes on the service's own registry key, readable only by accounts that can read
+  that service, rather than in a machine-wide variable visible to every local administrator.
+
+  **Still gated on a real machine**, and not claimed here: that a registered service reaches
+  `RUNNING`, that a stop drains, and that a failure action restarts on exit `1`. CI parses these
+  scripts; it does not run them. That row stays in [`docs/gate-register.md`](docs/gate-register.md).
+
+  **Upgrade note.** None for a running store. An existing Windows box installed from the old README
+  is worth re-checking on both counts above — `sc.exe qc pos-edge` should show `bin\current`, and
+  `config.toml` should name an absolute `store_path`; re-running the installer fixes both and leaves
+  an already-installed binary alone.
+
 ### Fixed
 
 - **The fleet's stream ceiling is now the cloud's to set, and something finally reads how full it is**

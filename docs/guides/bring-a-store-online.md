@@ -70,6 +70,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
    - **`install-pos-edge.sh`** — a Linux installer for *this* store, carrying both files above
      inside it. Prefer it; Step 2 says why. It therefore **contains the store's key**: treat it as a
      password and delete it once the box is up.
+   - **`install-pos-edge.ps1`** — the same for a Windows till, carrying `config.toml` inside it and
+     putting the key on the service's own registry key (Windows has no `env` file). Same warning:
+     it contains the store's key.
 
 > `config.toml` carries no secret, so it can sit beside the binary with ordinary permissions. `env`
 > carries the one secret and must be installed root-owned and mode 0600. Do not merge them, and do not
@@ -81,8 +84,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 ## Step 2 — Install the store server and drop the config
 
-`pos_edge` runs as an operating-system service so it starts on boot and restarts on crash. On Linux,
-let the wizard's installer do it; do it by hand on Windows, or on a host you manage some other way.
+`pos_edge` runs as an operating-system service so it starts on boot and restarts on crash. On both
+Linux and Windows, let the wizard's installer do it; go by hand only on a host you manage some other
+way.
 
 ### The installer (Linux, recommended)
 
@@ -103,7 +107,28 @@ binary you happened to be holding.
 
 Then **delete the script** — it carries the store's key.
 
-### By hand (Windows, or a host you manage yourself)
+### The installer (Windows, recommended)
+
+Copy the `pos_edge` binary and the downloaded `install-pos-edge.ps1` onto the machine, then, in a
+PowerShell started as an administrator:
+
+```
+powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 -Binary .\pos-edge.exe
+```
+
+It lays out the same update slots, writes `config.toml` with an **absolute** database path, registers
+the service on `bin\current`, puts the store key on the service's own registry key rather than in a
+machine-wide variable, and sets the failure actions that are what bring the box back after an
+over-the-air update. Running it again is safe, and it leaves an already-installed binary alone for
+the same reason the Linux one does.
+
+Then **delete the script** — it carries the store's key.
+
+If you have no wizard-generated copy — a store the console did not create — use
+[`deploy/edge/install-pos-edge.ps1`](../../deploy/edge/install-pos-edge.ps1), which is the same
+script taking the store's values as parameters.
+
+### By hand (a host you manage yourself)
 
 The step-by-step for both platforms is in
 **[`deploy/edge/README.md`](../../deploy/edge/README.md)**. Put the downloaded `config.toml` where
@@ -118,7 +143,8 @@ The service unit reads it through `EnvironmentFile=-/etc/pos-edge/env` — the l
 missing file is not an error, so a LAN-only demo box needs no env file at all. Then start the service.
 
 **On Windows there is no `env` file** and the command above is POSIX-only. The two values it carries
-— `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` — go on the service's own registry key instead;
+— `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` — go on the service's own registry key instead (which
+is what the installer above does for you);
 [`deploy/edge/README.md`](../../deploy/edge/README.md) has the exact `reg add` line and why
 service-scoped beats machine-wide. The sync key's proper home on either OS is the credential store,
 and the environment variable is a headless bring-up override.
