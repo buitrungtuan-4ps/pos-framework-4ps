@@ -19,6 +19,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use skrifa::MetadataProvider as _;
+
 /// A face could not be loaded.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -125,14 +127,10 @@ impl LoadedFace {
             .is_ok()
     }
 
-    /// A parsed outline reader for this face.
-    pub(crate) fn outlines(&self) -> Option<ttf_parser::Face<'_>> {
-        ttf_parser::Face::parse(&self.data, self.index).ok()
-    }
-
-    /// A shaper for this face.
-    pub(crate) fn shaper(&self) -> Option<rustybuzz::Face<'_>> {
-        rustybuzz::Face::from_slice(&self.data, self.index)
+    /// The parsed font, for outlines and for shaping. One parser serves both: `harfrust` and
+    /// `skrifa` are both built on `read-fonts`, so this is the type each of them takes.
+    pub(crate) fn font(&self) -> Option<skrifa::FontRef<'_>> {
+        skrifa::FontRef::from_index(&self.data, self.index).ok()
     }
 }
 
@@ -182,9 +180,10 @@ impl FontLibrary {
             path: path.to_path_buf(),
             source,
         })?;
-        let name = path
-            .file_name()
-            .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into(),
+        );
         let added = self.add_bytes(&name, &data);
         if added == 0 {
             return Err(LoadError::NotAFont {
@@ -197,15 +196,21 @@ impl FontLibrary {
     /// Loads every face in an in-memory font file. Returns how many were added, which is zero when
     /// the bytes are not a font.
     pub fn add_bytes(&mut self, name: &str, data: &[u8]) -> usize {
-        let count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
+        let count = faces_in(data);
         let mut added = 0;
         for index in 0..count {
-            let Ok(face) = ttf_parser::Face::parse(data, index) else {
+            let Ok(face) = skrifa::FontRef::from_index(data, index) else {
                 continue;
             };
-            // A face with no outlines is a bitmap-only or metrics-only file; it can report coverage
-            // and then render nothing, which is worse than not loading it.
-            if face.number_of_glyphs() == 0 || face.units_per_em() == 0 {
+            let metrics = face.metrics(
+                skrifa::instance::Size::unscaled(),
+                skrifa::instance::LocationRef::default(),
+            );
+            // A face with no glyph 0 has no outlines at all: a bitmap-only or metrics-only file,
+            // which would report coverage and then render nothing.
+            if metrics.units_per_em == 0
+                || face.outline_glyphs().get(skrifa::GlyphId::new(0)).is_none()
+            {
                 continue;
             }
             let loaded = LoadedFace {
@@ -216,9 +221,9 @@ impl FontLibrary {
                 },
                 data: data.to_vec(),
                 index,
-                units_per_em: face.units_per_em(),
-                ascender: face.ascender(),
-                descender: face.descender(),
+                units_per_em: metrics.units_per_em,
+                ascender: whole(metrics.ascent),
+                descender: whole(metrics.descent),
                 coverage: coverage_of(&face),
             };
             self.faces.push(loaded);
@@ -255,9 +260,10 @@ impl FontLibrary {
         let mut added = 0;
         for path in files {
             if let Ok(data) = std::fs::read(&path) {
-                let name = path
-                    .file_name()
-                    .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into(),
+                );
                 added += self.add_bytes(&name, &data);
             }
         }
@@ -303,9 +309,7 @@ impl FontLibrary {
     /// The index of the first face covering `character`.
     pub(crate) fn face_for(&self, character: char) -> Option<usize> {
         let codepoint = u32::from(character);
-        self.faces
-            .iter()
-            .position(|face| face.covers(codepoint))
+        self.faces.iter().position(|face| face.covers(codepoint))
     }
 
     /// One loaded face.
@@ -343,11 +347,7 @@ const PROBES: [(&str, &str); 8] = [
 const MAX_FONT_DEPTH: u8 = 8;
 
 /// Collects font files under `directory`, depth-first.
-fn collect_fonts(
-    directory: &Path,
-    depth: u8,
-    into: &mut Vec<PathBuf>,
-) -> std::io::Result<()> {
+fn collect_fonts(directory: &Path, depth: u8, into: &mut Vec<PathBuf>) -> std::io::Result<()> {
     if depth == 0 {
         return Ok(());
     }
@@ -356,7 +356,9 @@ fn collect_fonts(
         let path = entry.path();
         // `file_type` rather than `metadata`: it does not follow symlinks, so a link pointing back
         // up the tree is seen as a link and not descended into.
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if kind.is_dir() {
             // A subdirectory that cannot be read is skipped, not fatal.
             let _ = collect_fonts(&path, depth.saturating_sub(1), into);
@@ -371,27 +373,17 @@ fn collect_fonts(
 }
 
 /// The codepoints a face has a real glyph for, as sorted inclusive ranges.
-///
-/// A `cmap` entry pointing at glyph 0 is not coverage — it is the font saying "I do not have this"
-/// — so those are dropped. Keeping them would make [`FontLibrary::covers`] answer `true` for a
-/// character that prints as an empty box.
-fn coverage_of(face: &ttf_parser::Face<'_>) -> Vec<(u32, u32)> {
-    let mut points: Vec<u32> = Vec::new();
-    if let Some(cmap) = face.tables().cmap {
-        for subtable in cmap.subtables {
-            if !subtable.is_unicode() {
-                continue;
-            }
-            subtable.codepoints(|codepoint| points.push(codepoint));
-        }
-    }
+fn coverage_of(face: &skrifa::FontRef<'_>) -> Vec<(u32, u32)> {
+    let mut points: Vec<u32> = face
+        .charmap()
+        .mappings()
+        // A `cmap` entry pointing at glyph 0 is the font saying "I do not have this", so it is not
+        // coverage; keeping it would make `covers` answer true for a character that prints as a box.
+        .filter(|(_, glyph)| glyph.to_u32() != 0)
+        .map(|(codepoint, _)| codepoint)
+        .collect();
     points.sort_unstable();
     points.dedup();
-    points.retain(|codepoint| {
-        char::from_u32(*codepoint)
-            .and_then(|character| face.glyph_index(character))
-            .is_some_and(|glyph| glyph.0 != 0)
-    });
 
     let mut ranges: Vec<(u32, u32)> = Vec::new();
     for codepoint in points {
@@ -401,6 +393,29 @@ fn coverage_of(face: &ttf_parser::Face<'_>) -> Vec<(u32, u32)> {
         }
     }
     ranges
+}
+
+/// How many faces a font file holds — more than one only for a collection (`.ttc`).
+fn faces_in(data: &[u8]) -> u32 {
+    skrifa::raw::FileRef::new(data).map_or(1, |file| match file {
+        skrifa::raw::FileRef::Font(_) => 1,
+        skrifa::raw::FileRef::Collection(collection) => collection.len(),
+    })
+}
+
+/// A font-unit metric from `skrifa`'s `f32`, rounded to a whole design unit.
+///
+/// The same boundary rule as `text.rs`: a float may be named where the font parser hands one over,
+/// and never computed with (ADR-0102).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "clamped to the range a font metric can express before the cast"
+)]
+fn whole(value: f32) -> i16 {
+    if value.is_nan() {
+        return 0;
+    }
+    value.clamp(-32768.0, 32767.0).round() as i16
 }
 
 #[cfg(test)]

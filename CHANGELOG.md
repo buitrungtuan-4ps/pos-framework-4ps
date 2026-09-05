@@ -14,6 +14,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Changed
+
+- **Dependency review: twelve of the fifteen open Dependabot updates taken, three declined**
+  ([`docs/dependency-review-2026-09.md`](docs/dependency-review-2026-09.md)). Each was applied,
+  built and tested rather than read about. Taken: both GitHub Actions (v4 runs on the Node 20
+  runtime GitHub has deprecated), `hyper` 1.11.1 (two of its four fixes are HTTP/1 header-terminator
+  corrections — the request-smuggling family, and `pos_cloud` sits behind a proxy), `rusqlite` 0.40,
+  `tower-http` 0.7, `tokio-tungstenite` 0.30, and on the front end `vite` 8, `@solidjs/router` 1.0
+  and `intl-messageformat` 11. None needed a source change; the till bundle got 2 kB smaller.
+
+  Declined, with reasons: **`ed25519-dalek` 3**, because `async-nats` pins Ed25519 at 2 through
+  `nkeys`, so taking 3 would link *two* signature implementations into `pos_edge` — one verifying
+  OTA updates, one authenticating to the broker — and 2.2.0 carries no advisory. **TypeScript 7**,
+  because its npm package exposes no compiler API at all, and four CI gates parse `.tsx` with it,
+  including ADR-0020's no-hardcoded-strings gate. TypeScript moved 5.7 → 5.9 instead.
+
+  `rusqlite` 0.40 also retired the `hashbrown` duplicate its old `hashlink` caused, so that
+  `deny.toml` skip is deleted, along with the `syn@2` skip the ecosystem has moved past — eleven
+  entries down to nine.
+
+- **The printing font stack moved to its maintained successors** before it ever shipped.
+  `cargo deny` reported `rustybuzz` (RUSTSEC-2026-0206) and `ttf-parser` (RUSTSEC-2026-0192) as
+  unmaintained — a font parser that will never be fixed again is a poor foundation for a printing
+  path. `pos-render` now uses **`harfrust`** (the HarfBuzz project's own Rust port) and **`skrifa`**
+  (Google Fonts' `fontations`), the successors the advisories themselves name. They share one font
+  parser, so the tree gains no second one, and the rendered output is unchanged — the Devanagari
+  headline still joins and the matra still reorders. Advisories, bans and licences are all clean.
+
 ### Added
 
 - **A store prints Vietnamese, Japanese, Chinese, Korean, Devanagari, Thai and Arabic**

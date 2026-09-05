@@ -29,10 +29,10 @@ use std::fmt;
 use std::num::NonZeroU16;
 use std::sync::{Arc, Mutex};
 
+use pos_render::TextRenderer;
 use printer_escpos::device::DeviceTransport;
 use printer_escpos::tcp::TcpTransport;
 use printer_escpos::{EscPosPrinter, Transport};
-use pos_render::TextRenderer;
 
 use pos_ports::printer::{
     CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
@@ -649,17 +649,14 @@ impl Printers {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
+    use super::TcpTransports;
     use super::{
         ASSUMED_DOTS_PER_LINE, PrintOutcome, Printers, TicketLine, TransportFactory,
         assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
         station_printer, ticket_document, ticket_line,
     };
-    use super::TcpTransports;
-    use std::num::NonZeroU16;
     use crate::app::{EdgeSession, FiredLine};
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrinterConnection};
@@ -672,6 +669,7 @@ mod tests {
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use printer_escpos::{Transport, TransportStatus, Unreachable};
+    use std::num::NonZeroU16;
     use std::sync::{Arc, Mutex};
 
     fn lines_of(document: &pos_ports::printer::PrintDocument) -> Vec<&str> {
@@ -1184,7 +1182,9 @@ mod tests {
         // `GS v 0` — the raster command. Its presence is what says the diacritics went out as an
         // image rather than as bytes the printer would have mangled.
         assert!(
-            bytes.windows(4).any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
+            bytes
+                .windows(4)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
             "the ticket should carry a raster image"
         );
     }
@@ -1215,7 +1215,9 @@ mod tests {
         let written = recorder.written.lock().expect("the recorder");
         let bytes = written.first().expect("a receipt");
         assert!(
-            !bytes.windows(4).any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
+            !bytes
+                .windows(4)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
             "an ASCII receipt needs no raster"
         );
     }
@@ -1260,6 +1262,9 @@ mod tests {
         // Opening the channel is not reaching the printer: nothing is touched until the first write,
         // so a device path that does not exist fails where every other unreachable printer does.
         let network = device(3, DeviceKind::Printer, None);
-        assert!(TcpTransports.open(&network).is_ok(), "and the LAN still works");
+        assert!(
+            TcpTransports.open(&network).is_ok(),
+            "and the LAN still works"
+        );
     }
 }

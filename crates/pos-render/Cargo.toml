@@ -10,12 +10,17 @@ repository.workspace   = true
 
 [dependencies]
 pos-ports = { path = "../pos-ports" }
-# Shaping. A pure-Rust port of HarfBuzz: it reorders Devanagari matras, forms Khmer and Indic
-# conjuncts, and applies the OpenType features Vietnamese tone marks need. No C toolchain, which
-# is what keeps the edge cross-compiling to Windows and ARM (ADR-0102).
-rustybuzz = { version = "0.20.1", default-features = false, features = ["std"] }
-# Outlines. rustybuzz already parses faces with it, so taking it directly adds no second parser.
-ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "opentype-layout", "apple-layout", "variable-fonts", "glyph-names"] }
+# Shaping. The HarfBuzz project's own Rust port: it reorders Devanagari matras, forms Khmer and
+# Indic conjuncts, and applies the OpenType features Vietnamese tone marks need. No C toolchain,
+# which is what keeps the edge cross-compiling to Windows and ARM (ADR-0102).
+#
+# `harfrust` rather than `rustybuzz`, and `skrifa` rather than `ttf-parser`, because RUSTSEC-2026-0206
+# and RUSTSEC-2026-0192 declared both of those unmaintained. These two are the successors their own
+# advisories name, they are actively maintained (HarfBuzz and Google Fonts' fontations), and they
+# share one font parser — `read-fonts` — so the tree gains no second one.
+harfrust = { version = "0.13.3", default-features = false, features = ["std"] }
+# Outlines, over the same `read-fonts` parser harfrust uses.
+skrifa = { version = "0.46.2", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

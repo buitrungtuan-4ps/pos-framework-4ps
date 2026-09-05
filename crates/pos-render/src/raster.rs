@@ -171,11 +171,15 @@ impl Canvas {
             let j = n - i;
             let point = Point::new(
                 div_round(
-                    j * j * i64::from(from.x) + 2 * j * i * i64::from(control.x) + i * i * i64::from(to.x),
+                    j * j * i64::from(from.x)
+                        + 2 * j * i * i64::from(control.x)
+                        + i * i * i64::from(to.x),
                     n * n,
                 ),
                 div_round(
-                    j * j * i64::from(from.y) + 2 * j * i * i64::from(control.y) + i * i * i64::from(to.y),
+                    j * j * i64::from(from.y)
+                        + 2 * j * i * i64::from(control.y)
+                        + i * i * i64::from(to.y),
                     n * n,
                 ),
             );
@@ -225,7 +229,9 @@ impl Canvas {
 
         for row in 0..self.height {
             coverage.fill(0);
-            let row_top = i32::try_from(row).unwrap_or(i32::MAX).saturating_mul(SUBPIXEL);
+            let row_top = i32::try_from(row)
+                .unwrap_or(i32::MAX)
+                .saturating_mul(SUBPIXEL);
             for sample in 0..SAMPLES_PER_ROW {
                 // The centre of the sample band, so a shape exactly filling the row is fully inked
                 // and one grazing its edge is not.
@@ -331,7 +337,9 @@ fn add_span(coverage: &mut [u32], from: i32, to: i32) {
     let first = usize::try_from(from / SUBPIXEL).unwrap_or(0);
     let last = usize::try_from((to - 1) / SUBPIXEL).unwrap_or(0);
     for pixel in first..=last {
-        let left = i32::try_from(pixel).unwrap_or(i32::MAX).saturating_mul(SUBPIXEL);
+        let left = i32::try_from(pixel)
+            .unwrap_or(i32::MAX)
+            .saturating_mul(SUBPIXEL);
         let right = left.saturating_add(SUBPIXEL);
         let overlap = to.min(right) - from.max(left);
         if let Some(cell) = coverage.get_mut(pixel).filter(|_| overlap > 0) {
@@ -390,7 +398,10 @@ mod tests {
 
         assert!(bitmap.pixel(2, 5), "the ring should be inked");
         assert!(!bitmap.pixel(5, 5), "the hole should stay open");
-        assert!(bitmap.pixel(8, 5), "the far side of the ring should be inked");
+        assert!(
+            bitmap.pixel(8, 5),
+            "the far side of the ring should be inked"
+        );
     }
 
     #[test]

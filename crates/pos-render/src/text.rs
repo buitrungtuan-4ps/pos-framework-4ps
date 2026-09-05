@@ -9,8 +9,8 @@
 //! great many scripts. In Devanagari `नमस्ते` the vowel sign on the second syllable is *written*
 //! before the consonant it *follows*, two consonants join into a conjunct that has its own glyph,
 //! and a mark reorders around the cluster; a per-character loop produces something a Hindi reader
-//! cannot read. Getting that right is called shaping, and it is what [`rustybuzz`] — the HarfBuzz
-//! algorithm in Rust — does here. The same pass also applies the OpenType mark positioning that
+//! cannot read. Getting that right is called shaping, and it is what [`harfrust`] — the HarfBuzz
+//! project's own Rust port — does here. The same pass also applies the OpenType mark positioning that
 //! stacks a Vietnamese tone mark correctly over a vowel that already carries a diacritic.
 //!
 //! # The pipeline
@@ -21,10 +21,12 @@
 //! Everything after the font parser's own coordinates is fixed-point integer arithmetic
 //! ([`crate::raster`]), so the same line renders to the same bytes on every box in the fleet.
 
-use core::num::NonZeroU16;
 use core::fmt;
+use core::num::NonZeroU16;
 
 use pos_ports::printer::TextStyle;
+
+use skrifa::MetadataProvider as _;
 
 use crate::font::{FontLibrary, LoadedFace};
 use crate::raster::{Bitmap, Canvas, Point, SUBPIXEL, div_round};
@@ -155,7 +157,10 @@ impl TextRenderer {
         let ascent = self.ascent(size);
 
         for (index, row) in rows.iter().enumerate() {
-            let row_width = row.iter().map(|glyph| i64::from(glyph.advance)).sum::<i64>();
+            let row_width = row
+                .iter()
+                .map(|glyph| i64::from(glyph.advance))
+                .sum::<i64>();
             let start = if style.centred {
                 let slack = i64::from(width_sub) - row_width;
                 i32::try_from(slack.max(0) / 2).unwrap_or(0)
@@ -187,15 +192,19 @@ impl TextRenderer {
             let Some(face) = self.library.face(face_index) else {
                 continue;
             };
-            let Some(shaper) = face.shaper() else {
+            let Some(font) = face.font() else {
                 continue;
             };
-            let mut buffer = rustybuzz::UnicodeBuffer::new();
+            // Held in a binding: the shaper borrows the data, so building it inline would drop
+            // the data at the end of the statement.
+            let shaper_data = harfrust::ShaperData::new(&font);
+            let shaper = shaper_data.shaper(&font).build();
+            let mut buffer = harfrust::UnicodeBuffer::new();
             buffer.push_str(&run);
             // Script, direction and language from the text itself. This is what selects the Indic
             // or Arabic shaper rather than the default one.
             buffer.guess_segment_properties();
-            let glyphs = rustybuzz::shape(&shaper, &[], buffer);
+            let glyphs = shaper.shape(buffer, harfrust::ShapeOptions::default());
 
             let upem = i64::from(face.units_per_em());
             let scale = i64::from(size).saturating_mul(i64::from(SUBPIXEL));
@@ -292,9 +301,10 @@ impl TextRenderer {
             let Some(face) = self.library.face(glyph.face) else {
                 continue;
             };
-            let Some(outlines) = face.outlines() else {
+            let Some(font) = face.font() else {
                 continue;
             };
+            let outlines = font.outline_glyphs();
             let x = pen.saturating_add(glyph.x_offset);
             let y = baseline.saturating_sub(glyph.y_offset);
             draw_glyph(canvas, &outlines, face, glyph.glyph, size, x, y);
@@ -350,14 +360,14 @@ fn wrap(placed: &[Placed], width: i32) -> Vec<Vec<Placed>> {
 /// Walks one glyph's outline into the canvas, scaled and positioned.
 fn draw_glyph(
     canvas: &mut Canvas,
-    outlines: &ttf_parser::Face<'_>,
+    outlines: &skrifa::outline::OutlineGlyphCollection<'_>,
     face: &LoadedFace,
     glyph: u32,
     size: u16,
     pen_x: i32,
     baseline_y: i32,
 ) {
-    let Ok(glyph_id) = u16::try_from(glyph) else {
+    let Some(outline) = outlines.get(skrifa::GlyphId::new(glyph)) else {
         return;
     };
     let mut sink = OutlineSink {
@@ -369,13 +379,18 @@ fn draw_glyph(
         start: None,
         current: None,
     };
-    outlines.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut sink);
+    // Unscaled: coordinates arrive in font design units and this crate does the scaling in integers.
+    let settings = skrifa::outline::DrawSettings::unhinted(
+        skrifa::instance::Size::unscaled(),
+        skrifa::instance::LocationRef::default(),
+    );
+    let _ = outline.draw(settings, &mut sink);
     sink.close_open_contour();
 }
 
 /// Receives a glyph's outline from the font parser and lays it into the canvas.
 ///
-/// This is the boundary the crate's `clippy.toml` exists for: `ttf_parser::OutlineBuilder` speaks
+/// This is the boundary the crate's `clippy.toml` exists for: `skrifa::outline::OutlinePen` speaks
 /// `f32`, and every coordinate is rounded to a whole font design unit here and never computed with
 /// as a float. A TrueType glyph's coordinates are integers already, so the rounding discards
 /// nothing; a CFF glyph's may be fractional, and 1/2048 of an em is a fiftieth of a printer dot.
@@ -419,7 +434,7 @@ impl OutlineSink<'_> {
     }
 }
 
-impl ttf_parser::OutlineBuilder for OutlineSink<'_> {
+impl skrifa::outline::OutlinePen for OutlineSink<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.close_open_contour();
         let point = self.point(x, y);
@@ -504,11 +519,7 @@ mod tests {
 
     /// How many pixels are inked, as a crude "did anything render" measure.
     fn ink(bitmap: &crate::Bitmap) -> u32 {
-        bitmap
-            .bits()
-            .iter()
-            .map(|byte| byte.count_ones())
-            .sum()
+        bitmap.bits().iter().map(|byte| byte.count_ones()).sum()
     }
 
     #[test]
@@ -581,7 +592,11 @@ mod tests {
             long.bitmap.height(),
             short.bitmap.height()
         );
-        assert_eq!(long.bitmap.width().get(), EIGHTY_MM, "and stay on the paper");
+        assert_eq!(
+            long.bitmap.width().get(),
+            EIGHTY_MM,
+            "and stay on the paper"
+        );
     }
 
     #[test]

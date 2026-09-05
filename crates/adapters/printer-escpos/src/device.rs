@@ -196,7 +196,10 @@ mod tests {
         std::fs::write(&path, b"").expect("create");
         let transport = DeviceTransport::new(&path);
         let status = transport.probe().expect("the device is there");
-        assert_eq!(status.has_paper, None, "no sensor is read over a device file");
+        assert_eq!(
+            status.has_paper, None,
+            "no sensor is read over a device file"
+        );
         assert_eq!(status.cover_closed, None);
         let _ = std::fs::remove_file(&path);
     }

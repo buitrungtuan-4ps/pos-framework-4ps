@@ -4,8 +4,8 @@
 //! Binding the listener and serving with graceful shutdown.
 
 use core::time::Duration;
-use std::sync::Arc;
 use std::num::NonZeroU16;
+use std::sync::Arc;
 
 use tokio::net::TcpListener;
 

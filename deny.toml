@@ -84,11 +84,6 @@ deny = [
 # transient: the ecosystem is mid-migration across a major version, and each skip
 # disappears when the laggards catch up. Re-check on the review date.
 skip = [
-    # syn straddles its 2 -> 3 bump: serde_derive and thiserror-impl are on syn 3,
-    # while rust-embed-impl and tracing-attributes are still on syn 2. All four are
-    # build-time proc-macros — none is linked into a shipped binary — so this is a
-    # compile-time duplicate only. review: 2026-11-19
-    { crate = "syn@2", reason = "build-time proc-macro; ecosystem mid-migration from syn 2 to syn 3" },
     # rand_core straddles 0.6 -> 0.9: password-hash (via argon2) pulls 0.6 for the salt generation
     # the edge never uses — it only verifies PINs — while tungstenite's WebSocket frame masking pulls
     # 0.9. Skipping the 0.6 line leaves 0.9 unique. review: 2026-11-19
@@ -97,11 +92,6 @@ skip = [
     # on 0.2, postgres-protocol on 0.3. Skipping the 0.2 line leaves 0.3 unique. Both are cloud-only
     # (store-postgres), never at the edge. review: 2026-11-19
     { crate = "fallible-iterator@0.2", reason = "tokio-postgres stack mid-migration from fallible-iterator 0.2 to 0.3" },
-    # hashbrown straddles 0.14 -> 0.17 across the two binaries: rusqlite's hashlink (edge, store-sqlite)
-    # pins 0.14, while indexmap (cloud, pulled by utoipa for OpenAPI generation, P7) is on 0.17. The two
-    # binaries never link both, so this is a workspace-graph duplicate only; skipping the 0.14 line
-    # leaves 0.17 unique. review: 2026-11-19
-    { crate = "hashbrown@0.14", reason = "rusqlite/hashlink (edge) still on 0.14; utoipa/indexmap (cloud) on 0.17" },
     # sha1 straddles 0.10 -> 0.11: axum's WebSocket handshake pulls 0.10 (on the `digest` 0.10 line),
     # while pos-cloud's super-admin TOTP (ADR-0034, amended to HMAC-SHA1 for authenticator-app
     # compatibility) needs 0.11 on the `digest` 0.11 line `hmac` 0.13 uses. The two never link in one

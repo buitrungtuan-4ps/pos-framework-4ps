@@ -76,7 +76,7 @@ link-nats = { path = "../adapters/link-nats" }
 # dependency-rule test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 axum       = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 # `debug-embed` makes rust-embed embed in every profile, not only release, so the
 # tests exercise the same serving path the shipped binary does. `dev-ui` reads
 # from disk instead, and is handled explicitly in `http::assets`.
@@ -138,7 +138,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"]
 # The WebSocket fan-out test binds an ephemeral port and connects a real client.
 # tokio-tungstenite is pinned to the version axum already resolves, so it adds no
 # duplicate; no TLS features (the LAN socket is plaintext ws://).
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 # The application layer runs against the in-memory fakes in tests, exactly as it will against
 # store-sqlite in the field.
