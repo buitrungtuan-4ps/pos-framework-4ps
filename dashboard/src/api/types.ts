@@ -276,6 +276,21 @@ export interface TaxRate {
   readonly tax_class_id: string;
   readonly sales_channel: SalesChannel;
   readonly rate_bps: number;
+  /**
+   * How the rate is broken out on the invoice, when a country requires it
+   * ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). The parts must sum to
+   * `rate_bps`, and the server refuses a save where they do not.
+   *
+   * Empty is the ordinary case and means the invoice prints one line. India's 5 % restaurant GST is
+   * `[CGST 2.5 %, SGST 2.5 %]`, because the halves go to different governments.
+   */
+  readonly components: readonly TaxComponent[];
+}
+
+/** One named part of a tax rate, in basis points. */
+export interface TaxComponent {
+  readonly name: string;
+  readonly rate_bps: number;
 }
 
 // --- Campaigns & scheduling (ADR-0077, Track M3) --------------------------------------------------

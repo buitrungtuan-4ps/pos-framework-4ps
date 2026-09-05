@@ -51,7 +51,7 @@ use pos_proto::ids::{
     SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
-use pos_proto::locale::TaxRate;
+use pos_proto::locale::{TaxComponent, TaxRate};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
@@ -1807,10 +1807,28 @@ fn tax_rate_entry(row: &TaxRateRow) -> Result<Option<TaxRateEntry>, TaxRateStore
         return Ok(None);
     };
     let rate = TaxRate::from_basis_points(u32::try_from(row.rate_bps).unwrap_or(0));
+    // A breakdown that does not decode is dropped rather than failing the read (ADR-0104): the
+    // components are how the tax is *printed*, and `rate` — which does decode — is what the guest
+    // pays, so a corrupt list can cost an invoice its lines and can never cost a bill its total.
+    // The read still says so, because a silent drop on a legal document is not a thing to be quiet
+    // about.
+    let components: Vec<TaxComponent> = match serde_json::from_str(&row.components_json) {
+        Ok(components) => components,
+        Err(error) => {
+            tracing::warn!(
+                tax_class_id = %row.tax_class_id,
+                sales_channel = %row.sales_channel,
+                %error,
+                "a stored tax-rate breakdown did not decode; the row keeps its rate and prints as                  one line"
+            );
+            Vec::new()
+        }
+    };
     Ok(Some(TaxRateEntry {
         tax_class_id,
         sales_channel,
         rate,
+        components,
     }))
 }
 
@@ -1842,6 +1860,11 @@ impl TaxRateStore for PostgresTaxRates {
                 tax_class_id: entry.tax_class_id.to_string(),
                 sales_channel: entry.sales_channel.as_wire().to_string(),
                 rate_bps: i32::try_from(entry.rate.basis_points()).unwrap_or(i32::MAX),
+                // A list of name/rate pairs cannot fail to serialise; `[]` on the impossible branch
+                // rather than an `expect`, because the backbone forbids the panic and "no breakdown"
+                // is the correct fallback anyway.
+                components_json: serde_json::to_string(&entry.components)
+                    .unwrap_or_else(|_ignored| "[]".to_owned()),
             })
             .collect();
         self.replace(&tenant_id.to_string(), &rows, expected.map(Version::as_str))

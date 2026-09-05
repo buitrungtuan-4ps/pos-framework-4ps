@@ -104,7 +104,7 @@ use pos_proto::ids::{
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
-use pos_proto::locale::TaxRate;
+use pos_proto::locale::{TaxComponent, TaxRate};
 use pos_proto::money::CurrencyCode;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -8027,12 +8027,25 @@ struct TaxRateState<Tax, Cat, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// One authored tax-rate row on the wire: the class id, the channel's wire token, and the rate in
-/// basis points (10% is `1000`).
+/// One authored tax-rate row on the wire: the class id, the channel's wire token, the rate in basis
+/// points (10% is `1000`), and how that rate is broken out on the invoice.
 #[derive(Debug, Clone, serde::Serialize)]
 struct TaxRateView {
     tax_class_id: String,
     sales_channel: String,
+    rate_bps: u32,
+    /// The named parts the invoice prints, which must sum to `rate_bps`
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty for a rate
+    /// printed as one line, which is most of the world.
+    components: Vec<TaxComponentView>,
+}
+
+/// One named part of a rate, on the wire.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct TaxComponentView {
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
+    name: String,
+    /// This part's share, in basis points.
     rate_bps: u32,
 }
 
@@ -8049,6 +8062,10 @@ struct TaxRateRowRequest {
     tax_class_id: String,
     sales_channel: String,
     rate_bps: u32,
+    /// How the rate is broken out on the invoice. `#[serde(default)]`, so a console that predates
+    /// ADR-0104 still saves a grid and every row keeps printing as one line.
+    #[serde(default)]
+    components: Vec<TaxComponentView>,
 }
 
 /// Builds the tax-rate sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -8090,7 +8107,134 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
         tax_class_id: entry.tax_class_id.to_string(),
         sales_channel: entry.sales_channel.as_wire().to_owned(),
         rate_bps: entry.rate.basis_points(),
+        components: entry
+            .components
+            .iter()
+            .map(|component| TaxComponentView {
+                name: component.name.clone(),
+                rate_bps: component.rate.basis_points(),
+            })
+            .collect(),
     }
+}
+
+/// Checks one row's breakdown and returns the components to store
+/// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+///
+/// The invariant is that the parts sum to the row's own rate, and it is checked **here**, where the
+/// table is authored, rather than at the till. A row that fails it would print an invoice whose
+/// lines do not add up to the tax charged — which is the one way this feature can produce a document
+/// an auditor rejects, and the refusal says which row and by how much so the operator can fix it
+/// rather than hunt for it.
+///
+/// An empty list always passes: it is "no breakdown", not "a breakdown summing to zero".
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_components(row: &TaxRateRowRequest) -> Result<Vec<TaxComponent>, Response> {
+    if row.components.is_empty() {
+        return Ok(Vec::new());
+    }
+    if row
+        .components
+        .iter()
+        .any(|component| component.name.trim().is_empty())
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a tax component has no name, and the name is what the invoice prints",
+            &[("rates", "MISSING_FIELD")],
+        ));
+    }
+    let total: u64 = row
+        .components
+        .iter()
+        .map(|component| u64::from(component.rate_bps))
+        .sum();
+    if total != u64::from(row.rate_bps) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "a rate's components sum to {total} basis points but the rate is {}; the invoice \
+                 would print lines that do not add up to the tax charged",
+                row.rate_bps
+            )
+            .as_str(),
+            &[("rates", "OUT_OF_RANGE")],
+        ));
+    }
+    Ok(row
+        .components
+        .iter()
+        .map(|component| {
+            TaxComponent::new(
+                component.name.trim(),
+                TaxRate::from_basis_points(component.rate_bps),
+            )
+        })
+        .collect())
+}
+
+/// Validates a whole submitted grid into the entries to store, or the one refusal that stops it.
+///
+/// Every check is on the row rather than on the table: an unknown class or channel, a rate above
+/// 100 %, a `(class, channel)` pair submitted twice, and a breakdown that does not sum to its own
+/// rate. The first failure returns, because a partly-applied grid is not a state this resource has —
+/// a save replaces the tenant's whole table or none of it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_entries(
+    rows: &[TaxRateRowRequest],
+    known: &BTreeSet<TaxClassId>,
+) -> Result<Vec<TaxRateEntry>, Response> {
+    let mut entries = Vec::with_capacity(rows.len());
+    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
+    for row in rows {
+        let tax_class_id = match parse_ulid_fields([("tax_class_id", &row.tax_class_id)]) {
+            Ok([tax_class_id]) => TaxClassId::new(tax_class_id),
+            Err(refusal) => return Err(refusal),
+        };
+        if !known.contains(&tax_class_id) {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate names an unknown tax class",
+                &[("rates", "UNKNOWN_REFERENCE")],
+            ));
+        }
+        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate names an unknown sales channel",
+                &[("rates", "INVALID_ENUM_VALUE")],
+            ));
+        };
+        if row.rate_bps > MAX_TAX_RATE_BPS {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate exceeds 100%",
+                &[("rates", "OUT_OF_RANGE")],
+            ));
+        }
+        if !seen.insert((tax_class_id, sales_channel)) {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a (tax class, channel) pair is repeated",
+                &[("rates", "DUPLICATE")],
+            ));
+        }
+        entries.push(
+            TaxRateEntry::new(
+                tax_class_id,
+                sales_channel,
+                TaxRate::from_basis_points(row.rate_bps),
+            )
+            .with_components(checked_components(row)?),
+        );
+    }
+    Ok(entries)
 }
 
 /// A super-admin lists a tenant's authored tax rates.
@@ -8180,47 +8324,10 @@ where
             .collect(),
         Err(error) => return catalog_error_response(&error),
     };
-    let mut entries = Vec::with_capacity(request.rates.len());
-    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
-    for row in &request.rates {
-        let tax_class_id = match parse_ulid_fields([("tax_class_id", &row.tax_class_id)]) {
-            Ok([tax_class_id]) => TaxClassId::new(tax_class_id),
-            Err(refusal) => return refusal,
-        };
-        if !known.contains(&tax_class_id) {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate names an unknown tax class",
-                &[("rates", "UNKNOWN_REFERENCE")],
-            );
-        }
-        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate names an unknown sales channel",
-                &[("rates", "INVALID_ENUM_VALUE")],
-            );
-        };
-        if row.rate_bps > MAX_TAX_RATE_BPS {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate exceeds 100%",
-                &[("rates", "OUT_OF_RANGE")],
-            );
-        }
-        if !seen.insert((tax_class_id, sales_channel)) {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a (tax class, channel) pair is repeated",
-                &[("rates", "DUPLICATE")],
-            );
-        }
-        entries.push(TaxRateEntry {
-            tax_class_id,
-            sales_channel,
-            rate: TaxRate::from_basis_points(row.rate_bps),
-        });
-    }
+    let entries = match checked_entries(&request.rates, &known) {
+        Ok(entries) => entries,
+        Err(refusal) => return refusal,
+    };
     match state
         .tax_rates
         .set_tax_rates(tenant_id, &entries, expected.as_ref())

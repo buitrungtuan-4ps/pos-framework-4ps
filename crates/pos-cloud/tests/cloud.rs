@@ -9010,7 +9010,7 @@ impl TaxRateStore for FakeTaxRates {
             .expect("lock")
             .iter()
             .filter(|(owner, _entry)| *owner == tenant_id)
-            .map(|(_owner, entry)| *entry)
+            .map(|(_owner, entry)| entry.clone())
             .collect();
         let version = self.versions.lock().expect("lock").get(&tenant_id).cloned();
         Ok((entries, version))
@@ -9038,7 +9038,7 @@ impl TaxRateStore for FakeTaxRates {
         versions.insert(tenant_id, version.clone());
         let mut rows = self.rows.lock().expect("lock");
         rows.retain(|(owner, _entry)| *owner != tenant_id);
-        rows.extend(entries.iter().map(|entry| (tenant_id, *entry)));
+        rows.extend(entries.iter().map(|entry| (tenant_id, entry.clone())));
         Ok(UpdateOutcome::Updated(version))
     }
 }
@@ -9502,6 +9502,117 @@ async fn tax_rates_set_lists_and_validates() {
     assert_eq!(bad_rate.status(), StatusCode::BAD_REQUEST);
 }
 
+/// An Indian rate authored as CGST + SGST survives the round trip, and one whose parts miss the
+/// total is refused where it is typed ([ADR-0104](../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+#[tokio::test]
+async fn tax_rate_components_round_trip_and_must_sum_to_their_rate() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Food");
+    let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
+    let cookie = admin_cookie(&router).await;
+
+    // 5% restaurant GST as the two halves that go to different governments.
+    let saved = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 500,
+                  "components": [
+                      { "name": "CGST", "rate_bps": 250 },
+                      { "name": "SGST", "rate_bps": 250 },
+                  ] },
+            ] }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the components save");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let current = etag_of(&saved);
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list tax rates");
+    let rows = json_body(listed).await;
+    let components = rows
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("components"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .expect("the row carries its breakdown");
+    assert_eq!(components.len(), 2);
+    assert_eq!(
+        components.first().and_then(|c| c.get("name")),
+        Some(&serde_json::json!("CGST"))
+    );
+    assert_eq!(
+        components.first().and_then(|c| c.get("rate_bps")),
+        Some(&serde_json::json!(250))
+    );
+
+    // Parts that miss their own rate would print an invoice whose lines do not add up to the tax
+    // charged. Refused here, where it is authored, rather than discovered on a document.
+    let unbalanced = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 500,
+                  "components": [
+                      { "name": "CGST", "rate_bps": 250 },
+                      { "name": "SGST", "rate_bps": 200 },
+                  ] },
+            ] }),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the unbalanced save");
+    assert_eq!(unbalanced.status(), StatusCode::BAD_REQUEST);
+
+    // A component with no name is refused too: the name is the whole point — it is what the invoice
+    // prints, and an unnamed line is not a line an auditor can read.
+    let nameless = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 500,
+                  "components": [{ "name": "   ", "rate_bps": 500 }] },
+            ] }),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the nameless save");
+    assert_eq!(nameless.status(), StatusCode::BAD_REQUEST);
+
+    // And a grid saved with no `components` key at all still saves — the console that predates
+    // ADR-0104 is not broken by it.
+    let legacy = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &serde_json::json!({ "tenant_id": tenant, "rates": [
+                { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 1000 },
+            ] }),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the legacy save");
+    assert_eq!(legacy.status(), StatusCode::OK);
+}
+
 /// A save against a version the grid no longer holds is refused, and changes nothing (ADR-0095).
 #[tokio::test]
 async fn a_tax_rate_save_against_a_stale_version_is_refused() {
@@ -9633,11 +9744,7 @@ async fn tax_publish_writes_the_tax_node_onto_the_store_layer() {
     let class = TaxClassId::new(Ulid::from_u128(7));
     tax_rates.rows.lock().expect("lock").push((
         tenant(),
-        TaxRateEntry {
-            tax_class_id: class,
-            sales_channel: SalesChannel::DineIn,
-            rate: TaxRate::from_percent(10),
-        },
+        TaxRateEntry::new(class, SalesChannel::DineIn, TaxRate::from_percent(10)),
     ));
     let config_trees = FakeConfigTrees::default();
     let router = tax_publish_app(provisioned_admin(), tax_rates, config_trees.clone());

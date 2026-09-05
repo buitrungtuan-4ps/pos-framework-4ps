@@ -35,6 +35,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   sells liquor is refused at the till until it publishes its own state's rate, rather than trading
   untaxed until an assessment finds it.
 
+- **The console can author a rate's invoice breakdown** — the second half of ADR-0104. The proto
+  types and `countries/in` shipped the CGST/SGST split, and the cloud's own authoring path could not
+  express it: `TaxRateEntry` and `catalog_tax_rates` held a rate and nothing else, so an Indian
+  tenant could trade on the pack's defaults and could not edit them.
+
+  A rate row now carries `components` end to end — migration `0050_tax_rate_components` (additive,
+  defaulted to `[]`), the store seam, `PUT`/`GET /admin/catalog/tax-rates`, the `tax` config node,
+  and a per-cell field on the Tax rates screen typed as `CGST 2.5, SGST 2.5`. The parts must sum to
+  the cell's own rate: the screen says so beside the input and the server refuses the save, because a
+  breakdown that does not add up is the one way this feature produces a document an auditor rejects.
+
 - **A country pack now carries the till's money, not just its tax** — `LocalePack` gains
   `prices_include_tax`, `cash_rounding_increment` and `cash_denominations` (ADR-0105). Each closed a
   place where a country fact was held in code: `pos_edge` passed a literal `None` for cash rounding

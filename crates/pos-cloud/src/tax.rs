@@ -17,19 +17,49 @@ use core::future::Future;
 
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{TaxClassId, TenantId};
-use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
 
 use crate::version::{UpdateOutcome, Version};
 
 /// One authored rate: a tax class on a sales channel resolves to this rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaxRateEntry {
     /// The class the rate applies to — the id an item's `tax_class_id` references.
     pub tax_class_id: TaxClassId,
     /// The channel the rate applies on (the same item may be taxed differently dine-in vs takeaway).
     pub sales_channel: SalesChannel,
-    /// The rate in force.
+    /// The rate in force. Stays the authority on what the guest pays, whatever the components say.
     pub rate: TaxRate,
+    /// How that rate is broken out on the invoice, when a country requires it
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// Empty is the ordinary case and means "one rate, printed as one line" — Vietnam, Japan, and
+    /// most of the world. India's is `[CGST 2.5%, SGST 2.5%]`, because the halves go to different
+    /// governments and an invoice printing their sum is not a valid invoice.
+    ///
+    /// The parts must sum to `rate`, which is why this type is no longer `Copy`: a `Vec` is what
+    /// makes the number of parts a country's business rather than the framework's.
+    pub components: Vec<TaxComponent>,
+}
+
+impl TaxRateEntry {
+    /// A row with no breakdown — one rate, printed as one line.
+    #[must_use]
+    pub fn new(tax_class_id: TaxClassId, sales_channel: SalesChannel, rate: TaxRate) -> Self {
+        Self {
+            tax_class_id,
+            sales_channel,
+            rate,
+            components: Vec::new(),
+        }
+    }
+
+    /// The same row with a breakdown attached.
+    #[must_use]
+    pub fn with_components(mut self, components: Vec<TaxComponent>) -> Self {
+        self.components = components;
+        self
+    }
 }
 
 /// Persists and reads a tenant's per-(tax class × channel) tax rates.
@@ -81,7 +111,12 @@ pub trait TaxRateStore {
 pub fn to_table(entries: &[TaxRateEntry]) -> TaxRateTable {
     let mut table = TaxRateTable::new();
     for entry in entries {
-        table = table.with(entry.tax_class_id, entry.sales_channel, entry.rate);
+        table = table.with_components(
+            entry.tax_class_id,
+            entry.sales_channel,
+            entry.rate,
+            entry.components.clone(),
+        );
     }
     table
 }
@@ -107,7 +142,7 @@ mod tests {
 
     use pos_proto::enums::SalesChannel;
     use pos_proto::ids::{TaxClassId, TenantId};
-    use pos_proto::locale::TaxRate;
+    use pos_proto::locale::{TaxComponent, TaxRate};
     use pos_proto::ulid::Ulid;
 
     use super::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
@@ -144,7 +179,7 @@ mod tests {
                 .expect("lock")
                 .iter()
                 .filter(|(owner, _entry)| *owner == tenant_id)
-                .map(|(_owner, entry)| *entry)
+                .map(|(_owner, entry)| entry.clone())
                 .collect();
             let version = self.versions.lock().expect("lock").get(&tenant_id).cloned();
             Ok((entries, version))
@@ -174,7 +209,7 @@ mod tests {
             versions.insert(tenant_id, version.clone());
             let mut rows = self.rows.lock().expect("lock");
             rows.retain(|(owner, _entry)| *owner != tenant_id);
-            rows.extend(entries.iter().map(|entry| (tenant_id, *entry)));
+            rows.extend(entries.iter().map(|entry| (tenant_id, entry.clone())));
             Ok(UpdateOutcome::Updated(version))
         }
     }
@@ -204,27 +239,24 @@ mod tests {
     #[tokio::test]
     async fn set_replaces_the_table_and_stays_tenant_scoped() {
         let store = FakeTaxRates::default();
-        let standard = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::DineIn,
-            rate: TaxRate::from_percent(10),
-        };
-        let takeaway = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::Takeaway,
-            rate: TaxRate::from_percent(8),
-        };
+        let standard =
+            TaxRateEntry::new(tax_class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let takeaway = TaxRateEntry::new(
+            tax_class(),
+            SalesChannel::Takeaway,
+            TaxRate::from_percent(8),
+        );
 
         // A neighbour's table must survive our writes — including its version, which is per tenant.
         applied(
             store
                 .set_tax_rates(
                     other_tenant(),
-                    &[TaxRateEntry {
-                        tax_class_id: tax_class(),
-                        sales_channel: SalesChannel::DineIn,
-                        rate: TaxRate::from_percent(5),
-                    }],
+                    &[TaxRateEntry::new(
+                        tax_class(),
+                        SalesChannel::DineIn,
+                        TaxRate::from_percent(5),
+                    )],
                     None,
                 )
                 .await
@@ -233,7 +265,7 @@ mod tests {
 
         applied(
             store
-                .set_tax_rates(tenant(), &[standard, takeaway], None)
+                .set_tax_rates(tenant(), &[standard.clone(), takeaway.clone()], None)
                 .await
                 .expect("set ours"),
         );
@@ -244,12 +276,12 @@ mod tests {
         // A second set at that version replaces rather than appends.
         applied(
             store
-                .set_tax_rates(tenant(), &[standard], Some(&version))
+                .set_tax_rates(tenant(), std::slice::from_ref(&standard), Some(&version))
                 .await
                 .expect("replace"),
         );
         let (replaced, moved) = store.list_tax_rates(tenant()).await.expect("list replaced");
-        assert_eq!(replaced, vec![standard]);
+        assert_eq!(replaced, vec![standard.clone()]);
         assert_ne!(
             moved.expect("still versioned"),
             version,
@@ -268,22 +300,20 @@ mod tests {
     #[tokio::test]
     async fn a_save_against_a_version_the_table_no_longer_holds_is_refused() {
         let store = FakeTaxRates::default();
-        let standard = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::DineIn,
-            rate: TaxRate::from_percent(10),
-        };
-        let clobber = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::DineIn,
-            rate: TaxRate::from_percent(99),
-        };
+        let standard =
+            TaxRateEntry::new(tax_class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let clobber =
+            TaxRateEntry::new(tax_class(), SalesChannel::DineIn, TaxRate::from_percent(99));
 
         // Naming a version for a tenant that has never saved is a `NotFound`, not a conflict: there
         // is no other edit to have lost, so telling the operator to reload would be a lie.
         assert_eq!(
             store
-                .set_tax_rates(tenant(), &[clobber], Some(&Version::new("v0")))
+                .set_tax_rates(
+                    tenant(),
+                    std::slice::from_ref(&clobber),
+                    Some(&Version::new("v0"))
+                )
                 .await
                 .expect("the comparison must not raise"),
             UpdateOutcome::NotFound
@@ -291,7 +321,7 @@ mod tests {
 
         let first = applied(
             store
-                .set_tax_rates(tenant(), &[standard], None)
+                .set_tax_rates(tenant(), std::slice::from_ref(&standard), None)
                 .await
                 .expect("the first save"),
         );
@@ -299,7 +329,7 @@ mod tests {
         // Claiming "nothing saved yet" about a table that has been saved: refused, not upserted.
         assert_eq!(
             store
-                .set_tax_rates(tenant(), &[clobber], None)
+                .set_tax_rates(tenant(), std::slice::from_ref(&clobber), None)
                 .await
                 .expect("the create path"),
             UpdateOutcome::VersionMismatch
@@ -308,13 +338,13 @@ mod tests {
         // Replaying a version the table has moved past is the lost update this exists to refuse.
         applied(
             store
-                .set_tax_rates(tenant(), &[standard], Some(&first))
+                .set_tax_rates(tenant(), std::slice::from_ref(&standard), Some(&first))
                 .await
                 .expect("a second save"),
         );
         assert_eq!(
             store
-                .set_tax_rates(tenant(), &[clobber], Some(&first))
+                .set_tax_rates(tenant(), std::slice::from_ref(&clobber), Some(&first))
                 .await
                 .expect("the stale save"),
             UpdateOutcome::VersionMismatch
@@ -326,17 +356,14 @@ mod tests {
 
     #[test]
     fn to_table_resolves_each_class_and_channel() {
-        let standard = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::DineIn,
-            rate: TaxRate::from_percent(10),
-        };
-        let takeaway = TaxRateEntry {
-            tax_class_id: tax_class(),
-            sales_channel: SalesChannel::Takeaway,
-            rate: TaxRate::from_percent(8),
-        };
-        let table = to_table(&[standard, takeaway]);
+        let standard =
+            TaxRateEntry::new(tax_class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let takeaway = TaxRateEntry::new(
+            tax_class(),
+            SalesChannel::Takeaway,
+            TaxRate::from_percent(8),
+        );
+        let table = to_table(&[standard.clone(), takeaway.clone()]);
         assert_eq!(
             table.rate_for(tax_class(), SalesChannel::DineIn),
             Some(TaxRate::from_percent(10))
@@ -347,5 +374,48 @@ mod tests {
         );
         // A channel nobody priced stays a visible None, never a silent zero.
         assert_eq!(table.rate_for(tax_class(), SalesChannel::Delivery), None);
+    }
+    #[test]
+    fn to_table_carries_a_rate_s_named_parts() {
+        // The console authors CGST + SGST; `to_table` is what puts them on the `tax` node the edge
+        // applies, so a breakdown dropped here would be a breakdown the invoice never prints
+        // (ADR-0104).
+        let indian = TaxRateEntry::new(
+            tax_class(),
+            SalesChannel::DineIn,
+            TaxRate::from_basis_points(500),
+        )
+        .with_components(vec![
+            TaxComponent::new("CGST", TaxRate::from_basis_points(250)),
+            TaxComponent::new("SGST", TaxRate::from_basis_points(250)),
+        ]);
+        let table = to_table(&[indian]);
+        let names: Vec<&str> = table
+            .components_for(tax_class(), SalesChannel::DineIn)
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect();
+        assert_eq!(names, ["CGST", "SGST"]);
+        assert!(
+            table.unbalanced_rows().is_empty(),
+            "the parts sum to the rate they belong to"
+        );
+    }
+
+    #[test]
+    fn a_row_with_no_parts_still_reaches_the_table() {
+        // Most of the world. `with_components` and an empty list must behave exactly as `with` did,
+        // or every existing tenant's grid would change shape on this release.
+        let plain = TaxRateEntry::new(tax_class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let table = to_table(&[plain]);
+        assert_eq!(
+            table.rate_for(tax_class(), SalesChannel::DineIn),
+            Some(TaxRate::from_percent(10))
+        );
+        assert!(
+            table
+                .components_for(tax_class(), SalesChannel::DineIn)
+                .is_empty()
+        );
     }
 }
