@@ -1279,7 +1279,8 @@ export const api = {
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
   listLocales: () => requestJson<string[]>("GET", "/admin/locales"),
   // Publish a store's locale settings (ADR-0074) as its `locale` config node, behind
-  // console.config.publish; the edge applies the currency, timezone, and business-date cutoff.
+  // console.config.publish; the edge applies the currency, timezone, and business-date cutoff — and,
+  // since ADR-0105, the quoting posture, the cash-rounding increment and the till's quick-cash notes.
   publishLocale: (
     tenantId: string,
     storeId: string,
@@ -1288,6 +1289,9 @@ export const api = {
       timezone: string;
       cutoff_hour: number;
       display_language?: string;
+      prices_include_tax: boolean;
+      cash_rounding_increment: number | null;
+      cash_denominations: readonly number[];
     },
   ) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
@@ -1297,6 +1301,9 @@ export const api = {
       timezone: settings.timezone,
       cutoff_hour: settings.cutoff_hour,
       display_language: settings.display_language ?? null,
+      prices_include_tax: settings.prices_include_tax,
+      cash_rounding_increment: settings.cash_rounding_increment,
+      cash_denominations: settings.cash_denominations,
     }),
 
   // --- media (ADR-0075) ---

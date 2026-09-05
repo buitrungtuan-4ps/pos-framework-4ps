@@ -515,6 +515,12 @@ export interface Country {
   readonly group_separator: string;
   readonly digits_per_group: number;
   readonly default_retention_days: number;
+  /** Whether this country's menu prices already contain their tax (ADR-0104): Japan and India do. */
+  readonly prices_include_tax: boolean;
+  /** What the total rounds to in cash, in minor units, or `null` for no rounding (ADR-0105). */
+  readonly cash_rounding_increment: number | null;
+  /** The notes a guest hands over, ascending, in minor units. Empty means the exact amount only. */
+  readonly cash_denominations: readonly number[];
 }
 
 /** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */

@@ -5,6 +5,12 @@
 // before its country module ships. A live preview shows the store's business date under the chosen
 // timezone and cutoff, so the operator sees the effect before publishing. Store-scoped: publishing is
 // per-store.
+//
+// It also carries the till's money (ADR-0105): whether prices are quoted with tax already in them,
+// what the total rounds to in cash, and which notes the pay pad offers. Those are country facts, so
+// **Start from a country** fills all of them in from the compiled country pack — the affordance the
+// whole country-pack idea exists for. Each stays editable afterwards, because a store in an airport
+// may round differently from the country it is in.
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 
@@ -71,6 +77,12 @@ export function StoreSettings() {
   // The store's display language, which selects a compiled item's per-locale name at the edge
   // (ADR-0074). Blank means each item shows its default name.
   const [displayLanguage, setDisplayLanguage] = createSignal("");
+  // The till's money (ADR-0105). `roundingText` and `notesText` are the raw fields rather than parsed
+  // numbers, so a half-typed value is not silently reinterpreted while the operator is typing; both
+  // are parsed once, on publish.
+  const [pricesIncludeTax, setPricesIncludeTax] = createSignal(false);
+  const [roundingText, setRoundingText] = createSignal("");
+  const [notesText, setNotesText] = createSignal("");
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -105,6 +117,50 @@ export function StoreSettings() {
 
   const preview = createMemo(() => businessDatePreview(timezone(), cutoffHour()));
 
+  /** The rounding increment as the server wants it: a positive number, or `null` for no rounding. */
+  const roundingValue = createMemo(() => {
+    const text = roundingText().trim();
+    if (text === "") {
+      return null;
+    }
+    const value = Number(text);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  });
+
+  /** The notes as the server wants them: positive minor units, ascending, de-duplicated. */
+  const noteValues = createMemo(() => {
+    const parsed = notesText()
+      .split(",")
+      .map((part) => Number(part.trim()))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    return [...new Set(parsed)].sort((left, right) => left - right);
+  });
+
+  /** Whether what was typed into either field is not what will be published. */
+  const tillMoneyRejected = createMemo(
+    () =>
+      (roundingText().trim() !== "" && roundingValue() === null) ||
+      notesText().split(",").filter((part) => part.trim() !== "").length !== noteValues().length,
+  );
+
+  // Fill the form from a compiled country pack (ADR-0105). This is the affordance country packs
+  // exist for: the operator picks Japan and every field a Japanese store needs is already right,
+  // rather than being told to remember that Japanese prices include their tax.
+  const applyCountry = (code: string) => {
+    const country = countries().find((candidate) => candidate.code === code);
+    if (!country) {
+      return;
+    }
+    setCurrency(country.currency_code);
+    setDisplayLanguage(country.default_language);
+    setPricesIncludeTax(country.prices_include_tax);
+    setRoundingText(
+      country.cash_rounding_increment === null ? "" : String(country.cash_rounding_increment),
+    );
+    setNotesText(country.cash_denominations.join(", "));
+    toast.ok(t("storeSettings.filledFrom", { country: country.display_name }));
+  };
+
   const publish = async () => {
     setError("");
     setBusy(true);
@@ -114,6 +170,9 @@ export function StoreSettings() {
         timezone: timezone().trim(),
         cutoff_hour: cutoffHour(),
         display_language: displayLanguage().trim() || undefined,
+        prices_include_tax: pricesIncludeTax(),
+        cash_rounding_increment: roundingValue(),
+        cash_denominations: noteValues(),
       });
       toast.ok(t("storeSettings.published", { store: storeName() }));
     } catch (caught) {
@@ -131,6 +190,23 @@ export function StoreSettings() {
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={loaded()}>
             <div class="grid max-w-xl gap-4">
+              <FormField label={t("storeSettings.fromCountry")}>
+                <select
+                  class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                  value=""
+                  onChange={(event) => {
+                    applyCountry(event.currentTarget.value);
+                    event.currentTarget.value = "";
+                  }}
+                >
+                  <option value="">{t("storeSettings.fromCountryNone")}</option>
+                  <For each={countries()}>
+                    {(country) => <option value={country.code}>{country.display_name}</option>}
+                  </For>
+                </select>
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.fromCountryHint")}</p>
+              </FormField>
+
               <FormField label={t("storeSettings.currency")}>
                 <input
                   class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink uppercase"
@@ -184,6 +260,42 @@ export function StoreSettings() {
                 </datalist>
                 <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.languageHint")}</p>
               </FormField>
+
+              <FormField label={t("storeSettings.pricesIncludeTax")}>
+                <label class="flex min-h-touch items-center gap-2 text-sm text-ink">
+                  <input
+                    type="checkbox"
+                    class="size-4"
+                    checked={pricesIncludeTax()}
+                    onChange={(event) => setPricesIncludeTax(event.currentTarget.checked)}
+                  />
+                  {t("storeSettings.pricesIncludeTaxLabel")}
+                </label>
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.pricesIncludeTaxHint")}</p>
+              </FormField>
+
+              <FormField label={t("storeSettings.cashRounding")}>
+                <input
+                  inputMode="numeric"
+                  class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink tabular-nums"
+                  value={roundingText()}
+                  onInput={(event) => setRoundingText(event.currentTarget.value)}
+                />
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cashRoundingHint")}</p>
+              </FormField>
+
+              <FormField label={t("storeSettings.cashNotes")}>
+                <input
+                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink tabular-nums"
+                  value={notesText()}
+                  onInput={(event) => setNotesText(event.currentTarget.value)}
+                />
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cashNotesHint")}</p>
+              </FormField>
+
+              <Show when={tillMoneyRejected()}>
+                <Banner tone="danger" message={t("storeSettings.tillMoneyRejected")} />
+              </Show>
 
               <div class="rounded-token border border-line bg-surface-raised p-3 text-sm">
                 <span class="text-ink-muted">{t("storeSettings.businessDate")}</span>{" "}
