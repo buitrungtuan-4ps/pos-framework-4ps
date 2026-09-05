@@ -1,0 +1,21 @@
+[package]
+name        = "pos-render"
+version     = "0.1.0"
+description = "Turns a line of text in any script into the 1-bit raster a thermal printer prints."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-ports = { path = "../pos-ports" }
+# Shaping. A pure-Rust port of HarfBuzz: it reorders Devanagari matras, forms Khmer and Indic
+# conjuncts, and applies the OpenType features Vietnamese tone marks need. No C toolchain, which
+# is what keeps the edge cross-compiling to Windows and ARM (ADR-0102).
+rustybuzz = { version = "0.20.1", default-features = false, features = ["std"] }
+# Outlines. rustybuzz already parses faces with it, so taking it directly adds no second parser.
+ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "opentype-layout", "apple-layout", "variable-fonts", "glyph-names"] }
+
+[lints]
+workspace = true
