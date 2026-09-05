@@ -79,7 +79,7 @@ Code closes the waves below. It does not close either of these, and no pull requ
 
 | id | Item | Evidence |
 | --- | --- | --- |
-| R1 | The OTA boot report is skipped on any box not laid out for updates, contradicting `confirm_boot`'s own contract — so the fleet view holds `NULL` for exactly the boxes an upgrade campaign must find | reported |
+| R1 | The OTA boot report is skipped on any box not laid out for updates, contradicting `confirm_boot`'s own contract — so the fleet view holds `NULL` for exactly the boxes an upgrade campaign must find. **Verified and fixed:** `spawn_ota` returned early on a missing `bin/current` *or* a build with no signing keys, taking the report with it. The two needs are different and are now separated — **reporting** needs a keyed cloud client and nothing else; **updating** needs somewhere to put a binary and keys to judge one with. A box with no update layout reports through `NoUpdateLayout`, whose marker-clearing branch is unreachable rather than a no-op: the marker is the installer's own file, so such a box always settles `Settled`. The missing-keys warning now says the box still reports | **done** |
 | R2 | `Hello.product_version` is documented as reaching the fleet view; the only production `MessageLink` negotiates locally, so the release tag leaves the box on no path | reported |
 | R3 | Reconciliation's edge half is deferred onto `/internal/*`, which the shipped proxy 404s for every off-box caller — the same discovery that already moved two sibling routes to `/sync` | reported |
 | R4 | The edge never learns its lease standing, so a superseded box keeps updating (`lease` appears nowhere in `pos-edge` production code) | **verified** |

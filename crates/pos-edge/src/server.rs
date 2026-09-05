@@ -706,37 +706,71 @@ struct OtaWiring<A, S> {
     restart: RestartIntent,
 }
 
-/// Reports which binary this store is running, then starts the loop that weighs the published
-/// rollout ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), ADR-0055 Amendment 1).
+/// Reports which binary this store is running, and — when the box can actually install one — starts
+/// the loop that weighs the published rollout
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), ADR-0055 Amendment 1).
 ///
-/// Needs both a keyed cloud client and an install seam. With neither, or only one, nothing is
-/// spawned and the box trades exactly as it did before this loop existed: a store with no cloud has
-/// no release to fetch, and a store with no `bin/current` has nowhere to put one.
+/// # The report is not conditional on the update loop
+///
+/// It was, and that was production-readiness **R1**: this function returned early when there was no
+/// `bin/current` or no signing keys baked in, taking `confirm_boot` with it — so the fleet view held
+/// `NULL` for the installed version of exactly the boxes an upgrade campaign has to find, while
+/// `confirm_boot`'s own contract says the report "is sent in every case".
+///
+/// The two needs are different and are now separated. **Reporting** needs a keyed cloud client and
+/// nothing else; a store with no cloud has nobody to tell, which is the one honest reason to stay
+/// silent. **Updating** needs somewhere to put a binary (`bin/current`) and keys to judge one with;
+/// without either the box keeps trading on what it has, and still says what that is.
 fn spawn_ota<A, S>(wiring: OtaWiring<A, S>, shutdown_rx: &tokio::sync::watch::Receiver<bool>)
 where
     A: OtaStateAuthority + 'static,
     S: EventStore + Send + Sync + 'static,
 {
-    let (Some(client), Some(installer)) = (wiring.client, wiring.installer) else {
+    let Some(client) = wiring.client else {
         return;
     };
-    let trusted = match crate::trusted_keys() {
-        Ok(keys) => keys,
-        Err(error) => {
-            // Without the release signing keys there is nothing that could verify an artifact, so
-            // there is no safe way to run the loop. The box keeps trading on the binary it has.
-            tracing::warn!(
-                %error,
-                "no release signing keys are baked into this build; over-the-air updates are off"
-            );
-            return;
-        }
-    };
+    let store_id = wiring.store_id;
+    let boot = wiring.boot;
     let cloud = HttpCloudSync::new(
         OtaHttpTransport::new(client),
-        wiring.store_id,
+        store_id,
         crate::version::target(),
     );
+
+    // Can this box install what it is told to? Both halves are required, and a missing one is not an
+    // error — a LAN-installed box legitimately has no update layout.
+    let updater = match (wiring.installer, crate::trusted_keys()) {
+        (Some(installer), Ok(trusted)) => Some((installer, trusted)),
+        // `ota_installer` already said why, at info.
+        (None, _) => None,
+        (Some(_), Err(error)) => {
+            tracing::warn!(
+                %error,
+                "no release signing keys are baked into this build; over-the-air updates are off \
+                 (this box still reports which binary it is running)"
+            );
+            None
+        }
+    };
+
+    let Some((installer, trusted)) = updater else {
+        let authority = wiring.authority;
+        tokio::spawn(async move {
+            crate::ota_client::confirm_boot(
+                &cloud,
+                &authority,
+                &crate::ota_client::NoUpdateLayout,
+                store_id,
+                boot,
+            )
+            .await;
+        });
+        tracing::info!(
+            "this box does not update over the air; it still reports which binary it is running"
+        );
+        return;
+    };
+
     let ota = OtaClient::new(
         cloud.clone(),
         MinisignVerifier,
@@ -744,12 +778,10 @@ where
         trusted,
         wiring.authority,
         wiring.edge,
-        wiring.store_id,
+        store_id,
         wiring.restart,
     );
     let shutdown = wait_for_shutdown(shutdown_rx.clone());
-    let boot = wiring.boot;
-    let store_id = wiring.store_id;
     tokio::spawn(async move {
         // The report comes first: it is what tells the console which binary this store is running,
         // and after a revert it is the only place the failure is visible.

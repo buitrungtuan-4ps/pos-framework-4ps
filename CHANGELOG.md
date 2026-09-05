@@ -16,6 +16,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store that cannot update itself still says which binary it is running**
+  (production-readiness **R1**). `confirm_boot`'s own contract says the boot report "is sent in every
+  case, because a report exists chiefly to say which binary a store is running… and that is worth
+  knowing from a store's first boot". The wiring did not honour it: the report was spawned *inside*
+  the update loop, and that loop returned early when the box had no `bin/current` to install into, or
+  when the build carried no release signing keys.
+
+  So the fleet view held `NULL` for the installed version of exactly the boxes an upgrade campaign
+  has to find and lay out by hand — the ones where knowing the version matters most. Reporting and
+  updating are now separated by what they actually need: the report needs a keyed cloud client and
+  nothing else (a store with no cloud has nobody to tell, which is the one honest reason to stay
+  silent), while updating needs both a place to put a binary and keys to judge one with. The
+  missing-keys warning now says the box still reports.
+
 - **The provisioning chain stops handing operators values that cannot work** (production-readiness
   **D1**–**D4**, **D6**). Five bugs in the shipped scripts and the documents beside them, each of
   which fails quietly rather than loudly:

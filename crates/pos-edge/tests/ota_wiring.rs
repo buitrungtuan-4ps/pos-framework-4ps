@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pos_core::ota::{ReleaseVersion, SelfTest};
 use pos_edge::config_client::session_from_config;
 use pos_edge::{
-    BootStanding, Edge, EdgeSession, InMemoryOtaState, InMemoryReceipts, OtaClient,
+    BootStanding, Edge, EdgeSession, InMemoryOtaState, InMemoryReceipts, NoUpdateLayout, OtaClient,
     OtaStateAuthority, RestartRequest, StoreIdentity, SystemdInstaller, TickOutcome,
     UpdateInstaller, UpdateOutcome, confirm_boot,
 };
@@ -41,6 +41,45 @@ use pos_fakes::{FakeCloudSync, FakeSigner, FakeStore};
 use pos_proto::ids::StoreId;
 use pos_proto::ulid::Ulid;
 use tempfile::TempDir;
+
+/// A cloud that records the reports it is handed, so a test can assert one was actually sent.
+///
+/// [`FakeCloudSync`] is stateless and cannot answer "was a report sent?"; the two other methods
+/// delegate to it so this fake differs from the shared one in exactly one respect.
+#[derive(Debug, Default)]
+struct RecordingCloud {
+    reports: std::sync::Mutex<Vec<pos_ports::cloud_sync::UpdateReport>>,
+}
+
+impl RecordingCloud {
+    fn reports(&self) -> Vec<pos_ports::cloud_sync::UpdateReport> {
+        self.reports.lock().expect("lock").clone()
+    }
+}
+
+impl pos_ports::cloud_sync::CloudSync for RecordingCloud {
+    async fn activate(
+        &self,
+        activation_code: &str,
+    ) -> Result<pos_ports::cloud_sync::ActivationGrant, pos_ports::PortError> {
+        FakeCloudSync::new().activate(activation_code).await
+    }
+
+    async fn fetch_update(
+        &self,
+        release: &pos_proto::text::ReleaseTag,
+    ) -> Result<pos_ports::cloud_sync::SignedArtifact, pos_ports::PortError> {
+        FakeCloudSync::new().fetch_update(release).await
+    }
+
+    async fn report(
+        &self,
+        report: &pos_ports::cloud_sync::UpdateReport,
+    ) -> Result<(), pos_ports::PortError> {
+        self.reports.lock().expect("lock").push(report.clone());
+        Ok(())
+    }
+}
 
 /// A restart requester that counts, standing in for the process exiting.
 #[derive(Debug, Default)]
@@ -337,6 +376,39 @@ async fn confirming_a_boot_records_the_pass_the_rollback_rule_reads() {
         .expect("a verdict is on record");
     assert_eq!(recorded.version, pos_edge::released().expect("parses"));
     assert!(recorded.passed);
+}
+
+#[tokio::test]
+async fn a_box_with_no_update_layout_still_reports_which_binary_it_runs() {
+    // Production-readiness R1. The boot report used to be spawned inside the update loop, so a box
+    // with no `bin/current` reported nothing at all — and the fleet view held NULL for exactly the
+    // boxes an upgrade campaign has to find and lay out by hand. `confirm_boot`'s own contract says
+    // the report is sent in every case; `NoUpdateLayout` is what lets the wiring honour it.
+    let cloud = RecordingCloud::default();
+    let authority = InMemoryOtaState::new();
+
+    confirm_boot(
+        &cloud,
+        &authority,
+        &NoUpdateLayout,
+        store(),
+        BootStanding::Settled,
+    )
+    .await;
+
+    let sent = cloud.reports();
+    assert_eq!(sent.len(), 1, "a store with no update layout still reports");
+    assert_eq!(sent[0].store, store());
+    assert_eq!(
+        sent[0].installed,
+        pos_edge::tag(),
+        "and the report names the binary it is actually running"
+    );
+    assert_eq!(
+        authority.last_self_test(store()).await.expect("read"),
+        None,
+        "reporting records no verdict of its own — nothing installed here"
+    );
 }
 
 #[tokio::test]

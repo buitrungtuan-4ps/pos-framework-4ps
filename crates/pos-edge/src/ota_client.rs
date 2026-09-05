@@ -176,6 +176,28 @@ pub enum BootStanding {
     Reverted,
 }
 
+/// The confirmation seam for a box with **no update layout** — no `bin/current` to retarget, so
+/// nothing here ever installs (production-readiness **R1**).
+///
+/// It exists so the *boot report* does not have to be conditional on a layout the report does not
+/// use. Reporting which binary a store runs is worth doing whether or not that store can install a
+/// new one — in fact it is worth *more* there, because those are exactly the boxes an upgrade
+/// campaign has to find and lay out by hand, and until this they were the ones the fleet view held
+/// `NULL` for.
+///
+/// Its [`confirm_boot`](BootConfirmation::confirm_boot) is unreachable rather than a no-op that
+/// papers over something: the unconfirmed marker is the installer's own file, so a box with no
+/// installer settles as [`BootStanding::Settled`] and [`confirm_boot`]'s only marker-clearing branch
+/// never runs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoUpdateLayout;
+
+impl BootConfirmation for NoUpdateLayout {
+    fn confirm_boot(&self) -> Result<(), InstallError> {
+        Ok(())
+    }
+}
+
 /// Clearing the unconfirmed-boot marker: the one thing [`confirm_boot`] needs from the install seam.
 ///
 /// Separate from [`UpdateInstaller`] because it is not part of an install cycle — it is what the

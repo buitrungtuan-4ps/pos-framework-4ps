@@ -83,8 +83,8 @@ pub use installer::{SystemdInstaller, binary_directory};
 pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};
 pub use ota_client::{
-    BootConfirmation, BootStanding, OTA_POLL_INTERVAL, OtaClient, RestartRequest, TickOutcome,
-    confirm_boot,
+    BootConfirmation, BootStanding, NoUpdateLayout, OTA_POLL_INTERVAL, OtaClient, RestartRequest,
+    TickOutcome, confirm_boot,
 };
 pub use ota_state::{InMemoryOtaState, OtaStateAuthority, device_state};
 pub use pairing::{Code, DeviceToken, Pairing};
