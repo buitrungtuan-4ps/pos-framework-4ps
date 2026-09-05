@@ -234,6 +234,20 @@ trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 # exactly as written — link-nats lifts it into the connect options, because async-nats itself reads
 # credentials only from there and would otherwise drop it (ADR-0089's correction).
 #
+# The scheme and host are NOT free choices (production-readiness D2). Once secrets/tls holds a
+# certificate this script puts TLS on the broker's client port for EVERY client, this container
+# included — so `nats://` is refused as plaintext, and `tls://…@nats:4222` fails hostname
+# verification, because the certificate is issued for DOMAIN and `nats` is a Docker network alias
+# that can never appear on it. Use the public name the certificate actually carries:
+#
+#   url = "tls://:THE_NATS_TOKEN@YOUR_DOMAIN:4222"
+#
+# which means this container reaches its own host by its public address — an ordinary hairpin on a
+# VPS with a public IP. Where that cannot hairpin, the other working shape is to leave the broker's
+# TLS off (no certificate in secrets/tls, so the port stays on 127.0.0.1) and use the plaintext
+# `nats://:THE_NATS_TOKEN@nats:4222`, which is safe only because the port is then closed to the
+# internet and reachable from the Docker network alone. Do not mix the two.
+#
 # `stream` must be the same name every store publishes into, and the console's new-store wizard
 # generates POS_FLEET / pos.fleet.events into each store's config.toml (ADR-0087 Amendment 1). One
 # stream, one subject, fleet-wide: this cursor binds ONE stream, so a fork that renames either must
@@ -241,7 +255,7 @@ trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 # nothing anywhere reports an error. `filter_subject` is left unset, which means every subject the
 # stream captures:
 # [nats]
-# url = "nats://:THE_NATS_TOKEN@nats:4222"
+# url = "tls://:THE_NATS_TOKEN@YOUR_DOMAIN:4222"
 # stream = "POS_FLEET"
 # durable = "cloud_ingest"
 
@@ -261,10 +275,18 @@ else
   # run chowned this file to $APP_UID mode 600, so a non-root deploy user can neither read nor write
   # it; that is why this uses the same `sudo -n` ladder as the chown below, and why failing at both
   # is reported loudly rather than passed over.
+  # ADDING a top-level key means inserting it ABOVE the first table header, never appending it to
+  # the end of the file (production-readiness D1). Step 4 appends `[artifacts]` when Garage answers,
+  # so on any box that has completed a bootstrap the end of cloud.toml is *inside* that table — and
+  # a bare `trusted_proxy_hops` written there becomes `artifacts.trusted_proxy_hops`, which the
+  # cloud never reads. It would then quietly keep the default hop count while this script reported
+  # "set": exactly the failure the comment above says the reconcile exists to prevent.
+  hops_note='# Trusted X-Forwarded-For hops, derived from TLS_MODE (ADR-0090).'
   hops_cmd="if grep -q '^trusted_proxy_hops' '$SECRETS/cloud.toml'; then"
   hops_cmd="$hops_cmd sed -i 's/^trusted_proxy_hops = .*/trusted_proxy_hops = $TRUSTED_PROXY_HOPS/' '$SECRETS/cloud.toml';"
-  hops_cmd="$hops_cmd else printf '\n# Trusted X-Forwarded-For hops, derived from TLS_MODE (ADR-0090).\ntrusted_proxy_hops = %s\n'"
-  hops_cmd="$hops_cmd '$TRUSTED_PROXY_HOPS' >> '$SECRETS/cloud.toml'; fi"
+  hops_cmd="$hops_cmd elif grep -q '^\\[' '$SECRETS/cloud.toml'; then"
+  hops_cmd="$hops_cmd sed -i '0,/^\\[/s//$hops_note\\ntrusted_proxy_hops = $TRUSTED_PROXY_HOPS\\n\\n&/' '$SECRETS/cloud.toml';"
+  hops_cmd="$hops_cmd else printf '\\n%s\\ntrusted_proxy_hops = %s\\n' '$hops_note' '$TRUSTED_PROXY_HOPS' >> '$SECRETS/cloud.toml'; fi"
   if sh -c "$hops_cmd" 2>/dev/null; then
     echo "set    cloud.toml trusted_proxy_hops = $TRUSTED_PROXY_HOPS (TLS_MODE=$CADDY_TLS_MODE)"
   elif command -v sudo >/dev/null 2>&1 && sudo -n sh -c "$hops_cmd" 2>/dev/null; then
@@ -278,9 +300,12 @@ else
   # one warn line at boot — so an upgrade run should turn it on. Rewriting an existing one would
   # invalidate every table QR already printed and stuck to a table, which is why this is the one
   # reconcile in this file that refuses to touch a value it finds.
-  qr_cmd="if ! grep -q '^table_token_secret' '$SECRETS/cloud.toml'; then"
-  qr_cmd="$qr_cmd printf '\n# QR table-token signing secret (ADR-0057), added by a later bootstrap run.\ntable_token_secret = \"%s\"\n'"
-  qr_cmd="$qr_cmd '$(rand_hex 32)' >> '$SECRETS/cloud.toml'; echo added; fi"
+  qr_note='# QR table-token signing secret (ADR-0057), added by a later bootstrap run.'
+  qr_secret="$(rand_hex 32)"
+  qr_cmd="if grep -q '^table_token_secret' '$SECRETS/cloud.toml'; then :;"
+  qr_cmd="$qr_cmd elif grep -q '^\\[' '$SECRETS/cloud.toml'; then"
+  qr_cmd="$qr_cmd sed -i '0,/^\\[/s//$qr_note\\ntable_token_secret = \"$qr_secret\"\\n\\n&/' '$SECRETS/cloud.toml'; echo added;"
+  qr_cmd="$qr_cmd else printf '\\n%s\\ntable_token_secret = \"%s\"\\n' '$qr_note' '$qr_secret' >> '$SECRETS/cloud.toml'; echo added; fi"
   if qr_added="$(sh -c "$qr_cmd" 2>/dev/null)"; then
     [ -n "$qr_added" ] && echo "set    cloud.toml table_token_secret (QR ordering was off on this box)"
   elif command -v sudo >/dev/null 2>&1 && qr_added="$(sudo -n sh -c "$qr_cmd" 2>/dev/null)"; then

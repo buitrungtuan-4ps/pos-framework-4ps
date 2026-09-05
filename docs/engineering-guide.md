@@ -253,12 +253,22 @@ open https://admin.<domain>/setup?token=…  → create the super-admin (TOTP re
 
 ### 11.2 Secrets
 
+The names below are the ones [`deploy.yml`](../.github/workflows/deploy.yml) actually reads;
+[`fork-checklist.md`](fork-checklist.md) carries the same list, and the two are meant to agree. They
+did not (production-readiness **D6**): this table named a port secret the workflow never reads and
+omitted two the deploy requires — one of them the reason the SSH is not trust-on-first-use.
+
 | Secret | Required | Purpose |
 |---|---|---|
-| `VPS_HOST`, `VPS_SSH_PORT`, `VPS_USER`, `VPS_SSH_KEY` | yes | Server access (a key created solely for deployment) |
+| `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` | yes | Server access (a key created solely for deployment) |
+| `VPS_KNOWN_HOSTS` | yes | `ssh-keyscan <host>` output. Without it the deploy trusts whatever host answers on the first connection — trust-on-first-use, on the channel that ships the image |
+| `VPS_PORT` | no | SSH port when it is not 22. **Not** `VPS_SSH_PORT` — nothing reads that name |
 | `DOMAIN`, `ACME_EMAIL` | recommended | Hostname and certificate notifications |
-| `CF_DNS_API_TOKEN` | required for multi-tenant subdomains | ACME DNS-01: closes port 80 and issues a wildcard certificate |
-| `RCLONE_REMOTE_*` | optional | Second-tier backup target |
+| `TLS_MODE` | no | The TLS posture ([ADR-0090](adr/0090-tls-postures.md)): `acme-http01` (the default when unset) · `acme-dns01` · `byo-cert` · `external`. It also decides which Caddy image CI builds |
+| `CF_DNS_API_TOKEN` | required by `TLS_MODE=acme-dns01`, and nothing else | ACME DNS-01: closes port 80 and issues a wildcard certificate. That mode refuses to bootstrap without it rather than falling back |
+
+The second-tier backup target (`RCLONE_REMOTE`) is **not** a deploy secret: nothing in the workflow
+reads one, and the value is installed on the box itself (gate register **A2**).
 
 **Two-tier secret principle.** GitHub holds only the *key to the door* — SSH access and public information. **Operational** secrets are generated on the server at first boot and stay there. This means repository administrators do not automatically hold the production database password, rotating operational secrets requires no GitHub change, and forking or sharing the repository can never leak system secrets. The user experience is unchanged: four to six secrets and one button.
 

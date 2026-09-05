@@ -65,6 +65,34 @@ sc.exe failure pos-edge reset= 86400 actions= restart/5000/restart/5000/restart/
 sc.exe start pos-edge
 ```
 
+### The two secrets Windows has no `env` file for
+
+The Linux unit reads `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` from `/etc/pos-edge/env`,
+root-owned mode 0600. Windows has no such file and no `EnvironmentFile=`, and until now nothing here
+said what to do instead — so a Windows store could be configured right and still never sync or
+publish (production-readiness **D4**).
+
+**Prefer the credential store.** The store's sync key belongs in Credential Manager, which is where
+activation puts the device credential and where the edge looks first
+([ADR-0086](../../docs/adr/0086-edge-keyvault-and-activation.md)). `POS_EDGE_SYNC_KEY` is a
+**headless bring-up override**, exactly as on Linux.
+
+When you do need the override, or the event-bus URL (which has no keyring slot), set them as
+**service-scoped** values rather than machine-wide ones — a machine environment variable is readable
+by every local administrator and shows up in process listings of unrelated services:
+
+```
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\pos-edge" /v Environment /t REG_MULTI_SZ ^
+  /d "POS_EDGE_CONFIG=C:\pos\config.toml\0POS_EDGE_SYNC_KEY=<the store's scoped key>\0POS_EDGE_NATS_URL=tls://:<token>@<your cloud host>:4222" /f
+sc.exe stop pos-edge & sc.exe start pos-edge
+```
+
+`REG_MULTI_SZ` with `\0` separators is how SCM passes several variables to one service; the values
+are then visible only to accounts that can read that service key, not to every process on the box.
+Restart the service after changing them — SCM reads the value at start, not on the fly. If you set
+`POS_EDGE_CONFIG` this way you no longer need the `setx … /M` line above; keep one or the other, not
+both, or the machine-wide value will quietly shadow nothing and confuse the next person.
+
 ### The `failure` line is not optional
 
 It is the Windows counterpart of the unit's `Restart=always`, and without it the store does not come

@@ -117,6 +117,12 @@ sudo install -o root -g root -m 0600 env /etc/pos-edge/env
 The service unit reads it through `EnvironmentFile=-/etc/pos-edge/env` — the leading `-` means a
 missing file is not an error, so a LAN-only demo box needs no env file at all. Then start the service.
 
+**On Windows there is no `env` file** and the command above is POSIX-only. The two values it carries
+— `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` — go on the service's own registry key instead;
+[`deploy/edge/README.md`](../../deploy/edge/README.md) has the exact `reg add` line and why
+service-scoped beats machine-wide. The sync key's proper home on either OS is the credential store,
+and the environment variable is a headless bring-up override.
+
 One thing the manual path gets wrong more often than any other: since
 [ADR-0055](../adr/0055-edge-ota-updater.md) Amendment 1 the unit starts
 `/var/lib/pos-edge/bin/current`, a symlink the edge retargets to install its own updates. A box with

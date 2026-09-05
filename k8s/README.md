@@ -35,10 +35,22 @@ kubectl -n pos-cloud create secret generic nats-config   --from-file=nats.conf=.
 kubectl -n pos-cloud create secret generic garage-config --from-file=garage.toml=./garage.toml
 ```
 
-`cloud.toml` must set `database_url` to reach the in-cluster Postgres Service
-(`host=postgres.pos-cloud.svc.cluster.local`) and carry the one-time `admin_setup_token`; first-boot
-enrolment then works exactly as in the runbook ([ADR-0045](../docs/adr/0045-first-boot-admin-enrolment.md),
-[`docs/deploy-runbook.md`](../docs/deploy-runbook.md) step 4).
+`cloud.toml` must set three things, and the pod **CrashLoopBackOffs on the first bring-up** if the
+third is missing (production-readiness D3):
+
+- `database_url`, reaching the in-cluster Postgres Service (`host=postgres.pos-cloud.svc.cluster.local`).
+- the one-time `admin_setup_token`; first-boot enrolment then works exactly as in the runbook
+  ([ADR-0045](../docs/adr/0045-first-boot-admin-enrolment.md),
+  [`docs/deploy-runbook.md`](../docs/deploy-runbook.md) step 4).
+- **`internal_shared_secret`** — at least 32 characters, e.g. `openssl rand -hex 32`
+  ([ADR-0097](../docs/adr/0097-internal-route-authentication.md)). `pos_cloud` refuses to start
+  without it: this file is not checked for unknown keys, so if absence meant "authentication off" a
+  misspelled key name would look set and be missing. The Compose lane generates it in
+  `bootstrap.sh`; nothing generates it for you here.
+
+Two more are optional but decide whether a feature exists at all: `table_token_secret` (absent = QR
+ordering off, one warn line at boot) and `trusted_proxy_hops` (absent = 1, which is wrong when TLS
+terminates upstream — see [ADR-0090](../docs/adr/0090-tls-postures.md)).
 
 ## The `/internal` deny is mandatory, and you must verify it
 

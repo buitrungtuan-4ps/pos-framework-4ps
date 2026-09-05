@@ -14,6 +14,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **The provisioning chain stops handing operators values that cannot work** (production-readiness
+  **D1**–**D4**, **D6**). Five bugs in the shipped scripts and the documents beside them, each of
+  which fails quietly rather than loudly:
+
+  - `bootstrap.sh` **appended** `trusted_proxy_hops` and `table_token_secret` to the end of
+    `cloud.toml`. Once Garage has answered, the end of that file is inside the `[artifacts]` table,
+    so a bare key written there becomes `artifacts.trusted_proxy_hops` — which the cloud never
+    reads, while the script reports "set". Both now insert **above the first table header**. That
+    was exactly the failure the reconcile's own comment said it existed to prevent.
+  - The generated comment showed the cloud's ingest-cursor URL as `nats://…@nats:4222`. Once a
+    certificate exists the broker's client port is TLS for *every* client, so plaintext is refused —
+    and `tls://…@nats:4222` fails hostname verification, because the certificate is for `DOMAIN` and
+    `nats` is a Docker alias that can never be on it. The comment now gives the working URL and the
+    one caveat, plus the alternative for a host that cannot hairpin.
+  - `k8s/README.md` never mentioned `internal_shared_secret`, which `pos_cloud` refuses to start
+    without — so the pod CrashLoopBackOffs on first bring-up with nothing in the lane's own document
+    to explain it.
+  - A Windows store had no documented way to set `POS_EDGE_SYNC_KEY` or `POS_EDGE_NATS_URL`: the
+    install block set only `POS_EDGE_CONFIG`, and the guide handed Windows a POSIX `install`
+    command. There is now a Windows equivalent, service-scoped rather than machine-wide.
+  - The engineering guide's deploy-secrets table named `VPS_SSH_PORT` (nothing reads it), omitted
+    `VPS_KNOWN_HOSTS` (the reason the deploy is not trust-on-first-use) and `TLS_MODE`, and listed a
+    backup secret the workflow never reads. It now matches `deploy.yml` row for row.
+
 ### Added
 
 - **The pre-production security review exists** (production-readiness **S6**). Gate **L5**, the
