@@ -42,7 +42,7 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use pos_proto::ids::StoreId;
 
 use crate::config_client::{ConfigTransport, ConfigTransportError, SyncedConfig};
-use crate::heartbeat_client::{HeartbeatError, HeartbeatTransport};
+use crate::heartbeat_client::{HeartbeatError, HeartbeatReport, HeartbeatTransport};
 use crate::relay_client::{PendingOrderDto, RelayTransport, RelayTransportError, StoreOutcome};
 
 /// How long any one request may take, end to end (resolve → connect → handshake → send → read). A
@@ -454,6 +454,10 @@ impl ConfigTransport for ConfigHttpTransport {
 /// The field [`HeartbeatTransport`]: POSTs the store's liveness ping over HTTPS
 /// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md), ADR-0085). The cloud advances `last_seen_at`
 /// and answers `204`; anything else is a transport failure the loop retries next tick.
+///
+/// A report with nothing in it is sent as no body at all — the shape the route has always accepted —
+/// so a store whose log could not be read keeps pinging exactly as it did before there was a body to
+/// send.
 #[derive(Debug, Clone)]
 pub struct HeartbeatHttpTransport {
     client: CloudHttpClient,
@@ -469,11 +473,16 @@ impl HeartbeatHttpTransport {
 }
 
 impl HeartbeatTransport for HeartbeatHttpTransport {
-    async fn beat(&self) -> Result<(), HeartbeatError> {
+    async fn beat(&self, report: HeartbeatReport) -> Result<(), HeartbeatError> {
         let path = format!("/sync/stores/{}/heartbeat", self.store_id);
+        let body = match report.outbox_depth {
+            Some(depth) => serde_json::to_vec(&serde_json::json!({ "outbox_depth": depth }))
+                .map_err(|error| HeartbeatError::new(error.to_string()))?,
+            None => Vec::new(),
+        };
         let (status, _body) = self
             .client
-            .request(&hyper::Method::POST, &path, None, Vec::new())
+            .request(&hyper::Method::POST, &path, None, body)
             .await
             .map_err(|error| HeartbeatError::new(error.to_string()))?;
         match status {

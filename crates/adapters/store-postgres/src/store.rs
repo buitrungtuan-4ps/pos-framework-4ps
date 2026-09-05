@@ -166,6 +166,11 @@ const MIGRATION_0047: &str = include_str!("../migrations/0047_api_key_store_scop
 /// cannot find out and printing cannot do without (ADR-0100).
 const MIGRATION_0048: &str = include_str!("../migrations/0048_device_approval_facts.sql");
 
+/// The store's own publish backlog on the fleet read model (production-readiness **O6**):
+/// `EventStore::outbox_depth` had no production caller, so a store falling behind on its event
+/// publish was invisible to everyone.
+const MIGRATION_0049: &str = include_str!("../migrations/0049_store_outbox_depth.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -416,6 +421,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0048)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0049)
             .await
             .map_err(unavailable)
     }

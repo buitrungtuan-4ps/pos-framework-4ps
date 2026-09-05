@@ -149,6 +149,30 @@ export function Fleet() {
       ),
     },
     {
+      key: "outbox",
+      header: t("fleet.outbox"),
+      // A store that never reported sorts below every store that did: "did not say" is not a count,
+      // and sorting it as zero would bury a silent box among the healthiest rows.
+      sortValue: (row) => row.outbox_depth ?? -1,
+      cell: (row) => (
+        <div class="flex flex-wrap items-baseline gap-2">
+          <Show
+            when={row.outbox_depth !== null}
+            fallback={<span class="text-sm text-ink-muted">{t("fleet.notReported")}</span>}
+          >
+            <span class="text-ink">{formatCount(row.outbox_depth ?? 0)}</span>
+            <Show when={(row.outbox_depth ?? 0) > 0 && row.outbox_reported_at_ms !== null}>
+              <span class="text-xs text-ink-muted">
+                {t("fleet.reportedAge", {
+                  age: formatRelativeAge(ageSeconds(row.outbox_reported_at_ms ?? Date.now())),
+                })}
+              </span>
+            </Show>
+          </Show>
+        </div>
+      ),
+    },
+    {
       key: "id",
       header: t("common.technicalDetails"),
       cell: (row) => (
@@ -287,6 +311,18 @@ export function Fleet() {
                       : formatRelativeAge(
                           ageSeconds(store().relay_oldest_pending_at_ms ?? Date.now()),
                         ),
+                  )}
+                  {detailRow(
+                    t("fleet.outbox"),
+                    store().outbox_depth === null
+                      ? t("fleet.notReported")
+                      : formatCount(store().outbox_depth ?? 0),
+                  )}
+                  {detailRow(
+                    t("fleet.outboxReported"),
+                    store().outbox_reported_at_ms === null
+                      ? t("fleet.never")
+                      : formatRelativeAge(ageSeconds(store().outbox_reported_at_ms ?? Date.now())),
                   )}
                 </div>
                 <TechnicalDetails label={t("common.technicalDetails")}>

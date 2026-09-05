@@ -80,11 +80,18 @@ pub trait ConfigTreeStore {
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 
     /// Records a store's lightweight heartbeat ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)
-    /// slice 2): advances `last_seen_at` to `seen_at` and nothing else, for a store that is up but not
-    /// currently pulling config (a parked long-poll, or a quiet period between publishes). It leaves
-    /// the recorded held version and last-config-pull instant untouched — a heartbeat is "I am here",
-    /// not "I pulled". Unlike the config-pull capture this is the request's whole purpose, so the
-    /// caller surfaces a failure rather than swallowing it.
+    /// slice 2): advances `last_seen_at` to `seen_at`, and records `outbox_depth` when the store
+    /// reported one, for a store that is up but not currently pulling config (a parked long-poll, or
+    /// a quiet period between publishes). It leaves the recorded held version and last-config-pull
+    /// instant untouched — a heartbeat is "I am here", not "I pulled". Unlike the config-pull capture
+    /// this is the request's whole purpose, so the caller surfaces a failure rather than swallowing
+    /// it.
+    ///
+    /// `outbox_depth` is how many events the store has committed and not yet published
+    /// ([`EventStore::outbox_depth`](pos_ports::event_store::EventStore::outbox_depth)) — the store's
+    /// own backlog, the opposite direction from the relay backlog the fleet row already carries.
+    /// `None` means the store did not say (an older edge, or one whose log could not be read), which
+    /// is not the same answer as zero and must leave whatever was last recorded alone.
     ///
     /// # Errors
     ///
@@ -94,6 +101,7 @@ pub trait ConfigTreeStore {
         tenant: TenantId,
         store: StoreId,
         seen_at: Timestamp,
+        outbox_depth: Option<u64>,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 }
 

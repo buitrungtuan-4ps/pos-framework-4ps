@@ -757,6 +757,15 @@ export interface FleetStore {
   readonly self_test_ok: boolean | null;
   /** Unix ms of the store's most recent OTA report, or `null`. */
   readonly reported_at_ms: number | null;
+  /**
+   * How many events the store had committed and not yet published as of its last heartbeat, or
+   * `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
+   * *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
+   * is not a store that is caught up — so the screen renders the two differently.
+   */
+  readonly outbox_depth: number | null;
+  /** Unix ms of the heartbeat that reported `outbox_depth`, or `null`. */
+  readonly outbox_reported_at_ms: number | null;
 }
 
 /**

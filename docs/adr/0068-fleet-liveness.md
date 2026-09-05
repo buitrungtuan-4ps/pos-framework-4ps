@@ -111,3 +111,32 @@ answers it, captured from the signal the edge already sends.
 - Landed in slices under Track O1: (1) capture (this) → (2) edge heartbeat → (3) fleet read API →
   (4) background-task health → (5) fleet dashboard. Alerting on the derived state is Track **O2**, not
   here.
+
+## Amendment 1 — the heartbeat carries the store's own publish backlog (Track O6)
+
+Slice 2 shipped the heartbeat as a bare "I am here": no body, no facts. That left the fleet row able
+to say how many orders the cloud was holding **for** a store and nothing at all about how many sales
+the store was holding **from** the cloud — a box whose event link had been down for a day read
+identically to one perfectly current. `EventStore::outbox_depth` existed for exactly that question,
+was implemented in both adapters and contract-tested, and had no production caller anywhere.
+
+The heartbeat is where the answer belongs: it is the one rail that reaches the cloud on a fixed
+interval whether or not the store has anything else to say, and a depth is a count — never an event
+body — so it carries no personal data (`docs/pos-spec.md` §13). So:
+
+- `HeartbeatTransport::beat` takes a `HeartbeatReport`, and the loop reads it from a
+  `HeartbeatSource` — the shipped one being the store's own `Edge`. A log that cannot be read reports
+  `None` and still pings: a box that stopped saying "I am here" because it could not count its outbox
+  would read as offline, which is a worse lie than an unknown depth.
+- `POST /sync/stores/{id}/heartbeat` accepts an **optional** JSON body. An edge older than the body
+  posts nothing and is recorded exactly as before; a body that is present and will not parse is
+  refused, because swallowing it would let a store report nothing forever while believing it
+  reported.
+- Migration `0049` adds nullable `outbox_depth` and `outbox_reported_at` to `store_liveness`, and the
+  upsert `COALESCE`s both: silence never overwrites the last depth a store did report. **`NULL` is
+  not zero** — "did not say" and "nothing pending" are different answers, and a console that rendered
+  both as `0` would report a silent store as caught up. The console shows *Not reported* for the
+  first and a number for the second, and the reporting instant travels with the depth so a stale one
+  reads as stale.
+
+No `PROTOCOL_VERSION` change: the body is additive and optional in both directions.

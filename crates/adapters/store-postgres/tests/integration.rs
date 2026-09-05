@@ -1061,7 +1061,7 @@ mod activation_codes {
 // ---------------------------------------------------------------------------
 
 mod config_tree_store {
-    use super::{block_on, prepared};
+    use super::{Client, block_on, prepared};
     use pos_proto::{StoreId, TenantId, Ulid};
     use store_postgres::RowUpdate;
 
@@ -1384,9 +1384,9 @@ mod config_tree_store {
         });
     }
 
-    /// A heartbeat advances only `last_seen_at`, preserving the held version and last-config-pull
-    /// instant a prior pull recorded; a heartbeat before any pull creates the row with those NULL
-    /// ([ADR-0068] slice 2).
+    /// A heartbeat advances only `last_seen_at` (and the reported publish backlog), preserving the
+    /// held version and last-config-pull instant a prior pull recorded; a heartbeat before any pull
+    /// creates the row with those NULL ([ADR-0068] slice 2).
     #[test]
     fn heartbeat_advances_last_seen_only() {
         block_on(async {
@@ -1402,7 +1402,7 @@ mod config_tree_store {
                 .await
                 .expect("record seen");
             trees
-                .record_heartbeat(tenant, store_id, 5000)
+                .record_heartbeat(tenant, store_id, 5000, None)
                 .await
                 .expect("record heartbeat");
             let row = admin
@@ -1432,7 +1432,7 @@ mod config_tree_store {
             // A heartbeat for a store that has never pulled creates the row with those two NULL.
             let fresh = StoreId::new(Ulid::from_u128(0x59));
             trees
-                .record_heartbeat(tenant, fresh, 2000)
+                .record_heartbeat(tenant, fresh, 2000, None)
                 .await
                 .expect("record heartbeat for a fresh store");
             let row = admin
@@ -1454,6 +1454,77 @@ mod config_tree_store {
                 None,
                 "a heartbeat-only store has no config-pull instant"
             );
+        });
+    }
+
+    /// A reported publish backlog is recorded with the instant that reported it, and a later
+    /// heartbeat that reports none leaves both alone — "did not say" is not "caught up"
+    /// ([ADR-0068] slice 2, Track O6).
+    #[test]
+    fn a_reported_outbox_depth_is_recorded_and_never_erased_by_silence() {
+        block_on(async {
+            async fn read(admin: &Client, tenant: TenantId, store: StoreId) -> tokio_postgres::Row {
+                admin
+                    .query_one(
+                        "SELECT outbox_depth, outbox_reported_at FROM store_liveness \
+                         WHERE tenant_id = $1 AND store_id = $2",
+                        &[&tenant.to_string(), &store.to_string()],
+                    )
+                    .await
+                    .expect("row")
+            }
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE3));
+            let store_id = StoreId::new(Ulid::from_u128(0x5A));
+
+            trees
+                .record_heartbeat(tenant, store_id, 1000, Some(17))
+                .await
+                .expect("record a heartbeat that reports a backlog");
+            let row = read(&admin, tenant, store_id).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                Some(17),
+                "the depth is recorded"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(1),
+                Some(1000),
+                "the depth is stamped with the heartbeat that carried it"
+            );
+
+            // An older edge, or one whose log could not be read, reports nothing. Overwriting a real
+            // backlog with a fabricated zero would read as a store that had caught up.
+            trees
+                .record_heartbeat(tenant, store_id, 9000, None)
+                .await
+                .expect("record a heartbeat that reports nothing");
+            let row = read(&admin, tenant, store_id).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                Some(17),
+                "silence leaves the last reported depth standing"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(1),
+                Some(1000),
+                "and leaves the instant that reported it, so the console can see it is stale"
+            );
+
+            // A store that has only ever been silent has no depth at all — NULL, not zero.
+            let silent = StoreId::new(Ulid::from_u128(0x5B));
+            trees
+                .record_heartbeat(tenant, silent, 1000, None)
+                .await
+                .expect("record heartbeat for a silent store");
+            let row = read(&admin, tenant, silent).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                None,
+                "a store that never reported has no depth, which is not a depth of zero"
+            );
+            assert_eq!(row.get::<_, Option<i64>>(1), None);
         });
     }
 }

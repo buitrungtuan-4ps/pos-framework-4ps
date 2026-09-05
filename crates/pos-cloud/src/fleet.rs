@@ -6,8 +6,9 @@
 //! The console's operational answer to "is the fleet up, and is it in sync?" reads four facts about
 //! each store together — its identity and status (the [registry](crate::registry)), its liveness
 //! (`store_liveness`, captured on every config pull and heartbeat), its config drift (the version it
-//! holds vs the one currently published), and its relay backlog (unreported orders queued for its
-//! POS). None of those is a new write; this seam only *reads* them, joined per tenant.
+//! holds vs the one currently published), its relay backlog (unreported orders queued for its POS),
+//! and its own publish backlog (events committed at the store and not yet shipped, as of its last
+//! heartbeat). None of those is a new write; this seam only *reads* them, joined per tenant.
 //!
 //! Online/offline is deliberately **not** a stored fact — a store never announces it went quiet — so
 //! it is derived at read time by the caller from `now − last_seen_at` against a freshness threshold
@@ -61,6 +62,18 @@ pub struct FleetRow {
     pub self_test_ok: Option<bool>,
     /// When the store last reported an update outcome, or `None`.
     pub reported_at: Option<Timestamp>,
+    /// How many events the store has committed and not yet published, as of its last heartbeat, or
+    /// `None` if it has never reported one (an older edge, or one whose log could not be read).
+    ///
+    /// The store's *own* backlog, and the mirror image of [`relay_backlog`](Self::relay_backlog):
+    /// that one counts orders the cloud is holding *for* the store, this one counts sales the store
+    /// is holding *from* the cloud. `None` is deliberately not zero — "did not say" and "nothing
+    /// pending" are different answers, and a console that showed both as `0` would report a silent
+    /// store as caught up.
+    pub outbox_depth: Option<u64>,
+    /// When the store reported [`outbox_depth`](Self::outbox_depth), or `None`. A depth is only as
+    /// current as the heartbeat that carried it, so the instant travels with it.
+    pub outbox_reported_at: Option<Timestamp>,
 }
 
 /// Reads the fleet read model, per tenant.

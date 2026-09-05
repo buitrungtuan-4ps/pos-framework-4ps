@@ -445,8 +445,12 @@ impl ConfigTreeStore for PostgresConfigTrees {
         tenant: TenantId,
         store: StoreId,
         seen_at: Timestamp,
+        outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
-        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch())
+        // A depth past `i64::MAX` is not reachable from a store's log, but saturating beats a panic
+        // and beats dropping the heartbeat: the column is `bigint`, so this is the widest it holds.
+        let depth = outbox_depth.map(|depth| i64::try_from(depth).unwrap_or(i64::MAX));
+        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch(), depth)
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
@@ -1600,6 +1604,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let reported_at = row
         .reported_at_ms
         .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let outbox_reported_at = row
+        .outbox_reported_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
@@ -1614,6 +1621,10 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         installed_version: row.installed_version,
         self_test_ok: row.self_test_ok,
         reported_at,
+        // A negative depth cannot come from a store's log; if one somehow reached the column, "did
+        // not say" is a truer answer for the console than a wrapped-around count.
+        outbox_depth: row.outbox_depth.and_then(|depth| u64::try_from(depth).ok()),
+        outbox_reported_at,
     })
 }
 

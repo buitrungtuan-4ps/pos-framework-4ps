@@ -14,6 +14,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **The fleet console can see a store's own publish backlog** (production-readiness **O6**).
+  `EventStore::outbox_depth` was implemented in every adapter and contract-tested, and **no
+  production code had ever called it** — so the cloud could say how many orders it was holding *for*
+  a store and nothing about how many sales the store was holding *from* the cloud. A box whose event
+  link had been down for a day looked exactly like one perfectly in sync. The heartbeat now carries
+  the count (it is the one rail that runs on a fixed interval whether or not the store has anything
+  else to say), and it lands on the Fleet screen as **Publish backlog** beside the relay backlog it
+  mirrors. A depth is a count and never an event body, so nothing personal travels with it.
+
+  A store that did not report shows **Not reported**, never `0`: an older edge, or one whose log
+  could not be read, must not read as caught up, and its silence never overwrites the last depth it
+  did report. The reporting instant travels with the depth, so a stale one reads as stale.
+  [ADR-0068](docs/adr/0068-fleet-liveness.md) Amendment 1.
+
+  **Upgrade note.** Additive migration `0049_store_outbox_depth.sql` adds two nullable columns to
+  `store_liveness`; it is applied idempotently on boot. `POST /sync/stores/{id}/heartbeat` now
+  accepts an **optional** JSON body — an edge running the older binary posts nothing and is recorded
+  exactly as before, so no `PROTOCOL_VERSION` change and no ordering constraint between deploying
+  the cloud and updating the stores.
+
 ### Fixed
 
 - **The store hub stops reporting a zero nobody measured** (production-readiness **O5**). The

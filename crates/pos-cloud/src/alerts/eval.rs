@@ -287,6 +287,8 @@ mod tests {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         }
     }
 

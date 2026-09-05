@@ -588,8 +588,11 @@ where
     );
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
-    let heartbeat_client = HeartbeatClient::new(
+    // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet
+    // console can see a box whose events are piling up behind a down link (ADR-0068).
+    let heartbeat_client = HeartbeatClient::reporting(
         HeartbeatHttpTransport::new(client.clone(), store_id),
+        Arc::clone(edge),
         HEARTBEAT_INTERVAL,
     );
     tokio::spawn(heartbeat_client.run(wait_for_shutdown(shutdown_rx.clone())));

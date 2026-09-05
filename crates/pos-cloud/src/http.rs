@@ -6101,6 +6101,13 @@ struct FleetStoreView {
     self_test_ok: Option<bool>,
     /// Unix ms of the store's most recent OTA report, or `null`.
     reported_at_ms: Option<i64>,
+    /// How many events the store had committed and not yet published as of its last heartbeat, or
+    /// `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
+    /// *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
+    /// is not a store that is caught up — so the console renders the two differently.
+    outbox_depth: Option<u64>,
+    /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
+    outbox_reported_at_ms: Option<i64>,
 }
 
 impl FleetStoreView {
@@ -6137,6 +6144,10 @@ impl FleetStoreView {
             self_test_ok: row.self_test_ok,
             reported_at_ms: row
                 .reported_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            outbox_depth: row.outbox_depth,
+            outbox_reported_at_ms: row
+                .outbox_reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
         }
     }
@@ -15544,6 +15555,7 @@ async fn edge_heartbeat<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
+    body: axum::body::Bytes,
 ) -> Response
 where
     S: Clone + Send + Sync + 'static,
@@ -15568,15 +15580,54 @@ where
     if let Err(forbidden) = require_store(&grant, store_id) {
         return forbidden.into_response();
     }
+    let outbox_depth = match heartbeat_body(&body) {
+        Ok(report) => report.outbox_depth,
+        // A body that is present and will not parse is the caller's mistake; swallowing it would let
+        // a store report nothing forever while believing it reported.
+        Err(error) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("the heartbeat body is not a heartbeat report: {error}"),
+                &[("outbox_depth", "INVALID_VALUE")],
+            );
+        }
+    };
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app
         .config_trees
-        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now())
+        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now(), outbox_depth)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
+///
+/// Every field is optional and the whole body is optional, because the body is younger than the
+/// route: a store running an older binary posts nothing at all, and must keep being recorded as
+/// alive rather than refused for sending the empty body it has always sent.
+#[derive(Debug, Default, serde::Deserialize)]
+struct HeartbeatBody {
+    /// How many events the store has committed and not yet published — its own publish backlog, the
+    /// opposite direction from the relay backlog the fleet row already carries. `None` when the store
+    /// did not say, which is a different answer from zero and leaves the recorded depth alone.
+    #[serde(default)]
+    outbox_depth: Option<u64>,
+}
+
+/// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —
+/// nothing reported, which the store layer keeps distinct from a reported zero.
+///
+/// # Errors
+///
+/// The decode error, for the caller to phrase as a refusal.
+fn heartbeat_body(body: &[u8]) -> Result<HeartbeatBody, serde_json::Error> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(HeartbeatBody::default());
+    }
+    serde_json::from_slice(body)
 }
 
 // --- The interactive super-admin surface (`/admin`) ---------------------------------------------

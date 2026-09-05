@@ -753,6 +753,9 @@ type ConfigRows = HashMap<(TenantId, StoreId), Versioned<ConfigTreeState>>;
 struct FakeConfigTrees {
     rows: Arc<Mutex<ConfigRows>>,
     seen: Arc<Mutex<HashMap<(TenantId, StoreId), RecordedSeen>>>,
+    /// The publish backlog a heartbeat last reported, mirroring `store_liveness.outbox_depth`. A
+    /// heartbeat that reported none leaves the entry alone, as the adapter's `COALESCE` does.
+    outbox: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -764,6 +767,15 @@ impl FakeConfigTrees {
     /// The `(held_version, seen_at_ms)` last recorded for a store, or `None` if it never checked in.
     fn recorded_seen(&self, tenant: TenantId, store: StoreId) -> Option<RecordedSeen> {
         self.seen
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .copied()
+    }
+
+    /// The publish backlog a heartbeat last reported for a store, or `None` if none ever did.
+    fn recorded_outbox_depth(&self, tenant: TenantId, store: StoreId) -> Option<u64> {
+        self.outbox
             .lock()
             .expect("lock")
             .get(&(tenant, store))
@@ -870,6 +882,7 @@ impl ConfigTreeStore for FakeConfigTrees {
         tenant: TenantId,
         store: StoreId,
         seen_at: Timestamp,
+        outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
         self.seen
@@ -878,6 +891,14 @@ impl ConfigTreeStore for FakeConfigTrees {
             .entry((tenant, store))
             .and_modify(|entry| entry.1 = seen_at.as_milliseconds_since_epoch())
             .or_insert((None, seen_at.as_milliseconds_since_epoch()));
+        // A depth the store did not report leaves the last one it did alone — the adapter's
+        // `COALESCE`, so a test that passes here is not passing on a laxer store.
+        if let Some(depth) = outbox_depth {
+            self.outbox
+                .lock()
+                .expect("lock")
+                .insert((tenant, store), depth);
+        }
         Ok(())
     }
 }
@@ -2839,6 +2860,84 @@ async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
         seen_at, NOW_MS,
         "the contact instant is the server clock's now"
     );
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        None,
+        "a heartbeat that reports no depth records none — an empty object is not a reported zero"
+    );
+}
+
+#[tokio::test]
+async fn a_heartbeat_reports_the_stores_own_publish_backlog() {
+    // Track O6: `EventStore::outbox_depth` had no production caller, so a store whose events were
+    // piling up behind a down link looked identical to one perfectly in sync. The heartbeat is the
+    // one rail that runs on a fixed interval whether or not the store has anything else to say, so
+    // it carries the count — and only a count, never an event body (`docs/pos-spec.md` §13).
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/heartbeat");
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+
+    let beat = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({ "outbox_depth": 128 }),
+            &token,
+        ))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        Some(128),
+        "the depth the store reported is the depth the cloud recorded"
+    );
+
+    // An edge older than the body posts nothing at all, and must keep being recorded as alive
+    // rather than refused for sending the empty body it has always sent — and its silence must not
+    // erase the depth a newer report left standing.
+    let bodyless = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("build the request");
+    let beat = router
+        .clone()
+        .oneshot(bodyless)
+        .await
+        .expect("route the bodyless heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        Some(128),
+        "silence leaves the last reported depth standing rather than zeroing it"
+    );
+
+    // A body that is present and will not parse is the caller's mistake: swallowing it would let a
+    // store report nothing forever while believing it reported.
+    let malformed = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from("{\"outbox_depth\": \"lots\"}"))
+        .expect("build the request");
+    let refused = router
+        .oneshot(malformed)
+        .await
+        .expect("route the malformed heartbeat");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -5191,6 +5290,7 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _tenant: TenantId,
         _store: StoreId,
         _seen_at: Timestamp,
+        _outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }
@@ -5795,6 +5895,8 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -5858,6 +5960,8 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -5910,6 +6014,8 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 installed_version: Some("v1.2.3".to_owned()),
                 self_test_ok: Some(true),
                 reported_at: Some(seen_ago(1_000)),
+                outbox_depth: Some(0),
+                outbox_reported_at: Some(seen_ago(1_000)),
             },
         )
         .with_row(
@@ -5927,6 +6033,8 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 installed_version: None,
                 self_test_ok: None,
                 reported_at: None,
+                outbox_depth: Some(41),
+                outbox_reported_at: Some(seen_ago(600_000)),
             },
         );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -5959,6 +6067,10 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
         "the fleet read surfaces the reported OTA version"
     );
     assert_eq!(online["self_test_ok"], true, "and its self-test outcome");
+    assert_eq!(
+        online["outbox_depth"], 0,
+        "a store that reported an empty outbox has nothing waiting to publish"
+    );
 
     let offline = &rows[1];
     assert_eq!(
@@ -5972,6 +6084,15 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
     assert_eq!(offline["config_version_held"], "v-old");
     assert_eq!(offline["config_version_published"], "v-current");
     assert_eq!(offline["relay_backlog"], 3);
+    assert_eq!(
+        offline["outbox_depth"], 41,
+        "and its own publish backlog — the opposite direction, and the one that was invisible"
+    );
+    assert_eq!(
+        offline["outbox_reported_at_ms"],
+        seen_ago(600_000).as_milliseconds_since_epoch(),
+        "the depth travels with the heartbeat that reported it, so a stale one reads as stale"
+    );
     assert_eq!(offline["relay_oldest_pending_at_ms"], NOW_MS - 120_000);
 }
 
@@ -5993,6 +6114,8 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -6040,6 +6163,8 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
