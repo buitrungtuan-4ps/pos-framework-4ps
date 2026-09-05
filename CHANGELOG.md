@@ -16,6 +16,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud compiles a store's approved devices into its `devices` config node**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2b).
+  `POST /admin/devices/publish` reads the store's *approved* proposals and versions them onto the
+  `devices` key, so the edge learns where its printers are through the config-pull it already runs —
+  and still knows after a reboot with the WAN down, because that node is persisted locally and
+  restored at boot.
+
+  The proposal's identifier becomes the device's: the approval is what turns a proposal into a
+  device, and reusing it means the audit trail on the proposal and the device the store addresses are
+  the same thing rather than two ids to correlate by hand.
+
+  A row approved before this existed — one with no connection recorded — is **skipped, not published
+  as a guess**, and the response says how many were held back. The guess would have to be `network`,
+  which silently disables the cash drawer on a USB printer. A `kind` or `connection` this build does
+  not recognise keeps its token instead of failing the publish, matching what the store does on the
+  other end: a node that refused to compile over one unfamiliar device would take a shop's receipt
+  printer with it.
+
 - **Approving a device now records how it is attached and which kitchen it serves**
   ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2a).
   A proposal carries only what a box can *discover* on its LAN — kind, name, address. It cannot

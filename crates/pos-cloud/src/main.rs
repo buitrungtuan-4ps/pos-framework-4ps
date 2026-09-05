@@ -446,6 +446,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Device publish (ADR-0100, C2 slice 2b): compile the store's *approved* printers and kitchen
+        // displays into the `devices` config node, so the edge learns where they are through the
+        // config-pull it already runs — and still knows after a reboot with the WAN down, because
+        // that node is persisted locally and restored at boot.
+        .merge(http::device_publish_router(
+            store.device_proposals(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Console audit read (ADR-0069 slice 4): the filterable Audit screen reads the append-only
         // trail here. It carries the concrete audit store (the recorder the write routes hold exposes
         // only `record`), behind the same super-admin session guard as the other reads.

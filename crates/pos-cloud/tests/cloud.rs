@@ -3397,6 +3397,143 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     );
 }
 
+/// The approved devices compile into the `devices` config node, and only the approved ones
+/// (**ADR-0100**, C2 slice 2b).
+///
+/// The store learns where its printers are through the config-pull it already runs, which is what
+/// makes the knowledge survive a reboot with the WAN down. Asserted end to end — propose, approve,
+/// publish, read the tree — because the value of this slice is precisely that the three sit on one
+/// path; each half passing in isolation would prove nothing about the join.
+/// The propose+approve surface and the publish surface over one device store and one config tree —
+/// production's two `merge`s, in a test.
+fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
+    let devices = FakeDevices::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::device_router(
+            devices.clone(),
+            admin.clone(),
+            keys.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::device_publish_router(
+            devices,
+            trees,
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+}
+
+/// Proposes one discovered printer and returns its id.
+async fn propose_printer(
+    router: &axum::Router,
+    token: &str,
+    store_ulid: &str,
+    name: &str,
+    address: &str,
+) -> String {
+    let proposal: serde_json::Value =
+        serde_json::json!({ "kind": "printer", "name": name, "address": address });
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &proposal,
+            token,
+        ))
+        .await
+        .expect("route the propose");
+    json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn approved_devices_compile_into_the_published_config_node() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // Two devices proposed; only one approved.
+    let counter =
+        propose_printer(&router, &token, &store_ulid, "Counter", "192.168.1.51:9100").await;
+    let oven = propose_printer(&router, &token, &store_ulid, "Oven", "192.168.1.52:9100").await;
+
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=usb"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "store_id": store_ulid.clone() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let summary = json_body(published).await;
+    assert_eq!(summary["device_count"], 1, "only the approved device");
+    assert_eq!(summary["skipped_count"], 0);
+
+    // The store reads the node the way its edge will: through the config pull.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the config read");
+    let document = json_body(effective).await;
+    let listed = document["devices"]["devices"]
+        .as_array()
+        .expect("the devices node is an array");
+    assert_eq!(listed.len(), 1);
+    let device = listed.first().expect("one device");
+    assert_eq!(
+        device["device_id"], counter,
+        "the proposal's id is the device's"
+    );
+    assert_eq!(device["address"], "192.168.1.51:9100");
+    assert_eq!(device["kind"], "DEVICE_KIND_PRINTER");
+    assert_eq!(
+        device["connection"], "DEVICE_CONNECTION_USB",
+        "the node carries the prefixed token, whatever the column spells"
+    );
+    assert!(
+        device["station_id"].is_null(),
+        "no station named means the counter's receipt printer"
+    );
+    assert_ne!(
+        device["device_id"], oven,
+        "the unapproved one is not published"
+    );
+}
+
 /// Approving without saying how the device is attached is refused, not guessed at (**ADR-0100**).
 ///
 /// The guess would have to be `network`, which is safe — a network device never opens a cash drawer
