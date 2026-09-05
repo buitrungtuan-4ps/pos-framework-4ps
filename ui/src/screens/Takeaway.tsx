@@ -5,7 +5,7 @@ import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
-import { settle, tenderAccepted, tipsEnabled } from "../state/store";
+import { cashDenominations, settle, tenderAccepted, tipsEnabled } from "../state/store";
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
 // (ADR-0093).
@@ -58,7 +58,7 @@ export function Takeaway() {
   // one that survived the fix to `Pay.tsx` because it was written the same way one file over.
   const quickCash = () => {
     const owed = total() + tip();
-    return [owed, ...quickCashFor(currency(), owed)];
+    return [owed, ...quickCashFor(cashDenominations(), owed)];
   };
 
   const back = () => {

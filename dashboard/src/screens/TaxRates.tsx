@@ -5,11 +5,23 @@
 // the whole table; Publish pushes it to the store in context as the `tax` config node the edge
 // applies. Rates are tenant-level (authored once); publishing is per-store, so it needs a store in the
 // top-bar context.
+//
+// Each priced cell also takes a **breakdown** (ADR-0104): the named parts the invoice prints, typed
+// as `CGST 2.5, SGST 2.5`. India needs it — an intra-state tax invoice must show the two halves
+// separately, because they go to different governments — and most of the world leaves it blank,
+// which means "print one line". The parts must sum to the cell's own rate; the screen says so
+// inline, and the server refuses a save where they do not.
 
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import { SALES_CHANNELS, type SalesChannel, type TaxClass, type TaxRate } from "../api/types";
+import {
+  SALES_CHANNELS,
+  type SalesChannel,
+  type TaxClass,
+  type TaxComponent,
+  type TaxRate,
+} from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
@@ -53,10 +65,53 @@ function percentToBps(text: string): number | null {
   return bps > MAX_BPS ? null : bps;
 }
 
+/**
+ * A breakdown as `CGST 2.5, SGST 2.5` into named parts, or `null` when any part is malformed
+ * (ADR-0104).
+ *
+ * `null` rather than dropping the bad part, because a breakdown that silently loses a half would
+ * print an invoice missing a tax the guest paid — worse than refusing to save. The name is
+ * everything up to the last space so a two-word label survives; the rate is what follows it.
+ */
+function parseComponents(text: string): TaxComponent[] | null {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return [];
+  }
+  const parts: TaxComponent[] = [];
+  for (const chunk of trimmed.split(",")) {
+    const piece = chunk.trim();
+    if (piece === "") {
+      continue;
+    }
+    const split = piece.lastIndexOf(" ");
+    if (split <= 0) {
+      return null;
+    }
+    const name = piece.slice(0, split).trim();
+    const bps = percentToBps(piece.slice(split + 1));
+    if (name === "" || bps === null) {
+      return null;
+    }
+    parts.push({ name, rate_bps: bps });
+  }
+  return parts;
+}
+
+/** Named parts back into the text the input shows. */
+function formatComponents(components: readonly TaxComponent[]): string {
+  return components
+    .map((component) => `${component.name} ${bpsToPercent(component.rate_bps)}`)
+    .join(", ");
+}
+
 export function TaxRates() {
   const [classes, setClasses] = createSignal<TaxClass[]>([]);
   // The edited grid: cellKey → the percent text in the input (empty string means "not priced").
   const [cells, setCells] = createSignal<Record<string, string>>({});
+  // The breakdown beside each cell: cellKey → `CGST 2.5, SGST 2.5`. Empty means one printed line,
+  // which is most of the world (ADR-0104).
+  const [breakdowns, setBreakdowns] = createSignal<Record<string, string>>({});
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -90,10 +145,14 @@ export function TaxRates() {
       setClasses(taxClasses.filter((row) => row.status === "active"));
       setVersion(rates.etag);
       const grid: Record<string, string> = {};
+      const parts: Record<string, string> = {};
       for (const rate of rates.value) {
-        grid[cellKey(rate.tax_class_id, rate.sales_channel)] = bpsToPercent(rate.rate_bps);
+        const key = cellKey(rate.tax_class_id, rate.sales_channel);
+        grid[key] = bpsToPercent(rate.rate_bps);
+        parts[key] = formatComponents(rate.components ?? []);
       }
       setCells(grid);
+      setBreakdowns(parts);
       setLoaded(true);
     } catch (caught) {
       await fail(caught);
@@ -109,17 +168,58 @@ export function TaxRates() {
     setCells({ ...cells(), [cellKey(taxClassId, channel)]: value });
   };
 
+  const setBreakdown = (taxClassId: string, channel: SalesChannel, value: string) => {
+    setBreakdowns({ ...breakdowns(), [cellKey(taxClassId, channel)]: value });
+  };
+
+  /**
+   * Why a cell's breakdown cannot be saved, or `null` when it can.
+   *
+   * Shown beside the input rather than only on the save's refusal, because the operator typing
+   * `CGST 2.5, SGST 2` should not have to press Save to find out — and because a breakdown that does
+   * not add up is the one way this feature produces a document an auditor rejects.
+   */
+  const breakdownProblem = (taxClassId: string, channel: SalesChannel): MessageKey | null => {
+    const key = cellKey(taxClassId, channel);
+    const text = breakdowns()[key] ?? "";
+    if (text.trim() === "") {
+      return null;
+    }
+    const parts = parseComponents(text);
+    if (parts === null) {
+      return "taxRates.breakdownMalformed";
+    }
+    const rate = percentToBps(cells()[key] ?? "");
+    if (rate === null) {
+      return "taxRates.breakdownNeedsRate";
+    }
+    const total = parts.reduce((sum, part) => sum + part.rate_bps, 0);
+    return total === rate ? null : "taxRates.breakdownUnbalanced";
+  };
+
+  /** Whether any cell's breakdown would be refused — the Save button's gate. */
+  const anyBreakdownProblem = () =>
+    classes().some((taxClass) =>
+      SALES_CHANNELS.some(
+        (channel) => breakdownProblem(taxClass.tax_class_id, channel) !== null,
+      ),
+    );
+
   // Every non-blank, in-range cell becomes a rate row; a blank or invalid cell is simply absent.
   const rows = (): TaxRate[] => {
     const out: TaxRate[] = [];
     for (const taxClass of classes()) {
       for (const channel of SALES_CHANNELS) {
-        const bps = percentToBps(cells()[cellKey(taxClass.tax_class_id, channel)] ?? "");
+        const key = cellKey(taxClass.tax_class_id, channel);
+        const bps = percentToBps(cells()[key] ?? "");
         if (bps !== null) {
           out.push({
             tax_class_id: taxClass.tax_class_id,
             sales_channel: channel,
             rate_bps: bps,
+            // A malformed breakdown never reaches the server: `anyBreakdownProblem` disables Save,
+            // and this is the second line rather than a silent empty list.
+            components: parseComponents(breakdowns()[key] ?? "") ?? [],
           });
         }
       }
@@ -214,6 +314,25 @@ export function TaxRates() {
                                     %
                                   </span>
                                 </div>
+                                <input
+                                  type="text"
+                                  class="mt-1 min-h-touch w-40 rounded-token border border-line bg-surface-raised px-2 text-xs text-ink"
+                                  placeholder={t("taxRates.breakdownPlaceholder")}
+                                  aria-label={`${taxClass.name} ${t(CHANNEL_LABEL[channel])} ${t("taxRates.breakdown")}`}
+                                  value={breakdowns()[cellKey(taxClass.tax_class_id, channel)] ?? ""}
+                                  onInput={(event) =>
+                                    setBreakdown(
+                                      taxClass.tax_class_id,
+                                      channel,
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                />
+                                <Show when={breakdownProblem(taxClass.tax_class_id, channel)}>
+                                  {(problem) => (
+                                    <p class="mt-1 w-40 text-xs text-danger">{t(problem())}</p>
+                                  )}
+                                </Show>
                               </td>
                             )}
                           </For>
@@ -224,9 +343,10 @@ export function TaxRates() {
                 </table>
               </Show>
             </div>
-            <p class="mb-3 text-sm text-ink-muted">{t("taxRates.blankHint")}</p>
+            <p class="mb-1 text-sm text-ink-muted">{t("taxRates.blankHint")}</p>
+            <p class="mb-3 text-sm text-ink-muted">{t("taxRates.breakdownHint")}</p>
             <div class="flex flex-wrap items-center gap-3">
-              <Button disabled={busy()} onClick={() => void save()}>
+              <Button disabled={busy() || anyBreakdownProblem()} onClick={() => void save()}>
                 {t("action.save")}
               </Button>
               <Button

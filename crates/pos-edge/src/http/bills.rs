@@ -186,7 +186,7 @@ where
 
     // After the commit, never before: a printer that is down must not unwind a settled bill, and a
     // rolled-back settle must never have printed (ADR-0100, `Edge::settle_bill`).
-    let mut response = BillResponse::from(view);
+    let mut response = BillResponse::from(view.clone());
     if view.print_receipt {
         let printed = print_receipt_for(printers.as_deref(), &edge, &view).await;
         response.receipt_print = Some(printed.as_wire().to_owned());
@@ -206,8 +206,8 @@ async fn print_receipt_for<S>(
 where
     S: EventStore + Send + Sync + 'static,
 {
-    let (Some(printers), Some(receipt_number), Some(total)) =
-        (printers, view.receipt_number, view.total_due)
+    let (Some(printers), Some(receipt_number), Some(totals)) =
+        (printers, view.receipt_number, view.totals.as_ref())
     else {
         return PrintOutcome::NoPrinter;
     };
@@ -220,7 +220,7 @@ where
             // itself makes (ADR-0025).
             EventId::new(view.bill_id.as_ulid()),
             receipt_number,
-            total,
+            totals,
         )
         .await
 }

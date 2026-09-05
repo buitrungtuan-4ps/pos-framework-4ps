@@ -53,6 +53,7 @@ use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
+use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 
@@ -90,6 +91,18 @@ struct PublishedLocale {
     currency_code: String,
     timezone: String,
     cutoff_hour: u8,
+    /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
+    /// node published before this field existed still applies, as the exclusive posture it meant.
+    #[serde(default)]
+    prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units (ADR-0105). Absent means no
+    /// rounding, which is what every store did before the field existed.
+    #[serde(default)]
+    cash_rounding_increment: Option<i64>,
+    /// The notes the till offers as quick-cash keys, in minor units. Absent means the exact amount
+    /// only, which is the front end's own fallback, so an older publish changes nothing.
+    #[serde(default)]
+    cash_denominations: Vec<i64>,
 }
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
@@ -226,6 +239,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.devices = devices;
     }
+    // The `store_profile` node (ADR-0106): who this store legally is, as the receipt prints it. An
+    // absent or unparseable node leaves the previous profile in place, which is the never-blank rule
+    // applied where it matters most — a store mid-service must not start printing receipts with no
+    // name because one publish was malformed.
+    if let Some(profile) = document
+        .get("store_profile")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<StoreProfile>(&text).ok())
+    {
+        session.profile = profile;
+    }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
     // default; a store now bills the authored rates. Absent or unparseable leaves the base table
@@ -318,6 +342,20 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         if let Ok(cutoff) = CutoffHour::new(locale.cutoff_hour) {
             session.cutoff = cutoff;
         }
+        // A bool cannot fail to parse, so unlike its siblings this one applies unconditionally —
+        // which is also what makes turning the posture back off a publish rather than a release.
+        session.prices_include_tax = locale.prices_include_tax;
+        // Likewise: both have a `serde(default)` that *is* the previous behaviour, so applying them
+        // unconditionally is what lets a store turn cash rounding off, or clear its quick-cash keys,
+        // by publishing — rather than by waiting for a build (ADR-0105). A non-positive increment is
+        // dropped rather than obeyed: `round_to_increment` needs a non-zero step, and a negative one
+        // is a typo nobody means.
+        session.cash_rounding_increment = locale
+            .cash_rounding_increment
+            .filter(|increment| *increment > 0);
+        session
+            .cash_denominations
+            .clone_from(&locale.cash_denominations);
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
     // itself against, and the signing keys revocation has retired. The cloud has published this node
@@ -1166,6 +1204,85 @@ mod tests {
             "VND",
             "the valid currency still applied"
         );
+    }
+
+    #[test]
+    fn a_locale_document_carries_the_country_s_till_money() {
+        // ADR-0105: cash rounding and the notes a guest carries are country facts, published rather
+        // than compiled in. `bill_input` passed a literal `None` for rounding until this arrived.
+        let india = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "INR",
+                "timezone": "Asia/Kolkata",
+                "cutoff_hour": 4,
+                "prices_include_tax": true,
+                "cash_rounding_increment": 100,
+                "cash_denominations": [1_000, 2_000, 5_000, 10_000],
+            }}),
+        );
+        assert_eq!(india.cash_rounding_increment, Some(100), "₹1 in paise");
+        assert_eq!(india.cash_denominations, vec![1_000, 2_000, 5_000, 10_000]);
+        assert!(india.prices_include_tax, "MRP is inclusive");
+
+        // Japan publishes no increment at all, and that has to *clear* a previously rounding store
+        // rather than leave it — otherwise a box could never stop rounding without a release.
+        let japan = session_from_config(
+            &india,
+            &serde_json::json!({ "locale": {
+                "currency_code": "JPY",
+                "timezone": "Asia/Tokyo",
+                "cutoff_hour": 6,
+                "prices_include_tax": true,
+                "cash_denominations": [1_000, 5_000, 10_000],
+            }}),
+        );
+        assert_eq!(
+            japan.cash_rounding_increment, None,
+            "the 1-yen coin circulates, so there is nothing to round to"
+        );
+        assert_eq!(japan.cash_denominations, vec![1_000, 5_000, 10_000]);
+    }
+
+    #[test]
+    fn a_locale_node_published_before_the_till_money_existed_still_applies() {
+        // The additive-in-both-directions property: a node written by an older cloud carries none of
+        // the three keys, and a newer edge reading it gets the behaviour that node meant — exclusive
+        // prices, no rounding, no quick-cash keys.
+        let rebuilt = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }}),
+        );
+        assert_eq!(rebuilt.currency.as_str(), "VND");
+        assert!(!rebuilt.prices_include_tax);
+        assert_eq!(rebuilt.cash_rounding_increment, None);
+        assert!(rebuilt.cash_denominations.is_empty());
+    }
+
+    #[test]
+    fn a_rounding_increment_of_zero_is_dropped_rather_than_obeyed() {
+        // `round_to_increment` needs a non-zero step, and a negative one is a typo nobody means. The
+        // cloud refuses both at the publish; this is the second line, because a store may be reading
+        // a node an older or hand-edited publish wrote.
+        for bad in [0, -500] {
+            let rebuilt = session_from_config(
+                &EdgeSession::bootstrap(),
+                &serde_json::json!({ "locale": {
+                    "currency_code": "VND",
+                    "timezone": "Asia/Ho_Chi_Minh",
+                    "cutoff_hour": 4,
+                    "cash_rounding_increment": bad,
+                }}),
+            );
+            assert_eq!(
+                rebuilt.cash_rounding_increment, None,
+                "{bad} is not an increment"
+            );
+        }
     }
 
     /// A `menu` node whose entry carries per-locale names, plus a `locale` node naming the store's

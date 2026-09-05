@@ -171,6 +171,11 @@ const MIGRATION_0048: &str = include_str!("../migrations/0048_device_approval_fa
 /// publish was invisible to everyone.
 const MIGRATION_0049: &str = include_str!("../migrations/0049_store_outbox_depth.sql");
 
+/// How a rate is broken out on the invoice (ADR-0104, ADR-0105): India's CGST and SGST as separate
+/// lines, because the halves go to different governments. `countries/in` publishes the breakdown as
+/// a default and the console could not edit it.
+const MIGRATION_0050: &str = include_str!("../migrations/0050_tax_rate_components.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -425,6 +430,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0049)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0050)
             .await
             .map_err(unavailable)
     }

@@ -104,8 +104,9 @@ use pos_proto::ids::{
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
-use pos_proto::locale::TaxRate;
+use pos_proto::locale::{CountryCode, TaxComponent, TaxRate};
 use pos_proto::money::CurrencyCode;
+use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
@@ -3810,6 +3811,204 @@ where
     }
 }
 
+// --- Store profile publish (`/admin/config/store-profile`, ADR-0106) ----------------------------
+
+/// A `PUT /admin/config/store-profile` body: the `(tenant, store)` and who that store legally is.
+///
+/// Every field is text the operator supplies. A registered address is written differently in every
+/// country, so the framework imposes no shape on it; the one field with a checkable shape is the tax
+/// registration number, and the check is the **country module's**
+/// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+#[derive(Debug, Clone, Deserialize)]
+struct PublishStoreProfileRequest {
+    tenant_id: String,
+    store_id: String,
+    /// The registered name — what the law wants on the paper.
+    #[serde(default)]
+    legal_name: String,
+    #[serde(default)]
+    trading_name: Option<String>,
+    #[serde(default)]
+    address_lines: Vec<String>,
+    #[serde(default)]
+    tax_registration_number: Option<String>,
+    #[serde(default)]
+    tax_registration_label: Option<String>,
+    #[serde(default)]
+    contact_lines: Vec<String>,
+    #[serde(default)]
+    footer_lines: Vec<String>,
+    /// Which country's rule to check the registration number's *shape* against, as an ISO 3166-1
+    /// alpha-2 code. Optional: a fork whose country module is not compiled into this cloud still
+    /// publishes a profile, with the number stored unchecked rather than the publish refused.
+    #[serde(default)]
+    country_code: Option<String>,
+}
+
+/// The collaborators the store-profile publish needs.
+#[derive(Clone)]
+struct ConfigStoreProfileState<Cfg, A, C> {
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+    countries: Arc<CountryRegistry>,
+}
+
+/// Builds the store-profile publish sub-router ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+///
+/// One route, behind [`ConsolePermission::PublishConfig`]: write the store's registered identity as
+/// its `store_profile` config node. The edge applies it to `EdgeSession::profile` and the receipt is
+/// composed from it — which is what turns the store's paper into a document a Japanese or Indian
+/// auditor accepts.
+pub fn config_store_profile_router<Cfg, A, C>(
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+    countries: Arc<CountryRegistry>,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/store-profile",
+            axum::routing::put(admin_publish_store_profile::<Cfg, A, C>),
+        )
+        .with_state(ConfigStoreProfileState {
+            config_trees,
+            admin,
+            clock,
+            audit,
+            countries,
+        })
+}
+
+/// Trims a field, and treats blank as absent — a store that typed a space must not get a receipt
+/// with a blank line where its address should be.
+fn trimmed(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+
+/// Trims a list of printed lines and drops the blank ones.
+fn trimmed_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Validates and writes a store's registered identity as its `store_profile` node.
+async fn admin_publish_store_profile<Cfg, A, C>(
+    State(state): State<ConfigStoreProfileState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishStoreProfileRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+
+    let registration = trimmed(request.tax_registration_number.as_deref());
+    // Format only, never registration: whether a number *exists* is a call to a tax authority and
+    // belongs behind `Fiscalization` (ADR-0027). This catches the typo that would otherwise reach an
+    // invoice — and only when this cloud carries the country's module, so a fork serving a market it
+    // has not written a pack for still publishes.
+    if let (Some(number), Some(module)) = (
+        registration.as_deref(),
+        trimmed(request.country_code.as_deref())
+            .and_then(|code| CountryCode::parse(&code).ok())
+            .and_then(|code| state.countries.get(code)),
+    ) && !module.is_valid_tax_code(number)
+    {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "tax_registration_number is not the shape {} issues",
+                module.display_name()
+            )
+            .as_str(),
+            &[("tax_registration_number", "INVALID_FORMAT")],
+        );
+    }
+
+    let profile = StoreProfile {
+        legal_name: request.legal_name.trim().to_owned(),
+        trading_name: trimmed(request.trading_name.as_deref()),
+        address_lines: trimmed_lines(&request.address_lines),
+        tax_registration_number: registration,
+        tax_registration_label: trimmed(request.tax_registration_label.as_deref()),
+        contact_lines: trimmed_lines(&request.contact_lines),
+        footer_lines: trimmed_lines(&request.footer_lines),
+    };
+    let Ok(profile_value) = serde_json::to_value(&profile) else {
+        tracing::error!("could not serialise a store profile");
+        return service_unavailable("config-tree");
+    };
+
+    let nodes = vec![("store_profile".to_owned(), profile_value)];
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
+    };
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "config.store_profile.publish",
+        "store",
+        &store_id.to_string(),
+        None,
+        // The registered identity is the store's own business data, not a person's, so the trail
+        // records what was published — which is the point of an audit trail on a legal document.
+        serde_json::to_value(&profile).ok(),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(PublishedConfig {
+            config_version_id: id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 // --- Locale publish (`/admin/config/locale`, ADR-0074, Track M4) --------------------------------
 
 /// The collaborators the locale-publish route needs: the config-tree store the `locale` node is
@@ -3837,6 +4036,21 @@ struct PublishLocaleRequest {
     /// item's default name, exactly as before.
     #[serde(default)]
     display_language: Option<String>,
+    /// Whether this store's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)): Japan's 税込 and
+    /// India's MRP are `true`, Vietnam's `++` is `false`. Defaults to `false`, which is what every
+    /// store did before the field existed.
+    #[serde(default)]
+    prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units — `1000` for Vietnam's thousand
+    /// đồng, `100` for India's rupee, absent for Japan
+    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    #[serde(default)]
+    cash_rounding_increment: Option<i64>,
+    /// The notes the till offers as quick-cash keys, in minor units. Absent or empty means the exact
+    /// amount only, which is the honest answer rather than a guess.
+    #[serde(default)]
+    cash_denominations: Vec<i64>,
 }
 
 /// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -3868,6 +4082,49 @@ where
             clock,
             audit,
         })
+}
+
+/// Checks the till-money half of a locale publish and returns the denominations to store
+/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+///
+/// Both refusals are about a number that cannot mean what it says. A rounding increment of zero or
+/// less is a typo rather than a posture — `round_to_increment` needs a non-zero step, and "round to
+/// nothing" is expressed by omitting the field — and a note worth nothing is not a note. Refused
+/// here rather than dropped at the edge, so the person who typed it finds out.
+///
+/// The denominations come back sorted and de-duplicated rather than as given: the till lays its keys
+/// out in this order, and a repeated note would be a repeated button.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_denominations(request: &PublishLocaleRequest) -> Result<Vec<i64>, Response> {
+    if request
+        .cash_rounding_increment
+        .is_some_and(|increment| increment <= 0)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cash_rounding_increment must be a positive number of minor units, or absent for no \
+             rounding",
+            &[("cash_rounding_increment", "OUT_OF_RANGE")],
+        ));
+    }
+    if request
+        .cash_denominations
+        .iter()
+        .any(|denomination| *denomination <= 0)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cash_denominations are note values in minor units and must all be positive",
+            &[("cash_denominations", "OUT_OF_RANGE")],
+        ));
+    }
+    let mut denominations = request.cash_denominations.clone();
+    denominations.sort_unstable();
+    denominations.dedup();
+    Ok(denominations)
 }
 
 /// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
@@ -3923,10 +4180,18 @@ where
             &[("cutoff_hour", "OUT_OF_RANGE")],
         );
     }
+    let denominations = match checked_denominations(&request) {
+        Ok(denominations) => denominations,
+        Err(refusal) => return refusal,
+    };
+
     let mut locale_value = serde_json::json!({
         "currency_code": request.currency_code,
         "timezone": request.timezone,
         "cutoff_hour": request.cutoff_hour,
+        "prices_include_tax": request.prices_include_tax,
+        "cash_rounding_increment": request.cash_rounding_increment,
+        "cash_denominations": denominations,
     });
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
@@ -7961,12 +8226,25 @@ struct TaxRateState<Tax, Cat, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// One authored tax-rate row on the wire: the class id, the channel's wire token, and the rate in
-/// basis points (10% is `1000`).
+/// One authored tax-rate row on the wire: the class id, the channel's wire token, the rate in basis
+/// points (10% is `1000`), and how that rate is broken out on the invoice.
 #[derive(Debug, Clone, serde::Serialize)]
 struct TaxRateView {
     tax_class_id: String,
     sales_channel: String,
+    rate_bps: u32,
+    /// The named parts the invoice prints, which must sum to `rate_bps`
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty for a rate
+    /// printed as one line, which is most of the world.
+    components: Vec<TaxComponentView>,
+}
+
+/// One named part of a rate, on the wire.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct TaxComponentView {
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
+    name: String,
+    /// This part's share, in basis points.
     rate_bps: u32,
 }
 
@@ -7983,6 +8261,10 @@ struct TaxRateRowRequest {
     tax_class_id: String,
     sales_channel: String,
     rate_bps: u32,
+    /// How the rate is broken out on the invoice. `#[serde(default)]`, so a console that predates
+    /// ADR-0104 still saves a grid and every row keeps printing as one line.
+    #[serde(default)]
+    components: Vec<TaxComponentView>,
 }
 
 /// Builds the tax-rate sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -8024,7 +8306,134 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
         tax_class_id: entry.tax_class_id.to_string(),
         sales_channel: entry.sales_channel.as_wire().to_owned(),
         rate_bps: entry.rate.basis_points(),
+        components: entry
+            .components
+            .iter()
+            .map(|component| TaxComponentView {
+                name: component.name.clone(),
+                rate_bps: component.rate.basis_points(),
+            })
+            .collect(),
     }
+}
+
+/// Checks one row's breakdown and returns the components to store
+/// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+///
+/// The invariant is that the parts sum to the row's own rate, and it is checked **here**, where the
+/// table is authored, rather than at the till. A row that fails it would print an invoice whose
+/// lines do not add up to the tax charged — which is the one way this feature can produce a document
+/// an auditor rejects, and the refusal says which row and by how much so the operator can fix it
+/// rather than hunt for it.
+///
+/// An empty list always passes: it is "no breakdown", not "a breakdown summing to zero".
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_components(row: &TaxRateRowRequest) -> Result<Vec<TaxComponent>, Response> {
+    if row.components.is_empty() {
+        return Ok(Vec::new());
+    }
+    if row
+        .components
+        .iter()
+        .any(|component| component.name.trim().is_empty())
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a tax component has no name, and the name is what the invoice prints",
+            &[("rates", "MISSING_FIELD")],
+        ));
+    }
+    let total: u64 = row
+        .components
+        .iter()
+        .map(|component| u64::from(component.rate_bps))
+        .sum();
+    if total != u64::from(row.rate_bps) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "a rate's components sum to {total} basis points but the rate is {}; the invoice \
+                 would print lines that do not add up to the tax charged",
+                row.rate_bps
+            )
+            .as_str(),
+            &[("rates", "OUT_OF_RANGE")],
+        ));
+    }
+    Ok(row
+        .components
+        .iter()
+        .map(|component| {
+            TaxComponent::new(
+                component.name.trim(),
+                TaxRate::from_basis_points(component.rate_bps),
+            )
+        })
+        .collect())
+}
+
+/// Validates a whole submitted grid into the entries to store, or the one refusal that stops it.
+///
+/// Every check is on the row rather than on the table: an unknown class or channel, a rate above
+/// 100 %, a `(class, channel)` pair submitted twice, and a breakdown that does not sum to its own
+/// rate. The first failure returns, because a partly-applied grid is not a state this resource has —
+/// a save replaces the tenant's whole table or none of it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_entries(
+    rows: &[TaxRateRowRequest],
+    known: &BTreeSet<TaxClassId>,
+) -> Result<Vec<TaxRateEntry>, Response> {
+    let mut entries = Vec::with_capacity(rows.len());
+    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
+    for row in rows {
+        let tax_class_id = match parse_ulid_fields([("tax_class_id", &row.tax_class_id)]) {
+            Ok([tax_class_id]) => TaxClassId::new(tax_class_id),
+            Err(refusal) => return Err(refusal),
+        };
+        if !known.contains(&tax_class_id) {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate names an unknown tax class",
+                &[("rates", "UNKNOWN_REFERENCE")],
+            ));
+        }
+        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate names an unknown sales channel",
+                &[("rates", "INVALID_ENUM_VALUE")],
+            ));
+        };
+        if row.rate_bps > MAX_TAX_RATE_BPS {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tax rate exceeds 100%",
+                &[("rates", "OUT_OF_RANGE")],
+            ));
+        }
+        if !seen.insert((tax_class_id, sales_channel)) {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a (tax class, channel) pair is repeated",
+                &[("rates", "DUPLICATE")],
+            ));
+        }
+        entries.push(
+            TaxRateEntry::new(
+                tax_class_id,
+                sales_channel,
+                TaxRate::from_basis_points(row.rate_bps),
+            )
+            .with_components(checked_components(row)?),
+        );
+    }
+    Ok(entries)
 }
 
 /// A super-admin lists a tenant's authored tax rates.
@@ -8114,47 +8523,10 @@ where
             .collect(),
         Err(error) => return catalog_error_response(&error),
     };
-    let mut entries = Vec::with_capacity(request.rates.len());
-    let mut seen: BTreeSet<(TaxClassId, SalesChannel)> = BTreeSet::new();
-    for row in &request.rates {
-        let tax_class_id = match parse_ulid_fields([("tax_class_id", &row.tax_class_id)]) {
-            Ok([tax_class_id]) => TaxClassId::new(tax_class_id),
-            Err(refusal) => return refusal,
-        };
-        if !known.contains(&tax_class_id) {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate names an unknown tax class",
-                &[("rates", "UNKNOWN_REFERENCE")],
-            );
-        }
-        let Some(sales_channel) = SalesChannel::from_wire(&row.sales_channel) else {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate names an unknown sales channel",
-                &[("rates", "INVALID_ENUM_VALUE")],
-            );
-        };
-        if row.rate_bps > MAX_TAX_RATE_BPS {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tax rate exceeds 100%",
-                &[("rates", "OUT_OF_RANGE")],
-            );
-        }
-        if !seen.insert((tax_class_id, sales_channel)) {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a (tax class, channel) pair is repeated",
-                &[("rates", "DUPLICATE")],
-            );
-        }
-        entries.push(TaxRateEntry {
-            tax_class_id,
-            sales_channel,
-            rate: TaxRate::from_basis_points(row.rate_bps),
-        });
-    }
+    let entries = match checked_entries(&request.rates, &known) {
+        Ok(entries) => entries,
+        Err(refusal) => return refusal,
+    };
     match state
         .tax_rates
         .set_tax_rates(tenant_id, &entries, expected.as_ref())
@@ -12061,8 +12433,13 @@ fn subject_error_response(error: &RetentionError) -> Response {
 // --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
 
 /// One compiled country module as the console reads it: the code, human name, currency, preferred
-/// language, number format, and the default retention period. What the platform can serve — not a
-/// per-store setting, and not fiscalization.
+/// language, number format, the default retention period, and the till facts its coinage and its
+/// quoting habit fix. What the platform can serve — not a per-store setting, and not fiscalization.
+///
+/// The last three are what make a country **choosable** rather than merely listed
+/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)): a store-settings form reads them
+/// to fill its own fields in, so provisioning a Japanese shop does not depend on somebody remembering
+/// that Japanese prices are tax-inclusive.
 #[derive(Debug, Clone, serde::Serialize)]
 struct CountryView {
     code: String,
@@ -12073,6 +12450,9 @@ struct CountryView {
     group_separator: String,
     digits_per_group: u8,
     default_retention_days: u16,
+    prices_include_tax: bool,
+    cash_rounding_increment: Option<i64>,
+    cash_denominations: Vec<i64>,
 }
 
 /// The state the country/locale reads share: the views computed once at start-up from the compiled
@@ -12113,6 +12493,9 @@ where
             group_separator: pack.number_format.group_separator.to_string(),
             digits_per_group: pack.number_format.digits_per_group,
             default_retention_days: pack.default_retention_days,
+            prices_include_tax: pack.prices_include_tax,
+            cash_rounding_increment: pack.cash_rounding_increment,
+            cash_denominations: pack.cash_denominations.clone(),
         });
     }
     Router::new()

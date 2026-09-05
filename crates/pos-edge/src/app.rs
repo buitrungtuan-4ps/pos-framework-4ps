@@ -49,6 +49,7 @@ use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
     ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::store_profile::StoreProfile;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
@@ -219,6 +220,26 @@ pub struct EdgeSession {
     /// a special case of this table, not a different model; carrying both dimensions from day one is
     /// what avoids a migration across every line ever written.
     pub tax_rates: TaxRateTable,
+    /// Whether this store's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// `false` — the bootstrap default and Vietnam's posture — adds tax on top of the price. `true`
+    /// is Japan's 税込 and India's MRP: the price is what the guest pays and the tax is extracted
+    /// from inside it. Published on the `locale` node, so a store changes posture without a release.
+    pub prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units, or `None` for no rounding
+    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    ///
+    /// A fact about the country's coinage: India rounds to the rupee because no smaller coin settles
+    /// the difference, Vietnam to the thousand đồng because that is the smallest note, Japan not at
+    /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
+    /// unconditionally until the `locale` node could say otherwise.
+    pub cash_rounding_increment: Option<i64>,
+    /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
+    ///
+    /// Empty means "offer the exact amount only", which is the honest answer for a store whose
+    /// country nobody has filled in: an unhelpful key on a till is worse than no key.
+    pub cash_denominations: Vec<i64>,
     /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
     /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
@@ -262,6 +283,14 @@ pub struct EdgeSession {
     /// What the dispatcher must never do is the thing the till did before this existed — claim
     /// "Printing receipt…" while nothing is wired.
     pub devices: PublishedDevices,
+    /// Who this store legally is, as the receipt prints it
+    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
+    /// address, and the tax registration number a Japanese qualified invoice or an Indian tax
+    /// invoice is not one without.
+    ///
+    /// Empty in the bootstrap, which is what every store had before the node existed — the receipt
+    /// then starts at its number, as it always did.
+    pub profile: StoreProfile,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -377,6 +406,13 @@ impl EdgeSession {
             connectivity: Connectivity::Offline,
             recipes: RecipeBook::default(),
             tax_rates: Self::bootstrap_tax_rates(),
+            // Exclusive until a locale publish says otherwise — the posture Vietnam trades on.
+            prices_include_tax: false,
+            // No cash rounding and no quick-cash keys until a locale publish supplies them: both are
+            // country facts, and inventing either would put a wrong total or a wrong button on a
+            // till that has not synced yet (ADR-0105).
+            cash_rounding_increment: None,
+            cash_denominations: Vec::new(),
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
@@ -384,6 +420,9 @@ impl EdgeSession {
             stations: StationPlan::new(),
             layout: DisplayPlan::new(),
             devices: PublishedDevices::default(),
+            // Nothing is invented here: a receipt headed with a guessed shop name is worse than one
+            // headed with nothing (ADR-0106).
+            profile: StoreProfile::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -640,7 +679,9 @@ pub struct BumpView {
 /// state the bill and its table moved to. `print_receipt` reflects the [`Effect::PrintReceipt`]
 /// the domain returned: the edge does not itself hold a printer, so the caller (the binary) runs the
 /// effect after this returns — a rolled-back settle therefore never prints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Not `Copy` since ADR-0106: the settled totals carry per-rate tax lines, and a country deciding how
+// many lines its invoice has is exactly the sort of thing a fixed-size type cannot hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillView {
     /// The bill.
     pub bill_id: BillId,
@@ -651,6 +692,15 @@ pub struct BillView {
     pub receipt_number: Option<u64>,
     /// What the guest owed, present once settled.
     pub total_due: Option<Money>,
+    /// The settled bill's totals in full, present once settled — what the receipt is composed from
+    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+    ///
+    /// `total_due` above is the same figure and stays, because the till and the response shape read
+    /// it and neither needs the tax lines. This carries what a *legal* document needs and the till
+    /// does not: the per-rate tax, its named parts, and the rounding adjustment.
+    ///
+    /// Edge-local: it crosses no wire and is not part of the settle response.
+    pub totals: Option<BillTotals>,
     /// The state the bill's table moved to as a result (P5 derives the floor cycle from the bill),
     /// or `None` for a counter order, which has no table to move (ADR-0093).
     pub table_state: Option<TableState>,
@@ -1895,6 +1945,7 @@ impl<S: EventStore> Edge<S> {
             state: BillState::Open,
             receipt_number: None,
             total_due: None,
+            totals: None,
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
         })
@@ -2038,6 +2089,7 @@ impl<S: EventStore> Edge<S> {
             state: bill_decision.next_state,
             receipt_number: Some(receipt_number),
             total_due: Some(totals.total_due),
+            totals: Some(totals.clone()),
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
         })
@@ -2406,8 +2458,9 @@ impl<S: EventStore> Edge<S> {
             // The order's channel, passed in — not `session.sales_channel`, which is a store-wide
             // constant and therefore the wrong rate for every order that did not come in on it.
             sales_channel,
-            cash_rounding_increment: None,
+            cash_rounding_increment: session.cash_rounding_increment,
             rounding_mode: Rounding::HalfUp,
+            prices_include_tax: session.prices_include_tax,
         }
     }
 

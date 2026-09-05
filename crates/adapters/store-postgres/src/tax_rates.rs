@@ -27,6 +27,14 @@ pub struct TaxRateRow {
     pub sales_channel: String,
     /// The rate in basis points (10% is 1000), bounded [0, 10000] by the table's CHECK.
     pub rate_bps: i32,
+    /// How the rate is broken out on the invoice, as the JSON text of a `pos_proto::TaxComponent`
+    /// list — `[{"name":"CGST","rate":250}]` (migration 0050, ADR-0104).
+    ///
+    /// Text rather than a decoded type, because this adapter's job is SQL: `pos-cloud` owns the
+    /// shape on both sides of it, exactly as it owns what a `sales_channel` token means. `[]` is the
+    /// ordinary case — one rate, printed as one line — and is what every row written before this
+    /// column existed reads back as.
+    pub components_json: String,
 }
 
 /// The tax-rate store over a shared pool. Built by
@@ -64,7 +72,8 @@ impl PostgresTaxRates {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT tax_class_id, sales_channel, rate_bps FROM catalog_tax_rates \
+                "SELECT tax_class_id, sales_channel, rate_bps, components::text \
+                 FROM catalog_tax_rates \
                  WHERE tenant_id = $1 ORDER BY tax_class_id, sales_channel",
                 &[&tenant_id],
             )
@@ -83,6 +92,7 @@ impl PostgresTaxRates {
                     tax_class_id: row.get(0),
                     sales_channel: row.get(1),
                     rate_bps: row.get(2),
+                    components_json: row.get(3),
                 })
                 .collect(),
             version.map(|row| row.get(0)),
@@ -179,14 +189,17 @@ impl PostgresTaxRates {
         for row in rows {
             transaction
                 .execute(
+                    // `$5::jsonb` rather than a jsonb parameter, because the caller hands this
+                    // over as JSON text and casting in SQL keeps the adapter free of a JSON type.
                     "INSERT INTO catalog_tax_rates \
-                     (tenant_id, tax_class_id, sales_channel, rate_bps) \
-                     VALUES ($1, $2, $3, $4)",
+                     (tenant_id, tax_class_id, sales_channel, rate_bps, components) \
+                     VALUES ($1, $2, $3, $4, $5::jsonb)",
                     &[
                         &tenant_id,
                         &row.tax_class_id,
                         &row.sales_channel,
                         &row.rate_bps,
+                        &row.components_json,
                     ],
                 )
                 .await

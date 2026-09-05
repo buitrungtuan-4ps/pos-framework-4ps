@@ -179,6 +179,23 @@ export interface BillResponse {
   receipt_print?: string;
 }
 
+/**
+ * The store's money settings, from `GET /api/locale`
+ * ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+ *
+ * Which notes a guest can hand over is a fact about a country's cash, so it arrives with everything
+ * else the cloud publishes rather than from a table compiled into this app.
+ */
+export interface LocaleResponse {
+  currency_code: string;
+  /** Notes a guest hands over, ascending, in minor units. Empty means the exact amount only. */
+  cash_denominations: number[];
+  /** What the total rounds to in cash, in minor units, or `null` for no rounding. */
+  cash_rounding_increment: number | null;
+  /** Whether menu prices already contain their tax (ADR-0104). */
+  prices_include_tax: boolean;
+}
+
 /** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
 export interface LayoutButton {
   /** The item this orders — the id the price book from `GET /api/menu` carries. */

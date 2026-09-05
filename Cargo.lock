@@ -1609,6 +1609,9 @@ dependencies = [
  "pos-contract-tests",
  "pos-core",
  "pos-country",
+ "pos-country-in",
+ "pos-country-jp",
+ "pos-country-vn",
  "pos-country-zz",
  "pos-fakes",
  "pos-ports",
@@ -1661,6 +1664,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-country-in"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-country",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
+name = "pos-country-jp"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-country",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
+name = "pos-country-vn"
+version = "0.1.0"
+dependencies = [
+ "pos-contract-tests",
+ "pos-country",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+]
+
+[[package]]
 name = "pos-country-zz"
 version = "0.1.0"
 dependencies = [
@@ -1689,6 +1725,9 @@ dependencies = [
  "pos-contract-tests",
  "pos-core",
  "pos-country",
+ "pos-country-in",
+ "pos-country-jp",
+ "pos-country-vn",
  "pos-country-zz",
  "pos-fakes",
  "pos-ports",

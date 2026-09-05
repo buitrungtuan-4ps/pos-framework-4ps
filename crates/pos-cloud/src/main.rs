@@ -645,6 +645,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Who a store legally is (ADR-0106): its registered name, address and tax registration, as
+        // the `store_profile` node the edge composes every receipt from. The registration number's
+        // *shape* is checked against the country module, which is why the registry is passed in.
+        .merge(http::config_store_profile_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+            Arc::new(countries::registry()),
+        ))
         // Channels & tender (ADR-0080, Track M7): author which sales channels a store accepts and
         // which payment methods it takes, as the `channels` and `tender` settings nodes; the edge
         // applies each as a policy gate. Publish behind console.config.publish, audited.

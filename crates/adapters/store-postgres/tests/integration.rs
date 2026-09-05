@@ -1914,6 +1914,16 @@ mod tax_rates {
             tax_class_id: "class-standard".to_owned(),
             sales_channel: channel.to_owned(),
             rate_bps,
+            // No breakdown: one rate, printed as one line, which is most of the world.
+            components_json: "[]".to_owned(),
+        }
+    }
+
+    /// The same row with the named parts an Indian invoice must print separately (ADR-0104).
+    fn row_with_components(channel: &str, rate_bps: i32, components: &str) -> TaxRateRow {
+        TaxRateRow {
+            components_json: components.to_owned(),
+            ..row(channel, rate_bps)
         }
     }
 
@@ -1996,6 +2006,59 @@ mod tax_rates {
             // The neighbour is untouched — the version is per tenant, like the rows it guards.
             let (neighbour_after, _) = rates.fetch(TENANT_B).await.expect("fetch neighbour");
             assert_eq!(neighbour_after, neighbour);
+        });
+    }
+
+    /// A rate's named parts survive the round trip through the `components` column (migration 0050,
+    /// [ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// India is the case: an intra-state invoice must print CGST and SGST separately, because the
+    /// halves go to different governments. A row saved with no breakdown reads back as `[]` — which
+    /// is also what every row written before this column existed reads back as, and the reason the
+    /// migration defaults rather than backfills.
+    #[test]
+    fn a_rates_named_parts_survive_the_round_trip() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let rates = store.tax_rates();
+
+            let indian = vec![
+                row_with_components(
+                    "SALES_CHANNEL_DINE_IN",
+                    500,
+                    r#"[{"name":"CGST","rate":250},{"name":"SGST","rate":250}]"#,
+                ),
+                row("SALES_CHANNEL_TAKEAWAY", 500),
+            ];
+            applied(
+                rates
+                    .replace(TENANT_A, &indian, None)
+                    .await
+                    .expect("save the Indian table"),
+            )
+            .expect("the save applies");
+
+            let (listed, _) = rates.fetch(TENANT_A).await.expect("fetch");
+            let dine_in = listed
+                .iter()
+                .find(|stored| stored.sales_channel == "SALES_CHANNEL_DINE_IN")
+                .expect("the dine-in row");
+            assert!(
+                dine_in.components_json.contains("CGST")
+                    && dine_in.components_json.contains("SGST"),
+                "the breakdown reads back: {}",
+                dine_in.components_json
+            );
+
+            let takeaway = listed
+                .iter()
+                .find(|stored| stored.sales_channel == "SALES_CHANNEL_TAKEAWAY")
+                .expect("the takeaway row");
+            assert_eq!(
+                takeaway.components_json, "[]",
+                "no breakdown is an empty list, not null — which is what a row written before this \
+                 column existed reads back as too"
+            );
         });
     }
 

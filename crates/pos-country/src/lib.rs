@@ -45,6 +45,9 @@ use core::fmt;
 
 use pos_proto::locale::{CountryCode, LocalePack};
 
+pub mod offline;
+pub mod tax_class;
+
 /// One country's obligations, bundled.
 ///
 /// # What an implementation owes
@@ -300,6 +303,9 @@ mod tests {
                 number_format: NumberFormat::default(),
                 default_language: TranslationKey::new("en"),
                 default_retention_days: 365,
+                prices_include_tax: false,
+                cash_rounding_increment: None,
+                cash_denominations: Vec::new(),
             }
         }
 

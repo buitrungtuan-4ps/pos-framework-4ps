@@ -1,0 +1,21 @@
+[package]
+name        = "pos-country-vn"
+version     = "0.1.0"
+description = "Vietnam: the values its law and its coinage fix, and an offline invoice number."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-country = { path = "../../crates/pos-country" }
+pos-ports   = { path = "../../crates/pos-ports" }
+pos-proto   = { path = "../../crates/pos-proto" }
+
+[dev-dependencies]
+pos-contract-tests = { path = "../../crates/pos-contract-tests" }
+pos-fakes          = { path = "../../crates/pos-fakes" }
+
+[lints]
+workspace = true

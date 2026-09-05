@@ -213,6 +213,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
+    "/admin/config/store-profile",
     // --- release hosting (R2, ADR-0088) ---
     // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
     // `X-Pos-Minisig` — so `docs/release-runbook.md` step 5 carries the exact `curl`, which is a

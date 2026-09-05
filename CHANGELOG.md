@@ -14,6 +14,110 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A receipt names who sold, and prints the tax it charged**
+  ([ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)). The receipt this framework printed was
+  three lines: an optional header, a number, and a total — and the header was `None` at every call
+  site, because no config node carried a store's name. So the paper a guest walked out with did not
+  say which shop sold them anything.
+
+  A new `store_profile` node carries the store's registered identity: legal name, trading name,
+  address, the seller's tax registration number and what the paper calls it, contact and footer
+  lines. `PUT /admin/config/store-profile` publishes it, behind `console.config.publish` and audited;
+  the registration number's **shape** is checked against the country module (format only, never
+  registration — a till must not need a network to be provisioned), and a country this cloud does not
+  carry stores it unchecked rather than refusing the publish.
+
+  The receipt is composed from it and from the settled bill's own totals: name, address, registration,
+  number, subtotal, discount, comps, service charge, **one line per tax rate with its named parts
+  indented under it** (ADR-0104's CGST/SGST), the cash-rounding adjustment, the total, and the
+  footer. Every block is omitted when it has nothing to say, so a store that has filled nothing in
+  gets the receipt it always got rather than a page of blank labels — an empty label on a legal
+  document reads as a value somebody forgot to type.
+
+  A Japanese qualified invoice and an Indian Rule 46 tax invoice are now printable, given a
+  registration number somebody has been issued. **What this deliberately does not do:** put the
+  *buyer* on the receipt. A B2B invoice carries the buyer's name and tax code, which is a fact about
+  one bill entered at the till rather than a config node — named in the ADR so its absence is a
+  decision rather than an oversight.
+
+  **Upgrade note:** none. `store_profile` is a new node with every field defaulted; a store that has
+  none prints what it printed before.
+
+- **Vietnam, Japan and India are country packs, not plans** — `countries/vn`, `countries/jp` and
+  `countries/in`, each a directory of constants on the `CountryModule` trait
+  ([ADR-0105](docs/adr/0105-a-country-pack-is-values.md)). Opening a market is now a
+  `--features country-jp` build plus the store's own values; the remaining work is a registration
+  number and a filled-in form, not a pull request.
+
+  | | Vietnam | Japan | India |
+  |---|---|---|---|
+  | Currency | VND | JPY | INR |
+  | Prices quoted | exclusive (`++`) | inclusive (税込) | inclusive (MRP) |
+  | Cash rounding | 1,000 ₫ | none | ₹1 |
+  | Rate | 10 % VAT | 10 %, **8 %** takeaway food | 5 %, printed CGST 2.5 % + SGST 2.5 % |
+  | Tax code | mã số thuế | 登録番号 `T`+13 | GSTIN |
+
+  Alcohol is a separate class in all three, because Japan excludes it from the reduced rate and India
+  does not tax it under GST at all — `countries/in` publishes **no** alcohol row, so a store that
+  sells liquor is refused at the till until it publishes its own state's rate, rather than trading
+  untaxed until an assessment finds it.
+
+- **The console can author a rate's invoice breakdown** — the second half of ADR-0104. The proto
+  types and `countries/in` shipped the CGST/SGST split, and the cloud's own authoring path could not
+  express it: `TaxRateEntry` and `catalog_tax_rates` held a rate and nothing else, so an Indian
+  tenant could trade on the pack's defaults and could not edit them.
+
+  A rate row now carries `components` end to end — migration `0050_tax_rate_components` (additive,
+  defaulted to `[]`, with a `store-postgres` round-trip test), the store seam, `PUT`/`GET
+  /admin/catalog/tax-rates`, the `tax` config node, and a per-cell field on the Tax rates screen
+  typed as `CGST 2.5, SGST 2.5`. The parts must sum to
+  the cell's own rate: the screen says so beside the input and the server refuses the save, because a
+  breakdown that does not add up is the one way this feature produces a document an auditor rejects.
+
+- **A country pack now carries the till's money, not just its tax** — `LocalePack` gains
+  `prices_include_tax`, `cash_rounding_increment` and `cash_denominations` (ADR-0105). Each closed a
+  place where a country fact was held in code: `pos_edge` passed a literal `None` for cash rounding
+  so no store could round; `ui/src/lib/money.ts` held the quick-cash notes in a three-row table, so a
+  till in an unlisted currency had one button; and nothing let a *country* state that its prices are
+  tax-inclusive, so provisioning a Japanese store depended on somebody remembering to tick the box.
+
+  The store's `locale` node publishes all three, `GET /api/locale` serves them to the till, and the
+  front-end table survives only as the fallback for a box that has not synced yet.
+
+- **The offline half of `Fiscalization` is written once** — `pos_country::offline::OfflineFiscalization`
+  holds the obligations that are identical in every country (pre-allocated ranges so a store issues
+  with no internet, never-reuse across ranges, one number per bill, a refusal rather than an invented
+  number on exhaustion) and takes the country's invoice-number format. All four packs run the full
+  contract suite against it. A provider with a real authority wraps it and keeps the offline path.
+
+  **Upgrade note:** none. The three `LocalePack` fields are `#[serde(default)]` and each default *is*
+  the previous behaviour; no `PROTOCOL_VERSION` bump and no migration. `pos_cloud` enables all four
+  country features by default and `pos_edge` still enables none, because a default country would
+  silently pick a tax regime.
+
+- **A tax rate can be a list of named parts, and a price may already contain its tax**
+  ([ADR-0104](docs/adr/0104-multi-component-and-inclusive-tax.md)). The two country facts that could
+  not have arrived later as configuration, because both would need a migration across every order
+  line ever written.
+
+  `TaxRateRow` keeps `rate` and gains `components`: named parts that must sum to it. India's 18 % GST
+  now prints as **CGST 9 % + SGST 9 %**, which is what makes the document a valid tax invoice rather
+  than a receipt. The money never depends on the parts — tax is computed from `rate` and then
+  *allocated* across them, so a mis-authored list can misprint an invoice and can never mischarge a
+  guest, and `TaxRateTable::unbalanced_rows` reports a table whose parts miss their total.
+
+  `locale.prices_include_tax` selects the posture. `false` — Vietnam, and the default — adds tax on
+  top of the price. `true` is Japan's 税込 and India's MRP: the tax is *extracted* from the quoted
+  price, the guest's total does not move, and the subtotal reports net. This finally reaches
+  `Money::tax_included`, which has been implemented and unreachable since P3.
+
+  **Upgrade note:** none. Both are `#[serde(default)]` additions on nodes that are already published,
+  so an older edge reading a newer publish still charges the correct total and a newer edge reading
+  an older publish behaves exactly as before. No `PROTOCOL_VERSION` bump and no migration. Vietnam's
+  arithmetic is unchanged byte for byte.
+
 ### Fixed
 
 - **Every list screen in the back-office console threw before it could show a row.**

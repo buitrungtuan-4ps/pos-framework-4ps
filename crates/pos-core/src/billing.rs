@@ -27,7 +27,7 @@
 //! inventory concern, tracked elsewhere. Keeping them distinct in [`BillTotals`] is what lets
 //! accounting and fraud analysis treat them differently, as the specification requires.
 
-use pos_proto::locale::TaxRateTable;
+use pos_proto::locale::{TaxComponent, TaxRateTable};
 use pos_proto::money::{Money, Rounding};
 use pos_proto::{CurrencyCode, PaymentMethod, SalesChannel, TaxClassId};
 
@@ -48,6 +48,61 @@ pub struct TaxLine {
     pub rate_basis_points: u32,
     /// The tax, rounded once for this class.
     pub tax: Money,
+    /// How that tax breaks out, when the country requires the invoice to say
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty everywhere
+    /// the rate prints as one number, which is most of the world.
+    ///
+    /// The parts are allocated out of `tax` after it is rounded, so they sum to it exactly. Rounding
+    /// each part independently would let the breakdown miss the total it claims to explain.
+    pub components: Vec<TaxComponentLine>,
+}
+
+/// One named part of a tax line, with the money that part accounts for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaxComponentLine {
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
+    pub name: String,
+    /// This part's rate, captured so the invoice can print it beside the amount.
+    pub rate_basis_points: u32,
+    /// This part's share of the line's tax. The shares sum exactly to [`TaxLine::tax`].
+    pub tax: Money,
+}
+
+/// Splits a rounded tax amount across its named components, in proportion to their rates.
+///
+/// Allocation rather than per-component multiplication, for the reason on [`TaxLine::components`]:
+/// the parts have to sum to the whole, and `Money::allocate` is the one primitive in this crate that
+/// guarantees it (the residual lands on the last part, as it does for the bill-level discount).
+///
+/// An empty component list yields no lines — "no breakdown", which is not the same as a breakdown of
+/// zero parts summing to the tax.
+fn split_components(
+    tax: Money,
+    components: &[TaxComponent],
+) -> Result<Vec<TaxComponentLine>, DomainError> {
+    if components.is_empty() {
+        return Ok(Vec::new());
+    }
+    let weights: Vec<i64> = components
+        .iter()
+        .map(|component| i64::from(component.rate.basis_points()))
+        .collect();
+    // Every component at a zero rate would make the weights unallocatable. That is a table a country
+    // should not have published, and `TaxRateTable::unbalanced_rows` catches it upstream; here it
+    // degrades to no breakdown rather than failing a sale over a printing concern.
+    if weights.iter().all(|weight| *weight == 0) {
+        return Ok(Vec::new());
+    }
+    let shares = tax.allocate(&weights)?;
+    Ok(components
+        .iter()
+        .zip(shares)
+        .map(|(component, share)| TaxComponentLine {
+            name: component.name.clone(),
+            rate_basis_points: component.rate.basis_points(),
+            tax: share,
+        })
+        .collect())
 }
 
 /// The pre-tax base for one tax class, before bill-level reductions.
@@ -90,6 +145,13 @@ pub struct BillInput<'a> {
     pub cash_rounding_increment: Option<i64>,
     /// The rounding mode for tax and for cash rounding.
     pub rounding_mode: Rounding,
+    /// Whether the class bases already contain their tax — the store's `locale.prices_include_tax`
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// `false` is Vietnam and every exclusive-pricing market: tax is added on top of the base.
+    /// `true` is Japan's 税込 and India's MRP: the base already contains the tax, so the tax is
+    /// *extracted* from it and the guest's total does not move.
+    pub prices_include_tax: bool,
 }
 
 /// A bill's computed totals, every component reconciling to [`Self::total_due`].
@@ -130,6 +192,84 @@ fn allocate_across_classes(
         .map(|base| base.amount.amount_minor)
         .collect();
     Ok(amount.allocate(&weights)?)
+}
+
+/// The tax on one taxable amount, the base to print beside it, and its named breakdown.
+///
+/// Shared by the per-class loop and the standalone service-charge line so the two cannot drift on
+/// the posture, which is exactly the kind of divergence that produces a receipt whose service charge
+/// is taxed on a different basis from the food above it.
+fn tax_for(
+    taxable: Money,
+    rate: pos_proto::locale::TaxRate,
+    components: &[TaxComponent],
+    prices_include_tax: bool,
+    mode: Rounding,
+) -> Result<(Money, Money, Vec<TaxComponentLine>), DomainError> {
+    // Exclusive: the rate is applied on top of the base. Inclusive: the base already contains the
+    // tax, so the tax is extracted from it and the guest's total does not move (ADR-0104).
+    let tax = if prices_include_tax {
+        taxable.tax_included(rate.as_ratio(), mode)?
+    } else {
+        taxable.mul_ratio(rate.as_ratio(), mode)?
+    };
+    // The invoice prints the base the tax was charged *on*, which under an inclusive posture is the
+    // quoted amount less the tax inside it — not the quoted amount itself.
+    let reported_base = if prices_include_tax {
+        taxable.checked_sub(tax)?
+    } else {
+        taxable
+    };
+    Ok((tax, reported_base, split_components(tax, components)?))
+}
+
+/// The service charge's own tax line, when it is taxable and its class was not among the bill's.
+///
+/// Without this the charge would be silently untaxed — it is added after discounts and before tax,
+/// so a class nobody ordered from carries it. `None` means the charge is untaxed, zero, or already
+/// folded into a class the bill has, all of which are handled where the classes are.
+///
+/// # Errors
+///
+/// [`DomainError::TaxRateNotConfigured`] if the charge's class has no rate on this channel, and
+/// [`DomainError::Money`] on overflow — the same refusals the per-class loop makes, for the same
+/// reason: a charge taxed at no rate is a tax-audit finding, not a default.
+fn service_charge_line(input: &BillInput<'_>) -> Result<Option<TaxLine>, DomainError> {
+    if !input.service_charge_taxable || input.service_charge.is_zero() {
+        return Ok(None);
+    }
+    let Some(sc_class) = input.service_charge_tax_class else {
+        return Ok(None);
+    };
+    if input
+        .class_bases
+        .iter()
+        .any(|base| base.tax_class_id == sc_class)
+    {
+        return Ok(None);
+    }
+
+    let rate = input
+        .rates
+        .rate_for(sc_class, input.sales_channel)
+        .ok_or_else(|| DomainError::TaxRateNotConfigured {
+            tax_class_id: sc_class.to_string(),
+            sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel).to_owned(),
+        })?;
+    let (tax, taxable_base, components) = tax_for(
+        input.service_charge,
+        rate,
+        input.rates.components_for(sc_class, input.sales_channel),
+        input.prices_include_tax,
+        input.rounding_mode,
+    )?;
+    Ok(Some(TaxLine {
+        tax_class_id: sc_class,
+        taxable_base,
+        rate_basis_points: rate.basis_points(),
+        tax,
+        components,
+    }))
 }
 
 /// Assembles a bill's totals, computing tax per class and materialising cash rounding.
@@ -185,44 +325,39 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
                 sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel)
                     .to_owned(),
             })?;
-        let tax = taxable.mul_ratio(rate.as_ratio(), input.rounding_mode)?;
+        let (tax, taxable_base, components) = tax_for(
+            taxable,
+            rate,
+            input
+                .rates
+                .components_for(base.tax_class_id, input.sales_channel),
+            input.prices_include_tax,
+            input.rounding_mode,
+        )?;
         tax_total = tax_total.checked_add(tax)?;
         tax_lines.push(TaxLine {
             tax_class_id: base.tax_class_id,
-            taxable_base: taxable,
+            taxable_base,
             rate_basis_points: rate.basis_points(),
             tax,
+            components,
         });
     }
 
-    // If the service charge is taxable but its class was not among the line classes, tax it on its
-    // own line so the charge is not silently untaxed.
-    if input.service_charge_taxable
-        && !input.service_charge.is_zero()
-        && let Some(sc_class) = input.service_charge_tax_class
-        && !input
-            .class_bases
-            .iter()
-            .any(|base| base.tax_class_id == sc_class)
-    {
-        let rate = input
-            .rates
-            .rate_for(sc_class, input.sales_channel)
-            .ok_or_else(|| DomainError::TaxRateNotConfigured {
-                tax_class_id: sc_class.to_string(),
-                sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel)
-                    .to_owned(),
-            })?;
-        let tax = input
-            .service_charge
-            .mul_ratio(rate.as_ratio(), input.rounding_mode)?;
-        tax_total = tax_total.checked_add(tax)?;
-        tax_lines.push(TaxLine {
-            tax_class_id: sc_class,
-            taxable_base: input.service_charge,
-            rate_basis_points: rate.basis_points(),
-            tax,
-        });
+    // The service charge may need a tax line of its own; see `service_charge_line`.
+    if let Some(line) = service_charge_line(input)? {
+        tax_total = tax_total.checked_add(line.tax)?;
+        tax_lines.push(line);
+    }
+
+    // Under an inclusive posture the quoted amounts already contain every minor unit of `tax_total`,
+    // so the reported subtotal is netted by it. That keeps *one* reconciliation formula true in both
+    // postures — `subtotal − discount − comps + service_charge + tax + rounding = total_due` — and
+    // leaves the guest paying exactly what the menu said. It also means `subtotal` reads as "what was
+    // quoted, net of all tax", which is what 小計 means on a Japanese receipt that folds in a service
+    // charge (ADR-0104).
+    if input.prices_include_tax {
+        subtotal = subtotal.checked_sub(tax_total)?;
     }
 
     // Grand total before cash rounding.
@@ -398,7 +533,7 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 mod tests {
     use super::{BillInput, ClassBase, Payment, assemble, settle, split_by_weights, split_evenly};
     use crate::error::DomainError;
-    use pos_proto::locale::{TaxRate, TaxRateTable};
+    use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
     use pos_proto::money::{Money, Rounding};
     use pos_proto::{CurrencyCode, PaymentMethod, SalesChannel, TaxClassId, Ulid};
     use proptest::prelude::*;
@@ -437,6 +572,7 @@ mod tests {
             sales_channel: SalesChannel::DineIn,
             cash_rounding_increment: None,
             rounding_mode: Rounding::HalfUp,
+            prices_include_tax: false,
         }
     }
 
@@ -466,6 +602,149 @@ mod tests {
             rebuilt, totals.total_due,
             "components must reconcile to total_due"
         );
+    }
+
+    // ---- ADR-0104: the two country facts that could not be configuration ---------------------
+
+    /// India: 18 % GST on an intra-state sale prints as CGST 9 % + SGST 9 %, and the halves sum
+    /// exactly to the tax charged. Printing the sum would not be a valid tax invoice.
+    #[test]
+    fn an_indian_bill_breaks_gst_into_cgst_and_sgst_that_sum_to_the_tax() {
+        let rates = TaxRateTable::new().with_components(
+            food(),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        let bases = [ClassBase {
+            tax_class_id: food(),
+            amount: vnd(1_000),
+        }];
+        let totals = assemble(&base_input(&bases, &rates)).expect("assembles");
+
+        assert_eq!(totals.tax_total, vnd(180), "18% of 1000");
+        let line = totals.tax_lines.first().expect("one class, one tax line");
+        assert_eq!(line.components.len(), 2);
+        let cgst = line.components.first().expect("CGST");
+        let sgst = line.components.get(1).expect("SGST");
+        assert_eq!(cgst.name, "CGST");
+        assert_eq!(cgst.tax, vnd(90));
+        assert_eq!(sgst.name, "SGST");
+        assert_eq!(sgst.tax, vnd(90));
+
+        let split: i64 = line
+            .components
+            .iter()
+            .map(|part| part.tax.amount_minor)
+            .sum();
+        assert_eq!(
+            split, line.tax.amount_minor,
+            "the parts must sum to the tax charged, or the invoice does not add up"
+        );
+        assert_reconciles(&totals);
+    }
+
+    /// An odd amount still splits exactly: the residual lands on the last component rather than
+    /// being lost, which is `Money::allocate`'s guarantee and the reason the split is an allocation
+    /// rather than two multiplications.
+    #[test]
+    fn an_odd_tax_still_splits_without_losing_a_minor_unit() {
+        let rates = TaxRateTable::new().with_components(
+            food(),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        let bases = [ClassBase {
+            tax_class_id: food(),
+            amount: vnd(105),
+        }];
+        let totals = assemble(&base_input(&bases, &rates)).expect("assembles");
+
+        let line = totals.tax_lines.first().expect("one class, one tax line");
+        let split: i64 = line
+            .components
+            .iter()
+            .map(|part| part.tax.amount_minor)
+            .sum();
+        assert_eq!(
+            split, line.tax.amount_minor,
+            "no minor unit is lost or invented"
+        );
+        assert_reconciles(&totals);
+    }
+
+    /// Japan: a 税込 price is what the guest pays. The tax comes *out* of it, the total does not move,
+    /// and the printed base is the price net of the tax inside it.
+    #[test]
+    fn an_inclusive_price_extracts_its_tax_and_leaves_the_total_alone() {
+        let rates =
+            TaxRateTable::new().with(food(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let bases = [ClassBase {
+            tax_class_id: food(),
+            amount: vnd(1_100),
+        }];
+        let mut input = base_input(&bases, &rates);
+        input.prices_include_tax = true;
+        let totals = assemble(&input).expect("assembles");
+
+        assert_eq!(
+            totals.total_due,
+            vnd(1_100),
+            "the guest pays the quoted price"
+        );
+        assert_eq!(totals.tax_total, vnd(100), "1100 x 10/110");
+        assert_eq!(
+            totals.subtotal,
+            vnd(1_000),
+            "the subtotal is reported net of tax"
+        );
+        let line = totals.tax_lines.first().expect("one tax line");
+        assert_eq!(line.taxable_base, vnd(1_000));
+        assert_reconciles(&totals);
+    }
+
+    /// The same bill under the two postures charges different totals from the same numbers, which is
+    /// the whole point of the flag — and exclusive stays exactly what it was before ADR-0104.
+    #[test]
+    fn the_posture_is_what_separates_an_inclusive_bill_from_an_exclusive_one() {
+        let rates =
+            TaxRateTable::new().with(food(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let bases = [ClassBase {
+            tax_class_id: food(),
+            amount: vnd(1_000),
+        }];
+
+        let exclusive = assemble(&base_input(&bases, &rates)).expect("assembles");
+        assert_eq!(exclusive.total_due, vnd(1_100), "tax added on top");
+        assert_eq!(exclusive.subtotal, vnd(1_000));
+        assert!(
+            exclusive
+                .tax_lines
+                .first()
+                .expect("one tax line")
+                .components
+                .is_empty(),
+            "no components published means no breakdown, not a breakdown of nothing"
+        );
+
+        let mut input = base_input(&bases, &rates);
+        input.prices_include_tax = true;
+        let inclusive = assemble(&input).expect("assembles");
+        assert_eq!(
+            inclusive.total_due,
+            vnd(1_000),
+            "tax taken out of the price"
+        );
+        assert_eq!(inclusive.tax_total, vnd(91), "1000 x 10/110, half-up");
+        assert_reconciles(&exclusive);
+        assert_reconciles(&inclusive);
     }
 
     #[test]

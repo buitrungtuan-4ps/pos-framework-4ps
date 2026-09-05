@@ -46,6 +46,7 @@ pub mod pii;
 pub mod protocol;
 pub mod quantity;
 pub mod snapshot;
+pub mod store_profile;
 pub mod text;
 pub mod time;
 pub mod ulid;

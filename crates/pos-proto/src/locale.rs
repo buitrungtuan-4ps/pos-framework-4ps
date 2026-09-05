@@ -72,6 +72,9 @@ impl CountryCode {
     pub const VN: Self = Self([b'V', b'N']);
     /// Japan, the worked example for channel-keyed tax in `docs/pos-spec.md` §5.
     pub const JP: Self = Self([b'J', b'P']);
+    /// India, the worked example for multi-component tax in
+    /// [ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md).
+    pub const IN: Self = Self([b'I', b'N']);
     /// CLDR's unknown region, used by the reference country module.
     pub const ZZ: Self = Self([b'Z', b'Z']);
 
@@ -208,6 +211,36 @@ impl fmt::Debug for TaxRate {
     }
 }
 
+/// One named part of a tax rate, for a country whose invoice must print the parts.
+///
+/// India is the case this exists for: an intra-state sale charged 18 % GST prints **CGST 9 % and
+/// SGST 9 % on separate lines**, because the two halves go to different governments. Printing the
+/// sum is not a terser rendering of the same fact — it is not a valid invoice
+/// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+///
+/// The name is free text carried straight to the invoice, not an enum: the framework cannot know
+/// every jurisdiction's label, and a closed set would make each new country a code change, which is
+/// the thing country packs exist to avoid.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TaxComponent {
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST`, `TVA`.
+    pub name: String,
+    /// This part's share of the row's rate. The parts must sum to the row's `rate`.
+    pub rate: TaxRate,
+}
+
+impl TaxComponent {
+    /// A named component at a rate.
+    #[must_use]
+    pub fn new(name: impl Into<String>, rate: TaxRate) -> Self {
+        Self {
+            name: name.into(),
+            rate,
+        }
+    }
+}
+
 /// One row of a tax rate table.
 ///
 /// A list of rows rather than a nested map, because it has to survive JSON round-tripping in the
@@ -221,8 +254,16 @@ pub struct TaxRateRow {
     /// Which channel. `Open`, so a rate table published by a newer cloud that has learned a channel
     /// this build has not does not fail to deserialise.
     pub sales_channel: Open<SalesChannel>,
-    /// The rate in force.
+    /// The rate in force. Stays the authority on what the guest pays, whatever the components say.
     pub rate: TaxRate,
+    /// How that rate is broken out on the invoice, when a country requires it.
+    ///
+    /// Empty for Vietnam and Japan, which print one rate and always did — so a country pays for this
+    /// only if it needs it. `#[serde(default)]` is what makes the field additive on the wire in both
+    /// directions: an older edge reading a newer publish ignores the key and still charges `rate`,
+    /// which is the correct total, and a newer edge reading an older publish sees an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<TaxComponent>,
 }
 
 /// Tax rates, keyed by item class and sales channel.
@@ -262,6 +303,30 @@ impl TaxRateTable {
             tax_class_id,
             sales_channel: Open::from_known(sales_channel),
             rate,
+            components: Vec::new(),
+        });
+        self
+    }
+
+    /// Adds a row whose rate prints as named components.
+    ///
+    /// The components are not validated here — a builder that refused would have to return a
+    /// `Result` and every existing call site is infallible. [`Self::unbalanced_rows`] is the check,
+    /// run where a table is authored or applied, so a bad table is refused with a message naming the
+    /// row rather than rejected one call at a time.
+    #[must_use]
+    pub fn with_components(
+        mut self,
+        tax_class_id: TaxClassId,
+        sales_channel: SalesChannel,
+        rate: TaxRate,
+        components: Vec<TaxComponent>,
+    ) -> Self {
+        self.rows.push(TaxRateRow {
+            tax_class_id,
+            sales_channel: Open::from_known(sales_channel),
+            rate,
+            components,
         });
         self
     }
@@ -293,6 +358,51 @@ impl TaxRateTable {
                     && !row.sales_channel.is_unrecognised()
             })
             .map(|row| row.rate)
+    }
+
+    /// The components for a class on a channel, empty when the row prints one rate.
+    ///
+    /// Separate from [`Self::rate_for`] rather than returned beside it, because the two answer
+    /// different questions and only one of them can stop a sale: a missing *rate* is a refusal, a
+    /// missing *breakdown* is the ordinary case in most of the world.
+    #[must_use]
+    pub fn components_for(
+        &self,
+        tax_class_id: TaxClassId,
+        sales_channel: SalesChannel,
+    ) -> &[TaxComponent] {
+        self.rows
+            .iter()
+            .find(|row| {
+                row.tax_class_id == tax_class_id
+                    && row.sales_channel.known() == sales_channel
+                    && !row.sales_channel.is_unrecognised()
+            })
+            .map_or(&[], |row| row.components.as_slice())
+    }
+
+    /// Rows whose components do not sum to their own rate.
+    ///
+    /// The invariant ADR-0104 rests on. A row that fails it would print an invoice whose parts do
+    /// not add up to the tax charged — which is the one way this feature can produce a document an
+    /// auditor rejects, so it is checked rather than assumed. An empty component list always passes:
+    /// it is "no breakdown", not "a breakdown summing to zero".
+    ///
+    /// Returns the offending rows so a refusal can name them; empty means the table is sound.
+    #[must_use]
+    pub fn unbalanced_rows(&self) -> Vec<&TaxRateRow> {
+        self.rows
+            .iter()
+            .filter(|row| {
+                !row.components.is_empty()
+                    && row
+                        .components
+                        .iter()
+                        .map(|component| u64::from(component.rate.basis_points()))
+                        .sum::<u64>()
+                        != u64::from(row.rate.basis_points())
+            })
+            .collect()
     }
 
     /// Whether the table says anything at all.
@@ -362,6 +472,30 @@ pub struct LocalePack {
     /// (Decree 13/2023) and the GDPR both put that duty on the operator, so this is a starting value
     /// somebody must confirm — not a compliance claim the framework is making on their behalf.
     pub default_retention_days: u16,
+    /// Whether this country's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// Japan quotes 税込 and India quotes MRP; Vietnam quotes exclusive. The store's `locale` node
+    /// still overrides it — this is what a fresh store in the country is correct with, so nobody
+    /// provisioning the fortieth Japanese shop has to remember the box.
+    #[serde(default)]
+    pub prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units, or `None` for no rounding.
+    ///
+    /// A fact about the country's **coinage**, not about its tax: India rounds to the rupee because
+    /// no smaller coin settles the difference, Vietnam to the thousand đồng because that is the
+    /// smallest note, and Japan not at all because the 1-yen coin circulates. Applied once to the
+    /// grand total and materialised as [`crate::Money`] on an explicit receipt line, so the bill
+    /// still reconciles.
+    #[serde(default)]
+    pub cash_rounding_increment: Option<i64>,
+    /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
+    ///
+    /// Empty is a legitimate answer and means "offer the exact amount only": an unhelpful key on a
+    /// till is worse than no key, and a country nobody has filled in should not have amounts guessed
+    /// for it. Notes rather than coins, because a coin is not a key a cashier presses.
+    #[serde(default)]
+    pub cash_denominations: Vec<i64>,
 }
 
 impl LocalePack {
@@ -382,7 +516,10 @@ impl LocalePack {
 
 #[cfg(test)]
 mod tests {
-    use super::{CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateTable};
+    use super::{
+        CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxComponent, TaxRate,
+        TaxRateTable,
+    };
     use crate::enums::SalesChannel;
     use crate::ids::TaxClassId;
     use crate::money::{CurrencyCode, Money, Rounding};
@@ -458,6 +595,68 @@ mod tests {
             .mul_ratio(TaxRate::from_percent(8).as_ratio(), Rounding::HalfUp)
             .expect("in range");
         assert_eq!(reduced, Money::new(CurrencyCode::VND, 8_000));
+    }
+
+    #[test]
+    fn a_rate_whose_components_sum_to_it_is_balanced() {
+        // India's intra-state 18%: CGST 9 + SGST 9. The invariant ADR-0104 rests on.
+        let table = TaxRateTable::new().with_components(
+            TaxClassId::new(Ulid::from_u128(1)),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        assert!(table.unbalanced_rows().is_empty());
+    }
+
+    #[test]
+    fn components_that_miss_their_rate_are_reported_rather_than_charged() {
+        // 9 + 8 is not 18. The money is still 18% — `rate` is the authority — but the invoice would
+        // print parts that do not add up, which is the one document an auditor rejects.
+        let table = TaxRateTable::new().with_components(
+            TaxClassId::new(Ulid::from_u128(1)),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(8)),
+            ],
+        );
+        assert_eq!(table.unbalanced_rows().len(), 1);
+    }
+
+    #[test]
+    fn a_row_with_no_components_is_balanced_not_empty() {
+        // Vietnam and Japan publish no breakdown at all. "No components" must never read as
+        // "components summing to zero", or every existing table would be reported as broken.
+        let table = TaxRateTable::new().with(
+            TaxClassId::new(Ulid::from_u128(1)),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(10),
+        );
+        assert!(table.unbalanced_rows().is_empty());
+        assert!(
+            table
+                .components_for(TaxClassId::new(Ulid::from_u128(1)), SalesChannel::DineIn)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_row_published_before_components_existed_still_parses() {
+        // The additive-on-the-wire claim, checked rather than asserted: the `tax` node is a bare
+        // array of rows, and a document written by a cloud that predates ADR-0104 has no
+        // `components` key at all.
+        let legacy = r#"[{"tax_class_id":"00000000000000000000000001",
+            "sales_channel":"DINE_IN","rate":1000}]"#;
+        let table: TaxRateTable = serde_json::from_str(legacy).expect("legacy rows still parse");
+        let row = table.rows().first().expect("one row");
+        assert_eq!(table.rows().len(), 1);
+        assert!(row.components.is_empty());
+        assert_eq!(row.rate, TaxRate::from_percent(10));
     }
 
     #[test]
@@ -552,6 +751,9 @@ mod tests {
             },
             default_language: TranslationKey::new("vi"),
             default_retention_days: 365,
+            prices_include_tax: false,
+            cash_rounding_increment: Some(1_000),
+            cash_denominations: vec![50_000, 100_000, 200_000],
         };
         let json = serde_json::to_string(&pack).expect("serialise");
         let back: LocalePack = serde_json::from_str(&json).expect("deserialise");

@@ -6,6 +6,7 @@ import type { BillResponse, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
 import {
+  cashDenominations,
   loadCheck,
   openBill,
   openBillFor,
@@ -109,7 +110,7 @@ export function Pay() {
   // enough money, and offering it would hand the cashier a key that cannot settle.
   const quickCash = () => {
     const owed = total() + tip();
-    return [owed, ...quickCashFor(currency(), owed)];
+    return [owed, ...quickCashFor(cashDenominations(), owed)];
   };
 
   const pay = async (payments: PaymentRequest[]) => {

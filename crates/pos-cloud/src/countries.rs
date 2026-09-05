@@ -25,5 +25,8 @@ use pos_country::CountryRegistry;
 pub fn registry() -> CountryRegistry {
     pos_country::country_registry! {
         #[cfg(feature = "country-zz")] pos_country_zz::Zz,
+        #[cfg(feature = "country-vn")] pos_country_vn::Vietnam,
+        #[cfg(feature = "country-jp")] pos_country_jp::Japan,
+        #[cfg(feature = "country-in")] pos_country_in::India,
     }
 }

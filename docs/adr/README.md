@@ -105,5 +105,12 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0097](0097-internal-route-authentication.md) | The `/internal` routes get a key of their own, and now is the only cheap time to do it | Accepted |
 | [0098](0098-paged-admin-reads.md) | Paging is a second read, not a change to the read that exists | Accepted |
 | [0099](0099-store-hub.md) | The console's landing page answers "is this shop all right", not "how much did it make" | Accepted |
+| [0100](0100-receipt-and-ticket-printing.md) | A receipt and a kitchen ticket are documents the store composes, and the printer only carries them | Accepted |
+| [0101](0101-the-cloud-stamps-the-tenant.md) | The cloud stamps the tenant, because the store cannot be trusted to name one | Accepted |
+| [0102](0102-printing-any-script.md) | A store draws the lines its printer's code page cannot spell | Accepted |
+| [0103](0103-directly-attached-printers.md) | A printer on a cable is a transport, not a second driver | Accepted |
+| [0104](0104-multi-component-and-inclusive-tax.md) | A tax rate is a list, and a price may already contain it | Accepted |
+| [0105](0105-a-country-pack-is-values.md) | A country pack is a list of values, and none of them are in the framework | Accepted |
+| [0106](0106-the-store-is-a-legal-person.md) | A receipt names who sold, and the store's identity is data | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

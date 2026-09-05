@@ -47,6 +47,12 @@ impl CurrencyCode {
     pub const JPY: Self = Self(*b"JPY");
     /// United States dollar, whose minor unit is the cent.
     pub const USD: Self = Self(*b"USD");
+    /// Indian rupee, whose minor unit is the paisa — two decimal places, so `100` is one rupee.
+    ///
+    /// Named here because `countries/in` denominates in it
+    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)); the constant is a
+    /// convenience, and any three upper-case letters still parse.
+    pub const INR: Self = Self(*b"INR");
 
     /// Parses a three-letter code.
     ///

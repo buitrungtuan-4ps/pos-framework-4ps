@@ -3,6 +3,10 @@
 `ZZ` is CLDR's code for an unknown region, so it can never collide with a real country. This
 directory exists to be **copied**.
 
+Three real countries are written against the same shape — [`vn`](../vn), [`jp`](../jp) and
+[`in`](../in) ([ADR-0105](../../docs/adr/0105-a-country-pack-is-values.md)) — and are worth reading
+beside this one: they show what the constants look like when a market actually needs them.
+
 ## Starting a real country
 
 1. `cp -r countries/zz countries/<cc>` — lower-case ISO 3166-1 alpha-2.
@@ -50,4 +54,10 @@ because there is no `ZZ` tax authority to contact. It is a **working** implement
 stub — it passes the full `Fiscalization` contract suite, including offline issuance and
 never-reuse — so the shape a real country fills in is already proven. See `tests/contract.rs`.
 
-A real module replaces the body and keeps the suite.
+The obligations that suite checks are the port's, not `ZZ`'s, so they live in
+[`pos_country::offline`](../../crates/pos-country/src/offline.rs) and every pack shares them. What
+this module supplies is the one thing only it knows: how a `ZZ` invoice number is written.
+
+A real module replaces the **format**, not the allocator, and keeps the suite. A country with a live
+authority wraps the allocator and adds the submission — keeping the offline path, because the
+alternative is a till that stops selling when the line drops.
