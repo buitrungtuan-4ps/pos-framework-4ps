@@ -123,6 +123,32 @@ jobs:
       - uses: ./.github/actions/rust-setup
       - run: cargo build --workspace --locked
 
+      # The only runner in the estate with a PowerShell parser, so it is where the Windows
+      # installer gets checked (issue #182). `dashboard/src/installers.mjs` emits both the
+      # checked-in `deploy/edge/install-pos-edge.ps1` and the per-store script the new-store
+      # wizard hands a technician; these run with administrator rights on a shop's only till, so
+      # a parse error is a store that does not open. Bare `node` is enough — the generator is
+      # plain ESM with no dependencies, so there is no pnpm install here.
+      - name: the Windows installers parse
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          node dashboard/scripts/installer-syntax.mjs --emit "$env:RUNNER_TEMP/installers"
+          $bad = 0
+          foreach ($file in Get-ChildItem "$env:RUNNER_TEMP/installers" -Filter *.ps1) {
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $file.FullName, [ref]$null, [ref]$errors)
+              if ($errors) {
+                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse"
+                  $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
+                  $bad += 1
+              } else {
+                  Write-Host "ok $($file.Name)"
+              }
+          }
+          if ($bad -gt 0) { exit 1 }
+
   # ---------------------------------------------------------------------------
   # The operator UI (P6). The Rust build embeds a placeholder on a fresh checkout
   # (ui/dist is gitignored), so this is the only job that actually compiles the

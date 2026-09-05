@@ -12,6 +12,17 @@ import { type MessageKey, t } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
 import { screenHref } from "../state/screens";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+// The four generated artifacts live in one module because a CI gate renders and parses them; see
+// `installers.mjs` and `scripts/installer-syntax.mjs`. This screen supplies the values and nothing
+// else, which is also what lets a Windows installer exist at all (issue #182).
+import {
+  DEFAULT_BIND_PORT,
+  configToml as renderConfigToml,
+  envFile as renderEnvFile,
+  linuxInstaller,
+  windowsInstaller,
+} from "../installers.mjs";
+import type { InstallerValues } from "../installers.d.mts";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
 // not be a MessageKey and would defeat the type check).
@@ -29,23 +40,6 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_rollups", key: "scope.read_rollups" },
   { wire: "manage_devices", key: "scope.manage_devices" },
 ];
-
-/// The bind port the edge defaults to when `config.toml` names none (`pos_edge`'s `DEFAULT_BIND`).
-const DEFAULT_BIND_PORT = "8787";
-
-/// The JetStream stream and subject every store publishes its committed events into
-/// (ADR-0087 Amendment 1). **Fleet-wide, and identical on every box** — `pos_cloud` binds one
-/// durable consumer to one named stream, so a per-store stream would be ingested one store deep, and
-/// a per-store subject inside a shared stream would be captured for the first box to connect and
-/// refused for every one after it (the edge's handshake is a create-or-get, which does not add a
-/// subject to a stream that already exists). They must match `cloud.toml`'s `[nats] stream` and
-/// `filter_subject` on the cloud box, which `bootstrap.sh` documents with these same two values.
-const FLEET_STREAM = "POS_FLEET";
-const FLEET_SUBJECT = "pos.fleet.events";
-
-/// The client port the broker publishes under `TLS_MODE`'s certificate-bearing postures
-/// ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)).
-const NATS_CLIENT_PORT = "4222";
 
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
 
@@ -163,177 +157,46 @@ export function NewStore() {
   // a claim about another crate, and it goes stale silently.
   const [copied, setCopied] = createSignal(false);
 
+  // Every artifact this screen hands over comes from `src/installers.mjs`, which exists so that a CI
+  // gate can render and parse them — `sh -n` for the shell script, PowerShell's own parser for the
+  // `.ps1` on the Windows runner. Before that gate, nothing in the tree checked a generated
+  // installer at all, and the Windows one could not be written for want of a way to check it
+  // (issue #182). The screen's only job is to supply the values.
+  const values = (): InstallerValues | null => {
+    const store = created();
+    if (!store) {
+      return null;
+    }
+    return {
+      storeName: store.name,
+      storeId: store.store_id,
+      tenantLabel: tenantName() || tenantId(),
+      tenantId: tenantId(),
+      cloudUrl: window.location.origin,
+      cloudHost: window.location.hostname,
+      bindPort: bindPort(),
+      key: issued()?.token ?? null,
+    };
+  };
+
   const configToml = () => {
-    const store = created();
-    if (!store) {
-      return "";
-    }
-    const port = bindPort().trim();
-    return [
-      "# pos_edge bootstrap configuration",
-      `# Store:  ${store.name}  (${store.store_id})`,
-      `# Tenant: ${tenantName() || tenantId()}  (${tenantId()})`,
-      "#",
-      "# This file tells the store server WHICH store it is and WHICH cloud to dial. It carries no",
-      "# credential — that lives in the environment file (or the OS keyring), never here.",
-      "# Save it as config.toml beside the pos_edge binary, or point POS_EDGE_CONFIG at its path.",
-      "",
-      `store_id = "${store.store_id}"`,
-      `cloud_url = "${window.location.origin}"`,
-      ...(port && port !== DEFAULT_BIND_PORT
-        ? ["", `bind = "0.0.0.0:${port}"`]
-        : ["", `# Optional — override the listen address (default 0.0.0.0:${DEFAULT_BIND_PORT}):`, `# bind = "0.0.0.0:${DEFAULT_BIND_PORT}"`]),
-      "",
-      "# Optional — the LAN IP to advertise in the pairing QR; pin it with a DHCP reservation:",
-      '# advertised_ip = "192.168.1.50"',
-      "",
-      "# Optional — where the SQLite event store lives (default store.sqlite):",
-      '# store_path = "store.sqlite"',
-      "",
-      "# Where this store publishes its committed events. Both values are the whole fleet's, not this",
-      "# store's, and they must match the [nats] section of cloud.toml on the cloud box — which is why",
-      "# they are generated rather than typed. The server URL is NOT here: it carries the broker token,",
-      "# so it lives in the env file below.",
-      "#",
-      "# Keep this table LAST. Everything above it is a top-level key, and a commented line moved below",
-      "# this header would be read as part of [nats] and refused at load.",
-      "[nats]",
-      `stream = "${FLEET_STREAM}"`,
-      `subject = "${FLEET_SUBJECT}"`,
-      "",
-    ].join("\n");
+    const v = values();
+    return v ? renderConfigToml(v) : "";
   };
 
-  // The second file the operator carries: the box's environment, holding the one real secret. Kept
-  // apart from config.toml on purpose — this one is mode-0600 and root-owned, that one is not.
   const envFile = () => {
-    const key = issued();
-    return [
-      "# pos_edge environment — the store's secrets. Install it as root:",
-      "#   sudo install -o root -g root -m 0600 env /etc/pos-edge/env",
-      "# The service unit reads it via EnvironmentFile=-/etc/pos-edge/env.",
-      "",
-      "# The scoped store key (read_config + relay_orders). Shown once at issuance and not",
-      "# recoverable — revoke and re-issue in the console if this file is lost.",
-      key ? `POS_EDGE_SYNC_KEY=${key.token}` : "POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here",
-      "",
-      "# Where this store publishes its committed events. config.toml already names the stream and the",
-      "# subject; this is the one part left, and it carries the broker token — which is why it is here.",
-      "#",
-      "# The console cannot fill it in. Unlike the store key above, the NATS token is ONE secret shared",
-      "# by the whole fleet, held on the cloud box, so putting it in a browser would spread it across",
-      "# every machine in the estate. Recover it on the cloud box and uncomment this line:",
-      "#",
-      "#   sudo sed -n 's/  token: //p' deploy/secrets/nats.conf",
-      "#",
-      `# POS_EDGE_NATS_URL=tls://:<that token>@${window.location.hostname}:${NATS_CLIENT_PORT}`,
-      "#",
-      "# The tls:// scheme is what makes the client require TLS; nats:// connects in plaintext and the",
-      "# broker refuses it. The token goes in the userinfo exactly as shown. Until this line is live the",
-      "# edge logs that POS_EDGE_NATS_URL is unset and the outbox holds — the store trades either way.",
-      "",
-    ].join("\n");
+    const v = values();
+    return v ? renderEnvFile(v) : "";
   };
 
-  // The third artifact, and the one a technician actually runs (roadmap-v3 **R3**): a single script
-  // that lays the box out correctly instead of asking someone to follow a README at 7am in a
-  // restaurant. It embeds the two files above as heredocs and then does exactly what
-  // `deploy/edge/pos-edge.service`'s install block documents — no more, no less, so there is one
-  // definition of the layout rather than two that drift.
-  //
-  // The **slot layout** is the reason this is worth generating rather than typing. Since ADR-0055
-  // Amendment 1 the unit's `ExecStart` is `/var/lib/pos-edge/bin/current`, a symlink the edge
-  // retargets to install its own updates; a box laid out the old way (the binary at
-  // `/usr/local/bin/pos-edge`) trades perfectly well and silently **never self-updates**. That is
-  // exactly the kind of mistake a hand-typed install makes and nobody notices for a release or two.
-  //
-  // It is deliberately not a `curl | sh`: the operator downloads it, can read every line, and runs
-  // it with `sudo`. Nothing in it reaches the network.
   const installer = () => {
-    const store = created();
-    if (!store) {
-      return "";
-    }
-    const key = issued();
-    return [
-      "#!/bin/sh",
-      "# pos_edge installer — generated by the new-store wizard for one specific store.",
-      `# Store:  ${store.name}  (${store.store_id})`,
-      `# Tenant: ${tenantName() || tenantId()}  (${tenantId()})`,
-      "#",
-      "# WHAT IT DOES, in order: creates the service user and the state directory, puts the binary in",
-      "# the first update slot and points `current` at it, writes the bootstrap config and the",
-      "# environment file (mode 0600, root-owned), installs the systemd unit, then enables and starts",
-      "# the service. Idempotent: running it twice is safe and re-applies the same layout.",
-      "#",
-      "# THIS FILE CONTAINS THE STORE'S KEY. Treat it as you would a password, and delete it once the",
-      "# box is up. Revoke and re-issue in the console if it leaks.",
-      "#",
-      "# RUN IT AS:  sudo sh install-pos-edge.sh /path/to/pos-edge /path/to/pos-edge.service",
-      "",
-      "set -eu",
-      "",
-      'BINARY="${1:?usage: install-pos-edge.sh <pos-edge binary> <pos-edge.service unit>}"',
-      'UNIT="${2:?the unit file ships in deploy/edge/pos-edge.service}"',
-      'STATE=/var/lib/pos-edge',
-      "",
-      '[ "$(id -u)" -eq 0 ] || { echo "run me as root (sudo)" >&2; exit 1; }',
-      '[ -f "$BINARY" ] || { echo "no such binary: $BINARY" >&2; exit 1; }',
-      '[ -f "$UNIT" ] || { echo "no such unit file: $UNIT" >&2; exit 1; }',
-      "",
-      "# The service account. No login shell and no home: it only ever runs one program.",
-      'id -u pos >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin pos',
-      "",
-      "# The update slot layout (ADR-0055 Amendment 1). `current` is what the unit starts and what the",
-      "# edge retargets on a successful update; without it the box never self-updates.",
-      "#",
-      "# A box that already has `current` is one the edge is managing: it may be running slot-b after",
-      "# an over-the-air update, and re-laying slot-a would point `current` back at whatever binary",
-      "# this installer was handed — a silent downgrade of a shop that had updated itself. So the",
-      "# slots are laid out once, and a re-run refreshes the config, the unit and the rescue copy",
-      "# without touching the running binary. That is what makes running this twice safe.",
-      'install -d -o pos -g pos "$STATE" "$STATE/bin"',
-      'if [ -e "$STATE/bin/current" ]; then',
-      '  echo "bin/current exists — leaving the installed binary alone (the edge manages its own updates)"',
-      "else",
-      '  install -o pos -g pos -m 0755 "$BINARY" "$STATE/bin/slot-a"',
-      '  ln -sfn slot-a "$STATE/bin/current"',
-      '  chown -h pos:pos "$STATE/bin/current"',
-      "fi",
-      "",
-      "# The operator's rescue copy, and what `pos-edge --self-test` is run from by hand. Not what the",
-      "# service runs.",
-      'install -o root -g root -m 0755 "$BINARY" /usr/local/bin/pos-edge',
-      "",
-      "# The bootstrap config: which store this is and which cloud to dial. No credential in it.",
-      `cat > "$STATE/config.toml" <<'POS_EDGE_CONFIG'`,
-      configToml(),
-      "POS_EDGE_CONFIG",
-      'chown pos:pos "$STATE/config.toml"',
-      'chmod 0644 "$STATE/config.toml"',
-      "",
-      "# The environment file: the one real secret. Root-owned, mode 0600, never world-readable.",
-      "install -d -o root -g root -m 0755 /etc/pos-edge",
-      "cat > /etc/pos-edge/env <<'POS_EDGE_ENV'",
-      envFile(),
-      "POS_EDGE_ENV",
-      "chown root:root /etc/pos-edge/env",
-      "chmod 0600 /etc/pos-edge/env",
-      "",
-      "# The service.",
-      'install -o root -g root -m 0644 "$UNIT" /etc/systemd/system/pos-edge.service',
-      "systemctl daemon-reload",
-      "systemctl enable --now pos-edge",
-      "",
-      "systemctl --no-pager --lines=0 status pos-edge || true",
-      "echo",
-      `echo "pos_edge installed for ${store.name} (${store.store_id})."`,
-      'echo "Next: open http://<this box>:' + (bindPort().trim() || DEFAULT_BIND_PORT) + '/ on a device on the shop LAN and pair it."',
-      ...(key
-        ? ['echo "Now DELETE this installer — it contains the store key."']
-        : ['echo "WARNING: no key was issued, so /etc/pos-edge/env has no credential. Config sync and the order relay will not work until one is installed."']),
-      "",
-    ].join("\n");
+    const v = values();
+    return v ? linuxInstaller(v) : "";
+  };
+
+  const windowsScript = () => {
+    const v = values();
+    return v ? windowsInstaller(v) : "";
   };
 
   const copyConfig = async () => {
@@ -363,6 +226,8 @@ export function NewStore() {
   const downloadEnv = () => download("env", envFile(), "text/plain");
   const downloadInstaller = () =>
     download("install-pos-edge.sh", installer(), "application/x-shellscript");
+  const downloadWindowsInstaller = () =>
+    download("install-pos-edge.ps1", windowsScript(), "text/plain");
 
   return (
     <div>
@@ -560,6 +425,20 @@ export function NewStore() {
                 <Banner tone="danger" message={t("wizard.installerSecret")} />
                 <div class="flex gap-2">
                   <Button onClick={downloadInstaller}>{t("wizard.downloadInstaller")}</Button>
+                </div>
+              </div>
+
+              {/* The same handoff for a Windows store (R4, issue #182). Windows used to get the two
+                  files and a README, so the install was five sc.exe lines typed by hand — and the
+                  one easiest to skip decides whether the box comes back from an update. */}
+              <div class="flex flex-col gap-2">
+                <span class="text-sm font-medium text-ink">{t("wizard.installerWindowsTitle")}</span>
+                <p class="text-sm text-ink-muted">{t("wizard.installerWindowsHint")}</p>
+                <Banner tone="danger" message={t("wizard.installerSecret")} />
+                <div class="flex gap-2">
+                  <Button onClick={downloadWindowsInstaller}>
+                    {t("wizard.downloadWindowsInstaller")}
+                  </Button>
                 </div>
               </div>
 

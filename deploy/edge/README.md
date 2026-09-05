@@ -55,15 +55,44 @@ a stop. Started from a console it notices that SCM is not there and runs in the 
 `pos-edge.exe --self-test` and an operator's manual run are unchanged. **No third-party wrapper is
 needed.**
 
-Run the four commands as an administrator:
+### Use the installer
+
+`install-pos-edge.ps1`, beside this file, does the whole install. Run it in an elevated PowerShell:
 
 ```
-sc.exe create pos-edge binPath= "C:\pos\pos-edge.exe" start= auto
+powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 `
+    -Binary .\pos-edge.exe -StoreId 01J... -CloudUrl https://cloud.example.com -SyncKey <the store's key>
+```
+
+The new-store wizard's Handoff screen hands out the same script with the store's values already in
+it, so a technician runs one command with no arguments to get wrong. Both are emitted by
+`dashboard/src/installers.mjs` and parsed by the `build (windows-2022)` CI job before they can ship.
+Running either twice is safe.
+
+Prefer it over the by-hand recipe below, which is here to say what the script does and to be
+debuggable when something is already half-installed. **Three of its lines are easy to get wrong, and
+each has a silent failure mode**, which is the reason the script exists:
+
+```
+sc.exe create pos-edge binPath= "C:\ProgramData\pos-edge\bin\current" start= auto
 sc.exe description pos-edge "Pizza 4P's POS edge (store server)"
-setx POS_EDGE_CONFIG "C:\pos\config.toml" /M
 sc.exe failure pos-edge reset= 86400 actions= restart/5000/restart/5000/restart/30000
 sc.exe start pos-edge
 ```
+
+* **`binPath` is `bin\current`, not the binary.** `current` is the symlink the edge retargets when it
+  installs an update (ADR-0055 Amendment 1). A service registered straight onto `pos-edge.exe`
+  trades perfectly well and silently never self-updates — the same mistake the Linux installer
+  exists to prevent.
+* **`config.toml` needs an absolute `store_path`.** SCM starts a service in `C:\Windows\System32`,
+  and a relative path is resolved against the working directory, so the default `store.sqlite` puts
+  the store's database — and `bin\`, which is derived from the database's parent — under `System32`.
+  The systemd unit sets `WorkingDirectory=` and has no equivalent problem. Write
+  `store_path = "C:\\ProgramData\\pos-edge\\store.sqlite"` (TOML, so the separators are doubled).
+* **The `failure` line is not optional.** See below.
+
+`POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
+variable — the next section says why.
 
 ### The two secrets Windows has no `env` file for
 
@@ -89,9 +118,10 @@ sc.exe stop pos-edge & sc.exe start pos-edge
 
 `REG_MULTI_SZ` with `\0` separators is how SCM passes several variables to one service; the values
 are then visible only to accounts that can read that service key, not to every process on the box.
-Restart the service after changing them — SCM reads the value at start, not on the fly. If you set
-`POS_EDGE_CONFIG` this way you no longer need the `setx … /M` line above; keep one or the other, not
-both, or the machine-wide value will quietly shadow nothing and confuse the next person.
+Restart the service after changing them — SCM reads the value at start, not on the fly. This is
+where `POS_EDGE_CONFIG` belongs too, and it is what the installer writes; a machine-wide
+`setx POS_EDGE_CONFIG … /M` also works but is readable by every local administrator, and having both
+leaves the next person guessing which one the service actually read.
 
 ### The `failure` line is not optional
 
@@ -122,10 +152,11 @@ knowing:
   and the edge reports the absence rather than failing an install every ten minutes: with no
   `bin\current` the updater is not started at all and the box trades on the binary it has.
 - **Nothing in this repository has watched it happen.** The Windows CI job compiles the wrapper, so
-  a rename or a signature change fails a pull request. That a real service reaches `RUNNING`, that a
-  stop drains, and that a failure action restarts on exit code 1 are checks that need a Windows box
-  with a service installed on it — a row in [`docs/gate-register.md`](../../docs/gate-register.md),
-  not a claim made here.
+  a rename or a signature change fails a pull request, and it now also *parses* `install-pos-edge.ps1`
+  and the wizard's generated one, so a script that could not run at all cannot ship. Neither is the
+  same as running them. That a real service reaches `RUNNING`, that a stop drains, and that a failure
+  action restarts on exit code 1 are checks that need a Windows box with a service installed on it —
+  a row in [`docs/gate-register.md`](../../docs/gate-register.md), not a claim made here.
 
 A wrapper such as NSSM still works if you want its log rotation, but it is no longer what makes the
 service run.
