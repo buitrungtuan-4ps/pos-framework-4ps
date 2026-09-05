@@ -13,10 +13,40 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use std::sync::Arc;
+
+use pos_ports::dynamic::BoxFuture;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::StoreId;
+use pos_proto::ids::{BrandId, StoreId, TenantId};
+
+/// Who owns a store, as the registry records it
+/// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreOwner {
+    /// The tenant that owns the store.
+    pub tenant_id: TenantId,
+    /// The brand it trades under, or the nil id when it is under none — the registry's `brand_id` is
+    /// nullable, and a nil id reads as "no brand" rather than as a brand that might exist.
+    pub brand_id: BrandId,
+}
+
+/// Resolves a store to its owner, for the stamp
+/// [`Cloud::ingest`] puts on every event ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+///
+/// `dyn`-compatible on purpose — boxed futures rather than `impl Future` — so [`Cloud`] can hold one
+/// without gaining a type parameter that every existing construction site would have to name. The
+/// same trade `pos_ports::dynamic` makes, for the same reason.
+pub trait StoreOwners: Send + Sync + core::fmt::Debug {
+    /// The store's owner, or `None` if the registry has no row for it.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the registry itself cannot be read — distinct from an unknown store, which is
+    /// `Ok(None)`.
+    fn owner_of(&self, store_id: StoreId) -> BoxFuture<'_, Result<Option<StoreOwner>, PortError>>;
+}
 
 /// How many events a rollup pass reads per page from the log.
 const ROLLUP_PAGE: u32 = 512;
@@ -149,13 +179,42 @@ pub struct XzReport {
 #[derive(Debug, Clone)]
 pub struct Cloud<S> {
     store: S,
+    /// The registry [`Self::ingest`] stamps each event's owner from
+    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    ///
+    /// `None` leaves each envelope's claimed tenant and brand alone, which is what a fakes-backed
+    /// test and the on-fakes example want — they have no registry to resolve against. **The shipped
+    /// binary always sets one**: without it the event log's tenant column is whatever the box asserted,
+    /// which is the hole S2 names.
+    owners: Option<Arc<dyn StoreOwners>>,
 }
 
 impl<S: EventStore> Cloud<S> {
-    /// Builds the application over `store`.
+    /// Builds the application over `store`, taking each event's tenant and brand as the envelope
+    /// claims them.
+    ///
+    /// For a test and for the on-fakes example. The shipped cloud uses
+    /// [`with_store_owners`](Self::with_store_owners) (ADR-0101).
     #[must_use]
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            owners: None,
+        }
+    }
+
+    /// Builds the application over `store`, stamping each ingested event's tenant and brand from the
+    /// store registry ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    ///
+    /// This is the shipped composition. The tenant on an event is the column row-level isolation is
+    /// defined on, and until this existed it was whatever the publishing box put there — one constant
+    /// for the whole fleet, as it happened.
+    #[must_use]
+    pub fn with_store_owners(store: S, owners: Arc<dyn StoreOwners>) -> Self {
+        Self {
+            store,
+            owners: Some(owners),
+        }
     }
 
     /// The underlying store.
@@ -170,9 +229,20 @@ impl<S: EventStore> Cloud<S> {
     /// so a replay stores nothing and is reported as `duplicates`. The whole batch commits or none
     /// of it does.
     ///
+    /// # The tenant is the registry's, not the envelope's
+    ///
+    /// Every event is stamped with the tenant and brand the store registry records for its `store_id`,
+    /// overwriting what the envelope claimed ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// This is the single funnel both ingest paths pass through — the NATS cursor and
+    /// `POST /internal/ingest` — so it is the one place the stamp has to be. Idempotency is unaffected:
+    /// the log's key is `(business_date, event_id)` and carries no tenant.
+    ///
     /// # Errors
     ///
     /// [`PortError`] if the store cannot be reached or the transaction fails; nothing is committed.
+    /// A registry that cannot be read is **not** an error — the batch is stored with the tenants it
+    /// claimed and the failure is logged, because refusing would stall the fleet's ingest behind a
+    /// lookup, and dropping would lose a real store's trading history.
     pub async fn ingest(
         &self,
         events: &[EventEnvelope<RawPayload>],
@@ -180,13 +250,67 @@ impl<S: EventStore> Cloud<S> {
         if events.is_empty() {
             return Ok(IngestOutcome::default());
         }
+        let stamped = self.stamp_owners(events).await;
         let mut tx = self.store.begin().await?;
-        let outcome = self.store.append(&mut tx, events).await?;
+        let outcome = self.store.append(&mut tx, &stamped).await?;
         tx.commit().await?;
         Ok(IngestOutcome {
             appended: outcome.appended,
             duplicates: outcome.duplicates,
         })
+    }
+
+    /// Rewrites each event's tenant and brand to the registry's answer for its store (ADR-0101).
+    ///
+    /// One lookup per distinct store in the batch, not per event: a batch is one store's window far
+    /// more often than not, and a fleet-wide batch is still bounded by the number of stores in it.
+    ///
+    /// Three things are deliberately not errors, and each keeps its own claim:
+    /// - **No registry composed** — a test or the on-fakes example.
+    /// - **The registry cannot be read** — refusing would stall every store's ingest behind one
+    ///   unavailable lookup, and the log is the thing that must not stop.
+    /// - **The store is unknown** — a provisioned store has a registry row by construction, so this
+    ///   is a diagnostic rather than a path; losing a real store's history to a missing row would be
+    ///   a provisioning bug turned into data loss.
+    async fn stamp_owners(
+        &self,
+        events: &[EventEnvelope<RawPayload>],
+    ) -> Vec<EventEnvelope<RawPayload>> {
+        let mut stamped = events.to_vec();
+        let Some(owners) = self.owners.as_ref() else {
+            return stamped;
+        };
+        let mut resolved: BTreeMap<StoreId, Option<StoreOwner>> = BTreeMap::new();
+        for event in &mut stamped {
+            let owner = if let Some(owner) = resolved.get(&event.store_id) {
+                *owner
+            } else {
+                let owner = match owners.owner_of(event.store_id).await {
+                    Ok(owner) => owner,
+                    Err(error) => {
+                        tracing::warn!(
+                            store = %event.store_id,
+                            %error,
+                            "could not resolve a store's owner; ingesting with the tenant the event claimed"
+                        );
+                        None
+                    }
+                };
+                if owner.is_none() {
+                    tracing::warn!(
+                        store = %event.store_id,
+                        "no registry row for the store that published this event; ingesting with the tenant it claimed"
+                    );
+                }
+                resolved.insert(event.store_id, owner);
+                owner
+            };
+            if let Some(owner) = owner {
+                event.tenant_id = owner.tenant_id;
+                event.brand_id = owner.brand_id;
+            }
+        }
+        stamped
     }
 
     /// The per-day activity rollup for one store, oldest day first.

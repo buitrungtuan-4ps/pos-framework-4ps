@@ -15,17 +15,23 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::PermissionSet;
+use pos_edge::printing::{Printers, TransportFactory};
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
     StaffRoster, StoreIdentity, SystemClock,
 };
 use pos_fakes::FakeStore;
+use pos_ports::PortError;
 use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
+use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+use pos_proto::ids::DeviceId;
 use pos_proto::ids::{EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
+use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
+use printer_escpos::{Transport, TransportStatus, Unreachable};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -49,6 +55,12 @@ fn hash_of(pin: &str) -> String {
 /// route now requires both (S0b, ADR-0084). The store is seeded with one staff member so the device
 /// can sign in over the real route.
 async fn app() -> (Router, String) {
+    app_with(None).await
+}
+
+/// The same router, with a print dispatcher layered in and the given devices published — the shape
+/// `serve` composes ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
@@ -59,11 +71,18 @@ async fn app() -> (Router, String) {
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
     );
+    let devices = printing
+        .as_ref()
+        .map(|(_, devices)| devices.clone())
+        .unwrap_or_default();
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
             identity,
-            EdgeSession::bootstrap().with_staff(roster),
+            EdgeSession {
+                devices,
+                ..EdgeSession::bootstrap().with_staff(roster)
+            },
             Arc::new(InMemoryReceipts::new()),
         )
         .expect("seed"),
@@ -75,15 +94,19 @@ async fn app() -> (Router, String) {
         .redeem(&code, now)
         .await
         .expect("redeem")
+        .token()
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();
-    let service = pos_edge::http::domain_router(
+    let mut service = pos_edge::http::domain_router(
         edge,
         InMemoryQueueNumbers::new(),
         pairing,
         Arc::new(Sessions::new()),
     );
+    if let Some((printers, _)) = printing {
+        service = service.layer(axum::Extension(printers));
+    }
     // Sign the paired device in, so the command routes below run under a real employee.
     let (status, _) = send(
         service.clone(),
@@ -221,6 +244,9 @@ async fn a_table_sells_end_to_end_over_http() {
     assert_eq!(settled["receipt_number"], 1);
     assert_eq!(settled["table_state"], "TABLE_STATE_NEEDS_CLEANING");
     assert_eq!(settled["print_receipt"], true);
+    // No dispatcher is layered into this router, so the honest answer is that there was nothing to
+    // print on — not the silence the till used to render "Printing receipt…" over (ADR-0100).
+    assert_eq!(settled["receipt_print"], "NO_PRINTER");
 
     // Clean it down: the table returns to free.
     let (status, cleaned) = send(
@@ -233,6 +259,113 @@ async fn a_table_sells_end_to_end_over_http() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(cleaned["state"], "TABLE_STATE_FREE");
+}
+
+/// A transport that records what a printer would have received.
+#[derive(Debug, Default)]
+struct Recorder {
+    written: std::sync::Mutex<Vec<Vec<u8>>>,
+}
+
+#[derive(Debug)]
+struct Recorders(Arc<Recorder>);
+
+#[derive(Debug)]
+struct RecordingTransport(Arc<Recorder>);
+
+impl Transport for RecordingTransport {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        self.0
+            .written
+            .lock()
+            .map_err(|_| Unreachable)?
+            .push(bytes.to_vec());
+        Ok(())
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        Ok(TransportStatus::default())
+    }
+}
+
+impl TransportFactory for Recorders {
+    fn open(&self, _device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
+        Ok(Box::new(RecordingTransport(Arc::clone(&self.0))))
+    }
+}
+
+#[tokio::test]
+async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
+    // The whole point of C2: `print_receipt` has been true on every settle since P5 and nothing ever
+    // constructed a job. This drives the shipped route and asserts paper (ADR-0100).
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let counter_printer = PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9100)),
+        kind: DeviceKind::Printer.into(),
+        connection: DeviceConnection::Network.into(),
+        address: "192.0.2.10:9100".to_owned(),
+        name: DisplayName::new("Counter"),
+        // No station: this is the receipt printer.
+        station_id: None,
+    };
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer]),
+    )))
+    .await;
+
+    let table = TableId::new(Ulid::from_u128(702));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    let (status, settled) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(165_000),
+                "applied_to_bill": vnd(165_000),
+            }],
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(settled["receipt_print"], "PRINTED");
+    let written = recorder.written.lock().expect("the recorder");
+    assert_eq!(written.len(), 1, "one settle, one receipt");
+    let bytes = written.first().expect("the receipt");
+    assert!(
+        bytes.windows(2).any(|window| window == b"#1"),
+        "the gapless receipt number is on the paper"
+    );
 }
 
 #[tokio::test]

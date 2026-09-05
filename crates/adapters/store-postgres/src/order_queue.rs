@@ -239,6 +239,37 @@ impl PostgresStoreDirectory {
             .map_err(unavailable)?;
         Ok(row.map(|row| row.get(0)))
     }
+
+    /// Resolves which tenant and brand own a store, from the **registry**, or `None` if no store by
+    /// that id has been provisioned.
+    ///
+    /// The registry rather than `config_trees` (which [`Self::tenant_of`] reads): the console creates
+    /// the `stores` row when a store is provisioned, before anything is ever published to it, so this
+    /// answers for a box that has traded but never been configured. It also carries the brand, which
+    /// the config tree does not. Archived stores are included — a reconciliation re-push of a closed
+    /// store's history still has to be filed under its owner
+    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    ///
+    /// Read as the trusted role, spanning every tenant: the caller is resolving a store it cannot yet
+    /// name a tenant for, the same posture as the webhook delivery task's fleet-wide load.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn owner_of(
+        &self,
+        store_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT tenant_id, brand_id FROM stores WHERE store_id = $1 LIMIT 1",
+                &[&store_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| (row.get(0), row.get(1))))
+    }
 }
 
 /// Parses a jsonb column read back as text into a [`serde_json::Value`].

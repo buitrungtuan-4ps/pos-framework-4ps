@@ -125,10 +125,17 @@ export function NewStore() {
       setError(t("wizard.scopesRequired"));
       return;
     }
+    const store = created();
+    if (!store) {
+      return;
+    }
     setError("");
     setBusy(true);
     try {
-      setIssued(await api.createApiKey(tenantId(), scopes()));
+      // Bound to the store step 1 just created (S1). The store sync routes refuse a key that names
+      // another store or none, so a wizard that issued a tenant-wide key here would hand the
+      // operator a credential the box cannot use.
+      setIssued(await api.createApiKey(tenantId(), scopes(), store.store_id));
     } catch (caught) {
       fail(caught);
     } finally {

@@ -88,19 +88,21 @@ use pos_cloud::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
-use pos_cloud::{Cloud, IngestOutcome, http};
+use pos_cloud::{Cloud, IngestOutcome, StoreOwner, StoreOwners, http};
 use pos_contract_tests::fixtures;
 use pos_core::activation::{ActivationCode, CodeStatus};
 use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
+use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
+use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId, StationId,
-    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
+    AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
+    StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
@@ -217,6 +219,7 @@ impl ApiKeyAdminStore for FakeKeys {
             .filter(|key| key.tenant_id == tenant_id)
             .map(|key| ApiKeySummary {
                 id: key.id.to_string(),
+                store_id: key.store_id.map(|id| id.to_string()),
                 scopes: key.scope_wire_names(),
                 revoked: key.revoked,
                 expires_at_ms: key.expires_at_ms(),
@@ -241,6 +244,28 @@ impl ApiKeyAdminStore for FakeKeys {
 /// Each call mints a distinct id, so a test issuing more than one key does not have the second
 /// silently overwrite the first in the fake's map.
 fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
+    issue_key_for(keys, tenant_id, None, scopes)
+}
+
+/// As [`issue_key`], but bound to one store — a *store's* own credential (S1).
+///
+/// The `/sync/stores/{store_id}/…` routes require this: a key that names no store, or names another
+/// one, is refused there however good its scopes.
+fn issue_store_key(
+    keys: &FakeKeys,
+    tenant_id: TenantId,
+    store: StoreId,
+    scopes: &[Scope],
+) -> String {
+    issue_key_for(keys, tenant_id, Some(store), scopes)
+}
+
+fn issue_key_for(
+    keys: &FakeKeys,
+    tenant_id: TenantId,
+    store: Option<StoreId>,
+    scopes: &[Scope],
+) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(0x00A1_1CE0);
     let id = ApiKeyId::new(Ulid::from_u128(u128::from(
@@ -249,6 +274,7 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
     let (stored, token) = issue(
         id,
         tenant_id,
+        store,
         scopes.iter().copied().collect(),
         FAKE_SECRET,
         None,
@@ -727,6 +753,9 @@ type ConfigRows = HashMap<(TenantId, StoreId), Versioned<ConfigTreeState>>;
 struct FakeConfigTrees {
     rows: Arc<Mutex<ConfigRows>>,
     seen: Arc<Mutex<HashMap<(TenantId, StoreId), RecordedSeen>>>,
+    /// The publish backlog a heartbeat last reported, mirroring `store_liveness.outbox_depth`. A
+    /// heartbeat that reported none leaves the entry alone, as the adapter's `COALESCE` does.
+    outbox: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -738,6 +767,15 @@ impl FakeConfigTrees {
     /// The `(held_version, seen_at_ms)` last recorded for a store, or `None` if it never checked in.
     fn recorded_seen(&self, tenant: TenantId, store: StoreId) -> Option<RecordedSeen> {
         self.seen
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .copied()
+    }
+
+    /// The publish backlog a heartbeat last reported for a store, or `None` if none ever did.
+    fn recorded_outbox_depth(&self, tenant: TenantId, store: StoreId) -> Option<u64> {
+        self.outbox
             .lock()
             .expect("lock")
             .get(&(tenant, store))
@@ -844,6 +882,7 @@ impl ConfigTreeStore for FakeConfigTrees {
         tenant: TenantId,
         store: StoreId,
         seen_at: Timestamp,
+        outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
         self.seen
@@ -852,6 +891,14 @@ impl ConfigTreeStore for FakeConfigTrees {
             .entry((tenant, store))
             .and_modify(|entry| entry.1 = seen_at.as_milliseconds_since_epoch())
             .or_insert((None, seen_at.as_milliseconds_since_epoch()));
+        // A depth the store did not report leaves the last one it did alone — the adapter's
+        // `COALESCE`, so a test that passes here is not passing on a laxer store.
+        if let Some(depth) = outbox_depth {
+            self.outbox
+                .lock()
+                .expect("lock")
+                .insert((tenant, store), depth);
+        }
         Ok(())
     }
 }
@@ -1247,6 +1294,91 @@ async fn text_body(response: axum::response::Response) -> String {
 }
 
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
+
+/// Reads a fake store's whole log back, for asserting on what was actually written.
+async fn read_back(store: &FakeStore) -> Vec<EventEnvelope<RawPayload>> {
+    let page = core::num::NonZeroU32::new(64).expect("positive");
+    EventStore::read(store, &EventQuery::first(store_id(), page))
+        .await
+        .expect("read back")
+}
+
+/// A registry that answers for one store and nothing else (ADR-0101).
+#[derive(Debug)]
+struct FakeOwners {
+    store: StoreId,
+    owner: StoreOwner,
+}
+
+impl StoreOwners for FakeOwners {
+    fn owner_of(
+        &self,
+        store_id: StoreId,
+    ) -> pos_ports::dynamic::BoxFuture<'_, Result<Option<StoreOwner>, PortError>> {
+        let answer = (store_id == self.store).then_some(self.owner);
+        Box::pin(async move { Ok(answer) })
+    }
+}
+
+#[tokio::test]
+async fn an_ingested_event_is_filed_under_the_registrys_tenant_not_the_one_it_claimed() {
+    // production-readiness S2 / ADR-0101. Every store in the fleet stamped `ULID(1)` for tenant and
+    // brand, so the column row-level isolation is defined on held one constant fleet-wide. The stamp
+    // is what makes it mean something.
+    let real_tenant = TenantId::new(Ulid::from_u128(0x7E_4A_47));
+    let real_brand = BrandId::new(Ulid::from_u128(0xB_4A_4D));
+    let cloud = Cloud::with_store_owners(
+        FakeStore::new(),
+        Arc::new(FakeOwners {
+            store: store_id(),
+            owner: StoreOwner {
+                tenant_id: real_tenant,
+                brand_id: real_brand,
+            },
+        }),
+    );
+
+    let events = fixtures::activations(store_id(), 1, 2);
+    assert_ne!(
+        events[0].tenant_id, real_tenant,
+        "the fixture claims something else, which is the point"
+    );
+
+    cloud.ingest(&events).await.expect("ingest");
+
+    let stored = read_back(cloud.store()).await;
+    assert_eq!(stored.len(), 2);
+    for event in &stored {
+        assert_eq!(event.tenant_id, real_tenant);
+        assert_eq!(event.brand_id, real_brand);
+    }
+}
+
+#[tokio::test]
+async fn an_event_from_a_store_the_registry_does_not_know_is_kept_rather_than_lost() {
+    // A provisioned store has a registry row by construction, so this is a diagnostic, not a path.
+    // Refusing would stall the fleet's ingest behind one lookup; dropping would turn a provisioning
+    // bug into lost trading history. It keeps its own claim, and the warning names the store.
+    let stranger = StoreId::new(Ulid::from_u128(0x5_7A_46));
+    let cloud = Cloud::with_store_owners(
+        FakeStore::new(),
+        Arc::new(FakeOwners {
+            store: stranger,
+            owner: StoreOwner {
+                tenant_id: TenantId::new(Ulid::from_u128(1)),
+                brand_id: BrandId::new(Ulid::from_u128(1)),
+            },
+        }),
+    );
+
+    let events = fixtures::activations(store_id(), 1, 1);
+    let claimed = events[0].tenant_id;
+    let outcome = cloud.ingest(&events).await.expect("ingest");
+
+    assert_eq!(outcome.appended, 1, "the event is stored, not dropped");
+    let stored = read_back(cloud.store()).await;
+    assert_eq!(stored.first().map(|event| event.tenant_id), Some(claimed));
+}
 
 #[tokio::test]
 async fn ingest_is_idempotent_by_event_id() {
@@ -2408,8 +2540,71 @@ async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, Str
         .as_str()
         .expect("a version id")
         .to_owned();
-    let token = issue_key(keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(keys, tenant(), store_id(), &[Scope::ReadConfig]);
     (router, token, store_ulid, version)
+}
+
+/// A sibling store's key does not read this store's configuration (production-readiness **S1**).
+///
+/// The `/sync` routes took the tenant from the verified grant and the store from the *path*, which
+/// within one tenant is no check at all: every store in a chain shares a tenant, so any store's key
+/// served any sibling's `permissions` node — employee names and PIN hashes. Both halves are asserted
+/// here, because the second is what the first one's fix is worth: a key bound to store B is refused,
+/// and the key bound to store A still works on store A.
+#[tokio::test]
+async fn one_stores_key_does_not_read_another_stores_config() {
+    let keys = FakeKeys::default();
+    let (router, own_token, store_ulid, _version) = published_config(&keys).await;
+    let sibling = StoreId::new(Ulid::from_u128(0x0051_5111)); // a second store in the *same* tenant
+    let sibling_token = issue_store_key(&keys, tenant(), sibling, &[Scope::ReadConfig]);
+
+    let stolen = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&sibling_token),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(
+        stolen.status(),
+        StatusCode::FORBIDDEN,
+        "a sibling store's key must not read this store's config"
+    );
+
+    let own = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&own_token),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(
+        own.status(),
+        StatusCode::OK,
+        "the store's own key still reads its own config"
+    );
+}
+
+/// A tenant-wide key is not a store's credential, however good its scopes (**S1**).
+///
+/// `read_config` on an unbound key was the shape every key had before per-store scoping, and
+/// treating "names no store" as "may act for any store in the tenant" would leave the finding open
+/// under a different name. So `/sync` refuses it and the operator re-issues a store-scoped key.
+#[tokio::test]
+async fn a_tenant_wide_key_is_refused_on_the_store_facing_surface() {
+    let keys = FakeKeys::default();
+    let (router, _own_token, store_ulid, _version) = published_config(&keys).await;
+    let tenant_wide = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    let response = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&tenant_wide),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 /// A refusal on the **store-facing** surface is enveloped too, and names the field that was wrong
@@ -2450,7 +2645,7 @@ async fn a_store_facing_refusal_names_the_field_that_was_actually_wrong() {
 async fn a_refusal_about_two_fields_names_only_the_ones_missing() {
     let keys = FakeKeys::default();
     let router = device_app(provisioned_admin(), keys.clone(), FakeDevices::default());
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let devices_uri = format!("/sync/stores/{store_ulid}/devices");
 
@@ -2565,7 +2760,7 @@ async fn config_sync_records_store_liveness() {
         .as_str()
         .expect("a version id")
         .to_owned();
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     // Nothing is recorded until the store actually pulls.
     assert!(
@@ -2651,7 +2846,7 @@ async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
     assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
 
     // A read_config key records the contact and answers 204.
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let beat = router
         .oneshot(post_json_bearer(&uri, &serde_json::json!({}), &token))
         .await
@@ -2665,6 +2860,84 @@ async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
         seen_at, NOW_MS,
         "the contact instant is the server clock's now"
     );
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        None,
+        "a heartbeat that reports no depth records none — an empty object is not a reported zero"
+    );
+}
+
+#[tokio::test]
+async fn a_heartbeat_reports_the_stores_own_publish_backlog() {
+    // Track O6: `EventStore::outbox_depth` had no production caller, so a store whose events were
+    // piling up behind a down link looked identical to one perfectly in sync. The heartbeat is the
+    // one rail that runs on a fixed interval whether or not the store has anything else to say, so
+    // it carries the count — and only a count, never an event body (`docs/pos-spec.md` §13).
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/heartbeat");
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+
+    let beat = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({ "outbox_depth": 128 }),
+            &token,
+        ))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        Some(128),
+        "the depth the store reported is the depth the cloud recorded"
+    );
+
+    // An edge older than the body posts nothing at all, and must keep being recorded as alive
+    // rather than refused for sending the empty body it has always sent — and its silence must not
+    // erase the depth a newer report left standing.
+    let bodyless = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("build the request");
+    let beat = router
+        .clone()
+        .oneshot(bodyless)
+        .await
+        .expect("route the bodyless heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_outbox_depth(tenant(), store_id()),
+        Some(128),
+        "silence leaves the last reported depth standing rather than zeroing it"
+    );
+
+    // A body that is present and will not parse is the caller's mistake: swallowing it would let a
+    // store report nothing forever while believing it reported.
+    let malformed = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from("{\"outbox_depth\": \"lots\"}"))
+        .expect("build the request");
+    let refused = router
+        .oneshot(malformed)
+        .await
+        .expect("route the malformed heartbeat");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -2694,7 +2967,10 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
         "read_rollups does not authorise config pull"
     );
 
-    // The right scope, but a store with no published config, is a 404 — not a leak of another's tree.
+    // The right scope, aimed at a *different* store, is forbidden — and the refusal happens before
+    // the tree is read, so nothing about whether that store exists or has published leaks either
+    // (S1). This used to be a `404`, which was the honest answer only because the sibling happened
+    // to have nothing published; a sibling that *had* published was served.
     let other_store = Ulid::from_u128(0xBEEF).to_string();
     let unknown = router
         .oneshot(get(
@@ -2703,7 +2979,7 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
         ))
         .await
         .expect("route");
-    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }
 
 // --- Rollup reset-cursor-and-replay (`POST /admin/stores/{id}/rollups/reset`) -------------------
@@ -2787,6 +3063,7 @@ async fn the_internal_routes_refuse_a_request_without_the_shared_secret() {
                 provisioned_admin(),
                 clock(),
                 Some(internal_secret()),
+                FakeKeys::default(),
             ),
         ),
         (
@@ -2829,6 +3106,7 @@ async fn the_admin_reconcile_read_does_not_want_the_internal_key() {
         admin,
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let tenant_ulid = tenant().as_ulid().to_string();
     let response = router
@@ -2948,6 +3226,7 @@ fn reconcile_app(admin: FakeAdmin, store: FakeReconcile) -> axum::Router {
         admin,
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     ))
 }
 
@@ -2986,6 +3265,7 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
         provisioned_admin(),
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
@@ -3019,6 +3299,90 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
 }
 
 #[tokio::test]
+async fn a_store_reconciles_over_sync_with_its_own_key() {
+    // Production-readiness R3. ADR-0040 called reconciliation edge-initiated and put it on
+    // `/internal/*` — which the shipped proxy denies to every off-box caller, and a store is one by
+    // definition. The store's own door takes no shared secret: its tenant is the grant's and its
+    // store is the path's, checked against the key's binding.
+    let present: HashSet<EventId> = [1_u128, 3]
+        .into_iter()
+        .map(|n| EventId::new(Ulid::from_u128(n)))
+        .collect();
+    let store = FakeReconcile::with_present(present);
+    let keys = FakeKeys::default();
+    let router = http::reconcile_router(
+        store.clone(),
+        provisioned_admin(),
+        clock(),
+        Some(internal_secret()),
+        keys.clone(),
+    );
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/reconcile");
+    let manifest = serde_json::json!({
+        "event_ids": [event_ulid(1), event_ulid(2), event_ulid(3), event_ulid(4)],
+    });
+
+    // No bearer at all, and a key scoped to another store, are both closed.
+    let anon = router
+        .clone()
+        .oneshot(post_json(&uri, &manifest))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let elsewhere = issue_store_key(
+        &keys,
+        tenant(),
+        StoreId::new(Ulid::from_u128(0x0000_E15E)),
+        &[Scope::ReadConfig],
+    );
+    let wrong_store = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &manifest, &elsewhere))
+        .await
+        .expect("route");
+    assert_eq!(
+        wrong_store.status(),
+        StatusCode::FORBIDDEN,
+        "a key bound to another store cannot reconcile this one's log"
+    );
+
+    // This store's own key gets the same diff `/internal/reconcile` gives.
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let response = router
+        .oneshot(post_json_bearer(&uri, &manifest, &token))
+        .await
+        .expect("route the reconcile");
+    assert_eq!(response.status(), StatusCode::OK);
+    let missing = json_body(response).await["missing"]
+        .as_array()
+        .expect("a missing array")
+        .iter()
+        .map(|value| value.as_str().expect("a string").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        missing,
+        vec![event_ulid(2), event_ulid(4)],
+        "the same diff, through the door a store can actually reach"
+    );
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "and it records a run like the other door"
+    );
+    let (recorded_tenant, run) = &recorded[0];
+    assert_eq!(
+        *recorded_tenant,
+        tenant(),
+        "the tenant is the grant's, never a body's"
+    );
+    assert_eq!(run.store, store_id());
+    assert_eq!(run.candidates_offered, 4);
+    assert_eq!(run.missing_found, 2);
+}
+
+#[tokio::test]
 async fn reconcile_rejects_a_malformed_id() {
     let store = FakeReconcile::default();
     let router = http::reconcile_router(
@@ -3026,6 +3390,7 @@ async fn reconcile_rejects_a_malformed_id() {
         provisioned_admin(),
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
@@ -3122,6 +3487,9 @@ struct DeviceRow {
     kind: DeviceKind,
     name: String,
     address: String,
+    /// Recorded at approval, not at discovery (ADR-0100).
+    connection: Option<DeviceConnection>,
+    station_id: Option<StationId>,
     status: DeviceProposalStatus,
 }
 
@@ -3140,6 +3508,10 @@ impl DeviceProposalStore for FakeDevices {
             kind: proposal.kind,
             name: proposal.name.clone(),
             address: proposal.address.clone(),
+            // Pending genuinely does not know these: discovery cannot find how a printer is attached
+            // or which station it serves (ADR-0100). Approval fills them in.
+            connection: None,
+            station_id: None,
             status: DeviceProposalStatus::Pending,
         });
         Ok(())
@@ -3167,6 +3539,8 @@ impl DeviceProposalStore for FakeDevices {
                 kind: row.kind.as_wire().to_owned(),
                 name: row.name.clone(),
                 address: row.address.clone(),
+                connection: row.connection.map(|kind| kind.short_name().to_owned()),
+                station_id: row.station_id.map(|id| id.to_string()),
                 status: row.status.as_wire().to_owned(),
             })
             .collect())
@@ -3177,6 +3551,8 @@ impl DeviceProposalStore for FakeDevices {
         tenant: TenantId,
         id: DeviceProposalId,
         approved: bool,
+        connection: Option<DeviceConnection>,
+        station: Option<StationId>,
     ) -> Result<bool, DeviceProposalError> {
         let mut rows = self.rows.lock().expect("lock");
         for row in rows.iter_mut() {
@@ -3186,6 +3562,8 @@ impl DeviceProposalStore for FakeDevices {
                 } else {
                     DeviceProposalStatus::Rejected
                 };
+                row.connection = connection;
+                row.station_id = station;
                 return Ok(true);
             }
         }
@@ -3219,7 +3597,7 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let devices = FakeDevices::default();
     let router = device_app(provisioned_admin(), keys.clone(), devices);
     let cookie = admin_cookie(&router).await;
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let tenant_ulid = tenant().as_ulid().to_string();
     let devices_uri = format!("/sync/stores/{store_ulid}/devices");
@@ -3267,7 +3645,9 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approve = router
         .clone()
         .oneshot(post_with_cookie(
-            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
             &serde_json::json!({}),
             &cookie,
         ))
@@ -3281,6 +3661,211 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approved = json_body(after).await;
     assert_eq!(approved.as_array().expect("array").len(), 1);
     assert_eq!(approved[0]["address"], "192.168.1.50:9100");
+    assert_eq!(
+        approved[0]["connection"], "network",
+        "the store reads back what approval said about how the device is attached (ADR-0100)"
+    );
+    assert!(
+        approved[0]["station_id"].is_null(),
+        "no station named means the counter's receipt printer"
+    );
+}
+
+/// The approved devices compile into the `devices` config node, and only the approved ones
+/// (**ADR-0100**, C2 slice 2b).
+///
+/// The store learns where its printers are through the config-pull it already runs, which is what
+/// makes the knowledge survive a reboot with the WAN down. Asserted end to end — propose, approve,
+/// publish, read the tree — because the value of this slice is precisely that the three sit on one
+/// path; each half passing in isolation would prove nothing about the join.
+/// The propose+approve surface and the publish surface over one device store and one config tree —
+/// production's two `merge`s, in a test.
+fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
+    let devices = FakeDevices::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::device_router(
+            devices.clone(),
+            admin.clone(),
+            keys.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::device_publish_router(
+            devices,
+            trees,
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+}
+
+/// Proposes one discovered printer and returns its id.
+async fn propose_printer(
+    router: &axum::Router,
+    token: &str,
+    store_ulid: &str,
+    name: &str,
+    address: &str,
+) -> String {
+    let proposal: serde_json::Value =
+        serde_json::json!({ "kind": "printer", "name": name, "address": address });
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &proposal,
+            token,
+        ))
+        .await
+        .expect("route the propose");
+    json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn approved_devices_compile_into_the_published_config_node() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // Two devices proposed; only one approved.
+    let counter =
+        propose_printer(&router, &token, &store_ulid, "Counter", "192.168.1.51:9100").await;
+    let oven = propose_printer(&router, &token, &store_ulid, "Oven", "192.168.1.52:9100").await;
+
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=usb"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "store_id": store_ulid.clone() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let summary = json_body(published).await;
+    assert_eq!(summary["device_count"], 1, "only the approved device");
+    assert_eq!(summary["skipped_count"], 0);
+
+    // The store reads the node the way its edge will: through the config pull.
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the config read");
+    let document = json_body(effective).await;
+    let listed = document["devices"]["devices"]
+        .as_array()
+        .expect("the devices node is an array");
+    assert_eq!(listed.len(), 1);
+    let device = listed.first().expect("one device");
+    assert_eq!(
+        device["device_id"], counter,
+        "the proposal's id is the device's"
+    );
+    assert_eq!(device["address"], "192.168.1.51:9100");
+    assert_eq!(device["kind"], "DEVICE_KIND_PRINTER");
+    assert_eq!(
+        device["connection"], "DEVICE_CONNECTION_USB",
+        "the node carries the prefixed token, whatever the column spells"
+    );
+    assert!(
+        device["station_id"].is_null(),
+        "no station named means the counter's receipt printer"
+    );
+    assert_ne!(
+        device["device_id"], oven,
+        "the unapproved one is not published"
+    );
+}
+
+/// Approving without saying how the device is attached is refused, not guessed at (**ADR-0100**).
+///
+/// The guess would have to be `network`, which is safe — a network device never opens a cash drawer
+/// — and silently wrong for the store whose receipt printer is on USB with a drawer under it. The
+/// refusal names the field, so the console can point at it.
+#[tokio::test]
+async fn approving_a_device_without_a_connection_is_refused() {
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let router = device_app(provisioned_admin(), keys.clone(), devices);
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let proposal = serde_json::json!({
+        "kind": "printer", "name": "Counter", "address": "192.168.1.51:9100"
+    });
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &proposal,
+            &token,
+        ))
+        .await
+        .expect("route the propose");
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    let unknown = router
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=carrier-pigeon"
+            ),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(
+        unknown.status(),
+        StatusCode::BAD_REQUEST,
+        "a connection this build does not know is refused, not stored"
+    );
 }
 
 #[tokio::test]
@@ -3306,7 +3891,7 @@ async fn approving_a_device_proposal_records_to_the_audit_trail() {
         sink,
     ));
     let cookie = admin_cookie(&router).await;
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let tenant_ulid = tenant().as_ulid().to_string();
 
@@ -3328,7 +3913,9 @@ async fn approving_a_device_proposal_records_to_the_audit_trail() {
     let approve = router
         .clone()
         .oneshot(post_with_cookie(
-            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
             &serde_json::json!({}),
             &cookie,
         ))
@@ -4339,7 +4926,7 @@ async fn orders_submit_accepts_and_creates() {
 #[tokio::test]
 async fn the_sync_surface_is_refused_once_the_connection_is_over_its_budget() {
     let keys = FakeKeys::default();
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let state =
         app(Cloud::new(FakeStore::new()), FakeRollups::default(), keys).with_sync_rate_limit(1, 60);
     let throttle = state.sync_throttle();
@@ -4792,6 +5379,7 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _tenant: TenantId,
         _store: StoreId,
         _seen_at: Timestamp,
+        _outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }
@@ -4928,7 +5516,7 @@ impl OrderQueueStore for FakeOrderQueue {
 async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
     let keys = FakeKeys::default();
     let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
-    let relay_token = issue_key(&keys, tenant(), &[Scope::RelayOrders]);
+    let relay_token = issue_store_key(&keys, tenant(), order_store(), &[Scope::RelayOrders]);
     let (known, _price) = known_menu_item();
     let queue = FakeOrderQueue::new();
     let app = || {
@@ -5396,6 +5984,8 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -5459,6 +6049,8 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -5511,6 +6103,8 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 installed_version: Some("v1.2.3".to_owned()),
                 self_test_ok: Some(true),
                 reported_at: Some(seen_ago(1_000)),
+                outbox_depth: Some(0),
+                outbox_reported_at: Some(seen_ago(1_000)),
             },
         )
         .with_row(
@@ -5528,6 +6122,8 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 installed_version: None,
                 self_test_ok: None,
                 reported_at: None,
+                outbox_depth: Some(41),
+                outbox_reported_at: Some(seen_ago(600_000)),
             },
         );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -5560,6 +6156,10 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
         "the fleet read surfaces the reported OTA version"
     );
     assert_eq!(online["self_test_ok"], true, "and its self-test outcome");
+    assert_eq!(
+        online["outbox_depth"], 0,
+        "a store that reported an empty outbox has nothing waiting to publish"
+    );
 
     let offline = &rows[1];
     assert_eq!(
@@ -5573,6 +6173,15 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
     assert_eq!(offline["config_version_held"], "v-old");
     assert_eq!(offline["config_version_published"], "v-current");
     assert_eq!(offline["relay_backlog"], 3);
+    assert_eq!(
+        offline["outbox_depth"], 41,
+        "and its own publish backlog — the opposite direction, and the one that was invisible"
+    );
+    assert_eq!(
+        offline["outbox_reported_at_ms"],
+        seen_ago(600_000).as_milliseconds_since_epoch(),
+        "the depth travels with the heartbeat that reported it, so a stale one reads as stale"
+    );
     assert_eq!(offline["relay_oldest_pending_at_ms"], NOW_MS - 120_000);
 }
 
@@ -5594,6 +6203,8 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -5641,6 +6252,8 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             installed_version: None,
             self_test_ok: None,
             reported_at: None,
+            outbox_depth: None,
+            outbox_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -15384,7 +15997,7 @@ fn artifact_fixture(
 ) -> (axum::Router, String, FakeBlobs) {
     use sha2::Digest as _;
     let keys = FakeKeys::default();
-    let token = issue_key(&keys, tenant(), scopes);
+    let token = issue_store_key(&keys, tenant(), store_id(), scopes);
     let target = pos_cloud::ota::TargetTriple::parse(TEST_TARGET).expect("a valid triple");
     let blobs = FakeBlobs::default();
     blobs.put_now(
@@ -15680,7 +16293,7 @@ async fn an_uploaded_release_is_what_a_store_downloads() {
         .expect("route the upload");
     assert_eq!(uploaded.status(), StatusCode::CREATED);
 
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let served = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id()),
@@ -15876,7 +16489,7 @@ async fn promoting_a_version_the_cloud_does_not_host_is_refused() {
 async fn a_store_report_takes_its_tenant_from_the_key_not_the_body() {
     let reports = FakeOtaReports::default();
     let (router, keys) = store_report_app(reports.clone());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let accepted = router
         .oneshot(post_json_bearer(
@@ -15904,7 +16517,7 @@ async fn a_store_report_takes_its_tenant_from_the_key_not_the_body() {
 async fn a_store_report_can_say_it_has_never_self_tested() {
     let reports = FakeOtaReports::default();
     let (router, keys) = store_report_app(reports.clone());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let accepted = router
         .oneshot(post_json_bearer(
@@ -15949,7 +16562,7 @@ async fn a_store_report_needs_a_scoped_key() {
 #[tokio::test]
 async fn a_store_report_with_a_blank_version_is_refused() {
     let (router, keys) = store_report_app(FakeOtaReports::default());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let refused = router
         .oneshot(post_json_bearer(
@@ -15962,4 +16575,147 @@ async fn a_store_report_with_a_blank_version_is_refused() {
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     let body = json_body(refused).await;
     assert_eq!(body["error"]["details"][0]["field"], "installed");
+}
+
+#[tokio::test]
+async fn a_menus_prices_need_the_revenue_permission_not_plain_read() {
+    // production-readiness S5. `ReadRevenue` was carved out of `Read` because prices are T2, and the
+    // placements read — which carries every item's price on every channel of the menu — sat behind
+    // plain `Read`, which Ops and Viewer both hold. The console refused a Viewer the revenue report
+    // and handed them the price book.
+    let admin = provisioned_admin();
+    let router = catalog_app(admin.clone(), FakeCatalog::default());
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let list = format!("/admin/catalog/menus/{menu}/placements?tenant_id={tenant}");
+
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-prices"),
+        (AdminRole::Ops, "ops-prices"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&list, &cookie))
+            .await
+            .expect("route list placements");
+        assert_eq!(
+            refused.status(),
+            StatusCode::FORBIDDEN,
+            "{role:?} holds console.data.read but not console.reports.revenue"
+        );
+    }
+
+    // An Admin holds `ReadRevenue` and still reads the menu.
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-prices").await;
+    let allowed = router
+        .oneshot(get_with_cookie(&list, &cookie))
+        .await
+        .expect("route list placements");
+    assert_eq!(allowed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_console_config_read_never_carries_a_staff_pin_hash() {
+    // production-readiness S7, found while verifying S5. `GET /admin/stores/{id}/config` returns the
+    // whole effective document under plain `Read`, and the document's `permissions` node carries each
+    // member of staff's Argon2id PIN hash — T1, the credential the edge verifies a sign-in against.
+    // A read-only console account could lift the PIN hash of every member of staff in the fleet.
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let mine = tenant();
+    let store = StoreId::new(Ulid::from_u128(77));
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(1));
+
+    EmployeeStore::create(
+        &people,
+        &NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "C01".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
+        .await
+        .expect("set pin");
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec!["billing.discount.apply".to_owned()],
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: store,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign");
+
+    let router = people_publish_app(
+        admin,
+        people,
+        config,
+        Arc::new(NoopAuditRecorder) as Arc<dyn AuditRecorder>,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = mine.as_ulid().to_string();
+    let store_ulid = store.as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+
+    let staff = doc["permissions"]["staff"]
+        .as_array()
+        .expect("the staff array is still there");
+    assert_eq!(staff.len(), 1);
+    assert_eq!(
+        staff[0]["code"],
+        serde_json::json!("C01"),
+        "the roster is still readable — only the credential is withheld"
+    );
+    assert!(
+        staff[0].get("pin_phc").is_none(),
+        "the field is removed, not blanked: an empty string would read as 'no PIN set', which is a \
+         different and real state"
+    );
+    assert!(
+        !serde_json::to_string(&doc)
+            .expect("serialize")
+            .contains("argon2id"),
+        "no hash anywhere in the document"
+    );
 }

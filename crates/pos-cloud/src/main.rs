@@ -71,7 +71,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
     // config routes author, and the webhook-endpoint store the `/admin` webhook routes register into.
-    let cloud = Cloud::new(store.clone());
+    // Stamped, not trusted: every ingested event's tenant and brand come from this registry lookup,
+    // overwriting what the publishing box claimed
+    // ([ADR-0101](../../docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**).
+    // The tenant is the column row-level isolation is defined on, and until this line every store in
+    // the fleet stamped the same constant.
+    let cloud = Cloud::with_store_owners(store.clone(), Arc::new(store.store_directory()));
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
     // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
@@ -351,6 +356,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             config.internal_shared_secret.clone(),
+            // The store-facing reconcile route authenticates the box by its scoped key, exactly as
+            // the config pull and the OTA report beside it do — a store is off the cloud's private
+            // network, so `/internal` was never reachable from one (production-readiness R3).
+            store.api_keys(),
         ))
         .merge(http::ota_report_router(
             store.config_trees(),
@@ -441,6 +450,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // so the edge applies the real floor plan and station routing.
         .merge(http::floor_publish_router(
             store.floor(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Device publish (ADR-0100, C2 slice 2b): compile the store's *approved* printers and kitchen
+        // displays into the `devices` config node, so the edge learns where they are through the
+        // config-pull it already runs — and still knows after a reboot with the WAN down, because
+        // that node is persisted locally and restored at boot.
+        .merge(http::device_publish_router(
+            store.device_proposals(),
             store.config_trees(),
             store.admin(),
             SystemClock,
@@ -702,6 +722,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         sync_throttle,
         http::throttle_sync,
     ));
+    // The console security headers over the **fully-composed** service (ADR-0067 slice 5,
+    // production-readiness **S3**). `http::router` layers the same middleware over its own routes, and
+    // a comment there claimed this line already existed — it did not, so the console's own document,
+    // its assets, and every `/admin` sub-router merged in above (devices, registry, people, floor,
+    // catalog, audit, fleet, alerts, …) were served with no `Content-Security-Policy`, no
+    // `X-Frame-Options` and no `Referrer-Policy`. The SPA fallback is the one that matters most: it is
+    // the document a browser renders, and the inner layer never reached it because `.fallback` is
+    // added out here.
+    //
+    // Outermost on purpose, so it also covers the throttle's own `429` and any rejection a layer
+    // produces before a route is matched. The headers are `insert`ed, so the two layers agree rather
+    // than stacking.
+    let service = service.layer(axum::middleware::from_fn(http::security_headers));
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

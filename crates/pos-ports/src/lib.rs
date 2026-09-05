@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The eighteen boundaries between the framework and the outside world.
+//! The nineteen boundaries between the framework and the outside world.
 //!
 //! Every external system — database, broker, printer, terminal, marketplace, tax
 //! authority — is one implementation of one trait defined here. The list is fixed
 //! by `docs/adr/0021-corrected-port-list.md` and its amendments —
-//! `docs/adr/0053-cloud-sync-port.md` added the seventeenth and
-//! `docs/adr/0091-durable-edge-auth-state.md` the eighteenth; a nineteenth needs an
-//! ADR merged first.
+//! `docs/adr/0053-cloud-sync-port.md` added the seventeenth, `docs/adr/0091-durable-edge-auth-state.md`
+//! the eighteenth, and `docs/adr/0064-edge-order-in.md` Amendment the nineteenth — `IntakeLedger`,
+//! which shipped as a trait its own record called a port and was registered late. A twentieth needs
+//! an ADR merged first, and the count here is checkable against `PortName::ALL`.
 //!
 //! # Shape
 //!
@@ -16,9 +17,9 @@
 //! `unimplemented!()` means the port is wrong, not the adapter
 //! (`docs/design-principles.md`, interface segregation).
 //!
-//! Two of the eighteen are synchronous and are re-exported from `pos-proto`
+//! Two of the nineteen are synchronous and are re-exported from `pos-proto`
 //! rather than defined here, so that there is exactly one definition of each:
-//! `ClockSource` and `IdGenerator`. The other sixteen are asynchronous,
+//! `ClockSource` and `IdGenerator`. The other seventeen are asynchronous,
 //! declared with native `async fn` in trait — no procedural macro, no boxing on
 //! the happy path. Where a family needs runtime selection between several
 //! compiled-in adapters, this crate also carries a hand-written object-safe
@@ -95,8 +96,8 @@ pub use shipping::{
 pub use signer::{KeyId, PublicKey, Signature, Signer};
 pub use tx::{Transactional, TxContext};
 
-/// The two synchronous ports, re-exported so the seventeen-port list has one definition of
-/// each rather than two that can drift.
+/// The two synchronous ports, re-exported so the port list has one definition of each rather than
+/// two that can drift.
 ///
 /// They are defined in `pos-proto` because `pos-core` needs them and must not depend on this
 /// crate — see [ADR-0013](../../../docs/adr/0013-async-strategy.md).

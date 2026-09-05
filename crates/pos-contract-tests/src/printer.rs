@@ -85,7 +85,7 @@ fn job(seed: u32) -> PrintJob {
     PrintJob {
         job_id: fixtures::event_id(seed),
         store_id: StoreId::new(Ulid::from_u128(1)),
-        station_id: StationId::new(Ulid::from_u128(1)),
+        station_id: Some(StationId::new(Ulid::from_u128(1))),
         document: PrintDocument {
             blocks: vec![
                 PrintBlock::Text {

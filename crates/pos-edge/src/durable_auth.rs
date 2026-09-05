@@ -29,7 +29,7 @@
 use core::future::Future;
 use core::pin::Pin;
 
-use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
+use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice};
 use pos_ports::error::PortError;
 use pos_proto::ids::DeviceId;
 use pos_proto::time::Timestamp;
@@ -44,6 +44,15 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// Only the methods the edge actually calls are mirrored. `paired_devices` and `sign_ins` are here
 /// because boot reads them; the rest are the write paths.
+///
+/// [`DeviceRegistry::device_for_token`] is deliberately **not** mirrored, and was removed once it
+/// was found to have no caller (production-readiness **X2**). The edge never resolves one digest
+/// against storage: [`Pairing::load`](crate::pairing::Pairing::load) reads the whole table once at
+/// boot and the request gate then answers from memory, which is the point of holding the map at
+/// all. A mirror nothing calls is worse than no mirror — it is surface an adapter author reads as a
+/// requirement, and its old doc here claimed a "boot path consistency check" that was never
+/// written. The port keeps the method: it is a real capability of a registry and the contract suite
+/// asserts the digest binding through it.
 pub trait DurableAuth: Send + Sync {
     /// See [`DeviceRegistry::record_pairing`].
     fn record_pairing(&self, device: PairedDevice) -> BoxFuture<'_, Result<(), PortError>>;
@@ -65,12 +74,6 @@ pub trait DurableAuth: Send + Sync {
     ) -> BoxFuture<'_, Result<(), PortError>>;
     /// See [`DeviceRegistry::clear_sign_in`].
     fn clear_sign_in(&self, device_id: DeviceId) -> BoxFuture<'_, Result<(), PortError>>;
-    /// See [`DeviceRegistry::device_for_token`]. Used by the boot path's consistency check, not on
-    /// the request path — the gate resolves a token from memory.
-    fn device_for_token(
-        &self,
-        digest: TokenDigest,
-    ) -> BoxFuture<'_, Result<Option<DeviceId>, PortError>>;
 }
 
 /// Every `DeviceRegistry` is one, so an adapter implements only the plain trait.
@@ -109,13 +112,6 @@ impl<T: DeviceRegistry> DurableAuth for T {
 
     fn clear_sign_in(&self, device_id: DeviceId) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(DeviceRegistry::clear_sign_in(self, device_id))
-    }
-
-    fn device_for_token(
-        &self,
-        digest: TokenDigest,
-    ) -> BoxFuture<'_, Result<Option<DeviceId>, PortError>> {
-        Box::pin(DeviceRegistry::device_for_token(self, digest))
     }
 }
 
@@ -172,13 +168,6 @@ impl<S: pos_ports::EventStore + DeviceRegistry + Send + Sync> DurableAuth for Ed
 
     fn clear_sign_in(&self, device_id: DeviceId) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(DeviceRegistry::clear_sign_in(self.0.store(), device_id))
-    }
-
-    fn device_for_token(
-        &self,
-        digest: TokenDigest,
-    ) -> BoxFuture<'_, Result<Option<DeviceId>, PortError>> {
-        Box::pin(DeviceRegistry::device_for_token(self.0.store(), digest))
     }
 }
 

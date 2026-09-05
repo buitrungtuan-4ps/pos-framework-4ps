@@ -943,6 +943,58 @@ async fn a_revoked_device_is_refused_by_the_composed_edge() {
     .await;
     assert_eq!(status, StatusCode::OK, "the devices route is mounted");
     assert_eq!(devices["devices"], 1, "one device is paired");
+    // O1: the list, not just the count — `revoke` takes a device id, and this is the only surface
+    // that hands one out. The caller's own row is marked so an operator does not retire the tablet
+    // in their hand while looking for the one that walked out.
+    let paired = devices["paired"]
+        .as_array()
+        .expect("the paired devices are listed");
+    assert_eq!(paired.len(), 1, "the one paired device is named");
+    assert_eq!(
+        paired[0]["this_device"], true,
+        "the requesting device is marked as itself"
+    );
+    assert!(
+        paired[0]["device_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "the device id is what revoke takes back"
+    );
+    assert!(
+        paired[0]["paired_at_ms"].as_i64().is_some(),
+        "and when it paired, which is how an operator tells the tills apart"
+    );
+
+    // Retiring by id is the ordinary path: name the lost tablet, leave everyone else trading.
+    let this_device = paired[0]["device_id"]
+        .as_str()
+        .expect("a device id")
+        .to_owned();
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/pair/revoke",
+        Some(json!({ "device_id": "00000000000000000000000000" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "revoking a device that is not paired is a no-op, not an error"
+    );
+    let (status, devices) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/pair/devices",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "this device is untouched");
+    assert_eq!(
+        devices["paired"][0]["device_id"], this_device,
+        "retiring a stranger did not retire the caller"
+    );
 
     // Break glass: retire every device.
     let (status, _) = post(

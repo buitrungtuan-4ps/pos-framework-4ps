@@ -41,10 +41,18 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
-2. **API key** — issue the store's scoped key. `read_config` and `relay_orders` are pre-selected
-   together and you should keep both: with only `read_config` the box syncs its configuration and
-   looks healthy while the order relay answers `403` on every poll, so orders placed in the cloud
-   never reach the kitchen. The key is shown **once** — the next step embeds it in a file for you.
+2. **API key** — issue the store's scoped key. It is issued **bound to the store you just created**,
+   which is what the `/sync/stores/{id}/…` routes require: those serve one store its own
+   configuration, employee roster included, so a key naming another store — or naming none — is
+   refused there. `read_config` and `relay_orders` are pre-selected together and you should keep
+   both: with only `read_config` the box syncs its configuration and looks healthy while the order
+   relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The key
+   is shown **once** — the next step embeds it in a file for you.
+
+   Issuing a store key by hand instead (**API keys** screen) works the same way, but you must pick
+   the store in *Which store is this key for?*. A tenant-wide key is right for an integration that
+   reads a whole tenant's rollups and wrong for a box: the box will authenticate and then be refused
+   on every sync call.
 3. **Handoff** — the wizard produces the two files the box needs, and an installer that contains
    both. Set the listen port here if this machine cannot use the default `8787`, then download what
    the next step calls for:
@@ -109,6 +117,12 @@ sudo install -o root -g root -m 0600 env /etc/pos-edge/env
 The service unit reads it through `EnvironmentFile=-/etc/pos-edge/env` — the leading `-` means a
 missing file is not an error, so a LAN-only demo box needs no env file at all. Then start the service.
 
+**On Windows there is no `env` file** and the command above is POSIX-only. The two values it carries
+— `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` — go on the service's own registry key instead;
+[`deploy/edge/README.md`](../../deploy/edge/README.md) has the exact `reg add` line and why
+service-scoped beats machine-wide. The sync key's proper home on either OS is the credential store,
+and the environment variable is a headless bring-up override.
+
 One thing the manual path gets wrong more often than any other: since
 [ADR-0055](../adr/0055-edge-ota-updater.md) Amendment 1 the unit starts
 `/var/lib/pos-edge/bin/current`, a symlink the edge retargets to install its own updates. A box with
@@ -155,6 +169,32 @@ Each till, printer, and kitchen display becomes a named device that trades on it
 > the tracked hardware handoff), and the loops authenticate with that scoped key (the keyring's
 > `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential is accepted on
 > `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
+
+## Retiring a till that was lost or replaced
+
+A tablet pairs once and stays paired: pairings are durable by design
+([ADR-0091](../adr/0091-durable-edge-auth-state.md)), so nothing expires them and a restart no longer
+unpairs the store. That is the right default for a shop that reboots mid-service, and it means a
+tablet that walks out of the building keeps working until somebody retires it.
+
+On any **paired** device in the store, open **Devices** in the top bar:
+
+1. Every device the store has admitted is listed, newest first, with the moment it paired. The
+   tablet you are holding is marked **This device** — that is the one row not to retire by accident.
+2. **Retire** the row that is gone, then confirm. Its token stops resolving at once and does not come
+   back after a restart. Everyone else keeps trading.
+3. If you cannot tell which row is the missing tablet, **Retire every device** is the break-glass:
+   type `ALL` to confirm, then re-pair each till you still have (Step 3's six-digit code, one per
+   device). Every till stops working at the same instant, so do it between services if you can.
+
+The edge does not know a device's *name* — device names live in the cloud's approved-device registry,
+and a store that has never synced has none — so the pairing moment and the **This device** mark are
+what tell the tills apart. Retiring is behind the paired-device gate, not an operator login: the
+store server has no operator identity offline (the console is a browser on the LAN), so it is as
+strong as pairing and no stronger, and every retirement is written to the store's log.
+
+If a retirement answers an error, the store server could not write its durable device table — the
+tablet may still be paired after a restart. Try again rather than assuming it is locked out.
 
 ## Step 5 — Publish the store's configuration
 

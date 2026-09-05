@@ -53,6 +53,13 @@ pub struct FleetStoreRow {
     pub self_test_ok: Option<bool>,
     /// Unix ms of the store's most recent OTA report, or `None`.
     pub reported_at_ms: Option<i64>,
+    /// How many events the store reported having committed and not yet published on its last
+    /// heartbeat, or `None` if it has never said. Its *own* backlog — the opposite direction from
+    /// `relay_backlog`, which counts orders queued *for* it.
+    pub outbox_depth: Option<i64>,
+    /// Unix ms of the heartbeat that reported `outbox_depth`, or `None`. Carried so a stale depth
+    /// reads as stale rather than as current.
+    pub outbox_reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -72,7 +79,9 @@ const FLEET_SELECT: &str = "SELECT \
      b.oldest_pending_ms, \
      l.installed_version, \
      l.self_test_ok, \
-     l.reported_at \
+     l.reported_at, \
+     l.outbox_depth, \
+     l.outbox_reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN config_trees ct ON ct.tenant_id = s.tenant_id AND ct.store_id = s.store_id \
@@ -146,5 +155,7 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         installed_version: row.get(9),
         self_test_ok: row.get(10),
         reported_at_ms: row.get(11),
+        outbox_depth: row.get(12),
+        outbox_reported_at_ms: row.get(13),
     }
 }

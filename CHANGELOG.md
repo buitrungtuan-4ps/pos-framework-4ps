@@ -14,7 +14,532 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
-## [Unreleased]
+### Security
+
+- **A console role without `console.reports.revenue` no longer reads a store's prices through the
+  configuration screen** (production-readiness **S8**). Closing
+  `GET /admin/catalog/menus/{id}/placements` under **S5** left the same compiled price book readable
+  one route over: `GET /admin/stores/{id}/config` returns the whole effective document, and the
+  `menu` node in it is the per-channel price book. Every role down to Viewer holds plain `Read`, so
+  every console account could read what everything costs — the exact **T2** boundary `ReadRevenue`
+  was carved out of `Read` to hold.
+
+  The read now **redacts the priced nodes** for a caller without `ReadRevenue`, rather than being
+  gated on it outright. Gating the route is one line and costs Ops the screen they use for a store's
+  capabilities, floor, stations and printers; prices are narrower than data, so the narrow thing is
+  what is withheld.
+
+  Fixing it found a second priced node: **`campaigns`** carries combo prices, discount amounts and
+  minimum-bill thresholds. A redaction that closed the menu and left promotions open would not have
+  been a fix, so both go — on the current read and on the version-diff read, because a price is not
+  less sensitive for being last month's. The node is **removed, not blanked**, for the same reason
+  the staff PIN hash is: an empty object would read as "this store has no menu published", which is
+  a real and different state. The Config screen now says that a role is hiding something, so an
+  operator does not have to infer it from an absence.
+
+  **Upgrade note:** no migration and no configuration. An Owner or Admin sees exactly what they saw
+  before. An Ops or Viewer account keeps the config screen and no longer sees the `menu` or
+  `campaigns` nodes in it.
+
+### Fixed
+
+- **Thirteen documents that contradicted the tree** (production-readiness **Wave 6**). Each was
+  verified against source before being touched; none was refuted, and two were worse than reported.
+  The user-visible ones:
+
+  - The **README** described a tree that no longer exists: adapters that were never written
+    (`payment-*`, `vendor-*`) while seven real ones went unlisted, no mention of `dashboard/` — the
+    cloud console — at all, `countries/vn/` shown as present when only the reference module `zz` is,
+    "12 architecture decision records" against **101**, and "4–6 GitHub Secrets" against the fork
+    checklist's thirteen. Its status line now points at the current roadmap and the readiness list
+    rather than the original phase plan.
+  - **`pos-ports`' crate documentation** said eighteen ports in three places and "seventeen" in a
+    fourth; `PortName::ALL` has **nineteen**. `IntakeLedger` — the port that shipped as a trait its
+    own record called a port, and was registered late — is now named as the nineteenth.
+  - The **port table** credited `ConfigStore` to "SQLite / PostgreSQL". There is no PostgreSQL
+    implementation of that port and never was: what the cloud has is its own authoring-side config
+    tree, a different thing that also stores configuration. Naming both in one cell implied a
+    swappable adapter a fork could pick.
+  - **`ui-ux.md` §5** listed shipped console screens as backlog — four of six shipped whole, and a
+    fifth as the Fleet store drawer. What is genuinely still missing is now named instead: per-store
+    last backup, installed version and invoice-queue depth; unknown-result payments; and the
+    recovery actions, whose lease half cannot be built until a box learns its own lease standing.
+  - **`roadmap.md`'s ADR table** marked four Accepted, shipped ADRs as Open (0016, 0019, 0020, 0022).
+  - **`fork-checklist.md` §1** said "13, of which 6 are optional"; the tables carry six required, two
+    conditional on `TLS_MODE`, and five optional — and the difference between conditional and
+    optional is exactly what the page exists to make visible.
+  - **[ADR-0061](docs/adr/0061-order-relay.md)** was "Extended by ADR-0062", an ADR nobody wrote. The
+    header now says so, that `MessageLink` stays one-directional until it exists, and that 0062 is
+    reserved rather than missing.
+  - Three sets of slice ids collided on `O1`–`O4` across three planning documents. They are
+    disambiguated at the point of use rather than renumbered, because two references outside those
+    files already carried the qualifying prefix and renumbering would have broken them.
+  - Four smaller number-vs-tree disagreements: the step budget's task count (thirteen against
+    fifteen, in three places), E5's residual count (three against the five actually closed), the
+    debate log's declared range (D1–D22 against a list running to D25), and the gate register citing
+    a gate `H13` it no longer contains — that one because the row did what the register asks rows to
+    do: it stopped needing a human and left.
+
+  No code behaviour changes here beyond the `pos-ports` documentation.
+
+### Removed
+
+- **The edge's `DurableAuth` mirror drops `device_for_token`, which nothing called**
+  (production-readiness **X2**). Its doc said it was "used by the boot path's consistency check";
+  there is no such check. The boot path reads the *whole* device table once
+  (`Pairing::load`) and the request gate answers every later token from the in-memory digest map —
+  which is the entire reason the map exists. The mirror's own module rule already said only the
+  methods the edge calls are mirrored, so this was surface an adapter author could read as a
+  requirement while no code depended on it.
+
+  The **port keeps `DeviceRegistry::device_for_token`**, now documented for what it is: a genuine
+  capability of a registry, the read the contract suite proves the digest→device binding and its
+  revocation through, and what an edge that resolved against storage instead of caching the table
+  would use. No adapter changes — the blanket implementation still derives from the port.
+
+### Changed
+
+- **`Hello.product_version` stops claiming a path it does not have** (production-readiness **R2**).
+  The field was documented as "the edge's product release, for the fleet view", and ADR-0024
+  described a `hello` round trip. Neither is what the shipped transport does: the only production
+  `MessageLink` is `link-nats`, which is **outbound-only** by design — the store publishes into a
+  JetStream stream and there is no cloud responder — so its `handshake` runs `negotiate` against its
+  own compiled version range and nothing in the frame is transmitted.
+
+  Both places now say so, and name the rail that actually carries the version: `CloudSync::report`
+  over `/sync`, which **R1** above just made unconditional. The field itself is kept — the frame
+  belongs to the protocol rather than to one transport, the deferred bidirectional link reads it,
+  and removing a member from a wire type would be a `PROTOCOL_VERSION` change for no gain. No wire
+  change here, only two documents that were describing a different link than the one that ships.
+
+### Added
+
+- **A webhook delivery carries an idempotency key, so a receiver can dedupe a retry cheaply**
+  (production-readiness **R6**). Every `POST` now rides a third header beside the signature and its
+  timestamp:
+
+  ```
+  pos-delivery-id: 01J8Z…STORE.01J8Z…FIRSTEVENT
+  ```
+
+  The reason it was missing is the dispatch rule itself. A failed delivery does **not** advance the
+  endpoint's cursor ([ADR-0032](docs/adr/0032-webhooks.md)), so the retry re-reads the *identical*
+  page — and signs it under a fresh timestamp, which is bound into the signed bytes. Identical bytes
+  therefore arrived under a different signature on every attempt, and a receiver that had processed
+  the page and merely answered late could only recognise the second copy by hashing the body or by
+  unpacking every `event_id` inside it.
+
+  The key is the page's identity — the store plus the first event on it. It is stable for as long as
+  the page is (every retry of the same page repeats it) and different the moment the cursor advances,
+  which is exactly the boundary a receiver needs. It is **absent rather than empty** on a body that
+  is not a cursor page: an alert notification ([ADR-0073](docs/adr/0073-alerting.md)) goes out over
+  the same signed transport and has no page to key on, and minting a per-attempt id for it would be
+  worse than sending none — a receiver would dedupe on a value that never repeats.
+
+  Roadmap **Q5** had struck this header's name from the `naming-and-api.md` table because what it
+  described (one event per delivery) was not what the webhook does, and said a per-attempt id would
+  have to arrive as a real addition rather than a documentation fix. It now has, with the semantics
+  the transport actually supports: it names the **page**, not one event. The header table and
+  ADR-0032 both record it.
+
+  No configuration and no migration: a receiver that ignores the header behaves exactly as before.
+
+- **A store can reconcile its event log over a route it can actually reach**
+  (production-readiness **R3**). [ADR-0040](docs/adr/0040-reconciliation.md) called reconciliation
+  *edge-initiated* and put it on `/internal/*`. Both statements cannot hold on the shipped
+  deployment: the proxy denies `/internal/*` to every off-box caller, and a store is one by
+  definition — so the deferred edge poller would have been written against a route it could never
+  reach, and would have found out on the first real box.
+
+  `POST /sync/stores/{store_id}/reconcile` is the store's door, authenticated by its own scoped key
+  and bound to its own store, exactly like the config pull, the heartbeat and the OTA report beside
+  it — the third route to make this move. Its manifest carries **only** `event_ids`: the tenant is
+  the grant's and the store is the path's, because a body whose `tenant_id` the server discards is a
+  body a caller will eventually believe is honoured. `POST /internal/reconcile` is unchanged, for a
+  caller that genuinely is on the cloud's network.
+
+  One shared body runs the diff and records the run for both doors, so they cannot drift on
+  validation, on the diff, or on the history — the whole difference between them is meant to be
+  *where identity comes from*. The ADR carries the amendment, including why its own rejection of
+  "authenticating `/internal/reconcile`" was right about `/internal` and wrong about which surface a
+  store belongs on. **The edge poller itself is still deferred**; what changes is that it now has a
+  reachable endpoint.
+
+### Fixed
+
+- **A store that cannot update itself still says which binary it is running**
+  (production-readiness **R1**). `confirm_boot`'s own contract says the boot report "is sent in every
+  case, because a report exists chiefly to say which binary a store is running… and that is worth
+  knowing from a store's first boot". The wiring did not honour it: the report was spawned *inside*
+  the update loop, and that loop returned early when the box had no `bin/current` to install into, or
+  when the build carried no release signing keys.
+
+  So the fleet view held `NULL` for the installed version of exactly the boxes an upgrade campaign
+  has to find and lay out by hand — the ones where knowing the version matters most. Reporting and
+  updating are now separated by what they actually need: the report needs a keyed cloud client and
+  nothing else (a store with no cloud has nobody to tell, which is the one honest reason to stay
+  silent), while updating needs both a place to put a binary and keys to judge one with. The
+  missing-keys warning now says the box still reports.
+
+- **The provisioning chain stops handing operators values that cannot work** (production-readiness
+  **D1**–**D4**, **D6**). Five bugs in the shipped scripts and the documents beside them, each of
+  which fails quietly rather than loudly:
+
+  - `bootstrap.sh` **appended** `trusted_proxy_hops` and `table_token_secret` to the end of
+    `cloud.toml`. Once Garage has answered, the end of that file is inside the `[artifacts]` table,
+    so a bare key written there becomes `artifacts.trusted_proxy_hops` — which the cloud never
+    reads, while the script reports "set". Both now insert **above the first table header**. That
+    was exactly the failure the reconcile's own comment said it existed to prevent.
+  - The generated comment showed the cloud's ingest-cursor URL as `nats://…@nats:4222`. Once a
+    certificate exists the broker's client port is TLS for *every* client, so plaintext is refused —
+    and `tls://…@nats:4222` fails hostname verification, because the certificate is for `DOMAIN` and
+    `nats` is a Docker alias that can never be on it. The comment now gives the working URL and the
+    one caveat, plus the alternative for a host that cannot hairpin.
+  - `k8s/README.md` never mentioned `internal_shared_secret`, which `pos_cloud` refuses to start
+    without — so the pod CrashLoopBackOffs on first bring-up with nothing in the lane's own document
+    to explain it.
+  - A Windows store had no documented way to set `POS_EDGE_SYNC_KEY` or `POS_EDGE_NATS_URL`: the
+    install block set only `POS_EDGE_CONFIG`, and the guide handed Windows a POSIX `install`
+    command. There is now a Windows equivalent, service-scoped rather than machine-wide.
+  - The engineering guide's deploy-secrets table named `VPS_SSH_PORT` (nothing reads it), omitted
+    `VPS_KNOWN_HOSTS` (the reason the deploy is not trust-on-first-use) and `TLS_MODE`, and listed a
+    backup secret the workflow never reads. It now matches `deploy.yml` row for row.
+
+### Added
+
+- **The pre-production security review exists** (production-readiness **S6**). Gate **L5**, the
+  independent pentest, was sequenced after a document nobody had written, so it could not be booked.
+  [`docs/security-review.md`](docs/security-review.md) is that document: the three trust zones and
+  what an attacker reaches from each, every authenticated surface with the gate that holds it, the
+  credential inventory with what throttles each one, the three independent tenant-isolation layers
+  (and which of them is actually primary — it is not the one people assume), the T1/T2/T3 data map,
+  the artefact trust chain, and the seven open items ranked by what an attacker would reach first.
+
+  Its last section is a **scope statement for the pentest**: the five places worth the engagement's
+  time and why, and the two that are hardware gates rather than software. Every claim cites the file
+  that implements it, so the reviewer can check the document against the tree rather than trust it.
+
+- **Tenants, brands and devices can be renamed and archived** (production-readiness **O2**). The
+  registry has had `PATCH /admin/tenants/{id}`, `/admin/brands/{id}` and
+  `/admin/stores/{id}/devices/{id}` since WS-C — audited, etag-guarded, and with **no client calling
+  any of them**. An org, a brand or a device typed in wrong stayed wrong, and one that closed stayed
+  active forever. Only stores had the buttons.
+
+  All three now have the same three verbs the stores table has had all along. The organisation in
+  context is renamed from a new **Organisation** card on the Stores screen (archiving it is offered
+  too, behind a confirm that says plainly it is the org you are standing in); brands get their own
+  table beside the stores one; registry devices get a **Registered devices** roster on the
+  Activation screen, with rename, a kind correction, and archive — and an archived device is no
+  longer offered a fresh activation code, which it silently was before.
+
+  Every save carries the row's `ETag` back as `If-Match`, so an edit made against a version somebody
+  else has already replaced is refused rather than overwriting them
+  ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)). Archiving a *registry* device is
+  not the same as retiring a *paired till* — different credential, different tier — and the confirm
+  says so, pointing at the till's own Devices screen.
+
+- **A store can retire a lost till** (production-readiness **O1**). Pairings are durable by design
+  ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md)) — a restart no longer unpairs the shop —
+  which also means a tablet that walks out of the building keeps working until somebody retires it.
+  `POST /api/pair/revoke` has been mounted since that slice with **no caller anywhere**, and its
+  companion read was a dead end of its own: `GET /api/pair/devices` answered a *count*, while revoke
+  takes a device id, so no surface handed one out.
+
+  The read now lists each paired device with the moment it paired and marks the row belonging to the
+  tablet making the request, and a new **Devices** screen in the till UI retires one (with a
+  confirm) or every one (the break-glass, behind a typed `ALL`). The pairing moment and the *This
+  device* mark are the identification: the edge does not know a device's *name* — that lives in the
+  cloud's approved-device registry, and a store that has never synced has none. Retiring stays
+  behind the paired-device gate rather than an operator login, because the store server has no
+  operator identity offline; it is as strong as pairing and no stronger, and every retirement is
+  written to the store's log. The procedure is now a step in
+  [Bring a store online](docs/guides/bring-a-store-online.md).
+
+- **The fleet console can see a store's own publish backlog** (production-readiness **O6**).
+  `EventStore::outbox_depth` was implemented in every adapter and contract-tested, and **no
+  production code had ever called it** — so the cloud could say how many orders it was holding *for*
+  a store and nothing about how many sales the store was holding *from* the cloud. A box whose event
+  link had been down for a day looked exactly like one perfectly in sync. The heartbeat now carries
+  the count (it is the one rail that runs on a fixed interval whether or not the store has anything
+  else to say), and it lands on the Fleet screen as **Publish backlog** beside the relay backlog it
+  mirrors. A depth is a count and never an event body, so nothing personal travels with it.
+
+  A store that did not report shows **Not reported**, never `0`: an older edge, or one whose log
+  could not be read, must not read as caught up, and its silence never overwrites the last depth it
+  did report. The reporting instant travels with the depth, so a stale one reads as stale.
+  [ADR-0068](docs/adr/0068-fleet-liveness.md) Amendment 1.
+
+  **Upgrade note.** Additive migration `0049_store_outbox_depth.sql` adds two nullable columns to
+  `store_liveness`; it is applied idempotently on boot. `POST /sync/stores/{id}/heartbeat` now
+  accepts an **optional** JSON body — an edge running the older binary posts nothing and is recorded
+  exactly as before, so no `PROTOCOL_VERSION` change and no ordering constraint between deploying
+  the cloud and updating the stores.
+
+### Fixed
+
+- **The store hub stops reporting a zero nobody measured** (production-readiness **O5**). The
+  "Out of stock" card subtracts `inventory.item.restored` from `inventory.item.sold_out`, and
+  **nothing in the tree emits either event** — the auto-86 rule is in `pos-core` §8, but the live
+  stock projection that would fire it is still a follow-up. So the card has always shown `0` beside
+  "items marked out", which reads as *nothing is 86'd today*: a measurement, where there is none. It
+  now shows an em dash and says the store does not report this yet, and points at the kitchen's own
+  screen for the live list. ADR-0099 claimed the number was "exact"; that paragraph is corrected. The
+  arithmetic stays, so the day a producer lands the card starts counting with no further change.
+
+- **The device-approval screen shows what it is approving** (production-readiness **O3**). A
+  proposal's `name` and `address` — the two facts that say which printer this is — have been served
+  since the flow was built and were dropped by the dashboard's own type, so the screen asked an
+  operator to approve a *kind* and a ULID. Both are now columns and both are searchable, along with
+  the `connection`, `station_id` and `status` the same type had been discarding.
+
+- **An expired API key no longer renders as "Active"** (production-readiness **O4**).
+  `expires_at_ms` has been served since the key store was written; the dashboard type omitted it, so
+  a key that stopped working still showed a green badge. The status now reads `Expired`, and a new
+  **Expires** column shows when — with never-expiring keys sorted last, because a key with an end
+  date is the one someone is looking for. Revoked still outranks expired: a revoked key was killed on
+  purpose, which is the more useful thing to know about it. Setting an expiry *from the create form*
+  is a separate, smaller gap and is still open.
+
+### Security
+
+- **The cloud stamps an ingested event's tenant; the store no longer claims one**
+  ([ADR-0101](docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**). Every
+  store in the fleet stamped `ULID(1)` as its tenant and brand on every event it published — the doc
+  comment said activation would supply the real ones, and activation hands a box a device id and a
+  credential, nothing else. So the column row-level tenant isolation is defined on held one constant
+  for the whole fleet.
+
+  `Cloud::ingest` now rewrites both from the store registry, at the single funnel the NATS cursor and
+  `POST /internal/ingest` both pass through. One lookup per distinct store in a batch. Idempotency is
+  untouched: the log's key is `(business_date, event_id)` and carries no tenant, so there is no
+  migration and no backfill.
+
+  Three things this closes that were not obvious. The `events` row-level policy was real but dormant,
+  and would have **inverted into a fleet-wide read** the moment the posture ADR-0016 describes was
+  switched on — a real tenant seeing none of its own events while anything holding `ULID(1)` saw
+  everyone's. Reconciliation filters on `tenant_id` and would have answered "I am missing all of
+  these" for ever once it had a caller. And `brand_id` was simply untrue in the log.
+
+  The edge keeps a placeholder, renamed to say what it is: `StoreIdentity::UNASSIGNED`, the nil ULID.
+  A nil id that reaches a report reads as "nobody", which is the truth; `ULID(1)` reads as a tenant
+  that might exist. Putting the real ids in `config.toml` was considered and rejected — it keeps the
+  trust where the problem is, and a mistyped ULID would file a store's whole history under the wrong
+  tenant with nothing in the system disagreeing.
+
+  **Not closed, and said so in the ADR:** the broker's subject and credential are fleet-wide, so a
+  caller holding them can still publish under another store's id — the stamp then files those events
+  under *that* store's real tenant. This narrows the claim from "any tenant" to "any store in the
+  fleet"; per-store mTLS ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md)) is the path to
+  closing it.
+
+- **The console's security headers reach the console** (production-readiness **S3**). The
+  `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` layer
+  was applied inside one router while a comment beside it claimed the composed service carried the
+  same layer — which it did not. The console's own document is served by the SPA fallback, added
+  outside that router, so the page a browser actually renders had no CSP at all, and neither did any
+  of the merged `/admin` sub-routers. The layer now sits outermost on the composed service.
+
+- **Ten wrong pairing codes shut the door** (production-readiness **S4**). A store's pairing code is
+  six digits and nothing counted a wrong one, so anything that could reach the box's HTTP port could
+  walk a million values at request speed while the five-minute expiry looked on. `POST /api/pair` now
+  answers `429` with `Retry-After` for a minute after ten consecutive failures — checked before the
+  code table is touched, so a shut box never consumes the live code an operator is standing there
+  reading, and cleared by a successful pairing so the next device does not inherit a stranger's
+  guesses. The sibling PIN path has had a lockout since ADR-0030; this is the same rule for the other
+  door.
+
+- **A menu's prices need the revenue permission** (production-readiness **S5**).
+  `console.reports.revenue` was carved out of `console.data.read` because prices are commercially
+  sensitive, and `GET /admin/catalog/menus/{id}/placements` — which returns every item's price on
+  every channel of the menu — sat behind the wider one. The console refused a Viewer the revenue
+  report and handed them the price book. Ops and Viewer keep the menus, their sections and the item
+  master; what things cost is now Owner and Admin only.
+
+- **A staff PIN hash never reaches the console** (production-readiness **S7**, found while verifying
+  S5). `GET /admin/stores/{id}/config` returns a store's whole effective configuration under
+  `console.data.read`, and the `permissions` node carries each member of staff's Argon2id PIN hash —
+  the credential the edge verifies an offline sign-in against. A read-only console account could lift
+  the hash of every member of staff in the fleet, one store at a time. The field is now removed from
+  both console reads (current and the version-diff), unconditionally: no screen reads one, and a
+  value nobody needs is not worth a role check that could later be widened by mistake. Removed rather
+  than blanked, because an empty string reads as "this member has no PIN set" — a different and real
+  state. The hash still reaches the store over `/sync`, which is scoped to that store's own key.
+
+### Added
+
+- **The till draws the buttons the console arranged**
+  ([ADR-0066](docs/adr/0066-cloud-catalog.md), production-readiness **C4**). The `layout` node has
+  been authored in the console, validated by the cloud, versioned into the config tree and published
+  to every store — and read by nobody, so a till drew the flat price book whatever an operator laid
+  out. The edge now applies it beside `menu`, resolved for the store's sales channel, and serves it
+  at `GET /api/layout`; the order screen groups by the display categories and sub-categories in the
+  order they were authored, with each button's own caption.
+
+  Its own route because it is its own node: `menu` is what the domain reprices from and `layout` is
+  what a screen draws, so a price change relays no buttons and a button moving reprices nothing —
+  and folding the plan into `GET /api/menu` would re-entangle at the last hop what the design keeps
+  apart. A button carries no price for the same reason: the till already holds the price book keyed
+  by `menu_item_id`, and a second copy is a second price that can disagree.
+
+  An empty plan is not an empty screen. A store that has arranged nothing gets the flat price book,
+  which is what it had before; a category whose items have all been withdrawn is dropped rather than
+  drawn as a heading with nothing under it; and a button naming an item the price book no longer
+  carries draws nothing rather than an unpriceable tap. A layout published for another channel never
+  arranges this one — the same guard the price book keeps.
+
+- **Receipts and kitchen tickets actually print**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2**, the last
+  slice). `BillView::print_receipt` has been true on every settle since P5 and the till has rendered
+  "Printing receipt…" over it, while nothing in the tree ever constructed a `PrintJob` and no binary
+  depended on `printer-escpos`. It does now: a settle builds the guest's receipt and a fire builds the
+  station's ticket, both dispatched to the printer the cloud published on the `devices` node, over a
+  new raw-TCP transport (port 9100) in the ESC/POS adapter.
+
+  What the till says is now what happened. The settle response carries `receipt_print` — `PRINTED`,
+  `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT` — and the fire response carries
+  `ticket_print` beside the station it routed to; the Pay screen reads the outcome instead of
+  asserting one. A store with no printer published is an ordinary state and says so; a printer that
+  does not answer is news for the cashier, never a reason to unwind a bill the guest has already
+  paid, so printing runs strictly after the commit and its failure never rolls one back.
+
+  A kitchen ticket falls back to the station plan's own `backup_station_id`, one hop, never a guess —
+  a ticket printed in a kitchen nobody expected is worse than one not printed, because nobody goes
+  looking for it. A retried settle or fire reuses the bill's or line's own identifier as the job's
+  idempotency key, so the guest gets one receipt and the kitchen makes one dish. No cash drawer is
+  opened from here at all: port 9100 has no authentication, and that stays true whatever a published
+  node claims.
+
+  **Known limit, deliberately visible.** A line the printer cannot spell is refused rather than sent —
+  `UNPRINTABLE_TEXT`. This build has no CP1258 table and no rasteriser, so a Vietnamese item name
+  cannot yet go on paper; sending it anyway would print a line of question marks in front of a
+  customer, which `docs/pos-spec.md` §13 forbids. Receipts are unaffected (their lines are the number
+  and the total) and the kitchen display shows every order as before. USB and serial printers are
+  likewise refused with a clear reason: the TCP transport is the one that needs no hardware to
+  validate, and the other two stay in `docs/gate-register.md` §6.
+
+- **The store applies the `devices` node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
+  production-readiness **C2** slice 3). `EdgeSession` gains the printers and kitchen displays this
+  store may address, rebuilt from the config document beside `menu`, `permissions`, `floor` and
+  `stations` — so a box learns them from the pull it already runs, and still knows after a reboot
+  with the WAN down, because that node is now persisted locally and restored at boot.
+
+  Empty is an ordinary state, not a fault: a LAN-only box that has never synced and a shop with no
+  printer both look like this, and both mean "print nothing" rather than "print blind". A `kind` this
+  build predates keeps its token and its neighbours: a newer cloud publishing a label printer beside
+  the receipt printer must not cost the shop the receipt printer, which is asserted rather than
+  assumed.
+
+  Nothing prints yet — the dispatcher is the last slice.
+
+- **The cloud compiles a store's approved devices into its `devices` config node**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2b).
+  `POST /admin/devices/publish` reads the store's *approved* proposals and versions them onto the
+  `devices` key, so the edge learns where its printers are through the config-pull it already runs —
+  and still knows after a reboot with the WAN down, because that node is persisted locally and
+  restored at boot.
+
+  The proposal's identifier becomes the device's: the approval is what turns a proposal into a
+  device, and reusing it means the audit trail on the proposal and the device the store addresses are
+  the same thing rather than two ids to correlate by hand.
+
+  A row approved before this existed — one with no connection recorded — is **skipped, not published
+  as a guess**, and the response says how many were held back. The guess would have to be `network`,
+  which silently disables the cash drawer on a USB printer. A `kind` or `connection` this build does
+  not recognise keeps its token instead of failing the publish, matching what the store does on the
+  other end: a node that refused to compile over one unfamiliar device would take a shop's receipt
+  printer with it.
+
+- **Approving a device now records how it is attached and which kitchen it serves**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2a).
+  A proposal carries only what a box can *discover* on its LAN — kind, name, address. It cannot
+  discover that the printer at the counter is on USB with a cash drawer under it, or that the one at
+  `192.168.1.50` belongs to the oven. Both facts decide behaviour, so approval is where a human
+  states them, which is what approval was for.
+
+  `POST /admin/devices/proposals/{id}/approve` now takes `connection` (required: `usb`, `network` or
+  `serial`) and an optional `station_id`; an approval without a connection is a `400` naming the
+  field rather than a guess. The guess would have to be `network` — safe, since a network device
+  never opens a drawer, and silently wrong for the store whose receipt printer is on USB. Absent
+  `station_id` means the counter's receipt printer, which serves the bill rather than a station.
+
+  The console's Devices screen asks at the point of approval, offering the *proposing store's*
+  stations by name rather than a ULID. A rejection carries neither fact: they describe a device the
+  store will address, and a rejected one never will.
+
+- **The `devices` config node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
+  production-readiness **C2** slice 1). The vocabulary a store needs to address a printer: for each
+  approved device, its id, kind, connection, address, name, and the kitchen station it serves (absent
+  for the receipt printer at the counter, which serves the bill rather than a station).
+
+  It carries the forward-compatibility the rest of the config tree has: an unknown `kind` — a label
+  printer from a newer cloud — keeps its token instead of failing the node, so a store does not lose
+  its receipt printer to a device it has never heard of. `station_id` is omitted when absent rather
+  than written as null, so a publish diff shows the change and not the shape.
+
+  Publishing it, applying it at the edge, and the dispatcher that turns a settled bill into a receipt
+  are the slices that follow; nothing prints yet.
+
+### Security
+
+- **A store's API key now names its store, and the store-facing routes require it**
+  (production-readiness **S1**, [ADR-0037](docs/adr/0037-api-keys.md) Amendment 1). "Every key is
+  bound to one tenant" was the whole isolation story, and the `/sync/stores/{store_id}/…` routes took
+  the tenant from the verified grant and the store from the **path**. Within one tenant that is not a
+  check: every shop in a chain shares a tenant, so any store's key served a sibling's configuration —
+  including the `permissions` node, which carries employee names and PIN hashes. No production tenant
+  existed when this was found, so it was a vulnerability and not an incident.
+
+  `api_keys` gains a nullable `store_id` (migration `0047`), and two guards read it. `require_store`
+  holds the store-facing routes — config pull, heartbeat, OTA report, artifact fetch, device propose
+  and list, order-relay pull and ack — to the grant's own store; a key naming another store, or
+  naming none, is a `403`. `confine_to_store` holds `/v1/stores/{id}/rollups/daily` more loosely: a
+  tenant-wide integration key is the documented credential there and still passes, but a store's key
+  cannot use its rollup scope to read a sibling's takings.
+
+  A key that names no store is refused on `/sync` rather than waved through, because treating
+  "unbound" as "any store in the tenant" would restore the finding under a different name.
+
+  **Upgrade note.** Existing keys keep working everywhere except `/sync`. Re-issue each store's key
+  with its store named — the guided new-store wizard does this automatically, and the **API keys**
+  screen has a *Which store is this key for?* picker — then put the new token in the box's
+  environment file. A box presenting an old tenant-wide key authenticates and is then refused on
+  every sync call.
+
+- **QR ordering was off on every deployed box** (production-readiness **C3**,
+  [ADR-0057](docs/adr/0057-qr-ordering.md)). `pos_cloud` treats a missing `table_token_secret` as
+  "QR ordering off" and says so in one `warn` line at boot — and `bootstrap.sh`, which generates the
+  admin setup token, the internal shared secret, the database password and Garage's keys, never
+  wrote it. So a box came up with the QR route disabled, the printable table-QR sheet leading
+  nowhere, and nothing to show for it but a log line. `docs/fork-checklist.md` claimed the installer
+  generated it, which is what let the gap survive.
+
+  `bootstrap.sh` now generates it on a fresh box, and **appends it on a later run to a box that
+  predates the line** — the one reconcile in that file that refuses to touch a value it finds,
+  because rotating this secret invalidates every table QR already printed and stuck to a table.
+
+### Fixed
+
+- **A store that restarts with its broadband down can now sell** (production-readiness **C1**,
+  [ADR-0001](docs/adr/0001-offline-first-store-autonomy.md),
+  [ADR-0004](docs/adr/0004-cloud-owned-configuration.md)). The edge pulled its configuration from the
+  cloud and rebuilt the live session from it — in memory only. `ConfigStore`, the local copy that
+  `store-sqlite` has implemented and been contract-tested against since P4, was constructed by no
+  binary. So every restart came up on the bootstrap session: an empty menu, an empty staff roster, an
+  empty floor. No line could be added and nobody could sign in until the cloud answered, which for a
+  broadband outage — or for the OTA installer, which restarts the edge deliberately — is exactly when
+  it cannot.
+
+  The pull loop now writes each applied document to the store's own `ConfigStore`, and the boot
+  restores it into the live session before the socket binds, preferring the current version and
+  falling back to the last one that validated. The restored version is what the pull loop starts out
+  holding, so a restart asks the cloud for a *change* rather than re-fetching a document the counter
+  is already selling on.
+
+  Two deliberate asymmetries. A **read** failure at boot is fatal (new `EdgeError::ConfigRestore`),
+  for the same reason a failed device-registry read is: a box quietly trading on defaults while its
+  own database holds the real menu is worse than a box that will not start. A **write** failure after
+  a pull is not — it is logged and swallowed, because the document is already live on the counter and
+  all that is lost is the next offline restart.
 
 ### Added
 

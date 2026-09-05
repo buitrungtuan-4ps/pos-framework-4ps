@@ -12,6 +12,7 @@ use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
 use key_vault_keyring::{KeyringVault, OsKeyring};
 use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
+use pos_ports::config_store::ConfigStore;
 use pos_ports::device_registry::DeviceRegistry;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
@@ -29,7 +30,7 @@ use crate::cloud_http::{
     RelayHttpTransport,
 };
 use crate::config::{EdgeConfig, NatsConfig};
-use crate::config_client::ConfigClient;
+use crate::config_client::{ConfigClient, restore_session_from_store};
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
@@ -138,7 +139,7 @@ pub async fn serve<S, Q, A>(
     ota_authority: A,
 ) -> Result<ServeOutcome, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
 {
@@ -170,7 +171,7 @@ pub async fn serve_until<S, Q, A, F>(
     stop: F,
 ) -> Result<ServeOutcome, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
     F: Future<Output = ()> + Send + 'static,
@@ -333,7 +334,7 @@ pub async fn compose<S, Q>(
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Composed, EdgeError>
 where
-    S: EventStore + IntakeLedger + DeviceRegistry + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + DeviceRegistry + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
@@ -343,6 +344,15 @@ where
     let countries = crate::countries::registry();
     countries.validate().map_err(EdgeError::Country)?;
     tracing::info!(countries = ?countries.country_codes(), "country modules loaded");
+
+    // The configuration this store last synced, back into the live session before anything binds
+    // (C1). A box that reboots with its broadband down — or that an OTA install has just restarted —
+    // otherwise comes up on `EdgeSession::bootstrap`: no menu, no roster, no floor, and no way to
+    // sell until the cloud answers. A local-store read failure is the same fault that would stop the
+    // event log opening, so it stops the boot rather than being papered over.
+    let held_config_version = restore_session_from_store(&edge)
+        .await
+        .map_err(EdgeError::ConfigRestore)?;
 
     // The store's cloud and identity, read before `config` moves into the app state: they decide
     // whether the config-pull and heartbeat loops run (ADR-0085).
@@ -389,12 +399,20 @@ where
     // same value be held in two places — the trait returns `impl Future`, so it cannot be erased
     // behind `dyn`.
     let queue = Arc::new(queue);
-    let mut app = crate::http::router(state).merge(crate::http::domain_router(
-        edge,
-        Arc::clone(&queue),
-        Arc::clone(&pairing),
-        Arc::clone(&sessions),
-    ));
+    // The printers the settle and fire paths dispatch to (ADR-0100, production-readiness C2). Layered
+    // rather than threaded through `domain_router`'s signature because a printer is an *effect* the
+    // routes run after a commit, not state a route reads: the application loop deliberately holds no
+    // printer, and every composition that omits this — the fakes-backed example, a route test —
+    // reports `NO_PRINTER`, which is the truth for it rather than a silent no-op.
+    let printers = Arc::new(crate::printing::Printers::tcp());
+    let mut app = crate::http::router(state)
+        .merge(crate::http::domain_router(
+            edge,
+            Arc::clone(&queue),
+            Arc::clone(&pairing),
+            Arc::clone(&sessions),
+        ))
+        .layer(axum::Extension(printers));
 
     // Compose the cloud surface when the store is provisioned for a cloud (ADR-0086). A `cloud_url`
     // means: mount the activation routes so a fresh box can be set up at `/setup`, and — once the box
@@ -410,6 +428,7 @@ where
             &config_edge,
             queue,
             nats.as_ref(),
+            held_config_version,
             shutdown_rx,
         )
         .await;
@@ -440,10 +459,11 @@ async fn compose_cloud_surface<S, Q>(
     edge: &Arc<Edge<S>>,
     queue: Q,
     nats: Option<&NatsConfig>,
+    held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> (axum::Router, Option<CloudHttpClient>)
 where
-    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
@@ -482,8 +502,15 @@ where
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
             let sync_key = resolve_sync_key(&*vault).await;
-            keyed_client =
-                spawn_cloud_loops(cloud_url, store_id, edge, queue, sync_key, shutdown_rx);
+            keyed_client = spawn_cloud_loops(
+                cloud_url,
+                store_id,
+                edge,
+                queue,
+                sync_key,
+                held_config_version,
+                shutdown_rx,
+            );
             // The event stream is a second rail with its own endpoint and its own credential, so it
             // is spawned beside the `/sync` loops rather than inside them: a store with no sync key
             // still ships the events it has committed (ADR-0087).
@@ -528,10 +555,11 @@ fn spawn_cloud_loops<S, Q>(
     edge: &Arc<Edge<S>>,
     queue: Q,
     sync_key: Option<String>,
+    held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Option<CloudHttpClient>
 where
-    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     let Some(sync_key) = sync_key else {
@@ -551,14 +579,20 @@ where
         }
     };
 
+    // Seeded with what the boot restore found on disk, so the first pull asks the cloud for a
+    // *change* rather than re-fetching the document the counter is already selling on (C1).
     let config_client = ConfigClient::new(
         ConfigHttpTransport::new(client.clone(), store_id),
         Arc::clone(edge),
+        held_config_version,
     );
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
-    let heartbeat_client = HeartbeatClient::new(
+    // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet
+    // console can see a box whose events are piling up behind a down link (ADR-0068).
+    let heartbeat_client = HeartbeatClient::reporting(
         HeartbeatHttpTransport::new(client.clone(), store_id),
+        Arc::clone(edge),
         HEARTBEAT_INTERVAL,
     );
     tokio::spawn(heartbeat_client.run(wait_for_shutdown(shutdown_rx.clone())));
@@ -672,37 +706,71 @@ struct OtaWiring<A, S> {
     restart: RestartIntent,
 }
 
-/// Reports which binary this store is running, then starts the loop that weighs the published
-/// rollout ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), ADR-0055 Amendment 1).
+/// Reports which binary this store is running, and — when the box can actually install one — starts
+/// the loop that weighs the published rollout
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), ADR-0055 Amendment 1).
 ///
-/// Needs both a keyed cloud client and an install seam. With neither, or only one, nothing is
-/// spawned and the box trades exactly as it did before this loop existed: a store with no cloud has
-/// no release to fetch, and a store with no `bin/current` has nowhere to put one.
+/// # The report is not conditional on the update loop
+///
+/// It was, and that was production-readiness **R1**: this function returned early when there was no
+/// `bin/current` or no signing keys baked in, taking `confirm_boot` with it — so the fleet view held
+/// `NULL` for the installed version of exactly the boxes an upgrade campaign has to find, while
+/// `confirm_boot`'s own contract says the report "is sent in every case".
+///
+/// The two needs are different and are now separated. **Reporting** needs a keyed cloud client and
+/// nothing else; a store with no cloud has nobody to tell, which is the one honest reason to stay
+/// silent. **Updating** needs somewhere to put a binary (`bin/current`) and keys to judge one with;
+/// without either the box keeps trading on what it has, and still says what that is.
 fn spawn_ota<A, S>(wiring: OtaWiring<A, S>, shutdown_rx: &tokio::sync::watch::Receiver<bool>)
 where
     A: OtaStateAuthority + 'static,
     S: EventStore + Send + Sync + 'static,
 {
-    let (Some(client), Some(installer)) = (wiring.client, wiring.installer) else {
+    let Some(client) = wiring.client else {
         return;
     };
-    let trusted = match crate::trusted_keys() {
-        Ok(keys) => keys,
-        Err(error) => {
-            // Without the release signing keys there is nothing that could verify an artifact, so
-            // there is no safe way to run the loop. The box keeps trading on the binary it has.
-            tracing::warn!(
-                %error,
-                "no release signing keys are baked into this build; over-the-air updates are off"
-            );
-            return;
-        }
-    };
+    let store_id = wiring.store_id;
+    let boot = wiring.boot;
     let cloud = HttpCloudSync::new(
         OtaHttpTransport::new(client),
-        wiring.store_id,
+        store_id,
         crate::version::target(),
     );
+
+    // Can this box install what it is told to? Both halves are required, and a missing one is not an
+    // error — a LAN-installed box legitimately has no update layout.
+    let updater = match (wiring.installer, crate::trusted_keys()) {
+        (Some(installer), Ok(trusted)) => Some((installer, trusted)),
+        // `ota_installer` already said why, at info.
+        (None, _) => None,
+        (Some(_), Err(error)) => {
+            tracing::warn!(
+                %error,
+                "no release signing keys are baked into this build; over-the-air updates are off \
+                 (this box still reports which binary it is running)"
+            );
+            None
+        }
+    };
+
+    let Some((installer, trusted)) = updater else {
+        let authority = wiring.authority;
+        tokio::spawn(async move {
+            crate::ota_client::confirm_boot(
+                &cloud,
+                &authority,
+                &crate::ota_client::NoUpdateLayout,
+                store_id,
+                boot,
+            )
+            .await;
+        });
+        tracing::info!(
+            "this box does not update over the air; it still reports which binary it is running"
+        );
+        return;
+    };
+
     let ota = OtaClient::new(
         cloud.clone(),
         MinisignVerifier,
@@ -710,12 +778,10 @@ where
         trusted,
         wiring.authority,
         wiring.edge,
-        wiring.store_id,
+        store_id,
         wiring.restart,
     );
     let shutdown = wait_for_shutdown(shutdown_rx.clone());
-    let boot = wiring.boot;
-    let store_id = wiring.store_id;
     tokio::spawn(async move {
         // The report comes first: it is what tells the console which binary this store is running,
         // and after a revert it is the only place the failure is visible.

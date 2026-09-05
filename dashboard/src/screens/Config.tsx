@@ -26,7 +26,7 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
   device: "config.level.device",
 };
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { storeId, tenantId } from "../state/session";
+import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextArea } from "../components/ui";
 import { ConfirmDialog, EmptyState, StatusBadge } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -51,6 +51,16 @@ const CONFLICT_CHECKS: Record<string, (on: (key: string) => boolean) => boolean>
 
 export function Config() {
   const [effective, setEffective] = createSignal<Json | null>(null);
+
+  // Whether this admin's role carries `console.reports.revenue`. Prices are T2, so the server strips
+  // the priced nodes — the menu price book and the campaign amounts — from the effective document for
+  // a role without it (production-readiness S8). Mirrored here only to *say so*: an operator who sees
+  // a document with no `menu` key must not have to work out whether the store has no menu published
+  // or whether their role hid it. The server is the authority; this never unlocks anything.
+  const readsPrices = () => {
+    const role = actingAdmin()?.role;
+    return role === "owner" || role === "admin";
+  };
   const [loaded, setLoaded] = createSignal(false);
   const [level, setLevel] = createSignal<ConfigLevel>("store");
   const [document, setDocument] = createSignal("{\n}\n");
@@ -420,6 +430,9 @@ export function Config() {
                 when={effective() !== null}
                 fallback={<p class="text-sm text-ink-muted">{t("config.effectiveEmpty")}</p>}
               >
+                <Show when={!readsPrices()}>
+                  <p class="mb-2 text-sm text-ink-muted">{t("config.pricesHidden")}</p>
+                </Show>
                 <pre class="max-h-96 overflow-auto rounded-token border border-line bg-surface-raised p-3 text-xs text-ink">
                   {JSON.stringify(effective(), null, 2)}
                 </pre>

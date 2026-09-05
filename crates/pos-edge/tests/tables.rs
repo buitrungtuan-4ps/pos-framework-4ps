@@ -68,6 +68,7 @@ async fn paired() -> (Router, String) {
         .redeem(&code, now)
         .await
         .expect("redeem")
+        .token()
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();

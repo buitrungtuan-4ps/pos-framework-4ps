@@ -30,7 +30,7 @@ use pos_proto::ids::{EventId, StoreId};
 use pos_proto::time::Timestamp;
 
 use super::breaker::{BreakerConfig, BreakerState, CircuitBreaker};
-use super::sign::{Signature, SigningSecret, sign};
+use super::sign::{Signature, SigningSecret, delivery_id, sign};
 use super::ssrf::VettedUrl;
 
 /// The default page size: how many events one delivery carries at most.
@@ -44,10 +44,16 @@ const DEFAULT_PAGE: u32 = 100;
 /// delivery is treated as failed.
 pub trait WebhookTransport {
     /// Delivers one signed body.
+    ///
+    /// `delivery_id` is the receiver's **idempotency key** ([`super::sign::DELIVERY_ID_HEADER`],
+    /// production-readiness **R6**), sent as a header when there is one. `None` is for a body that
+    /// is not a cursor page and therefore has no stable identity to offer — the alert channel — and
+    /// the header is then simply absent rather than carrying a value a receiver could not dedupe on.
     fn deliver(
         &self,
         target: &VettedUrl,
         signature: &Signature,
+        delivery_id: Option<&str>,
         body: &[u8],
     ) -> impl Future<Output = Result<(), DeliveryError>> + Send;
 }
@@ -153,6 +159,15 @@ impl WebhookEndpoint {
         self.cursor
     }
 
+    /// Shrinks the page, so a test can exercise *two* pages without seeding a hundred events.
+    ///
+    /// Test-only: production reads [`DEFAULT_PAGE`] and nothing configures it, so a public setter
+    /// would be API nobody calls.
+    #[cfg(test)]
+    fn set_page(&mut self, page: NonZeroU32) {
+        self.page = page;
+    }
+
     /// The breaker's current state, for the admin view.
     #[must_use]
     pub fn breaker_state(&self) -> BreakerState {
@@ -207,9 +222,20 @@ where
 
     let body = serde_json::to_vec(&batch).map_err(WebhookError::Encode)?;
     let signature = sign(&endpoint.secret, now, &body);
+    // The page's idempotency key (production-readiness R6). A failure below leaves the cursor where
+    // it is, so the next attempt re-reads this same page and mints this same id — which is exactly
+    // what lets a receiver that answered late recognise the retry instead of processing it twice.
+    let delivery_id = batch
+        .first()
+        .map(|event| delivery_id(endpoint.store_id, event.event_id));
 
     if transport
-        .deliver(&endpoint.destination, &signature, &body)
+        .deliver(
+            &endpoint.destination,
+            &signature,
+            delivery_id.as_deref(),
+            &body,
+        )
         .await
         .is_ok()
     {
@@ -230,6 +256,8 @@ where
 mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use core::num::NonZeroU32;
 
     use super::{DeliveryError, DeliveryOutcome, WebhookEndpoint, WebhookTransport, deliver_next};
 
@@ -269,8 +297,12 @@ mod tests {
     }
 
     /// Records the bodies it accepts, and can be flipped to refuse every delivery.
+    ///
+    /// `delivery_ids` records **every** attempt, refused ones included — the whole point of R6 is
+    /// what a retry carries, and a retry is by definition an attempt the receiver did not accept.
     struct FakeTransport {
         accepted: Mutex<Vec<(super::Signature, Vec<u8>)>>,
+        delivery_ids: Mutex<Vec<Option<String>>>,
         down: AtomicBool,
     }
 
@@ -278,6 +310,7 @@ mod tests {
         fn up() -> Self {
             Self {
                 accepted: Mutex::new(Vec::new()),
+                delivery_ids: Mutex::new(Vec::new()),
                 down: AtomicBool::new(false),
             }
         }
@@ -285,12 +318,17 @@ mod tests {
         fn down() -> Self {
             Self {
                 accepted: Mutex::new(Vec::new()),
+                delivery_ids: Mutex::new(Vec::new()),
                 down: AtomicBool::new(true),
             }
         }
 
         fn calls(&self) -> usize {
             self.accepted.lock().expect("lock").len()
+        }
+
+        fn delivery_ids(&self) -> Vec<Option<String>> {
+            self.delivery_ids.lock().expect("lock").clone()
         }
     }
 
@@ -299,8 +337,13 @@ mod tests {
             &self,
             _target: &VettedUrl,
             signature: &super::Signature,
+            delivery_id: Option<&str>,
             body: &[u8],
         ) -> Result<(), DeliveryError> {
+            self.delivery_ids
+                .lock()
+                .expect("lock")
+                .push(delivery_id.map(ToOwned::to_owned));
             if self.down.load(Ordering::SeqCst) {
                 return Err(DeliveryError::new("endpoint down"));
             }
@@ -416,5 +459,67 @@ mod tests {
             DeliveryOutcome::Delivered { events: 4 }
         );
         assert_eq!(endpoint.cursor(), Some(events[3].event_id));
+    }
+
+    #[tokio::test]
+    async fn a_retry_carries_the_same_delivery_id_and_the_next_page_a_different_one() {
+        // Production-readiness R6. A failed delivery leaves the cursor where it was, so the retry
+        // re-sends the same page with a fresh timestamp and therefore a fresh signature. Without a
+        // stable idempotency key the two are indistinguishable to a receiver except by hashing the
+        // body — so a receiver that processed the page and then answered late would process it twice.
+        let store = FakeStore::new();
+        let events = seed(&store, 4).await;
+        let mut endpoint =
+            WebhookEndpoint::register(store_id(), destination(), SigningSecret::new("shhh"));
+        endpoint.set_page(NonZeroU32::new(2).expect("a page of two"));
+
+        // Two refused attempts at the first page, then one that lands.
+        let down = FakeTransport::down();
+        for _ in 0..2 {
+            assert_eq!(
+                deliver_next(&store, &mut endpoint, &down, now())
+                    .await
+                    .expect("deliver"),
+                DeliveryOutcome::Failed
+            );
+        }
+        let refused = down.delivery_ids();
+        assert_eq!(refused.len(), 2, "both attempts reached the transport");
+        assert_eq!(
+            refused[0], refused[1],
+            "a retry of the same page carries the same idempotency key"
+        );
+
+        let up = FakeTransport::up();
+        assert_eq!(
+            deliver_next(&store, &mut endpoint, &up, now())
+                .await
+                .expect("deliver"),
+            DeliveryOutcome::Delivered { events: 2 }
+        );
+        let first_page = up.delivery_ids();
+        assert_eq!(
+            first_page[0], refused[0],
+            "and the attempt that finally lands carries it too — the page never changed"
+        );
+        assert_eq!(
+            first_page[0].as_deref(),
+            Some(format!("{}.{}", store_id(), events[0].event_id).as_str()),
+            "the key names the store and the page's first event, so an operator can read it"
+        );
+
+        // The cursor has moved, so the next page is a different delivery.
+        let second = FakeTransport::up();
+        assert_eq!(
+            deliver_next(&store, &mut endpoint, &second, now())
+                .await
+                .expect("deliver"),
+            DeliveryOutcome::Delivered { events: 2 }
+        );
+        assert_ne!(
+            second.delivery_ids()[0],
+            first_page[0],
+            "a different page is a different delivery, never a repeat of the last key"
+        );
     }
 }

@@ -38,6 +38,14 @@ pub enum EdgeError {
     #[error("could not load the device registry: {0}")]
     DeviceRegistry(pos_ports::error::PortError),
 
+    /// The configuration this store last synced could not be read back at boot (C1, ADR-0004).
+    ///
+    /// Fatal on purpose, and for the same reason as [`Self::DeviceRegistry`]: the alternative is a
+    /// box that comes up on an empty menu and an empty staff roster while its own database holds the
+    /// real one. A store that will not start is visible; a store quietly trading on defaults is not.
+    #[error("could not restore the last synced configuration: {0}")]
+    ConfigRestore(pos_ports::error::PortError),
+
     /// The listen address could not be bound — most often already in use.
     #[error("could not bind {addr}: {source}")]
     Bind {

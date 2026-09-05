@@ -79,7 +79,7 @@ These are not deferrals. They gate the *first live store*, not a later country p
 | L2 | **Confirm consent status, retention period, and a DPIA for customer analytics** | Analytics on customer data. `retention_days` is a value someone chooses, not a default to inherit | [ADR-0076](adr/0076-subject-request-tooling.md) · [ADR-0035](adr/0035-retention-and-pii-masking.md) |
 | L3 | **Clear any cross-border transfer** — a DTA or explicit consent — before data leaves the country of collection | Any hosting region outside it. The hosting-region decision itself (APPI/DPDP) is B10.4 | [ADR-0076](adr/0076-subject-request-tooling.md) · [`roadmap-v3.md`](roadmap-v3.md) B10.4 |
 | L4 | **Name the Data Protection contact** an EU-resident rights request escalates to | Nothing technical. The tool hands over the payload; it never auto-fulfils | [ADR-0076](adr/0076-subject-request-tooling.md) |
-| L5 | **Independent pentest**, after the security review | Production sign-off | [`roadmap-v3.md`](roadmap-v3.md) B10.4 |
+| L5 | **Independent pentest**, after the security review — which now exists: [`security-review.md`](security-review.md), whose last section is the engagement's scope statement | Production sign-off | [`roadmap-v3.md`](roadmap-v3.md) B10.4, [`security-review.md`](security-review.md) §9 |
 
 ## 6. Real hardware — cannot be cleared in CI
 
@@ -95,6 +95,8 @@ measure, and say so at the place they stop.
 | P5 | **Sudden power loss mid-transaction**, on the target machine | The recovery claim in the reliability matrix | [`capacity-and-reliability.md`](capacity-and-reliability.md) · [`roadmap-v3.md`](roadmap-v3.md) A·P5 |
 | P6 | **Sustained soak at 222 events/s** against live PostgreSQL, for hours, without leaking | The throughput figure. The model deliberately does not measure it — NVMe `fsync` is the deciding factor and wall-clock time is the method | [`capacity-and-reliability.md`](capacity-and-reliability.md) |
 | P7 | **Printer, KDS and card-terminal soak** on the pilot country's actual devices | The device matrix, and the card-terminal adapter | [`roadmap-v3.md`](roadmap-v3.md) A·P5, B10.3 |
+| P8 | **A USB or serial printer at all.** Narrower than it was: the dispatcher, the selection, the station failover and the ESC/POS bytes are all exercised in CI, and the raw-TCP (9100) transport is proven against a `TcpListener`, which is indistinguishable from a printer above the socket. What does not exist is a USB or serial `Transport` — both need a device on a desk to write and to validate, and both are refused with a named reason rather than silently dialled as network printers | A USB receipt printer, and therefore a cash drawer, which opens over USB and nowhere else | [ADR-0100](adr/0100-receipt-and-ticket-printing.md) · `crates/adapters/printer-escpos/src/tcp.rs` |
+| P9 | **Vietnamese on paper.** A thermal printer renders a line outside its code page as garbage (`pos-spec.md` §13), so the framework must either send CP1258 bytes or a rasterised bitmap; `printer-escpos` carries neither, and the dispatcher therefore refuses such a line (`UNPRINTABLE_TEXT`) rather than printing question marks in front of a customer. Which of the two to build is partly a hardware question — what the pilot's actual printers accept | Kitchen tickets in Vietnamese. Receipts are unaffected (their lines are the number and the total), and the kitchen display shows every order regardless | [ADR-0100](adr/0100-receipt-and-ticket-printing.md) · [`pos-spec.md`](pos-spec.md) §13 |
 
 ## 7. External registration — a third party must act
 
@@ -149,6 +151,14 @@ by this page, and that is deliberate: a register that *adds* obligations becomes
 truth and drifts from the first. When a gate is cleared, record the answer where the *Recorded in*
 column points, and mark it here — this page tracks whether a gate is open, not what the answer was.
 
-When a gate stops needing a human — H13 disappears the day artifact credentials are provisioned by
-bootstrap, P1 disappears the day someone runs `nc -zv` against a real box and writes down the result
-— delete the row. A register that only grows is one nobody reads.
+When a gate stops needing a human, delete the row. **P1** disappears the day someone runs `nc -zv`
+against a real box and writes down the result. That has already happened twice: **H11** (add the
+certificate-export cron line) and **H13** (mint the Garage S3 access keys on the box) were published
+here as human gates, moved to §8 when the owner asked why so much of a deploy is manual, and H13's
+successor **A1** then closed outright — `bootstrap.sh` creates the layout, the bucket and the key
+itself. A register that only grows is one nobody reads.
+
+**The numbers are not reused, and the sequence therefore has gaps** — there is no H11 or H13 today.
+Renumbering would silently redirect every link and every note that cites a gate by number, including
+the ones in `deploy-runbook.md` and this page's own §8. A gap means a row was removed; the history is
+in git, and the reason is usually recorded in §8.

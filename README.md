@@ -5,7 +5,7 @@
 A multi-country, offline-first Point-of-Sale framework written in Rust.
 One store runs entirely on its own hardware. The cloud manages configuration, fleet operations, and reporting — it is never in the path of a sale.
 
-**Status:** design frozen, implementation under way — see [docs/roadmap.md](docs/roadmap.md). Proprietary, internal use (see [LICENSE](LICENSE)).
+**Status:** v1.0 code-complete for the Vietnam pilot and under an open readiness audit — [docs/production-readiness.md](docs/production-readiness.md) is the live list of what stands between this tree and a shop that takes money, and [docs/roadmap-v3.md](docs/roadmap-v3.md) is the current roadmap. ([docs/roadmap.md](docs/roadmap.md) is the original phase plan, kept for its exit criteria.) Proprietary, internal use (see [LICENSE](LICENSE)).
 
 ---
 
@@ -14,7 +14,7 @@ One store runs entirely on its own hardware. The cloud manages configuration, fl
 | Promise | How it is delivered |
 |---|---|
 | **A store never stops selling** | All sales logic runs on a local binary with a local database. Network loss changes nothing except cloud-only features. |
-| **Plug and play** | Fork the repo, set 4–6 GitHub Secrets, click *Run workflow*. ~15 minutes later you have a running cloud and an admin UI. |
+| **Plug and play** | Fork the repo, set **six** required GitHub Actions secrets (thirteen exist; the rest are optional or depend on your TLS posture — [`docs/fork-checklist.md`](docs/fork-checklist.md) §1 derives the list from the workflows themselves), click *Run workflow*. ~15 minutes later you have a running cloud and an admin console. |
 | **Light and fast** | Two static Rust binaries. A store server idles below 1% CPU; a touch-to-persist operation costs 1–4 ms. |
 | **Multi-country** | Country-specific obligations (tax invoices, locale, vendors) live in `countries/<cc>/` and are selected by a Cargo feature. The core never changes when you add a country, and a fork that needs two countries out of five compiles only two — see [ADR-0027](docs/adr/0027-country-modules.md). |
 | **Cross-platform** | Store server runs on Windows and Linux. Clients are browsers: POS terminals, tablets, phones, kitchen displays. |
@@ -55,14 +55,16 @@ pos-framework/
 │   ├── pos-core/              Pure domain. No tokio, no sqlx, no I/O.
 │   ├── pos-ports/             Trait definitions (the framework's boundaries)
 │   ├── pos-proto/             Wire types, events, PROTOCOL_VERSION
-│   ├── adapters/
-│   │   ├── store-sqlite/      EventStore, ConfigStore (edge)
-│   │   ├── store-postgres/    EventStore, ConfigStore (cloud)
-│   │   ├── link-nats/         MessageLink
-│   │   ├── printer-escpos/    PrinterDriver
-│   │   ├── payment-*/         PaymentTerminal per acquirer
-│   │   ├── vendor-*/          DeliveryVendor per marketplace
-│   │   └── shipping-*/        ShippingDispatch per courier
+│   ├── adapters/             Twelve today; the port list is docs/architecture.md §5
+│   │   ├── store-sqlite/      EventStore, ConfigStore, DeviceRegistry, IntakeLedger (edge)
+│   │   ├── store-postgres/    EventStore + the cloud's own stores
+│   │   ├── link-nats/         MessageLink          cloud-sync-http/  CloudSync
+│   │   ├── printer-escpos/    PrinterDriver        key-vault-keyring/ KeyVault
+│   │   ├── blob-garage/       BlobStore            updater-minisign/  Signer
+│   │   ├── metrics-vm/        MetricsSink          erp-sap/           ErpSink
+│   │   └── shipping-ahamove/, shipping-grabexpress/   ShippingDispatch
+│   │                          (the last three are reference adapters: complete and
+│   │                           contract-tested, in no binary's graph until v1.2)
 │   ├── pos-country/           What a country module is; the feature-selected registry
 │   ├── pos-contract-tests/    The suite every implementation of every port must pass
 │   ├── pos-fakes/             In-memory implementations; passes every suite
@@ -70,9 +72,10 @@ pos-framework/
 │   ├── pos-cloud/             Cloud binary: wires adapters into core
 │   └── pos-simulator/         Virtual fleet for load and OTA testing
 ├── countries/                 One directory per country. Add or remove yours here.
-│   ├── zz/                    Reference module — copy this to start a country
-│   └── vn/                    Vietnam (arrives in P10)
-├── ui/                        SolidJS + Tailwind, embedded into binaries
+│   └── zz/                    Reference module — copy this to start a country.
+│                              Vietnam is not here yet (roadmap-v3 B·W10)
+├── ui/                        The till: SolidJS + Tailwind, embedded into pos_edge
+├── dashboard/                 The cloud console: SolidJS + Tailwind, embedded into pos_cloud
 ├── deploy/                    compose.yml, Caddyfile.d/, bootstrap.sh, k8s/
 ├── examples/                  Runnable examples (built by CI)
 ├── templates/adapter-template/   Extracted at the *third* adapter, not before (rule of three)
@@ -109,11 +112,15 @@ New here, or picking a task? The four short [**guides**](docs/guides/) each fini
 | [docs/naming-and-api.md](docs/naming-and-api.md) | How to name anything: JSON, DB, events, permissions |
 | [docs/ui-ux.md](docs/ui-ux.md) | How screens must behave |
 | [docs/engineering-guide.md](docs/engineering-guide.md) | Branching, CI, releases, deployment, AI contributions |
-| [docs/roadmap.md](docs/roadmap.md) | What is being built next, in what order, and the exit criterion for each phase |
+| [docs/roadmap-v3.md](docs/roadmap-v3.md) | **The current roadmap**: what is left, in what order, and what each version means |
+| [docs/production-readiness.md](docs/production-readiness.md) | The open list between this tree and a trading store, with an evidence state per item |
+| [docs/roadmap.md](docs/roadmap.md) | The original phase plan (P1–P13) and the exit criterion of each phase |
+| [docs/fork-checklist.md](docs/fork-checklist.md) | Everything a fork must configure: which secrets belong to GitHub, which to a machine |
+| [docs/release-runbook.md](docs/release-runbook.md) | Cutting a signed release, and what never touches a runner |
 | [docs/capacity-and-reliability.md](docs/capacity-and-reliability.md) | Sizing numbers, load limits, failure and recovery matrix |
 | [docs/design-principles.md](docs/design-principles.md) | SOLID, KISS, DRY, YAGNI as checkable rules for this codebase |
 | [docs/glossary.md](docs/glossary.md) | Restaurant and framework vocabulary (86, fire, bump, comp, business date) |
-| [docs/adr/](docs/adr/) | The twelve decisions that shaped the system, and why |
+| [docs/adr/](docs/adr/) | Every architecture decision and its reasoning — 101 records, numbered in the order they were taken |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow: orientation, verification, pull requests, changelog |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, when, and what to do about it when upgrading |
 
@@ -121,7 +128,7 @@ New here, or picking a task? The four short [**guides**](docs/guides/) each fini
 
 ### Also in the repository
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) — orientation, build and verify commands, PR rules · [`docs/design-principles.md`](docs/design-principles.md) — SOLID/KISS/DRY/YAGNI as concrete rules · [`docs/glossary.md`](docs/glossary.md) — vocabulary · [`docs/adr/`](docs/adr/) — 12 architecture decision records · [`CHANGELOG.md`](CHANGELOG.md) — version history.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — orientation, build and verify commands, PR rules · [`docs/design-principles.md`](docs/design-principles.md) — SOLID/KISS/DRY/YAGNI as concrete rules · [`docs/glossary.md`](docs/glossary.md) — vocabulary · [`docs/adr/`](docs/adr/) — 101 architecture decision records · [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
 ## Non-goals
 

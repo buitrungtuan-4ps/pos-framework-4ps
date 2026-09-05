@@ -36,6 +36,8 @@ use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, TxContext};
+use pos_proto::devices::PublishedDevices;
+use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
@@ -68,9 +70,15 @@ use crate::idgen::EdgeIdGenerator;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
 
-/// Which tenant, brand and store this edge is — the envelope context every event carries. Assigned
-/// at activation ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)); all three are identifiers,
-/// not PII.
+/// Which tenant, brand and store this edge is — the envelope context every event carries. All three
+/// are identifiers, not PII.
+///
+/// Only the store id is the box's own knowledge. The tenant and brand are
+/// [`UNASSIGNED`](Self::UNASSIGNED): a box has no way to learn them (activation hands it a device id
+/// and a credential, [ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)), and the cloud stamps
+/// both from its store registry as it ingests
+/// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)). This doc used to say
+/// activation supplied them; it never did.
 #[derive(Debug, Clone, Copy)]
 pub struct StoreIdentity {
     /// Owning tenant.
@@ -82,13 +90,27 @@ pub struct StoreIdentity {
 }
 
 impl StoreIdentity {
-    /// The identity for a store, with bootstrap tenant and brand ids until activation
-    /// ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)) supplies the real ones.
+    /// The tenant and brand a store puts on its own events: **neither**.
+    ///
+    /// The nil ULID, and deliberately so ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// A box does not know which tenant owns it and has no way to find out — activation hands it a
+    /// device id and a credential, not an org chart — so the honest value is one that reads as
+    /// "nobody". Until that ADR this was `ULID(1)`, which reads as a tenant that might exist, and
+    /// every store in the fleet stamped it: the column row-level isolation is defined on held one
+    /// constant, fleet-wide.
+    ///
+    /// The cloud overwrites both from its store registry as it ingests, so the *stored* log is
+    /// correct whatever a box asserts. This value is what the log holds only in a store's own SQLite,
+    /// where there is exactly one tenant and the question does not arise.
+    pub const UNASSIGNED: Ulid = Ulid::from_u128(0);
+
+    /// The identity for a store: its own id, and a tenant and brand it does not claim to know
+    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
     #[must_use]
     pub fn for_store(store_id: StoreId) -> Self {
         Self {
-            tenant_id: TenantId::new(Ulid::from_u128(1)),
-            brand_id: BrandId::new(Ulid::from_u128(1)),
+            tenant_id: TenantId::new(Self::UNASSIGNED),
+            brand_id: BrandId::new(Self::UNASSIGNED),
             store_id,
         }
     }
@@ -220,6 +242,26 @@ pub struct EdgeSession {
     /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
     /// own fallback.
     pub stations: StationPlan,
+    /// How the till groups and orders its buttons, from the `layout` config node
+    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), resolved for this store's sales
+    /// channel.
+    ///
+    /// The layout half of the catalog, deliberately apart from the price half: `menu` is what the
+    /// domain reprices from and `layout` is what a screen draws, so a price change relays no buttons
+    /// and a button moving reprices nothing. `pos_core` never reads this.
+    ///
+    /// Empty in the bootstrap, and an empty plan means "the console has laid nothing out", not "show
+    /// nothing": the till falls back to the flat price book, which is what it drew before this
+    /// existed (production-readiness **C4**).
+    pub layout: DisplayPlan,
+    /// The printers and kitchen displays this store may address, as published on the `devices`
+    /// config node ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    ///
+    /// Empty in the bootstrap, and an empty node is an ordinary state rather than a fault: a
+    /// LAN-only box that has never synced, and a shop with no printer at all, both look like this.
+    /// What the dispatcher must never do is the thing the till did before this existed — claim
+    /// "Printing receipt…" while nothing is wired.
+    pub devices: PublishedDevices,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -340,6 +382,8 @@ impl EdgeSession {
             staff: StaffRoster::new(),
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
+            layout: DisplayPlan::new(),
+            devices: PublishedDevices::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -548,7 +592,7 @@ pub struct LineDraft {
 }
 
 /// What a line looks like to a caller after a command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineView {
     /// The order the line belongs to.
     pub order_id: OrderId,
@@ -556,6 +600,27 @@ pub struct LineView {
     pub order_line_id: OrderLineId,
     /// Its state after the command.
     pub state: OrderLineState,
+    /// Present only on a fire: what the kitchen was told to make, for the caller to print
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    pub fired: Option<FiredLine>,
+}
+
+/// What a fire tells the kitchen, for the caller to turn into a ticket.
+///
+/// The ids, not the names: resolving an item's name is the *session's* job (its published menu
+/// carries the store's spelling and its locale), and the application loop deliberately does not hold
+/// presentation. The edge still holds no printer — this is the caller's material, exactly as
+/// [`BillView::print_receipt`] is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiredLine {
+    /// The station the published routing sent this to (ADR-0072).
+    pub station_id: StationId,
+    /// The item being made.
+    pub menu_item_id: MenuItemId,
+    /// How many — a [`Quantity`], because a split item is half of one.
+    pub quantity: Quantity,
+    /// The modifiers chosen, in the order they were added.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// What a KDS bump looks like to a caller: the order and station, and the lines now marked prepared.
@@ -1473,6 +1538,8 @@ impl<S: EventStore> Edge<S> {
             order_id,
             order_line_id,
             state: OrderLineState::Added,
+            // Nothing is made until a line fires, so an added line has no ticket.
+            fired: None,
         })
     }
 
@@ -1545,6 +1612,12 @@ impl<S: EventStore> Edge<S> {
             order_id: record.order_id,
             order_line_id,
             state: decision.next_state,
+            fired: Some(FiredLine {
+                station_id,
+                menu_item_id: record.menu_item_id,
+                quantity: record.quantity,
+                modifier_menu_item_ids: record.modifier_menu_item_ids,
+            }),
         })
     }
 

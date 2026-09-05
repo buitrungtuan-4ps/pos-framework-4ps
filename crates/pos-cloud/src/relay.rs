@@ -48,7 +48,7 @@ use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, Ulid};
 
 use crate::auth::apikey::{ApiKeyStore, Scope};
-use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::{api_error, parse_ulid_fields};
 use crate::orders::StoreDirectory;
@@ -654,6 +654,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
 
     // Answer immediately if anything is pending; otherwise hold the request open, re-checking, until
     // the cap. The store still initiated the connection — this is its own outbound wait, not a push.
@@ -707,6 +710,9 @@ where
             Ok([store_id, queued_id]) => (StoreId::new(store_id), OrderQueueId::new(queued_id)),
             Err(refusal) => return refusal,
         };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
 
     match state
         .queue

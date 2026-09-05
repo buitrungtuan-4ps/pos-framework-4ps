@@ -5,8 +5,8 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { ApiKeySummary } from "../api/types";
-import { type MessageKey, t } from "../i18n";
+import type { ApiKeySummary, Store } from "../api/types";
+import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
@@ -38,6 +38,10 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 
 export function ApiKeys() {
   const [rows, setRows] = createSignal<ApiKeySummary[] | null>(null);
+  const [stores, setStores] = createSignal<Store[]>([]);
+  // Which store this key belongs to; "" is a tenant-wide integration key. A store's own credential
+  // must name its store, because `/sync/stores/{id}/…` refuses a key that does not (S1).
+  const [forStore, setForStore] = createSignal("");
   const [chosen, setChosen] = createSignal<Set<string>>(new Set());
   const [token, setToken] = createSignal("");
   const [error, setError] = createSignal("");
@@ -48,7 +52,12 @@ export function ApiKeys() {
     setError("");
     setBusy(true);
     try {
-      setRows(await api.listApiKeys(tenantId()));
+      const [keys, registered] = await Promise.all([
+        api.listApiKeys(tenantId()),
+        api.listStores(tenantId()),
+      ]);
+      setStores(registered);
+      setRows(keys);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : String(caught));
     } finally {
@@ -74,9 +83,10 @@ export function ApiKeys() {
     setToken("");
     setBusy(true);
     try {
-      const created = await api.createApiKey(tenantId(), [...chosen()]);
+      const created = await api.createApiKey(tenantId(), [...chosen()], forStore() || undefined);
       setToken(created.token);
       setChosen(new Set<string>());
+      setForStore("");
       toast.ok(t("apiKeys.created"));
       await load();
     } catch (caught) {
@@ -108,7 +118,44 @@ export function ApiKeys() {
     }
   };
 
+  // A key's registered store name, the raw ULID if the registry has no row for it, or the
+  // tenant-wide label when it is bound to no store at all.
+  const storeLabel = (row: ApiKeySummary) => {
+    if (row.store_id === null) {
+      return t("apiKeys.tenantWide");
+    }
+    return stores().find((store) => store.store_id === row.store_id)?.name ?? row.store_id;
+  };
+
+  const formatMoment = (ms: number) =>
+    new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
+      new Date(ms),
+    );
+
+  // A key past its expiry stops working, and the console said "Active" (production-readiness O4):
+  // `expires_at_ms` was served from the day the key store was written and this screen never read it.
+  // Revoked outranks expired — a revoked key was deliberately killed, which is the more useful thing
+  // to know about it.
+  const isExpired = (row: ApiKeySummary) =>
+    row.expires_at_ms !== null && row.expires_at_ms <= Date.now();
+
+  const statusTone = (row: ApiKeySummary) =>
+    row.revoked || isExpired(row) ? ("disabled" as const) : ("active" as const);
+
+  const statusLabel = (row: ApiKeySummary): MessageKey => {
+    if (row.revoked) {
+      return "status.revoked";
+    }
+    return isExpired(row) ? "status.expired" : "status.active";
+  };
+
   const columns = (): Column<ApiKeySummary>[] => [
+    {
+      key: "store",
+      header: t("apiKeys.store"),
+      cell: (row) => <span class="text-ink">{storeLabel(row)}</span>,
+      sortValue: (row) => storeLabel(row),
+    },
     {
       key: "scopes",
       header: t("apiKeys.scopes"),
@@ -117,12 +164,19 @@ export function ApiKeys() {
     {
       key: "status",
       header: t("apiKeys.status"),
+      cell: (row) => <StatusBadge tone={statusTone(row)} label={t(statusLabel(row))} />,
+      sortValue: (row) => statusLabel(row),
+    },
+    {
+      key: "expires",
+      header: t("apiKeys.expires"),
       cell: (row) => (
-        <StatusBadge
-          tone={row.revoked ? "disabled" : "active"}
-          label={row.revoked ? t("status.revoked") : t("status.active")}
-        />
+        <span class="text-ink-muted">
+          {row.expires_at_ms === null ? t("apiKeys.neverExpires") : formatMoment(row.expires_at_ms)}
+        </span>
       ),
+      // Never-expiring keys sort last: a key with an end date is the one an operator is looking for.
+      sortValue: (row) => row.expires_at_ms ?? Number.MAX_SAFE_INTEGER,
     },
     {
       key: "id",
@@ -151,7 +205,7 @@ export function ApiKeys() {
                 <DataTable
                   columns={columns()}
                   rows={loaded()}
-                  searchText={(row) => `${row.id} ${row.scopes.join(" ")}`}
+                  searchText={(row) => `${row.id} ${storeLabel(row)} ${row.scopes.join(" ")}`}
                   pageSize={12}
                   empty={<EmptyState title={t("apiKeys.empty")} />}
                   actionsHeader={t("common.actions")}
@@ -172,6 +226,20 @@ export function ApiKeys() {
           </Card>
 
           <Card title={t("apiKeys.create")}>
+            <label class="mb-4 block">
+              <span class="mb-1 block text-sm font-medium text-ink">{t("apiKeys.storeLabel")}</span>
+              <select
+                class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+                value={forStore()}
+                onChange={(event) => setForStore(event.currentTarget.value)}
+              >
+                <option value="">{t("apiKeys.tenantWide")}</option>
+                <For each={stores()}>
+                  {(store) => <option value={store.store_id}>{store.name}</option>}
+                </For>
+              </select>
+              <span class="mt-1 block text-xs text-ink-muted">{t("apiKeys.storeHint")}</span>
+            </label>
             <fieldset class="mb-4 flex flex-col gap-2">
               <legend class="mb-1 text-sm font-medium text-ink">{t("apiKeys.scopesLabel")}</legend>
               <For each={SCOPES}>

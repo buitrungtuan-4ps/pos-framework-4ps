@@ -102,7 +102,12 @@ fn session(device_n: u128, employee_n: u128, ms: i64) -> DeviceSession {
     }
 }
 
-/// The gate's whole job: a digest in, the device it belongs to out.
+/// A digest in, the device it belongs to out.
+///
+/// This is the obligation, not a description of the shipped request path: `pos-edge` loads the
+/// whole table at boot and resolves from memory (production-readiness **X2**). An adapter still
+/// has to answer the point read correctly — it is how this suite proves `record_pairing` stored
+/// the binding at all.
 ///
 /// # Errors
 ///

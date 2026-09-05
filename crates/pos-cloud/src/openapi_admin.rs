@@ -271,6 +271,8 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/inventory/recipes/{item_id}",
     "/admin/inventory/suppliers",
     "/admin/inventory/suppliers/{supplier_id}",
+    // --- approved printers and kitchen displays (C2, ADR-0100) ---
+    "/admin/devices/publish",
     // --- floor plan and kitchen stations (M2, ADR-0072) ---
     "/admin/floor/areas",
     "/admin/floor/areas/{area_id}",

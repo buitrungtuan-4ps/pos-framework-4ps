@@ -99,5 +99,5 @@ pub mod version;
 pub mod vouchers;
 pub mod webhook;
 
-pub use cloud::{Cloud, DailyRollup, IngestOutcome};
+pub use cloud::{Cloud, DailyRollup, IngestOutcome, StoreOwner, StoreOwners};
 pub use config::{CloudConfig, NatsIngestConfig};

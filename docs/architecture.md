@@ -79,7 +79,7 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 | Port | Responsibility | Current implementation |
 |---|---|---|
 | `EventStore` | Append and read events, outbox | SQLite / PostgreSQL |
-| `ConfigStore` | Config snapshots and deltas | SQLite / PostgreSQL |
+| `ConfigStore` | Config snapshots and deltas | SQLite (edge-local) — see note |
 | `MessageLink` | Durable store↔cloud channel | NATS JetStream |
 | `BlobStore` | Large objects (backups, artifacts) | Garage / MinIO |
 | `MetricsSink` | Numeric telemetry | VictoriaMetrics |
@@ -94,6 +94,8 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 | `CloudSync` | Store→cloud request/response: activation exchange, OTA artifact fetch | HTTP to the cloud |
 | `DeviceRegistry` | Which devices a store has admitted, and who is signed in on each | SQLite (edge-local) |
 | `IntakeLedger` | What a caller's `(channel, reference)` produced, so a retry is not a second order | SQLite (edge-local) |
+
+**`ConfigStore` has one adapter, not two.** The row said "SQLite / PostgreSQL" and no PostgreSQL implementation of this port exists — the only `impl ConfigStore` outside the fakes is `store-sqlite`. What the cloud has is a *different* thing that happens to store configuration: `pos-cloud`'s own config-tree seam over its Postgres tables, which publishes nodes down to stores. The port is the store's local view of the config it was given; the cloud's is the authoring side. Naming both "ConfigStore" in one cell implied a swappable adapter a fork could pick, and there is none to pick.
 
 The list above is authoritative and counts **nineteen** ports. [ADR-0006](adr/0006-ports-and-adapters.md) named fifteen: it omitted `OrderIn`, which [ADR-0012](adr/0012-qr-ordering-via-cloud.md) depends on, and [ADR-0021](adr/0021-corrected-port-list.md) supersedes it with sixteen. [ADR-0053](adr/0053-cloud-sync-port.md) adds the seventeenth, `CloudSync`, for the store↔cloud calls that need an answer back — distinct from `MessageLink`, which stays outbound-only so the store still sells offline. [ADR-0091](adr/0091-durable-edge-auth-state.md) adds the eighteenth, `DeviceRegistry`, so that pairing and sign-in survive a restart instead of being erased by one; it stores a SHA-256 of each device token and never the token. The nineteenth, `IntakeLedger` ([ADR-0064](adr/0064-edge-order-in.md)), is a port that was named as one when it landed and registered late — see below.
 

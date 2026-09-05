@@ -29,7 +29,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use super::dispatch::{DeliveryError, WebhookTransport};
-use super::sign::{SIGNATURE_HEADER, Signature, TIMESTAMP_HEADER};
+use super::sign::{DELIVERY_ID_HEADER, SIGNATURE_HEADER, Signature, TIMESTAMP_HEADER};
 use super::ssrf::VettedUrl;
 
 /// A TLS webhook sender: one HTTPS `POST` per delivery, connecting only to pre-vetted addresses.
@@ -90,6 +90,7 @@ impl TlsWebhookSender {
         &self,
         prepared: &Prepared,
         signature: &Signature,
+        delivery_id: Option<&str>,
         body: &[u8],
     ) -> Result<(), DeliveryError> {
         let stream = Self::connect(&prepared.addresses).await?;
@@ -111,13 +112,20 @@ impl TlsWebhookSender {
             let _ = connection.await;
         });
 
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method("POST")
             .uri(&prepared.request_target)
             .header(HOST, prepared.host.as_str())
             .header(CONTENT_TYPE, "application/json")
             .header(TIMESTAMP_HEADER, signature.timestamp.to_string())
-            .header(SIGNATURE_HEADER, signature.signature.as_str())
+            .header(SIGNATURE_HEADER, signature.signature.as_str());
+        // Absent rather than empty when there is nothing stable to key on (production-readiness R6):
+        // a receiver that sees the header can trust it identifies the page, and one that does not see
+        // it knows this body is not a cursor page.
+        if let Some(delivery_id) = delivery_id {
+            request = request.header(DELIVERY_ID_HEADER, delivery_id);
+        }
+        let request = request
             .body(Full::new(Bytes::copy_from_slice(body)))
             .map_err(|error| DeliveryError::new(format!("building the request failed: {error}")))?;
 
@@ -141,12 +149,18 @@ impl WebhookTransport for TlsWebhookSender {
         &self,
         target: &VettedUrl,
         signature: &Signature,
+        delivery_id: Option<&str>,
         body: &[u8],
     ) -> Result<(), DeliveryError> {
         let prepared = prepare(target)?;
         // A black-hole endpoint must not wedge the dispatch loop: the whole connect→handshake→send is
         // bounded, and a timeout is an ordinary failed delivery (the breaker backs off, ADR-0032).
-        match tokio::time::timeout(self.timeout, self.send(&prepared, signature, body)).await {
+        match tokio::time::timeout(
+            self.timeout,
+            self.send(&prepared, signature, delivery_id, body),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_elapsed) => Err(DeliveryError::new("the webhook delivery timed out")),
         }

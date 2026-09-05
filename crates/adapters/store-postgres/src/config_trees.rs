@@ -219,6 +219,11 @@ impl PostgresConfigTrees {
     /// row gets them `NULL`, since a heartbeat carries no config-pull facts). `seen_at_ms` is Unix
     /// milliseconds.
     ///
+    /// `outbox_depth` is the store's own publish backlog if it reported one, stamped with
+    /// `seen_at_ms` as `outbox_reported_at`. A `None` — an older edge, or one that could not read its
+    /// log — leaves both columns exactly as they were: "did not say" is not "zero", and overwriting a
+    /// real backlog with a fabricated zero would read as a store that had caught up.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
@@ -227,14 +232,25 @@ impl PostgresConfigTrees {
         tenant: TenantId,
         store_id: StoreId,
         seen_at_ms: i64,
+        outbox_depth: Option<i64>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO store_liveness (tenant_id, store_id, last_seen_at) \
-                 VALUES ($1, $2, $3) \
-                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at",
-                &[&tenant.to_string(), &store_id.to_string(), &seen_at_ms],
+                "INSERT INTO store_liveness \
+                 (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at) \
+                 VALUES ($1, $2, $3, $4, CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3 END) \
+                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
+                 last_seen_at = EXCLUDED.last_seen_at, \
+                 outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
+                 outbox_reported_at = \
+                     COALESCE(EXCLUDED.outbox_reported_at, store_liveness.outbox_reported_at)",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &seen_at_ms,
+                    &outbox_depth,
+                ],
             )
             .await
             .map_err(unavailable)?;

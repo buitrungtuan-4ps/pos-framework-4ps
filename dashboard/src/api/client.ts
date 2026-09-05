@@ -520,10 +520,15 @@ export const api = {
   // --- API keys (ADR-0037) ---
   listApiKeys: (tenantId: string) =>
     requestJson<ApiKeySummary[]>("GET", `/admin/api-keys?${tenantQuery(tenantId)}`),
-  createApiKey: (tenantId: string, scopes: string[], expiresAtMs?: number) =>
+  // `storeId` binds the key to one store (S1). A store's own credential — the key its edge presents
+  // on `/sync/stores/{id}/…` — must carry it: those routes serve one store's configuration, employee
+  // roster included, and refuse a key that names another store or none. Omit it for an integration
+  // key that reads a whole tenant.
+  createApiKey: (tenantId: string, scopes: string[], storeId?: string, expiresAtMs?: number) =>
     requestJson<CreateApiKeyResponse>("POST", "/admin/api-keys", {
       tenant_id: tenantId,
       scopes,
+      ...(storeId === undefined || storeId === "" ? {} : { store_id: storeId }),
       ...(expiresAtMs === undefined ? {} : { expires_at_ms: expiresAtMs }),
     }),
   revokeApiKey: (id: string) => requestVoid("DELETE", `/admin/api-keys/${encodeURIComponent(id)}`),
@@ -658,10 +663,16 @@ export const api = {
       "GET",
       `/admin/devices/proposals?${tenantQuery(tenantId)}`,
     ),
-  approveDevice: (tenantId: string, id: string) =>
+  // Approving carries the two facts discovery cannot find (ADR-0100): how the device is attached,
+  // which decides whether a cash drawer may be opened at all, and the kitchen station it serves —
+  // omitted for the counter's receipt printer, which serves the bill rather than a station. The
+  // route refuses an approval with no connection rather than guessing one.
+  approveDevice: (tenantId: string, id: string, connection: string, stationId?: string) =>
     requestVoid(
       "POST",
-      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}`,
+      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}` +
+        `&connection=${encodeURIComponent(connection)}` +
+        (stationId ? `&station_id=${encodeURIComponent(stationId)}` : ""),
     ),
   rejectDevice: (tenantId: string, id: string) =>
     requestVoid(
@@ -965,10 +976,29 @@ export const api = {
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
   createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),
+  // Rename or archive a tenant (ADR-0065, production-readiness O2). `etag` is the version the caller
+  // read it at (ADR-0094): a save against a version the registry no longer holds is refused `412`
+  // rather than overwriting whoever edited in between.
+  updateTenant: (tenantId: string, fields: { name: string; status: EntityStatus }, etag: ETag) =>
+    requestJsonIfMatch<Tenant>("PATCH", `/admin/tenants/${encodeURIComponent(tenantId)}`, etag, {
+      name: fields.name,
+      status: fields.status,
+    }),
   listBrands: (tenantId: string) =>
     requestJson<Brand[]>("GET", `/admin/brands?${tenantQuery(tenantId)}`),
   createBrand: (tenantId: string, name: string) =>
     requestJson<Brand>("POST", "/admin/brands", { tenant_id: tenantId, name }),
+  updateBrand: (
+    brandId: string,
+    tenantId: string,
+    fields: { name: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<Brand>("PATCH", `/admin/brands/${encodeURIComponent(brandId)}`, etag, {
+      tenant_id: tenantId,
+      name: fields.name,
+      status: fields.status,
+    }),
   listStores: (tenantId: string) =>
     requestJson<Store[]>("GET", `/admin/stores?${tenantQuery(tenantId)}`),
   createStore: (tenantId: string, name: string, brandId?: string) =>
@@ -1003,6 +1033,22 @@ export const api = {
       name,
       kind,
     }),
+  // Rename, re-kind, or archive a registry device (ADR-0065, production-readiness O2). Archiving is
+  // how a device that was replaced leaves the roster — it does not retire a paired *till*, which is
+  // the store server's own `POST /api/pair/revoke`, a different credential in a different tier.
+  updateDevice: (
+    deviceId: string,
+    tenantId: string,
+    storeId: string,
+    fields: { name: string; kind: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<Device>(
+      "PATCH",
+      `/admin/stores/${encodeURIComponent(storeId)}/devices/${encodeURIComponent(deviceId)}`,
+      etag,
+      { tenant_id: tenantId, name: fields.name, kind: fields.kind, status: fields.status },
+    ),
 
   // --- catalog authoring (ADR-0066): items, tax classes, menus with inheritance, and placements ---
   listTaxClasses: (tenantId: string) =>

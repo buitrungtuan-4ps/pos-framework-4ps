@@ -158,6 +158,19 @@ const MIGRATION_0045: &str = include_str!("../migrations/0045_employee_page_inde
 /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
 const MIGRATION_0046: &str = include_str!("../migrations/0046_employee_name_index.sql");
 
+/// Binds a store's API key to that store, so a sibling store's key can no longer read its
+/// `permissions` node (production-readiness S1). Nullable: NULL stays a tenant-wide key.
+const MIGRATION_0047: &str = include_str!("../migrations/0047_api_key_store_scope.sql");
+
+/// Lets approval record a device's connection and the station it serves — the two facts discovery
+/// cannot find out and printing cannot do without (ADR-0100).
+const MIGRATION_0048: &str = include_str!("../migrations/0048_device_approval_facts.sql");
+
+/// The store's own publish backlog on the fleet read model (production-readiness **O6**):
+/// `EventStore::outbox_depth` had no production caller, so a store falling behind on its event
+/// publish was invisible to everyone.
+const MIGRATION_0049: &str = include_str!("../migrations/0049_store_outbox_depth.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -400,6 +413,18 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0046)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0047)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0048)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0049)
             .await
             .map_err(unavailable)
     }

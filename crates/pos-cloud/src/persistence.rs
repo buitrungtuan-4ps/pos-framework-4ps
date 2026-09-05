@@ -40,7 +40,9 @@ use store_postgres::{
 };
 
 use pos_ports::PortError;
+use pos_ports::dynamic::BoxFuture;
 use pos_proto::campaign::PublishedCampaign;
+use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
@@ -77,6 +79,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
+use crate::cloud::{StoreOwner, StoreOwners};
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
@@ -442,8 +445,12 @@ impl ConfigTreeStore for PostgresConfigTrees {
         tenant: TenantId,
         store: StoreId,
         seen_at: Timestamp,
+        outbox_depth: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
-        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch())
+        // A depth past `i64::MAX` is not reachable from a store's log, but saturating beats a panic
+        // and beats dropping the heartbeat: the column is `bigint`, so this is the widest it holds.
+        let depth = outbox_depth.map(|depth| i64::try_from(depth).unwrap_or(i64::MAX));
+        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch(), depth)
             .await
             .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
@@ -799,10 +806,12 @@ fn admin_invite_from_row(row: AdminInviteRow) -> Result<AdminInvite, AdminStoreE
 
 impl ApiKeyAdminStore for PostgresApiKeys {
     async fn insert(&self, key: &StoredApiKey) -> Result<(), ApiKeyStoreError> {
+        let store_id = key.store_id.map(|id| id.to_string());
         PostgresApiKeys::insert(
             self,
             &key.id.to_string(),
             &key.tenant_id.to_string(),
+            store_id.as_deref(),
             &key.secret_hash(),
             &key.scope_wire_names(),
             key.expires_at_ms(),
@@ -822,6 +831,7 @@ impl ApiKeyAdminStore for PostgresApiKeys {
             .into_iter()
             .map(|row| ApiKeySummary {
                 id: row.id,
+                store_id: row.store_id,
                 scopes: row.scopes,
                 revoked: row.revoked,
                 expires_at_ms: row.expires_at_ms,
@@ -847,6 +857,7 @@ impl ApiKeyStore for PostgresApiKeys {
                 let stored = StoredApiKey::from_parts(
                     id,
                     &row.tenant_id,
+                    row.store_id.as_deref(),
                     &row.secret_hash,
                     &row.scopes,
                     row.revoked,
@@ -1059,6 +1070,8 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 kind: row.kind,
                 name: row.name,
                 address: row.address,
+                connection: row.connection,
+                station_id: row.station_id,
                 status: row.status,
             })
             .collect())
@@ -1069,15 +1082,24 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         tenant: TenantId,
         id: DeviceProposalId,
         approved: bool,
+        connection: Option<DeviceConnection>,
+        station: Option<StationId>,
     ) -> Result<bool, DeviceProposalError> {
         let status = if approved {
             DeviceProposalStatus::Approved
         } else {
             DeviceProposalStatus::Rejected
         };
-        self.mark(&tenant.to_string(), &id.to_string(), status.as_wire())
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))
+        let station = station.map(|id| id.to_string());
+        self.mark(
+            &tenant.to_string(),
+            &id.to_string(),
+            status.as_wire(),
+            connection.map(DeviceConnection::as_wire),
+            station.as_deref(),
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))
     }
 }
 
@@ -1235,6 +1257,44 @@ fn pending_order(row: PendingOrderRow) -> Result<PendingOrder, PortError> {
     let payload: QueuedOrderPayload = serde_json::from_value(row.payload)
         .map_err(|error| PortError::internal(pos_ports::PortName::OrderIn, error.to_string()))?;
     Ok(PendingOrder { queued_id, payload })
+}
+
+impl StoreOwners for PostgresStoreDirectory {
+    /// Resolves the store's owner from the registry, for the stamp `Cloud::ingest` puts on every
+    /// event ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    ///
+    /// A stored id that will not parse is treated as **unknown**, not as a nil owner: filing a
+    /// store's events under a fabricated tenant is the failure this stamp exists to prevent, and the
+    /// batch keeps its own claim while the warning names the row.
+    fn owner_of(&self, store_id: StoreId) -> BoxFuture<'_, Result<Option<StoreOwner>, PortError>> {
+        Box::pin(async move {
+            let Some((tenant, brand)) =
+                PostgresStoreDirectory::owner_of(self, &store_id.to_string()).await?
+            else {
+                return Ok(None);
+            };
+            let Ok(tenant_id) = tenant.parse::<Ulid>().map(TenantId::new) else {
+                tracing::warn!(
+                    store = %store_id,
+                    "the registry's tenant id for this store is not a ULID"
+                );
+                return Ok(None);
+            };
+            // A store under no brand, and a brand id the registry cannot spell, both land on the nil
+            // id — "no brand", which is the truth in the first case and the safe reading in the
+            // second. Neither is a reason to refuse the tenant, which is the column that isolates.
+            let brand_id = brand
+                .and_then(|brand| brand.parse::<Ulid>().ok())
+                .map_or_else(
+                    pos_proto::ids::BrandId::default,
+                    pos_proto::ids::BrandId::new,
+                );
+            Ok(Some(StoreOwner {
+                tenant_id,
+                brand_id,
+            }))
+        })
+    }
 }
 
 impl StoreDirectory for PostgresStoreDirectory {
@@ -1544,6 +1604,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let reported_at = row
         .reported_at_ms
         .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let outbox_reported_at = row
+        .outbox_reported_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
@@ -1558,6 +1621,10 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         installed_version: row.installed_version,
         self_test_ok: row.self_test_ok,
         reported_at,
+        // A negative depth cannot come from a store's log; if one somehow reached the column, "did
+        // not say" is a truer answer for the console than a wrapped-around count.
+        outbox_depth: row.outbox_depth.and_then(|depth| u64::try_from(depth).ok()),
+        outbox_reported_at,
     })
 }
 

@@ -558,6 +558,7 @@ mod tests {
             _tenant: TenantId,
             _store: StoreId,
             _seen_at: pos_proto::time::Timestamp,
+            _outbox_depth: Option<u64>,
         ) -> Result<(), crate::config_tree::ConfigStoreError> {
             Ok(())
         }

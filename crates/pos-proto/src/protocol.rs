@@ -91,7 +91,19 @@ pub struct Hello {
     pub protocol_version_min: u32,
     /// The newest protocol version this edge can speak.
     pub protocol_version_max: u32,
-    /// The edge's product release, for the fleet view.
+    /// The edge's product release.
+    ///
+    /// **It does not reach the fleet view on the shipped path** (production-readiness **R2**). The
+    /// only production [`MessageLink`](pos_ports::message_link::MessageLink) is `link-nats`, which is
+    /// outbound-only by design ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)): there is no
+    /// cloud responder, so its `handshake` runs [`negotiate`] against its *own* compiled constants
+    /// and this field is never transmitted. The console learns which binary a store runs from
+    /// [`CloudSync::report`](pos_ports::cloud_sync::CloudSync::report) over `/sync`
+    /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), which is a different rail.
+    ///
+    /// The field stays because the frame is the protocol's, not one transport's: the deferred
+    /// bidirectional link (roadmap-v3 #89b, whose ADR is not written) reads it, and removing a
+    /// member from a wire type is a `PROTOCOL_VERSION` change made for no gain.
     pub product_version: ReleaseTag,
     /// Which store is calling.
     pub store_id: StoreId,

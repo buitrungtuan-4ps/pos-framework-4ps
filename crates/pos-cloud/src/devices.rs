@@ -12,7 +12,8 @@
 use core::fmt;
 use core::future::Future;
 
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::devices::DeviceConnection;
+use pos_proto::ids::{StationId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 /// Which kind of device a proposal is for.
@@ -122,6 +123,12 @@ pub struct DeviceProposalSummary {
     pub name: String,
     /// The device's network address.
     pub address: String,
+    /// How the device is attached (`usb`/`network`/`serial`), as approval recorded it — `None` while
+    /// pending, because discovery cannot find this out ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    pub connection: Option<String>,
+    /// The kitchen station this device serves, as approval recorded it. `None` for the counter's
+    /// receipt printer, which serves the bill rather than a station — and `None` while pending.
+    pub station_id: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
 }
@@ -168,6 +175,13 @@ pub trait DeviceProposalStore {
     /// found and changed — so resolving an already-resolved or unknown id is a no-op, not an error.
     /// Scoped to `tenant`, so one tenant cannot resolve another's proposal.
     ///
+    /// An approval also records the two facts discovery cannot find and printing cannot do without
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)): `connection`, because a
+    /// cash drawer opens only over USB, and `station`, because a fired line has to route somewhere.
+    /// `station` is `None` for the counter's receipt printer, which serves the bill rather than a
+    /// station. A rejection passes `None` for both — they describe a device the store will address,
+    /// and a rejected one never will.
+    ///
     /// # Errors
     ///
     /// [`DeviceProposalError`] if the store could not be written.
@@ -176,5 +190,7 @@ pub trait DeviceProposalStore {
         tenant: TenantId,
         id: DeviceProposalId,
         approved: bool,
+        connection: Option<DeviceConnection>,
+        station: Option<StationId>,
     ) -> impl Future<Output = Result<bool, DeviceProposalError>> + Send;
 }

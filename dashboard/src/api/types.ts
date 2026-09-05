@@ -33,8 +33,16 @@ export interface Enrolment {
 /** A summary row from `GET /admin/api-keys` (the secret is never listed). */
 export interface ApiKeySummary {
   readonly id: string;
+  /** The one store this key acts for, or `null` for a tenant-wide key (S1). */
+  readonly store_id: string | null;
   readonly scopes: string[];
   readonly revoked: boolean;
+  /**
+   * When the key stops working, in Unix milliseconds, or `null` if it never does. Served since the
+   * key store was written and dropped by this type, so an expired key rendered as "Active"
+   * (production-readiness **O4**).
+   */
+  readonly expires_at_ms: number | null;
 }
 
 /** The one-time response to `POST /admin/api-keys` — the token is shown once. */
@@ -48,6 +56,20 @@ export interface DeviceProposalSummary {
   readonly id: string;
   readonly store_id: string;
   readonly kind: string;
+  /**
+   * The name the box read off the device, and where it is on the LAN. Both are what identify the
+   * thing an operator is about to approve — the cloud has always served them, and this type dropped
+   * them, so the approval screen asked people to approve a kind and a ULID (production-readiness
+   * **O3**).
+   */
+  readonly name: string;
+  readonly address: string;
+  /** How it is attached, once approval recorded it; `null` while pending (ADR-0100). */
+  readonly connection: string | null;
+  /** The kitchen station it serves, once approval recorded it; `null` for a receipt printer. */
+  readonly station_id: string | null;
+  /** `pending`, `approved` or `rejected`. */
+  readonly status: string;
 }
 
 /** A webhook endpoint row from `GET /admin/webhooks` (ADR-0032). */
@@ -735,6 +757,15 @@ export interface FleetStore {
   readonly self_test_ok: boolean | null;
   /** Unix ms of the store's most recent OTA report, or `null`. */
   readonly reported_at_ms: number | null;
+  /**
+   * How many events the store had committed and not yet published as of its last heartbeat, or
+   * `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
+   * *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
+   * is not a store that is caught up — so the screen renders the two differently.
+   */
+  readonly outbox_depth: number | null;
+  /** Unix ms of the heartbeat that reported `outbox_depth`, or `null`. */
+  readonly outbox_reported_at_ms: number | null;
 }
 
 /**

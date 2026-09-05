@@ -27,6 +27,7 @@ use axum::response::{IntoResponse, Response};
 
 use pos_proto::determinism::ClockSource;
 use pos_proto::error::ErrorStatus;
+use pos_proto::ids::StoreId;
 
 use super::apikey::{ApiKeyStore, Grant, Scope, parse, verify};
 use crate::http::api_error;
@@ -82,6 +83,46 @@ pub fn require_scope(grant: &Grant, scope: Scope) -> Result<(), ScopeDenied> {
         Ok(())
     } else {
         Err(ScopeDenied)
+    }
+}
+
+/// Enforces that a verified `grant` is the key of the very store it is asking about (S1).
+///
+/// The `/sync/stores/{store_id}/…` routes serve *one* store its own data — configuration that
+/// carries the store's employee roster and PIN hashes among it. Being in the right tenant is not
+/// enough, and that was the whole check until this existed: a sibling store's key read a store's
+/// `permissions` node because both belonged to the same tenant.
+///
+/// A tenant-wide key (`Grant::store() == None`) is refused here too, not waved through. It is a
+/// perfectly good credential for reading a tenant's rollups; it simply is not a *store's* credential,
+/// and treating "unbound" as "any store" would leave the finding open under a different name.
+///
+/// # Errors
+///
+/// [`ScopeDenied`] — a `403` — if the grant names a different store, or names none.
+pub fn require_store(grant: &Grant, store_id: StoreId) -> Result<(), ScopeDenied> {
+    if grant.store() == Some(store_id) {
+        Ok(())
+    } else {
+        Err(ScopeDenied)
+    }
+}
+
+/// Narrows a verified `grant` to `store_id` *if* the grant is bound to a store (S1).
+///
+/// The complement of [`require_store`], for the routes a tenant-wide integration key is meant to
+/// reach — `/v1/stores/{id}/rollups/daily` and its window reads. An unbound key is the documented
+/// credential there and passes; a *store's* key must not use its rollup scope to read a sibling
+/// store's takings, so a bound grant is still held to its own store.
+///
+/// # Errors
+///
+/// [`ScopeDenied`] — a `403` — if the grant names a store and it is not this one.
+pub fn confine_to_store(grant: &Grant, store_id: StoreId) -> Result<(), ScopeDenied> {
+    match grant.store() {
+        None => Ok(()),
+        Some(bound) if bound == store_id => Ok(()),
+        Some(_) => Err(ScopeDenied),
     }
 }
 
@@ -225,6 +266,7 @@ mod tests {
         issue(
             key_id(),
             tenant(),
+            None,
             scopes.iter().copied().collect(),
             FAKE_SECRET,
             None,

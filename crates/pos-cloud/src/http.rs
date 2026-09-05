@@ -92,6 +92,7 @@ use pos_proto::channels::{
     PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
 };
 use pos_proto::determinism::ClockSource;
+use pos_proto::devices::{DeviceConnection, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -127,7 +128,7 @@ use crate::auth::admin::{
     hash_recovery_code, hash_session_token, login, logout,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
-use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::bearer::{authenticate, confine_to_store, require_scope, require_store};
 use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
@@ -685,17 +686,19 @@ where
         )
         .with_state(app)
         // The admin-console security headers ([ADR-0067] slice 5) on every response this router
-        // serves. `main.rs` applies the same layer to the fully-composed service so the SPA fallback
-        // and the other merged routers are covered too; re-inserting the same header values there is
-        // idempotent.
+        // serves — which is *only* this router. `main.rs` applies the same layer to the
+        // fully-composed service, which is what actually reaches the SPA fallback and the merged
+        // `/admin` sub-routers; this line covered neither, and until production-readiness **S3** the
+        // comment here claimed otherwise while `main.rs` carried no such layer. Both are kept: the
+        // headers are `insert`ed, so applying the middleware twice sets the same values once.
         .layer(axum::middleware::from_fn(security_headers))
 }
 
 /// The collaborators the reconciliation routes share: the diff-and-history store, the admin store the
-/// admin read authenticates against, and the clock that stamps each recorded run and drives the
-/// session guard.
+/// admin read authenticates against, the clock that stamps each recorded run and drives the session
+/// guard, and the scoped keys the store-facing route authenticates a box with.
 #[derive(Clone)]
-struct ReconcileState<Rec, A, C> {
+struct ReconcileState<Rec, A, C, K> {
     store: Rec,
     admin: A,
     clock: C,
@@ -703,37 +706,63 @@ struct ReconcileState<Rec, A, C> {
     /// same router serves `/admin/reconcile`, which is behind a console permission and must not
     /// start demanding an internal header.
     internal_shared_secret: Option<InternalSecret>,
+    /// The scoped keys the **store-facing** route authenticates with, so a box that is off the
+    /// cloud's own network can reconcile at all (production-readiness **R3**).
+    keys: K,
 }
 
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
 ///
-/// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
-/// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
-/// the ids to re-push through `/internal/ingest`. Every diff now also records a run into the history
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), so `GET /admin/reconcile` can show the
-/// console that reconciliation happened and what it caught. The internal route is private-network and
-/// unauthenticated (absent from the public OpenAPI, exactly like `/internal/ingest`); the admin read is
-/// behind [`ConsolePermission::Read`]. Stated independently and merged in `main`, rather than threading
-/// an extra collaborator through every `CloudApp` handler.
-pub fn reconcile_router<Rec, A, C>(
+/// Reconciliation is the cloud's half of ADR-0040's missing-id diff: a store sends the ids it holds
+/// over some window, and the cloud answers with the subset it lacks — the ids to re-push. Every diff
+/// also records a run into the history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// so `GET /admin/reconcile` can show the console that reconciliation happened and what it caught.
+///
+/// # Two doors, because a store is not on the cloud's network
+///
+/// `POST /sync/stores/{store_id}/reconcile` is the **store's** door, authenticated by its own scoped
+/// key and bound to its own store, exactly like the config pull, the heartbeat and the OTA report
+/// beside it. It exists because ADR-0040 called reconciliation *edge-initiated* and put it on
+/// `/internal/*` — and the shipped proxy denies `/internal/*` to every off-box caller, which a store
+/// is by definition. The deferred edge poller would have been written against a route it could never
+/// reach (production-readiness **R3**); this is the third route to make that same move.
+///
+/// `POST /internal/reconcile` stays for a caller that genuinely is on the cloud's own network — an
+/// operator's one-off, or a future cloud-side sweep. It names its tenant and store in the body and is
+/// guarded by the `/internal` shared secret (ADR-0097); the store's door takes neither, because its
+/// identity comes from the key it presents.
+///
+/// The admin read is behind [`ConsolePermission::Read`]. Stated independently and merged in `main`,
+/// rather than threading an extra collaborator through every `CloudApp` handler.
+pub fn reconcile_router<Rec, A, C, K>(
     store: Rec,
     admin: A,
     clock: C,
     internal_shared_secret: Option<InternalSecret>,
+    keys: K,
 ) -> Router
 where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/internal/reconcile", post(reconcile::<Rec, A, C>))
-        .route("/admin/reconcile", get(admin_reconcile_runs::<Rec, A, C>))
+        .route(
+            "/sync/stores/{store_id}/reconcile",
+            post(store_reconcile::<Rec, A, C, K>),
+        )
+        .route("/internal/reconcile", post(reconcile::<Rec, A, C, K>))
+        .route(
+            "/admin/reconcile",
+            get(admin_reconcile_runs::<Rec, A, C, K>),
+        )
         .with_state(ReconcileState {
             store,
             admin,
             clock,
             internal_shared_secret,
+            keys,
         })
 }
 
@@ -753,6 +782,17 @@ struct ReconcileRequest {
     event_ids: Vec<String>,
 }
 
+/// A store's own reconciliation manifest: just the ids, because the tenant and the store come from
+/// the key it presented and the path it called (production-readiness **R3**).
+///
+/// Deliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a
+/// `tenant_id` the server discards is a body a caller will eventually believe is honoured.
+#[derive(Debug, Clone, Deserialize)]
+struct StoreReconcileRequest {
+    /// The event ids this store holds over the window it is reconciling.
+    event_ids: Vec<String>,
+}
+
 /// The ids the cloud is missing from the manifest — what the edge should re-push.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ReconcileResponse {
@@ -766,8 +806,8 @@ struct ReconcileResponse {
 /// `/internal/ingest`), so it is absent from the public OpenAPI and requires the `X-Pos-Internal-Key`
 /// shared secret ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the
 /// proxy denies both deploy lanes apply.
-async fn reconcile<Rec, A, C>(
-    State(state): State<ReconcileState<Rec, A, C>>,
+async fn reconcile<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
     headers: HeaderMap,
     Json(request): Json<ReconcileRequest>,
 ) -> Response
@@ -775,6 +815,7 @@ where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
         return refusal;
@@ -786,8 +827,66 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let mut candidates = Vec::with_capacity(request.event_ids.len());
-    for raw in &request.event_ids {
+    run_reconcile(&state, tenant_id, store_id, &request.event_ids).await
+}
+
+/// `POST /sync/stores/{store_id}/reconcile` — the **store's** door onto the same diff.
+///
+/// Identity comes from the scoped key the box presents, not from a body it writes: the tenant is the
+/// grant's and the store is the path's, checked against the key's binding. That is the same shape the
+/// config pull, the heartbeat and the OTA report have, and it is why this route needs no shared
+/// secret — a store cannot reach the cloud's private network, and never could
+/// (production-readiness **R3**).
+async fn store_reconcile<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<StoreReconcileRequest>,
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
+    };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
+    run_reconcile(&state, grant.tenant(), store_id, &request.event_ids).await
+}
+
+/// The half both reconcile routes share: parse the manifest, run the diff, record the run.
+///
+/// Extracted for the reason the OTA report's shared body was — the whole difference between the two
+/// routes is meant to be *where identity comes from*, and one body makes that true rather than
+/// merely intended. A drift here would be a store and an operator getting different answers to the
+/// same question.
+async fn run_reconcile<Rec, A, C, K>(
+    state: &ReconcileState<Rec, A, C, K>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    event_ids: &[String],
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    let request_event_ids = event_ids;
+    let mut candidates = Vec::with_capacity(request_event_ids.len());
+    for raw in request_event_ids {
         match raw.parse::<EventId>() {
             Ok(id) => candidates.push(id),
             Err(_) => {
@@ -886,8 +985,8 @@ impl ReconcileRunView {
 /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
 /// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind
 /// [`ConsolePermission::Read`].
-async fn admin_reconcile_runs<Rec, A, C>(
-    State(state): State<ReconcileState<Rec, A, C>>,
+async fn admin_reconcile_runs<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
     headers: HeaderMap,
     Query(query): Query<ReconcileHistoryQuery>,
 ) -> Response
@@ -895,6 +994,7 @@ where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -1545,11 +1645,16 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
         return forbidden.into_response();
     }
-    // Parsed for its shape, and to keep the path meaningful in a log. Authority is the grant's
-    // tenant, exactly as on the config pull beside it — a release is fleet-wide, so there is no
-    // per-store row to isolate, and the store id must still be a store id.
-    if let Err(refusal) = parse_ulid_fields([("store_id", &store_id)]) {
-        return refusal;
+    // A release is fleet-wide, so there is no per-store row to isolate here — but the key presenting
+    // itself is still a *store's* credential, and one store must not fetch a release under another
+    // store's name (it is how the OTA progress read model attributes an install). So the id is parsed
+    // and then held to the grant, exactly as the config pull beside it does (S1).
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
+    };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
     }
     if let Err(error) = validate_release_tag(&request.release) {
         return api_error(ErrorStatus::InvalidArgument, format!("release: {error}"));
@@ -1679,6 +1784,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     record_ota_report(
         &state,
         grant.tenant(),
@@ -1849,6 +1957,16 @@ struct ProposeDeviceResponse {
 struct DeviceTenantQuery {
     /// The tenant whose proposals to act on (a 26-character ULID).
     tenant_id: String,
+    /// How an **approved** device is attached: `usb`, `network` or `serial`
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)). Required on approve,
+    /// ignored on reject. Discovery cannot find this out, and it decides whether a cash drawer may
+    /// be opened at all, so approval is where a human states it.
+    #[serde(default)]
+    connection: Option<String>,
+    /// The kitchen station an **approved** device serves (a ULID). Absent means the counter's
+    /// receipt printer, which serves the bill rather than a station. Ignored on reject.
+    #[serde(default)]
+    station_id: Option<String>,
 }
 
 /// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
@@ -1876,6 +1994,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let Some(kind) = DeviceKind::from_wire(&request.kind) else {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -1951,6 +2072,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     match state
         .devices
         .list(
@@ -2067,7 +2191,39 @@ where
         Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
         Err(refusal) => return refusal,
     };
-    match state.devices.resolve(tenant_id, id, approved).await {
+    // Approval carries the two facts discovery cannot find (ADR-0100). A rejection carries neither:
+    // they describe a device the store will address, and a rejected one never will.
+    let (connection, station) = if approved {
+        let Some(raw) = query.connection.as_deref() else {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "connection is required to approve a device: usb, network, or serial",
+                &[("connection", "REQUIRED")],
+            );
+        };
+        let Some(connection) = DeviceConnection::from_short_name(raw) else {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "connection must be one of usb, network, serial",
+                &[("connection", "INVALID_ENUM_VALUE")],
+            );
+        };
+        let station = match query.station_id.as_deref() {
+            None => None,
+            Some(raw) => match parse_ulid_fields([("station_id", raw)]) {
+                Ok([station]) => Some(StationId::new(station)),
+                Err(refusal) => return refusal,
+            },
+        };
+        (Some(connection), station)
+    } else {
+        (None, None)
+    };
+    match state
+        .devices
+        .resolve(tenant_id, id, approved, connection, station)
+        .await
+    {
         Ok(found) => {
             // Only a resolve that actually acted on a pending proposal is worth an entry; resolving
             // an already-resolved id is an idempotent `204` and records nothing. `resolved_by` is the
@@ -5533,6 +5689,208 @@ struct FloorPublishState<F, Cfg, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
+/// The device-publish sub-router's state: the approval queue to read, the config tree to write.
+#[derive(Clone)]
+struct DevicePublishState<D, Cfg, A, C> {
+    devices: D,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A super-admin selects the (tenant, store) whose `devices` node to compile and publish.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishDevicesRequest {
+    /// The tenant that owns the store (a 26-character ULID).
+    tenant_id: String,
+    /// The store whose approved devices to publish (a 26-character ULID).
+    store_id: String,
+}
+
+/// Builds the device-publish sub-router
+/// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md), C2 slice 2b).
+///
+/// Separate from [`device_router`] because it needs the config tree, which the propose/approve
+/// surface does not — the same split [`floor_publish_router`] makes for the same reason.
+pub fn device_publish_router<D, Cfg, A, C>(
+    devices: D,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/devices/publish",
+            post(admin_publish_devices::<D, Cfg, A, C>),
+        )
+        .with_state(DevicePublishState {
+            devices,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// Compiles a store's **approved** devices into its `devices` config node and versions it
+/// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+///
+/// The same load→compile→write→version shape as the floor publish beside it, onto the `devices` key.
+/// A device whose stored `kind` or `connection` this build does not know keeps its token through
+/// `Open` rather than failing the publish — the store on the other end applies the same rule, and a
+/// node that refused to compile over one unfamiliar device would take a shop's receipt printer with
+/// it.
+///
+/// A proposal with **no** connection is skipped, not published as a guess. That state is only
+/// reachable for a row approved before ADR-0100 (the route now requires it), and publishing it as
+/// `network` would silently disable the cash drawer on a USB printer. Skipping is visible: the
+/// response says how many were published and how many were held back.
+async fn admin_publish_devices<D, Cfg, A, C>(
+    State(state): State<DevicePublishState<D, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishDevicesRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+
+    let approved = match state
+        .devices
+        .list(tenant_id, Some(store_id), DeviceProposalStatus::Approved)
+        .await
+    {
+        Ok(approved) => approved,
+        Err(error) => {
+            tracing::warn!(%error, "could not read the approved devices to publish");
+            return service_unavailable("devices");
+        }
+    };
+    let considered = approved.len();
+    let node = compile_devices(&approved);
+    let published_count = node.devices().len();
+
+    let Ok(devices_value) = serde_json::to_value(&node) else {
+        tracing::error!("could not serialise a compiled device node");
+        return service_unavailable("devices");
+    };
+
+    let id = match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        vec![("devices".to_owned(), devices_value)],
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(refusal) => return refusal,
+    };
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "devices.publish",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({
+            "config_version_id": id.to_string(),
+            "device_count": published_count,
+            "skipped_count": considered.saturating_sub(published_count),
+        })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "config_version_id": id.to_string(),
+            "device_count": published_count,
+            "skipped_count": considered.saturating_sub(published_count),
+        })),
+    )
+        .into_response()
+}
+
+/// Turns approved proposals into the published node.
+///
+/// The proposal's ULID becomes the device's — the approval is what turns a proposal into a device,
+/// and reusing the identifier means the audit trail on the proposal and the device the store
+/// addresses are the same thing, rather than two ids an operator has to correlate by hand.
+///
+/// A row with no connection is dropped rather than guessed at; see [`admin_publish_devices`].
+fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
+    PublishedDevices::new(
+        approved
+            .iter()
+            .filter_map(|row| {
+                let device_id = row.id.parse::<Ulid>().ok().map(DeviceId::new)?;
+                let connection = row.connection.as_deref()?;
+                let station_id = match row.station_id.as_deref() {
+                    None => None,
+                    // A station id that will not parse drops the *station*, not the device: the
+                    // printer still exists and still prints, it simply falls back to serving no
+                    // station until the approval is corrected.
+                    Some(raw) => raw.parse::<Ulid>().ok().map(StationId::new),
+                };
+                Some(PublishedDevice {
+                    device_id,
+                    kind: Open::parse(&device_kind_token(&row.kind)),
+                    connection: Open::parse(&device_connection_token(connection)),
+                    address: row.address.clone(),
+                    name: DisplayName::new(row.name.as_str()),
+                    station_id,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The node's prefixed token for a stored short kind name (`printer` → `DEVICE_KIND_PRINTER`).
+///
+/// A name this build does not know still produces a token, which `Open` then retains — the
+/// forward-compatibility the node promises has to start here, at the one place the two spellings
+/// meet, or an unfamiliar device is lost before it reaches the store.
+fn device_kind_token(short: &str) -> String {
+    format!("DEVICE_KIND_{}", short.to_ascii_uppercase())
+}
+
+/// As [`device_kind_token`], for a connection (`usb` → `DEVICE_CONNECTION_USB`).
+fn device_connection_token(short: &str) -> String {
+    format!("DEVICE_CONNECTION_{}", short.to_ascii_uppercase())
+}
+
 /// A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.
 #[derive(Debug, Clone, Deserialize)]
 struct PublishFloorRequest {
@@ -5840,6 +6198,13 @@ struct FleetStoreView {
     self_test_ok: Option<bool>,
     /// Unix ms of the store's most recent OTA report, or `null`.
     reported_at_ms: Option<i64>,
+    /// How many events the store had committed and not yet published as of its last heartbeat, or
+    /// `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
+    /// *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
+    /// is not a store that is caught up — so the console renders the two differently.
+    outbox_depth: Option<u64>,
+    /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
+    outbox_reported_at_ms: Option<i64>,
 }
 
 impl FleetStoreView {
@@ -5876,6 +6241,10 @@ impl FleetStoreView {
             self_test_ok: row.self_test_ok,
             reported_at_ms: row
                 .reported_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            outbox_depth: row.outbox_depth,
+            outbox_reported_at_ms: row
+                .outbox_reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
         }
     }
@@ -13739,6 +14108,15 @@ where
 }
 
 /// A super-admin lists a menu's placements (tenant named on the query).
+///
+/// Behind [`ConsolePermission::ReadRevenue`], not plain `Read` (production-readiness **S5**): a
+/// [`MenuPlacement`] carries `prices` — the item's price on every channel of this menu — which is
+/// exactly the commercially sensitive (**T2**) data `ReadRevenue` was carved out of `Read` to hold
+/// back. Until this row was verified the console handed a store's full per-channel price book to any
+/// Viewer, while refusing the same figures on a revenue report.
+///
+/// The consequence is deliberate and worth stating: Ops and Viewer can still list the menus, their
+/// sections and the item master, and can no longer read what anything costs.
 async fn admin_list_placements<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
@@ -13754,7 +14132,7 @@ where
         &state.admin,
         &state.clock,
         &headers,
-        ConsolePermission::Read,
+        ConsolePermission::ReadRevenue,
     )
     .await
     {
@@ -15133,6 +15511,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = confine_to_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let window = match window.into_window() {
         Ok(window) => window,
         Err(error) => return window_refusal(error),
@@ -15220,6 +15601,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let held = match query.held_version {
         None => None,
         Some(ref raw) => match parse_ulid_fields([("held_version", raw)]) {
@@ -15268,6 +15652,7 @@ async fn edge_heartbeat<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
+    body: axum::body::Bytes,
 ) -> Response
 where
     S: Clone + Send + Sync + 'static,
@@ -15289,15 +15674,57 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
+    let outbox_depth = match heartbeat_body(&body) {
+        Ok(report) => report.outbox_depth,
+        // A body that is present and will not parse is the caller's mistake; swallowing it would let
+        // a store report nothing forever while believing it reported.
+        Err(error) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("the heartbeat body is not a heartbeat report: {error}"),
+                &[("outbox_depth", "INVALID_VALUE")],
+            );
+        }
+    };
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app
         .config_trees
-        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now())
+        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now(), outbox_depth)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
+///
+/// Every field is optional and the whole body is optional, because the body is younger than the
+/// route: a store running an older binary posts nothing at all, and must keep being recorded as
+/// alive rather than refused for sending the empty body it has always sent.
+#[derive(Debug, Default, serde::Deserialize)]
+struct HeartbeatBody {
+    /// How many events the store has committed and not yet published — its own publish backlog, the
+    /// opposite direction from the relay backlog the fleet row already carries. `None` when the store
+    /// did not say, which is a different answer from zero and leaves the recorded depth alone.
+    #[serde(default)]
+    outbox_depth: Option<u64>,
+}
+
+/// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —
+/// nothing reported, which the store layer keeps distinct from a reported zero.
+///
+/// # Errors
+///
+/// The decode error, for the caller to phrase as a refusal.
+fn heartbeat_body(body: &[u8]) -> Result<HeartbeatBody, serde_json::Error> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(HeartbeatBody::default());
+    }
+    serde_json::from_slice(body)
 }
 
 // --- The interactive super-admin surface (`/admin`) ---------------------------------------------
@@ -16191,6 +16618,14 @@ async fn audit_action<C>(
 struct CreateApiKeyRequest {
     /// The tenant the key will act for (a 26-character ULID).
     tenant_id: String,
+    /// The one store the key will act for (a ULID), or absent for a tenant-wide key.
+    ///
+    /// A store's own credential — the key its edge presents on `/sync/stores/{store_id}/…` — must
+    /// name its store here: those routes serve one store's configuration, including its employee
+    /// roster and PIN hashes, and refuse a key that is not bound to the store in the path (S1). A
+    /// tenant-wide key stays right for an integration reading a whole tenant's rollups.
+    #[serde(default)]
+    store_id: Option<String>,
     /// The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these.
     scopes: Vec<String>,
     /// An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires.
@@ -16249,6 +16684,13 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
+    let store_id = match request.store_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("store_id", raw)]) {
+            Ok([store_id]) => Some(StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        },
+    };
     // Strict: an unknown scope name is a `400`, not a silent drop — the admin is granting explicitly,
     // so a typo must not quietly issue a key that authorises nothing.
     let scopes = match parse_scopes(&request.scopes) {
@@ -16279,7 +16721,7 @@ where
         },
         None => None,
     };
-    let (stored, token) = issue(id, tenant_id, scopes, &secret, expires_at);
+    let (stored, token) = issue(id, tenant_id, store_id, scopes, &secret, expires_at);
     if let Err(error) = app.keys.insert(&stored).await {
         tracing::error!(%error, "persisting a new API key failed");
         return service_unavailable("provisioning");
@@ -17535,11 +17977,12 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
+    let context =
+        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
+            Ok(context) => context,
+            Err(denied) => return denied,
+        };
+    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id) =
         match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
@@ -17554,7 +17997,17 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
-                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                // Never the staff PIN hashes (S7), and never a price to a role without
+                // `ReadRevenue` (S8) — see `without_staff_credentials` and `without_prices`.
+                Some(effective) => {
+                    let document = without_staff_credentials(effective);
+                    let document = if prices {
+                        document
+                    } else {
+                        without_prices(&document)
+                    };
+                    (StatusCode::OK, Json(document)).into_response()
+                }
                 None => no_published_configuration(),
             }
         }
@@ -17635,6 +18088,77 @@ where
     }
 }
 
+/// Removes the credentials a console read must never carry (production-readiness **S7**).
+///
+/// The `permissions` node the People publish writes contains each staff member's Argon2id PIN hash —
+/// **T1**, the credential the edge verifies a sign-in against. It belongs on the `/sync` route a store
+/// reads with its own scoped key, and nowhere else. Until this existed, `GET /admin/stores/{id}/config`
+/// handed the whole effective document to anyone holding `console.data.read` — which every role down
+/// to Viewer holds — so a read-only console account could lift the PIN hash of every member of staff
+/// in the fleet, one store at a time.
+///
+/// Stripped unconditionally rather than gated on a permission: no console screen reads a PIN hash, no
+/// console screen could sensibly do anything with one, and a value nobody needs is not worth a role
+/// check that could later be widened by mistake. The field is *removed*, not blanked, so a reader
+/// cannot mistake an empty string for "this member has no PIN set" — which is a real and different
+/// state (they cannot sign in).
+fn without_staff_credentials(document: &serde_json::Value) -> serde_json::Value {
+    let mut document = document.clone();
+    if let Some(staff) = document
+        .get_mut("permissions")
+        .and_then(|node| node.get_mut("staff"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for member in staff {
+            if let Some(member) = member.as_object_mut() {
+                member.remove("pin_phc");
+            }
+        }
+    }
+    document
+}
+
+/// The config nodes whose published shape carries money, and which a console caller therefore reads
+/// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
+///
+/// A node earns a place here by carrying a **price a competitor would want** — `Money` in the wire
+/// type the publish path writes — not merely by being commercially interesting. Today that is two:
+///
+/// - **`menu`** — the compiled per-channel price book. This is the node S8 was raised for: closing
+///   `GET /admin/catalog/menus/{id}/placements` under **S5** left the same price book readable one
+///   route over, through the config screen.
+/// - **`campaigns`** — combo prices, discount amounts and minimum-bill thresholds
+///   ([ADR-0077](../../../docs/adr/0077-campaigns.md)). Found while fixing S8, and included because a
+///   redaction that closes one price surface and leaves its sibling open is not a fix; a promotion's
+///   economics are the same **T2** class as a menu price.
+///
+/// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`
+/// (published rates, which a receipt shows the guest anyway) and `permissions` (whose credential is
+/// removed unconditionally by [`without_staff_credentials`]).
+const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns"];
+
+/// Removes the priced nodes from a console read for a caller without `ReadRevenue`
+/// (production-readiness **S8**).
+///
+/// **Why redact rather than refuse the whole read.** The alternative was to gate
+/// `GET /admin/stores/{id}/config` on `ReadRevenue` outright, which is one line and costs Ops the
+/// config screen — the screen they use to see a store's capabilities, floor, stations and printers.
+/// The point of carving `ReadRevenue` out of `Read` was that prices are narrower than data, so the
+/// narrow thing is what should be withheld.
+///
+/// The node is **removed, not blanked**, for the reason S7 gives: an empty object would read as
+/// "this store has no menu published", which is a real and different state. The console tells the
+/// operator that something is hidden by their role rather than letting them infer it from an absence.
+fn without_prices(document: &serde_json::Value) -> serde_json::Value {
+    let mut document = document.clone();
+    if let Some(nodes) = document.as_object_mut() {
+        for node in PRICED_CONFIG_NODES {
+            nodes.remove(*node);
+        }
+    }
+    document
+}
+
 /// The effective (composed, validated) document of one past config version (super-admin only), for
 /// the console's diff view. `404` if the store or the named version is unknown.
 async fn admin_config_version_effective<S, R, K, C, A, T, W>(
@@ -17652,11 +18176,12 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
+    let context =
+        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
+            Ok(context) => context,
+            Err(denied) => return denied,
+        };
+    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -17678,7 +18203,17 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
-                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                // The diff view reads a past version, and a past version holds past PIN hashes (S7)
+                // and past prices (S8) — a price is not less sensitive for being last month's.
+                Some(effective) => {
+                    let document = without_staff_credentials(effective);
+                    let document = if prices {
+                        document
+                    } else {
+                        without_prices(&document)
+                    };
+                    (StatusCode::OK, Json(document)).into_response()
+                }
                 None => not_found("config version"),
             }
         }
@@ -20102,5 +20637,85 @@ mod error_envelope_tests {
             refusal_details(refusal).await,
             vec![("name".to_owned(), "REQUIRED".to_owned())]
         );
+    }
+}
+
+#[cfg(test)]
+mod console_config_redaction_tests {
+    //! What a console read of a store's configuration must never carry.
+    //!
+    //! Two independent redactions run on the same document and the tests keep them independent: the
+    //! staff credential goes unconditionally (**S7**), the priced nodes go by role (**S8**). A change
+    //! that merged them would be a change in behaviour for one of the two.
+
+    use super::{PRICED_CONFIG_NODES, without_prices, without_staff_credentials};
+    use serde_json::json;
+
+    /// A document shaped like a real effective config: a priced node, a free one, and the staff node.
+    fn document() -> serde_json::Value {
+        json!({
+            "menu": { "channels": { "dine_in": { "items": [{ "price_amount_minor": 95_000 }] } } },
+            "campaigns": { "rules": [{ "amount": { "currency": "VND", "minor": 20_000 } }] },
+            "layout": { "buttons": ["margherita"] },
+            "capabilities": { "tips_enabled": true },
+            "permissions": { "staff": [{ "employee_id": "01J", "pin_phc": "$argon2id$v=19$..." }] },
+        })
+    }
+
+    #[test]
+    fn a_role_without_read_revenue_gets_no_priced_node() {
+        let redacted = without_prices(&document());
+        for node in PRICED_CONFIG_NODES {
+            assert!(
+                redacted.get(*node).is_none(),
+                "`{node}` carries money and must not reach a caller without ReadRevenue (S8)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_document_survives_the_price_redaction() {
+        // The whole reason S8 redacts rather than gating the route: Ops keeps the config screen.
+        let redacted = without_prices(&document());
+        assert!(
+            redacted.get("layout").is_some(),
+            "buttons carry no money, so Ops still sees the till's layout"
+        );
+        assert!(
+            redacted.get("capabilities").is_some(),
+            "capabilities are what the config screen is *for*"
+        );
+        assert!(
+            redacted.get("permissions").is_some(),
+            "the staff node stays; its credential is removed separately (S7)"
+        );
+    }
+
+    #[test]
+    fn the_two_redactions_are_independent() {
+        // A priced read still loses the PIN hash, and a redacted read still loses the prices —
+        // neither is a side effect of the other.
+        let priced = without_staff_credentials(&document());
+        assert!(
+            priced.get("menu").is_some(),
+            "a caller with ReadRevenue keeps the price book"
+        );
+        let staff = priced["permissions"]["staff"][0]
+            .as_object()
+            .expect("a staff member");
+        assert!(
+            !staff.contains_key("pin_phc"),
+            "the credential goes unconditionally (S7), whatever the role"
+        );
+
+        let both = without_prices(&priced);
+        assert!(both.get("menu").is_none(), "and the prices go by role (S8)");
+    }
+
+    #[test]
+    fn redacting_a_document_that_has_no_priced_node_changes_nothing() {
+        // A store that has published capabilities and nothing else is the common case on day one.
+        let plain = json!({ "capabilities": { "tips_enabled": false } });
+        assert_eq!(without_prices(&plain), plain);
     }
 }

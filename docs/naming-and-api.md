@@ -92,6 +92,7 @@ convention the cloud actually implements.
 | `idempotency-key` | Deduplicate creates (industry standard) |
 | `pos-signature` | Webhook HMAC-SHA256, as `v1=<hex>` |
 | `pos-signature-time` | Signing timestamp, Unix seconds (replay window ±5 minutes) |
+| `pos-delivery-id` | Webhook idempotency key: the page being delivered, stable across retries |
 
 HTTP header names use hyphens by convention — this is HTTP, not a violation of the snake_case rule.
 They carry no `X-` prefix: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated it for new
@@ -100,13 +101,19 @@ headers, and a receiver should not have to guess which spelling a version sends.
 **This table is the contract, and the code is checked against it.** It listed two more headers until
 roadmap **Q5**, and neither existed:
 
-- **`pos-event-id`, `pos-delivery-id`** described a webhook that delivers *one event*. It does not:
-  a delivery is a **page** of events, read after the endpoint's cursor and re-sent unchanged until
-  the receiver accepts it ([ADR-0032](adr/0032-webhooks.md)). There is no single event to
-  name, and no delivery record with an id. A receiver dedupes on the `event_id` **inside** each
-  event in the body, which every event envelope carries; the page as a whole is identified by its
-  last `event_id`, which is also the cursor the cloud advances on success. A per-attempt id would be
-  a real addition rather than a fix, so it is not smuggled in here.
+- **`pos-event-id`** described a webhook that delivers *one event*. It does not: a delivery is a
+  **page** of events, read after the endpoint's cursor and re-sent unchanged until the receiver
+  accepts it ([ADR-0032](adr/0032-webhooks.md)). There is no single event to name. A receiver
+  dedupes on the `event_id` **inside** each event in the body, which every event envelope carries.
+  It stays removed.
+- **`pos-delivery-id`** was removed with it, and has since come back as the real addition Q5 said it
+  would have to be (production-readiness **R6**). It names the **page**, not one event: a failed
+  delivery leaves the cursor where it was, so the retry re-reads the identical page and re-signs it
+  with a fresh timestamp — meaning the signature differs on every attempt and the two are otherwise
+  indistinguishable except by hashing the body. The value is `{store_id}.{first_event_id}`, which is
+  stable for as long as the page is (every retry of it) and changes the moment the cursor advances.
+  It is **absent, never empty**, on a body that is not a cursor page — an alert notification carries
+  no page and so keys on nothing.
 - **`pos-api-version`** was an optional minor-version pin that nothing read. Every route ignored it,
   so an integrator who sent it believed they had pinned something and had not — worse than no header
   at all. Pinning is deliberately not being introduced now

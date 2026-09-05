@@ -167,8 +167,11 @@ impl<T: WebhookTransport + Sync> AlertChannel for WebhookAlertChannel<T> {
             ChannelError::new(format!("encoding the alert batch failed: {error}"))
         })?;
         let signature = sign(&self.secret, now, &body);
+        // No delivery id: an alert batch is not a cursor page and is never re-sent byte-for-byte, so
+        // there is nothing stable for a receiver to dedupe on. Sending a fresh value each time would
+        // look like an idempotency key and behave like a nonce (production-readiness **R6**).
         self.transport
-            .deliver(&self.destination, &signature, &body)
+            .deliver(&self.destination, &signature, None, &body)
             .await
             .map_err(|error| ChannelError::new(error.to_string()))
     }
@@ -218,8 +221,13 @@ mod tests {
             &self,
             target: &VettedUrl,
             signature: &crate::webhook::sign::Signature,
+            delivery_id: Option<&str>,
             body: &[u8],
         ) -> Result<(), DeliveryError> {
+            assert!(
+                delivery_id.is_none(),
+                "an alert batch is not a cursor page and offers no idempotency key (R6)"
+            );
             if self.fail {
                 return Err(DeliveryError::new("the endpoint refused with 503"));
             }

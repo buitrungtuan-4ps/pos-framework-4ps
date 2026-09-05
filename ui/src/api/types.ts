@@ -172,6 +172,46 @@ export interface BillResponse {
   total_due?: Money;
   table_state?: string;
   print_receipt: boolean;
+  /**
+   * What came of the receipt: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT`
+   * (ADR-0100). Absent when the settle asked for no receipt, or from an edge built before C2.
+   */
+  receipt_print?: string;
+}
+
+/** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
+export interface LayoutButton {
+  /** The item this orders — the id the price book from `GET /api/menu` carries. */
+  menu_item_id: string;
+  /** The caption the console wrote, which may be shorter than the item's catalog name. */
+  label: string;
+  /** Zero-based grid column, absent for a flowing layout where order alone places the button. */
+  column?: number;
+  /** Zero-based grid row, absent for the same reason. */
+  row?: number;
+}
+
+/** A second grouping level under a category. */
+export interface LayoutSubcategory {
+  display_subcategory_id: string;
+  name: string;
+  buttons: LayoutButton[];
+}
+
+/** A display category: a tab or section on the till. */
+export interface LayoutCategory {
+  display_category_id: string;
+  name: string;
+  buttons: LayoutButton[];
+  subcategories: LayoutSubcategory[];
+}
+
+/**
+ * The store's presentation plan for this channel. An empty `categories` means the console has laid
+ * nothing out, and the till draws the flat price book instead.
+ */
+export interface LayoutResponse {
+  categories: LayoutCategory[];
 }
 
 export interface OpenShiftRequest {
@@ -197,6 +237,30 @@ export interface PairRequest {
 
 export interface PairAccepted {
   device_token: string;
+}
+
+// One device this store has admitted, from `GET /api/pair/devices` (ADR-0091,
+// production-readiness O1). The edge does not know a device's *name* — that lives in the cloud's
+// approved-device registry, and a store that has never synced has none — so the pairing instant and
+// the `this_device` mark are what let an operator tell the tills apart.
+export interface PairedDevice {
+  readonly device_id: string;
+  readonly paired_at_ms: number;
+  /** Whether this is the tablet making the request. Retiring it signs this browser out. */
+  readonly this_device: boolean;
+}
+
+// What the store says about its own pairing: how many devices, whether that survives a restart, and
+// which they are.
+export interface PairingState {
+  readonly devices: number;
+  readonly durable: boolean;
+  readonly paired: readonly PairedDevice[];
+}
+
+// Which device to retire. An absent `device_id` retires every one of them — the break-glass.
+export interface RevokeRequest {
+  device_id?: string;
 }
 
 // The first-boot activation exchange (ADR-0050), mounted only when the store server is provisioned

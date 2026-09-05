@@ -17,10 +17,16 @@
 //! trading store's price book away. The HTTP is a seam ([`ConfigTransport`]), so the loop is tested
 //! with no socket.
 //!
-//! Scope: this rebuilds and hot-swaps the live session from the pulled document. Persisting the pulled
-//! document to the edge's local [`ConfigStore`](pos_ports::config_store::ConfigStore) (so a restart
-//! keeps the last-synced menu without a round-trip), and interpreting the delta form of a config
-//! update, are the store-sqlite integration that layers on this seam.
+//! Each applied document is also written to the edge's local
+//! [`ConfigStore`](pos_ports::ConfigStore), and [`restore_session_from_store`] reads it back at boot
+//! before anything binds. That is what makes a store that reboots with its WAN down still able to
+//! sell on its real menu: without it every restart came up on [`EdgeSession::bootstrap`] — an empty
+//! catalog, an empty roster, an empty floor — and stayed there until the cloud answered, which for
+//! an OTA install (which restarts the edge deliberately) or a broadband outage is exactly when it
+//! cannot.
+//!
+//! Scope: the delta form of a config update is still the cloud's to send as a snapshot — this loop
+//! pulls whole documents (ADR-0039) and stores them as [`ConfigUpdate::Snapshot`].
 
 use core::future::Future;
 use core::time::Duration;
@@ -33,9 +39,16 @@ use pos_core::channels::{accepted_tender, enabled_channels};
 use pos_core::inventory::from_published as inventory_from_published;
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_core::permission::{Permission, PermissionSet};
+use pos_ports::config_store::{ConfigDocument, ConfigSnapshot, ConfigStore, ConfigUpdate};
+use pos_ports::error::PortError;
+use pos_ports::event_store::EventStore;
+use pos_ports::tx::TxContext;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::devices::PublishedDevices;
+use pos_proto::display::LayoutBook;
 use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::ids::ConfigVersionId;
 use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
@@ -191,6 +204,28 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.stations = stations;
     }
+    // The `layout` node the catalog publish writes beside `menu` (ADR-0066): how the till groups and
+    // orders its buttons, resolved here for the store's channel exactly as the price book is. Until
+    // this branch the node was authored, validated, published — and read by nobody (C4). Absent or
+    // unparseable leaves the plan as the base has it: a bad publish never blanks a trading till's
+    // buttons, and an empty plan means the till draws the flat price book instead.
+    if let Some(book) = document
+        .get("layout")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<LayoutBook>(&text).ok())
+    {
+        session.layout = book.plan_for(channel).clone();
+    }
+    // The `devices` node the device publish writes (ADR-0100): the printers and kitchen displays this
+    // store may address. Absent leaves the session's set as the base has it — which for a box that
+    // has never synced means empty, and empty means "print nothing", not "print blind".
+    if let Some(devices) = document
+        .get("devices")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedDevices>(&text).ok())
+    {
+        session.devices = devices;
+    }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
     // default; a store now bills the authored rates. Absent or unparseable leaves the base table
@@ -337,6 +372,51 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     session
 }
 
+/// Restores the live session from the configuration this store last synced, so a box that reboots
+/// with its WAN down still trades on its real menu ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)).
+///
+/// Reads the local [`ConfigStore`]: [`ConfigStore::current`] first, then falling back to
+/// [`ConfigStore::last_known_good`] — the two differ only after a rejected version, and the version
+/// that validated is the right thing to come back on. Returns the version now live, or `None` when
+/// this box has never synced (a first boot, which trades on [`EdgeSession::bootstrap`] until the
+/// first pull answers) — which is also what the config-pull loop should start out holding, so a
+/// restart does not re-pull a document it already has.
+///
+/// Never fails the boot: a stored document that will not parse is logged and skipped, because a
+/// store that will not start is worse than a store on a stale menu.
+///
+/// # Errors
+///
+/// [`PortError`] if the local store cannot be read at all — which is the same fault that would stop
+/// the event log opening, so the caller treats it as one.
+pub async fn restore_session_from_store<S>(edge: &Edge<S>) -> Result<Option<String>, PortError>
+where
+    S: EventStore + ConfigStore,
+{
+    let store_id = edge.store_id();
+    let store = edge.store();
+    let stored = match store.current(store_id).await? {
+        Some(snapshot) => Some(snapshot),
+        None => store.last_known_good(store_id).await?,
+    };
+    let Some(stored) = stored else {
+        tracing::info!("no configuration has been synced to this store yet; trading on defaults");
+        return Ok(None);
+    };
+    let version = stored.config_version_id.to_string();
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(stored.document.as_json()) else {
+        // Unreachable through the port (a `ConfigDocument` holds validated JSON), so this is the
+        // hand-edited-database case. Logged without the document: config carries no personal data,
+        // but a whole document in a log line is noise nobody reads.
+        tracing::warn!(%version, "the stored configuration is not JSON; trading on defaults");
+        return Ok(None);
+    };
+    let rebuilt = session_from_config(&edge.session(), &document);
+    edge.apply_session(rebuilt);
+    tracing::info!(%version, "restored the last synced configuration from local storage");
+    Ok(Some(version))
+}
+
 /// A store's effective config as pulled from the cloud: its version and the document itself.
 #[derive(Debug, Clone)]
 pub struct SyncedConfig {
@@ -389,13 +469,19 @@ pub struct ConfigClient<T, S> {
 impl<T, S> ConfigClient<T, S>
 where
     T: ConfigTransport,
+    S: EventStore + ConfigStore,
 {
     /// Builds a client over a transport and the edge whose session it keeps current.
-    pub fn new(transport: T, edge: Arc<Edge<S>>) -> Self {
+    ///
+    /// `held_version` is what the store already has on disk — the value
+    /// [`restore_session_from_store`] returned at boot — so the first pull asks for a *change*
+    /// rather than re-fetching a document the store is already running. `None` on a box that has
+    /// never synced.
+    pub fn new(transport: T, edge: Arc<Edge<S>>, held_version: Option<String>) -> Self {
         Self {
             transport,
             edge,
-            held_version: Mutex::new(None),
+            held_version: Mutex::new(held_version),
         }
     }
 
@@ -423,10 +509,56 @@ where
         let base = self.edge.session();
         let rebuilt = session_from_config(&base, &synced.document);
         self.edge.apply_session(rebuilt);
+        // Store it before recording the version: the live session is already swapped either way, and
+        // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
+        // after a restart), not a reason to refuse a document the counter is already selling on.
+        self.persist(&synced).await;
         *self.held_version.lock().expect("held-version lock") =
             Some(synced.config_version_id.clone());
         tracing::info!(version = %synced.config_version_id, "applied a new store config");
         Ok(Some(synced.config_version_id))
+    }
+
+    /// Writes an applied document to the store's local [`ConfigStore`], so the next boot restores it
+    /// instead of coming up on defaults.
+    ///
+    /// Every failure is logged and swallowed. The document has already been applied to the live
+    /// session, so the only thing lost is the offline restart, and losing that quietly beats a
+    /// transport error that would make the loop back off and stop pulling.
+    async fn persist(&self, synced: &SyncedConfig) {
+        let Ok(config_version_id) = synced.config_version_id.parse::<ConfigVersionId>() else {
+            tracing::warn!(
+                version = %synced.config_version_id,
+                "the cloud's config version is not a ULID; applied but not stored, so a restart re-pulls it"
+            );
+            return;
+        };
+        let document = match serde_json::value::to_raw_value(&synced.document) {
+            Ok(raw) => ConfigDocument::new(raw),
+            Err(error) => {
+                tracing::warn!(%error, "the applied config document could not be re-encoded to store");
+                return;
+            }
+        };
+        let update = ConfigUpdate::Snapshot(ConfigSnapshot {
+            config_version_id,
+            store_id: self.edge.store_id(),
+            document,
+        });
+        let store = self.edge.store();
+        let stored = async {
+            let mut tx = store.begin().await?;
+            store.apply(&mut tx, &update).await?;
+            tx.commit().await
+        }
+        .await;
+        if let Err(error) = stored {
+            tracing::warn!(
+                %error,
+                version = %synced.config_version_id,
+                "applied the new config but could not store it; a restart will re-pull it"
+            );
+        }
     }
 
     /// Runs the config-pull loop until `shutdown` resolves: pull, apply anything new, wait
@@ -491,6 +623,63 @@ mod tests {
         ));
         let book = MenuBook::new().with(channel, catalog);
         serde_json::json!({ "menu": serde_json::to_value(&book).expect("serialize") })
+    }
+
+    #[test]
+    fn a_synced_layout_node_becomes_the_tills_button_plan() {
+        // C4: the node was authored, validated, published — and read by nobody, so every till in the
+        // fleet drew the flat price book whatever an operator arranged.
+        use pos_proto::display::{DisplayButton, DisplayCategory, DisplayPlan, LayoutBook};
+        use pos_proto::ids::DisplayCategoryId;
+
+        let base = EdgeSession::bootstrap();
+        assert!(base.layout.is_empty(), "the bootstrap lays nothing out");
+
+        let plan = DisplayPlan::new().with(DisplayCategory {
+            display_category_id: DisplayCategoryId::new(Ulid::from_u128(3)),
+            name: DisplayName::new("Pizza"),
+            buttons: vec![DisplayButton {
+                menu_item_id: item(),
+                label: DisplayName::new("Margherita"),
+                position: None,
+            }],
+            subcategories: Vec::new(),
+        });
+        let book = LayoutBook::new().with(base.sales_channel, plan);
+        let document =
+            serde_json::json!({ "layout": serde_json::to_value(&book).expect("serialize") });
+
+        let rebuilt = session_from_config(&base, &document);
+        let category = rebuilt.layout.categories().first().expect("one category");
+        assert_eq!(category.name.as_str(), "Pizza");
+        assert_eq!(
+            category.buttons.first().map(|button| button.menu_item_id),
+            Some(item())
+        );
+    }
+
+    #[test]
+    fn a_layout_published_for_another_channel_does_not_lay_out_this_one() {
+        // The same guard the price book keeps: a Grab layout must not arrange the till.
+        use pos_proto::display::{DisplayCategory, DisplayPlan, LayoutBook};
+        use pos_proto::ids::DisplayCategoryId;
+
+        let base = EdgeSession::bootstrap(); // DineIn
+        let plan = DisplayPlan::new().with(DisplayCategory {
+            display_category_id: DisplayCategoryId::new(Ulid::from_u128(3)),
+            name: DisplayName::new("Grab"),
+            buttons: Vec::new(),
+            subcategories: Vec::new(),
+        });
+        let book = LayoutBook::new().with(SalesChannel::Delivery, plan);
+        let document =
+            serde_json::json!({ "layout": serde_json::to_value(&book).expect("serialize") });
+
+        let rebuilt = session_from_config(&base, &document);
+        assert!(
+            rebuilt.layout.is_empty(),
+            "the till falls back to the flat price book, not another channel's arrangement"
+        );
     }
 
     #[test]

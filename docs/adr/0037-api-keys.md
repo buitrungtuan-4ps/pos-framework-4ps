@@ -67,3 +67,31 @@ than the integration needs.
   silent drop (the deny-by-default read tolerance would wrongly issue a key granting nothing).
 - **Deliberately not here yet:** a tenant self-service surface for managing its own keys (all
   provisioning is super-admin-driven for now), and per-key usage metering.
+
+## Amendment 1 — a store's key names its store (2026-09-05)
+
+**What was wrong.** "Every key is bound to one tenant" was the whole isolation story, and the
+`/sync/stores/{store_id}/…` routes took the tenant from the verified grant and the store from the
+**path**. Within one tenant that is not a check: every shop in a chain shares a tenant, so any
+store's key served a sibling's configuration — including the `permissions` node, which carries
+employee names and PIN hashes ([ADR-0070](0070-people-and-access.md)). No production tenant existed
+when this was found, so it was a vulnerability rather than an incident.
+
+**What changed.** `api_keys` gains a nullable `store_id` (migration `0047`), `StoredApiKey` and
+`Grant` carry it, and `Grant::store()` exposes it. Two guards use it:
+
+- `require_store` — the `/sync/stores/{id}` routes (config, heartbeat, report, artifact, devices,
+  order relay pull and ack). The grant must name **this** store. A grant naming another, or naming
+  none, is a `403`.
+- `confine_to_store` — `/v1/stores/{id}/rollups/daily` and its window reads. An unbound key passes,
+  because a tenant-wide integration key is the documented credential there; a *store's* key is still
+  held to its own store, so a shop cannot read a sibling's takings with its rollup scope.
+
+**Why `None` is refused on `/sync` rather than waved through.** Treating "names no store" as "may
+act for any store in the tenant" would leave the finding open under a different name — the first
+box provisioned with an old-style key would restore the exact behaviour being removed. A tenant-wide
+key stays correct for an integration reading a whole tenant; it simply is not a store's credential.
+
+**Upgrade.** Existing keys keep working everywhere except `/sync`, where they are now refused. Re-issue
+each store's key from the console with the store named (the guided wizard does this automatically;
+the **API keys** screen has a store picker) and put the new token in the box's environment file.

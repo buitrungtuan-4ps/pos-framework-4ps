@@ -247,6 +247,7 @@ mod tests {
             &self,
             _target: &VettedUrl,
             _signature: &Signature,
+            _delivery_id: Option<&str>,
             _body: &[u8],
         ) -> Result<(), DeliveryError> {
             if self.down.load(Ordering::SeqCst) {

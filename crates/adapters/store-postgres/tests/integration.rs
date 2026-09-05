@@ -862,12 +862,26 @@ mod api_keys_store {
             keys.insert(
                 "KEY0000000000000000000001",
                 "TENANT000000000000000000AA",
+                Some("STORE0000000000000000000A"),
                 hash,
                 &scopes,
                 None,
             )
             .await
             .expect("insert the key");
+            // A second key in the same tenant, bound to no store — the tenant-wide integration key
+            // (S1). Both shapes must round-trip, because the guard that reads `store_id` treats
+            // `NULL` and a store id as different authorities, not as a present-or-missing detail.
+            keys.insert(
+                "KEY0000000000000000000002",
+                "TENANT000000000000000000AA",
+                None,
+                hash,
+                &scopes,
+                None,
+            )
+            .await
+            .expect("insert the tenant-wide key");
 
             let row = keys
                 .fetch("KEY0000000000000000000001")
@@ -875,18 +889,40 @@ mod api_keys_store {
                 .expect("fetch")
                 .expect("the inserted key is present");
             assert_eq!(row.tenant_id, "TENANT000000000000000000AA");
+            assert_eq!(
+                row.store_id.as_deref(),
+                Some("STORE0000000000000000000A"),
+                "a store's key round-trips the store it is bound to"
+            );
             assert_eq!(row.secret_hash, vec![3_u8; 32]);
             assert!(!row.revoked, "a fresh key is live");
             assert_eq!(row.expires_at_ms, None);
+
+            let tenant_wide = keys
+                .fetch("KEY0000000000000000000002")
+                .await
+                .expect("fetch")
+                .expect("the tenant-wide key is present");
+            assert_eq!(
+                tenant_wide.store_id, None,
+                "a tenant-wide key reads back bound to no store"
+            );
 
             let listed = keys
                 .list_for_tenant("TENANT000000000000000000AA")
                 .await
                 .expect("list");
-            assert_eq!(listed.len(), 1);
-            let only = listed.first().expect("exactly one key");
-            assert_eq!(only.id, "KEY0000000000000000000001");
+            assert_eq!(listed.len(), 2);
+            let only = listed
+                .iter()
+                .find(|key| key.id == "KEY0000000000000000000001")
+                .expect("the store-bound key is listed");
             assert_eq!(only.scopes, scopes, "the granted scopes are listed");
+            assert_eq!(
+                only.store_id.as_deref(),
+                Some("STORE0000000000000000000A"),
+                "the listing says which store a key belongs to"
+            );
 
             // Another tenant sees nothing.
             let other = keys
@@ -1025,7 +1061,7 @@ mod activation_codes {
 // ---------------------------------------------------------------------------
 
 mod config_tree_store {
-    use super::{block_on, prepared};
+    use super::{Client, block_on, prepared};
     use pos_proto::{StoreId, TenantId, Ulid};
     use store_postgres::RowUpdate;
 
@@ -1348,9 +1384,9 @@ mod config_tree_store {
         });
     }
 
-    /// A heartbeat advances only `last_seen_at`, preserving the held version and last-config-pull
-    /// instant a prior pull recorded; a heartbeat before any pull creates the row with those NULL
-    /// ([ADR-0068] slice 2).
+    /// A heartbeat advances only `last_seen_at` (and the reported publish backlog), preserving the
+    /// held version and last-config-pull instant a prior pull recorded; a heartbeat before any pull
+    /// creates the row with those NULL ([ADR-0068] slice 2).
     #[test]
     fn heartbeat_advances_last_seen_only() {
         block_on(async {
@@ -1366,7 +1402,7 @@ mod config_tree_store {
                 .await
                 .expect("record seen");
             trees
-                .record_heartbeat(tenant, store_id, 5000)
+                .record_heartbeat(tenant, store_id, 5000, None)
                 .await
                 .expect("record heartbeat");
             let row = admin
@@ -1396,7 +1432,7 @@ mod config_tree_store {
             // A heartbeat for a store that has never pulled creates the row with those two NULL.
             let fresh = StoreId::new(Ulid::from_u128(0x59));
             trees
-                .record_heartbeat(tenant, fresh, 2000)
+                .record_heartbeat(tenant, fresh, 2000, None)
                 .await
                 .expect("record heartbeat for a fresh store");
             let row = admin
@@ -1418,6 +1454,77 @@ mod config_tree_store {
                 None,
                 "a heartbeat-only store has no config-pull instant"
             );
+        });
+    }
+
+    /// A reported publish backlog is recorded with the instant that reported it, and a later
+    /// heartbeat that reports none leaves both alone — "did not say" is not "caught up"
+    /// ([ADR-0068] slice 2, Track O6).
+    #[test]
+    fn a_reported_outbox_depth_is_recorded_and_never_erased_by_silence() {
+        block_on(async {
+            async fn read(admin: &Client, tenant: TenantId, store: StoreId) -> tokio_postgres::Row {
+                admin
+                    .query_one(
+                        "SELECT outbox_depth, outbox_reported_at FROM store_liveness \
+                         WHERE tenant_id = $1 AND store_id = $2",
+                        &[&tenant.to_string(), &store.to_string()],
+                    )
+                    .await
+                    .expect("row")
+            }
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE3));
+            let store_id = StoreId::new(Ulid::from_u128(0x5A));
+
+            trees
+                .record_heartbeat(tenant, store_id, 1000, Some(17))
+                .await
+                .expect("record a heartbeat that reports a backlog");
+            let row = read(&admin, tenant, store_id).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                Some(17),
+                "the depth is recorded"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(1),
+                Some(1000),
+                "the depth is stamped with the heartbeat that carried it"
+            );
+
+            // An older edge, or one whose log could not be read, reports nothing. Overwriting a real
+            // backlog with a fabricated zero would read as a store that had caught up.
+            trees
+                .record_heartbeat(tenant, store_id, 9000, None)
+                .await
+                .expect("record a heartbeat that reports nothing");
+            let row = read(&admin, tenant, store_id).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                Some(17),
+                "silence leaves the last reported depth standing"
+            );
+            assert_eq!(
+                row.get::<_, Option<i64>>(1),
+                Some(1000),
+                "and leaves the instant that reported it, so the console can see it is stale"
+            );
+
+            // A store that has only ever been silent has no depth at all — NULL, not zero.
+            let silent = StoreId::new(Ulid::from_u128(0x5B));
+            trees
+                .record_heartbeat(tenant, silent, 1000, None)
+                .await
+                .expect("record heartbeat for a silent store");
+            let row = read(&admin, tenant, silent).await;
+            assert_eq!(
+                row.get::<_, Option<i64>>(0),
+                None,
+                "a store that never reported has no depth, which is not a depth of zero"
+            );
+            assert_eq!(row.get::<_, Option<i64>>(1), None);
         });
     }
 }
@@ -4913,10 +5020,11 @@ mod device_proposals {
                 .expect("tenant pending");
             assert_eq!(all_pending.len(), 3, "the whole tenant's queue");
 
-            // Approve one; it leaves the pending list and joins the approved one.
+            // Approve one; it leaves the pending list and joins the approved one, carrying the two
+            // facts approval adds (ADR-0100).
             assert!(
                 devices
-                    .mark(TENANT_A, "DEV1", "approved")
+                    .mark(TENANT_A, "DEV1", "approved", Some("usb"), None)
                     .await
                     .expect("approve"),
                 "a pending proposal is resolved"
@@ -4926,7 +5034,17 @@ mod device_proposals {
                 .await
                 .expect("store-1 approved");
             assert_eq!(approved.len(), 1);
-            assert_eq!(approved.first().expect("one row").id, "DEV1");
+            let row = approved.first().expect("one row");
+            assert_eq!(row.id, "DEV1");
+            assert_eq!(
+                row.connection.as_deref(),
+                Some("usb"),
+                "approval's connection is stored, not discarded"
+            );
+            assert_eq!(
+                row.station_id, None,
+                "a counter printer serves the bill, not a station"
+            );
             assert_eq!(
                 devices
                     .fetch(TENANT_A, Some("store-1"), "pending")
@@ -4940,7 +5058,7 @@ mod device_proposals {
             // Resolving again is a no-op: the row is no longer pending.
             assert!(
                 !devices
-                    .mark(TENANT_A, "DEV1", "rejected")
+                    .mark(TENANT_A, "DEV1", "rejected", None, None)
                     .await
                     .expect("re-resolve"),
                 "an already-resolved proposal does not transition again"
@@ -4948,7 +5066,7 @@ mod device_proposals {
             // And another tenant cannot resolve this tenant's proposal.
             assert!(
                 !devices
-                    .mark("tenant-b", "DEV2", "approved")
+                    .mark("tenant-b", "DEV2", "approved", Some("network"), None)
                     .await
                     .expect("cross-tenant"),
                 "the tenant scope stops one tenant resolving another's proposal"

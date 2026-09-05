@@ -13,9 +13,23 @@
 //! config-pull loop is; the field implementation is an HTTPS `POST /sync/stores/{id}/heartbeat`
 //! authenticated with the store's scoped API key. A missed heartbeat is never fatal — the store keeps
 //! trading locally — so a transport error is logged and the next tick simply retries.
+//!
+//! # The ping carries the store's own backlog
+//!
+//! A heartbeat is the one rail that reaches the cloud on a fixed interval whether or not the store
+//! has anything else to say, so it is where the store reports how far behind its event publishing
+//! is ([`EventStore::outbox_depth`]). Without it the cloud can see how many orders it is holding
+//! *for* a store and nothing at all about how many sales the store is holding *from* it — a box
+//! whose NATS link has been down for a day looks identical to one that is perfectly current. The
+//! depth is a count, never an event body, so it carries no personal data (`docs/pos-spec.md` §13).
 
 use core::future::Future;
 use core::time::Duration;
+use std::sync::Arc;
+
+use pos_ports::event_store::EventStore;
+
+use crate::app::Edge;
 
 /// A failure of the heartbeat transport itself — the cloud is unreachable or refused the ping.
 #[derive(Debug, thiserror::Error)]
@@ -30,33 +44,107 @@ impl HeartbeatError {
     }
 }
 
+/// What one heartbeat says about the store beyond "I am here".
+///
+/// Every field is optional and the whole report may be empty, because the cloud's route is older
+/// than the report: a store that cannot answer a question says nothing about it rather than
+/// guessing, and the cloud leaves whatever it last recorded alone.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HeartbeatReport {
+    /// How many events the store has committed and not yet published, or `None` if its log could not
+    /// be read. Deliberately not "0 on failure": zero is the good answer, and reporting it for a
+    /// store whose log is unreadable would report the healthiest possible state for the least
+    /// healthy one.
+    pub outbox_depth: Option<u64>,
+}
+
 /// The heartbeat ping the loop rides: POST the store's liveness to the cloud. A seam, so the loop is
 /// tested without a socket; the field implementation is an HTTPS POST authenticated with the store's
 /// scoped API key.
 pub trait HeartbeatTransport: Send + Sync {
-    /// Sends one heartbeat.
+    /// Sends one heartbeat carrying `report`.
     ///
     /// # Errors
     ///
     /// [`HeartbeatError`] if the cloud could not be reached or refused the ping.
-    fn beat(&self) -> impl Future<Output = Result<(), HeartbeatError>> + Send;
+    fn beat(
+        &self,
+        report: HeartbeatReport,
+    ) -> impl Future<Output = Result<(), HeartbeatError>> + Send;
 }
 
-/// The heartbeat client: a transport to the cloud and the interval between pings.
+/// Where the loop reads what a heartbeat reports. A seam for the same reason the transport is: the
+/// loop is exercised with no store behind it, and the shipped binary passes its [`Edge`].
+pub trait HeartbeatSource: Send + Sync {
+    /// Gathers what this tick has to say.
+    fn report(&self) -> impl Future<Output = HeartbeatReport> + Send;
+}
+
+/// The source for a loop with nothing to report — every ping is a bare "I am here". The bootstrap
+/// shape, and what the tests that only count pings use.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NothingToReport;
+
+impl HeartbeatSource for NothingToReport {
+    async fn report(&self) -> HeartbeatReport {
+        HeartbeatReport::default()
+    }
+}
+
+/// The shipped source: the store's own event log, read through the [`Edge`] that owns it.
+///
+/// A log that cannot be read logs a warning and reports `None` rather than failing the heartbeat —
+/// liveness is the ping's first job, and a box that stops saying "I am here" because it could not
+/// count its outbox would read as offline, which is a worse lie than an unknown depth.
+impl<S> HeartbeatSource for Arc<Edge<S>>
+where
+    S: EventStore + Send + Sync,
+{
+    async fn report(&self) -> HeartbeatReport {
+        let outbox_depth = match self.store().outbox_depth(self.store_id()).await {
+            Ok(depth) => Some(depth),
+            Err(error) => {
+                tracing::warn!(%error, "could not read the outbox depth; the heartbeat reports none");
+                None
+            }
+        };
+        HeartbeatReport { outbox_depth }
+    }
+}
+
+/// The heartbeat client: a transport to the cloud, where to read the report, and the interval
+/// between pings.
 #[derive(Debug)]
-pub struct HeartbeatClient<T> {
+pub struct HeartbeatClient<T, R = NothingToReport> {
     transport: T,
+    source: R,
     interval: Duration,
 }
 
-impl<T> HeartbeatClient<T>
+impl<T> HeartbeatClient<T, NothingToReport>
 where
     T: HeartbeatTransport,
 {
-    /// Builds a client that pings every `interval`.
+    /// Builds a client that pings every `interval` and reports nothing but its liveness.
     pub fn new(transport: T, interval: Duration) -> Self {
         Self {
             transport,
+            source: NothingToReport,
+            interval,
+        }
+    }
+}
+
+impl<T, R> HeartbeatClient<T, R>
+where
+    T: HeartbeatTransport,
+    R: HeartbeatSource,
+{
+    /// Builds a client that pings every `interval`, reading each ping's report from `source`.
+    pub fn reporting(transport: T, source: R, interval: Duration) -> Self {
+        Self {
+            transport,
+            source,
             interval,
         }
     }
@@ -67,7 +155,8 @@ where
     ///
     /// [`HeartbeatError`] for a transport failure.
     pub async fn beat_once(&self) -> Result<(), HeartbeatError> {
-        self.transport.beat().await
+        let report = self.source.report().await;
+        self.transport.beat(report).await
     }
 
     /// Runs the heartbeat loop until `shutdown` resolves: wait `interval`, ping, repeat. A transport
@@ -82,7 +171,8 @@ where
             tokio::select! {
                 () = &mut shutdown => break,
                 () = tokio::time::sleep(self.interval) => {
-                    if let Err(error) = self.transport.beat().await {
+                    let report = self.source.report().await;
+                    if let Err(error) = self.transport.beat(report).await {
                         tracing::warn!(%error, "heartbeat failed; will retry next tick");
                     }
                 }
@@ -93,24 +183,41 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{HeartbeatClient, HeartbeatError, HeartbeatTransport};
+    use super::{
+        HeartbeatClient, HeartbeatError, HeartbeatReport, HeartbeatSource, HeartbeatTransport,
+    };
     use core::time::Duration;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A transport that counts pings, optionally failing every one.
+    /// A transport that counts pings and keeps the last report, optionally failing every one.
+    #[derive(Default)]
     struct CountingBeat {
         beats: Arc<AtomicUsize>,
+        last: Arc<Mutex<Option<HeartbeatReport>>>,
         fail: bool,
     }
 
     impl HeartbeatTransport for CountingBeat {
-        async fn beat(&self) -> Result<(), HeartbeatError> {
+        async fn beat(&self, report: HeartbeatReport) -> Result<(), HeartbeatError> {
             if self.fail {
                 return Err(HeartbeatError::new("cloud unreachable"));
             }
+            *self.last.lock().expect("lock") = Some(report);
             self.beats.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    /// A source that reports a fixed depth, so a test states what the wire should carry.
+    struct FixedDepth(Option<u64>);
+
+    impl HeartbeatSource for FixedDepth {
+        async fn report(&self) -> HeartbeatReport {
+            HeartbeatReport {
+                outbox_depth: self.0,
+            }
         }
     }
 
@@ -120,7 +227,7 @@ mod tests {
         let client = HeartbeatClient::new(
             CountingBeat {
                 beats: Arc::clone(&beats),
-                fail: false,
+                ..CountingBeat::default()
             },
             Duration::from_secs(60),
         );
@@ -136,8 +243,8 @@ mod tests {
     async fn beat_once_surfaces_a_transport_failure() {
         let client = HeartbeatClient::new(
             CountingBeat {
-                beats: Arc::new(AtomicUsize::new(0)),
                 fail: true,
+                ..CountingBeat::default()
             },
             Duration::from_secs(60),
         );
@@ -155,7 +262,7 @@ mod tests {
         let client = HeartbeatClient::new(
             CountingBeat {
                 beats: Arc::clone(&beats),
-                fail: false,
+                ..CountingBeat::default()
             },
             Duration::from_secs(3600),
         );
@@ -164,6 +271,76 @@ mod tests {
             beats.load(Ordering::SeqCst),
             0,
             "shutdown wins over the first tick, so no ping is sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ping_carries_the_reported_outbox_depth() {
+        let last = Arc::new(Mutex::new(None));
+        let client = HeartbeatClient::reporting(
+            CountingBeat {
+                last: Arc::clone(&last),
+                ..CountingBeat::default()
+            },
+            FixedDepth(Some(42)),
+            Duration::from_secs(60),
+        );
+        client.beat_once().await.expect("the ping succeeds");
+        assert_eq!(
+            *last.lock().expect("lock"),
+            Some(HeartbeatReport {
+                outbox_depth: Some(42)
+            }),
+            "the depth the source read is the depth the transport sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_store_that_cannot_read_its_log_still_pings() {
+        // The distinction the whole `Option` exists for: an unreadable log must not become a
+        // reported zero (the healthiest possible answer) and must not cost the store its liveness.
+        let beats = Arc::new(AtomicUsize::new(0));
+        let last = Arc::new(Mutex::new(None));
+        let client = HeartbeatClient::reporting(
+            CountingBeat {
+                beats: Arc::clone(&beats),
+                last: Arc::clone(&last),
+                ..CountingBeat::default()
+            },
+            FixedDepth(None),
+            Duration::from_secs(60),
+        );
+        client.beat_once().await.expect("the ping succeeds");
+        assert_eq!(
+            beats.load(Ordering::SeqCst),
+            1,
+            "the ping still reached the cloud"
+        );
+        assert_eq!(
+            last.lock()
+                .expect("lock")
+                .expect("a report was sent")
+                .outbox_depth,
+            None,
+            "an unreadable log reports nothing rather than zero"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_built_without_a_source_reports_nothing() {
+        let last = Arc::new(Mutex::new(None));
+        let client = HeartbeatClient::new(
+            CountingBeat {
+                last: Arc::clone(&last),
+                ..CountingBeat::default()
+            },
+            Duration::from_secs(60),
+        );
+        client.beat_once().await.expect("the ping succeeds");
+        assert_eq!(
+            *last.lock().expect("lock"),
+            Some(HeartbeatReport::default()),
+            "the bootstrap shape is a bare liveness ping"
         );
     }
 }

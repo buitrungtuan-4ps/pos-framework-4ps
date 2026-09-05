@@ -218,7 +218,7 @@ pub struct PrintDocument {
     pub blocks: Vec<PrintBlock>,
 }
 
-/// A print job, addressed to a station.
+/// A print job.
 ///
 /// `job_id` is the idempotency key. Reprinting is a deliberate act with its own permission
 /// and its own audit trail (`docs/pos-spec.md` §12 counts reprint rates per employee), so a
@@ -229,8 +229,13 @@ pub struct PrintJob {
     pub job_id: pos_proto::ids::EventId,
     /// Which store.
     pub store_id: StoreId,
-    /// Which station's printer.
-    pub station_id: StationId,
+    /// Which station's printer, or `None` for a job that no station made — the guest's receipt,
+    /// which comes off the counter's printer when the bill settles
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    ///
+    /// Optional rather than a nil id: a receipt genuinely has no station, and a placeholder would
+    /// have to be recognised as "not really a station" by everything that reads this.
+    pub station_id: Option<StationId>,
     /// What to print.
     pub document: PrintDocument,
 }
