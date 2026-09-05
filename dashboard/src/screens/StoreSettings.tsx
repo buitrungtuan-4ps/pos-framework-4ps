@@ -69,6 +69,27 @@ function businessDatePreview(timezone: string, cutoffHour: number): string | nul
   }
 }
 
+/**
+ * What each country's paper calls the seller's tax registration — a *suggestion*, overwritable.
+ *
+ * The values live in the country packs' own documentation; the console cannot read them from the
+ * registry because a label is text somebody prints, not a fact the `CountryModule` trait carries. A
+ * code with no row here leaves the field blank rather than guessing at a legal caption.
+ */
+const REGISTRATION_LABEL: Record<string, string> = {
+  VN: "MST",
+  JP: "登録番号",
+  IN: "GSTIN",
+};
+
+/** A textarea's lines as printed lines, trimmed, with the blanks dropped. */
+function printedLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
 export function StoreSettings() {
   const [countries, setCountries] = createSignal<Country[]>([]);
   const [currency, setCurrency] = createSignal("VND");
@@ -81,6 +102,16 @@ export function StoreSettings() {
   // numbers, so a half-typed value is not silently reinterpreted while the operator is typing; both
   // are parsed once, on publish.
   const [pricesIncludeTax, setPricesIncludeTax] = createSignal(false);
+  // Who this store legally is (ADR-0106). Held as raw text, published as a whole; the multi-line
+  // fields are one printed line per input line, which is how an address is actually written.
+  const [country, setCountry] = createSignal("");
+  const [legalName, setLegalName] = createSignal("");
+  const [tradingName, setTradingName] = createSignal("");
+  const [addressText, setAddressText] = createSignal("");
+  const [registrationNumber, setRegistrationNumber] = createSignal("");
+  const [registrationLabel, setRegistrationLabel] = createSignal("");
+  const [contactText, setContactText] = createSignal("");
+  const [footerText, setFooterText] = createSignal("");
   const [roundingText, setRoundingText] = createSignal("");
   const [notesText, setNotesText] = createSignal("");
   const [loaded, setLoaded] = createSignal(false);
@@ -158,7 +189,35 @@ export function StoreSettings() {
       country.cash_rounding_increment === null ? "" : String(country.cash_rounding_increment),
     );
     setNotesText(country.cash_denominations.join(", "));
+    setCountry(country.code);
+    // The label the paper uses is the country's, and the operator can overwrite it — a closed set
+    // here would make the fourth country a code change (ADR-0106).
+    if (registrationLabel().trim() === "") {
+      setRegistrationLabel(REGISTRATION_LABEL[country.code] ?? "");
+    }
     toast.ok(t("storeSettings.filledFrom", { country: country.display_name }));
+  };
+
+  const publishProfile = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await api.publishStoreProfile(tenantId(), storeId(), {
+        legal_name: legalName().trim(),
+        trading_name: tradingName().trim() || undefined,
+        address_lines: printedLines(addressText()),
+        tax_registration_number: registrationNumber().trim() || undefined,
+        tax_registration_label: registrationLabel().trim() || undefined,
+        contact_lines: printedLines(contactText()),
+        footer_lines: printedLines(footerText()),
+        country_code: country().trim() || undefined,
+      });
+      toast.ok(t("storeSettings.profilePublished", { store: storeName() }));
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const publish = async () => {
@@ -311,6 +370,80 @@ export function StoreSettings() {
               </div>
             </div>
           </Show>
+        </Card>
+        <Card title={t("storeSettings.identity")}>
+          <p class="mb-4 max-w-2xl text-sm text-ink-muted">
+            {t("storeSettings.identityHint")}
+          </p>
+          <div class="grid max-w-xl gap-4">
+            <FormField label={t("storeSettings.legalName")}>
+              <input
+                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                value={legalName()}
+                onInput={(event) => setLegalName(event.currentTarget.value)}
+              />
+            </FormField>
+
+            <FormField label={t("storeSettings.tradingName")}>
+              <input
+                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                value={tradingName()}
+                onInput={(event) => setTradingName(event.currentTarget.value)}
+              />
+              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.tradingNameHint")}</p>
+            </FormField>
+
+            <FormField label={t("storeSettings.address")}>
+              <textarea
+                rows={3}
+                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+                value={addressText()}
+                onInput={(event) => setAddressText(event.currentTarget.value)}
+              />
+              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.linesHint")}</p>
+            </FormField>
+
+            <FormField label={t("storeSettings.registrationLabel")}>
+              <input
+                class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                value={registrationLabel()}
+                onInput={(event) => setRegistrationLabel(event.currentTarget.value)}
+              />
+            </FormField>
+
+            <FormField label={t("storeSettings.registrationNumber")}>
+              <input
+                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                value={registrationNumber()}
+                onInput={(event) => setRegistrationNumber(event.currentTarget.value)}
+              />
+              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.registrationHint")}</p>
+            </FormField>
+
+            <FormField label={t("storeSettings.contact")}>
+              <textarea
+                rows={2}
+                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+                value={contactText()}
+                onInput={(event) => setContactText(event.currentTarget.value)}
+              />
+            </FormField>
+
+            <FormField label={t("storeSettings.footer")}>
+              <textarea
+                rows={2}
+                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+                value={footerText()}
+                onInput={(event) => setFooterText(event.currentTarget.value)}
+              />
+            </FormField>
+
+            <div>
+              <Button disabled={busy()} onClick={() => void publishProfile()}>
+                {t("storeSettings.publishProfile")}
+              </Button>
+            </div>
+          </div>
         </Card>
       </RequireContext>
     </div>

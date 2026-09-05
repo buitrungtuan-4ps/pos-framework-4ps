@@ -10239,6 +10239,107 @@ fn locale_publish_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::
     ))
 }
 
+fn store_profile_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_store_profile_router(
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+        Arc::new(pos_country::country_registry! { pos_country_jp::Japan }),
+    ))
+}
+
+/// The store's registered identity reaches the `store_profile` node, and a registration number that
+/// is not the shape the country issues is refused before it can reach an invoice
+/// ([ADR-0106](../../docs/adr/0106-the-store-is-a-legal-person.md)).
+#[tokio::test]
+async fn a_store_profile_publish_writes_the_node_and_checks_the_registration_shape() {
+    let config_trees = FakeConfigTrees::default();
+    let router = store_profile_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/store-profile",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "legal_name": "Pizza 4P's Japan K.K.",
+                "trading_name": "Pizza 4P's Ginza",
+                "address_lines": ["中央区銀座 1-2-3", "   "],
+                "tax_registration_number": "T1234567890123",
+                "tax_registration_label": "登録番号",
+                "country_code": "JP",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the profile publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let profile = &state.record.layers[2]["store_profile"];
+    assert_eq!(profile["trading_name"], "Pizza 4P's Ginza");
+    assert_eq!(
+        profile["address_lines"],
+        serde_json::json!(["中央区銀座 1-2-3"]),
+        "a blank line is dropped rather than printed on every receipt"
+    );
+    assert_eq!(profile["tax_registration_label"], "登録番号");
+
+    // `T` and thirteen digits is Japan's shape; twelve is a typo that would otherwise reach a
+    // qualified invoice, where it stops the buyer claiming input tax.
+    let typo = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/store-profile",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "legal_name": "Pizza 4P's Japan K.K.",
+                "tax_registration_number": "T123456789012",
+                "country_code": "JP",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the typo");
+    assert_eq!(typo.status(), StatusCode::BAD_REQUEST);
+
+    // A country this cloud does not carry stores the number unchecked rather than refusing: a fork
+    // serving a market it has not written a pack for must still be able to provision a store.
+    let unknown_country = router
+        .oneshot(put_with_cookie(
+            "/admin/config/store-profile",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "legal_name": "Pizza 4P's Bangkok",
+                "tax_registration_number": "anything at all",
+                "country_code": "TH",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the unknown country");
+    assert_eq!(unknown_country.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn locale_publish_validates_and_writes_the_locale_node() {
     let config_trees = FakeConfigTrees::default();

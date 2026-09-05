@@ -16,6 +16,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A receipt names who sold, and prints the tax it charged**
+  ([ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)). The receipt this framework printed was
+  three lines: an optional header, a number, and a total — and the header was `None` at every call
+  site, because no config node carried a store's name. So the paper a guest walked out with did not
+  say which shop sold them anything.
+
+  A new `store_profile` node carries the store's registered identity: legal name, trading name,
+  address, the seller's tax registration number and what the paper calls it, contact and footer
+  lines. `PUT /admin/config/store-profile` publishes it, behind `console.config.publish` and audited;
+  the registration number's **shape** is checked against the country module (format only, never
+  registration — a till must not need a network to be provisioned), and a country this cloud does not
+  carry stores it unchecked rather than refusing the publish.
+
+  The receipt is composed from it and from the settled bill's own totals: name, address, registration,
+  number, subtotal, discount, comps, service charge, **one line per tax rate with its named parts
+  indented under it** (ADR-0104's CGST/SGST), the cash-rounding adjustment, the total, and the
+  footer. Every block is omitted when it has nothing to say, so a store that has filled nothing in
+  gets the receipt it always got rather than a page of blank labels — an empty label on a legal
+  document reads as a value somebody forgot to type.
+
+  A Japanese qualified invoice and an Indian Rule 46 tax invoice are now printable, given a
+  registration number somebody has been issued. **What this deliberately does not do:** put the
+  *buyer* on the receipt. A B2B invoice carries the buyer's name and tax code, which is a fact about
+  one bill entered at the till rather than a config node — named in the ADR so its absence is a
+  decision rather than an oversight.
+
+  **Upgrade note:** none. `store_profile` is a new node with every field defaulted; a store that has
+  none prints what it printed before.
+
 - **Vietnam, Japan and India are country packs, not plans** — `countries/vn`, `countries/jp` and
   `countries/in`, each a directory of constants on the `CountryModule` trait
   ([ADR-0105](docs/adr/0105-a-country-pack-is-values.md)). Opening a market is now a

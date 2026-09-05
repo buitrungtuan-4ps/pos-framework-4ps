@@ -49,6 +49,7 @@ use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
     ShiftId, StationId, StoreId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::store_profile::StoreProfile;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
@@ -282,6 +283,14 @@ pub struct EdgeSession {
     /// What the dispatcher must never do is the thing the till did before this existed — claim
     /// "Printing receipt…" while nothing is wired.
     pub devices: PublishedDevices,
+    /// Who this store legally is, as the receipt prints it
+    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
+    /// address, and the tax registration number a Japanese qualified invoice or an Indian tax
+    /// invoice is not one without.
+    ///
+    /// Empty in the bootstrap, which is what every store had before the node existed — the receipt
+    /// then starts at its number, as it always did.
+    pub profile: StoreProfile,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -411,6 +420,9 @@ impl EdgeSession {
             stations: StationPlan::new(),
             layout: DisplayPlan::new(),
             devices: PublishedDevices::default(),
+            // Nothing is invented here: a receipt headed with a guessed shop name is worse than one
+            // headed with nothing (ADR-0106).
+            profile: StoreProfile::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -667,7 +679,9 @@ pub struct BumpView {
 /// state the bill and its table moved to. `print_receipt` reflects the [`Effect::PrintReceipt`]
 /// the domain returned: the edge does not itself hold a printer, so the caller (the binary) runs the
 /// effect after this returns — a rolled-back settle therefore never prints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Not `Copy` since ADR-0106: the settled totals carry per-rate tax lines, and a country deciding how
+// many lines its invoice has is exactly the sort of thing a fixed-size type cannot hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillView {
     /// The bill.
     pub bill_id: BillId,
@@ -678,6 +692,15 @@ pub struct BillView {
     pub receipt_number: Option<u64>,
     /// What the guest owed, present once settled.
     pub total_due: Option<Money>,
+    /// The settled bill's totals in full, present once settled — what the receipt is composed from
+    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+    ///
+    /// `total_due` above is the same figure and stays, because the till and the response shape read
+    /// it and neither needs the tax lines. This carries what a *legal* document needs and the till
+    /// does not: the per-rate tax, its named parts, and the rounding adjustment.
+    ///
+    /// Edge-local: it crosses no wire and is not part of the settle response.
+    pub totals: Option<BillTotals>,
     /// The state the bill's table moved to as a result (P5 derives the floor cycle from the bill),
     /// or `None` for a counter order, which has no table to move (ADR-0093).
     pub table_state: Option<TableState>,
@@ -1922,6 +1945,7 @@ impl<S: EventStore> Edge<S> {
             state: BillState::Open,
             receipt_number: None,
             total_due: None,
+            totals: None,
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
         })
@@ -2065,6 +2089,7 @@ impl<S: EventStore> Edge<S> {
             state: bill_decision.next_state,
             receipt_number: Some(receipt_number),
             total_due: Some(totals.total_due),
+            totals: Some(totals.clone()),
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
         })

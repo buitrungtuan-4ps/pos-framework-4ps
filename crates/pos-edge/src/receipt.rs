@@ -4,7 +4,7 @@
 //! The receipt-number authority: where the bill flow gets its gapless per-store number.
 //!
 //! A receipt number is allocated inside the settle transaction and is **gapless per store** — the
-//! promise a customer, an auditor and a country's tax code all rely on ([ADR-0025](../../../docs/adr/0025-gapless-receipt-numbering.md)).
+//! promise a customer, an auditor and a country's tax code all rely on ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md)).
 //! [`crate::app::Edge`] is generic over its event store `S`, so it cannot reach into a concrete
 //! store's inherent methods; the authority is injected instead. In the field that is
 //! [`store_sqlite::SqliteStore`], whose single writer thread serialises every allocation; the
@@ -13,7 +13,7 @@
 //!
 //! This is the store's own receipt number and **never** a legal invoice number: the latter is the
 //! country module's, issued from a pre-allocated range, and conflating the two is forbidden
-//! ([ADR-0025](../../../docs/adr/0025-gapless-receipt-numbering.md), `docs/pos-spec.md` §14.4).
+//! ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md), `docs/pos-spec.md` §14.4).
 
 use std::collections::HashMap;
 use std::future::Future;

@@ -34,6 +34,7 @@ use printer_escpos::device::DeviceTransport;
 use printer_escpos::tcp::TcpTransport;
 use printer_escpos::{EscPosPrinter, Transport};
 
+use pos_core::billing::BillTotals;
 use pos_ports::printer::{
     CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
     TextStyle,
@@ -44,6 +45,7 @@ use pos_proto::floor::StationPlan;
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StationId, StoreId};
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
+use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{EdgeSession, FiredLine};
 
@@ -115,48 +117,131 @@ pub fn connection_of(device: &PublishedDevice) -> PrinterConnection {
     }
 }
 
-/// The customer's receipt for a settled bill.
-///
-/// Deliberately plain: an optional header, the receipt number, the total, and a cut.
-/// `docs/pos-spec.md` §12 and the country's invoice rules decide what a *legal* invoice carries, and
-/// that is [`pos_ports::Fiscalization`]'s question, not this one — a receipt is the paper the guest
-/// walks out with, and the gapless number on it is explicitly not an invoice number (ADR-0025).
-///
-/// `header` is the store's name. It is optional because **nothing on the edge knows it yet**: no
-/// config node carries a store's display name, so the dispatcher passes `None` and the receipt starts
-/// at its number. Printing a blank line, or inventing a name, would both be worse than omitting one.
-#[must_use]
-pub fn receipt_document(header: Option<&str>, receipt_number: u64, total: Money) -> PrintDocument {
-    let mut blocks = Vec::new();
-    if let Some(header) = header {
-        blocks.push(PrintBlock::Text {
-            line: header.to_owned(),
-            style: TextStyle {
-                emphasised: true,
-                double_size: false,
-                centred: true,
-            },
-        });
+/// A centred line, emphasised or not — the header block's shape.
+fn centred(line: impl Into<String>, emphasised: bool) -> PrintBlock {
+    PrintBlock::Text {
+        line: line.into(),
+        style: TextStyle {
+            emphasised,
+            double_size: false,
+            centred: true,
+        },
     }
-    blocks.extend([
-        PrintBlock::Text {
-            line: format!("#{receipt_number}"),
-            style: TextStyle {
-                emphasised: false,
-                double_size: false,
-                centred: true,
-            },
+}
+
+/// A `label            amount` line, which is how every figure on a receipt is read.
+fn amount_line(label: &str, amount: Money) -> PrintBlock {
+    PrintBlock::Text {
+        line: format!("{label}  {}", format_money(amount)),
+        style: TextStyle::default(),
+    }
+}
+
+/// A tax rate in basis points as a percentage, without floating point — `250` is `2.50%`.
+fn percent(basis_points: u32) -> String {
+    format!("{}.{:02}%", basis_points / 100, basis_points % 100)
+}
+
+/// The customer's receipt for a settled bill — and, where a country's law is satisfied by it, its
+/// tax invoice ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+///
+/// Composed from three things and nothing else: who the store is, what the bill came to, and the
+/// store's own gapless receipt number — which is explicitly **not** a legal invoice number
+/// ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md)); a country whose law wants an
+/// allocated number gets it from `Fiscalization` and prints it beside this one.
+///
+/// # Every block is omitted when it has nothing to say
+///
+/// No registration number, no registration line. No service charge, no service-charge line. No
+/// components, no indented parts. A store that has filled nothing in gets the receipt this framework
+/// printed before ADR-0106 — a number and a total — rather than a page of blank labels, because an
+/// empty label on a legal document reads as a value somebody forgot to type.
+///
+/// # The tax section is per rate, not per line
+///
+/// Which is what a Japanese qualified invoice (8 % and 10 % separately) and an Indian tax invoice
+/// (CGST and SGST separately) both ask for, what `BillTotals::tax_lines` already computes, and what
+/// keeps a long bill's receipt short.
+#[must_use]
+pub fn receipt_document(
+    profile: &StoreProfile,
+    receipt_number: u64,
+    totals: &BillTotals,
+) -> PrintDocument {
+    let mut blocks = Vec::new();
+
+    // Who sold. The trading name leads and the legal name backs it up; the address and registration
+    // follow, each only if it is there.
+    if let Some(name) = profile.display_name() {
+        blocks.push(centred(name, true));
+    }
+    blocks.extend(
+        profile
+            .address_lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| centred(line.clone(), false)),
+    );
+    if let Some(registration) = profile.registration_line() {
+        blocks.push(centred(registration, false));
+    }
+
+    blocks.push(centred(format!("#{receipt_number}"), false));
+
+    // What was charged. `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the
+    // column adds up on paper in both postures — which is what makes the document check out when
+    // somebody totals it by hand.
+    blocks.push(amount_line("Subtotal", totals.subtotal));
+    if !totals.discount_total.is_zero() {
+        blocks.push(amount_line("Discount", totals.discount_total));
+    }
+    if !totals.comp_total.is_zero() {
+        blocks.push(amount_line("Comps", totals.comp_total));
+    }
+    if !totals.service_charge.is_zero() {
+        blocks.push(amount_line("Service charge", totals.service_charge));
+    }
+    for line in &totals.tax_lines {
+        blocks.push(amount_line(
+            &format!("Tax {}", percent(line.rate_basis_points)),
+            line.tax,
+        ));
+        // The parts, indented under the rate they explain. They are allocated out of the rounded tax,
+        // so they sum to the line above exactly (ADR-0104) — which is the property that makes this
+        // block printable at all.
+        blocks.extend(line.components.iter().map(|component| {
+            amount_line(
+                &format!(
+                    "  {} {}",
+                    component.name,
+                    percent(component.rate_basis_points)
+                ),
+                component.tax,
+            )
+        }));
+    }
+    if !totals.rounding_adjustment.is_zero() {
+        blocks.push(amount_line("Rounding", totals.rounding_adjustment));
+    }
+
+    blocks.push(PrintBlock::Text {
+        line: format_money(totals.total_due),
+        style: TextStyle {
+            emphasised: true,
+            double_size: true,
+            centred: true,
         },
-        PrintBlock::Text {
-            line: format_money(total),
-            style: TextStyle {
-                emphasised: true,
-                double_size: true,
-                centred: true,
-            },
-        },
-        PrintBlock::Cut,
-    ]);
+    });
+
+    blocks.extend(
+        profile
+            .contact_lines
+            .iter()
+            .chain(profile.footer_lines.iter())
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| centred(line.clone(), false)),
+    );
+    blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
 }
 
@@ -472,14 +557,15 @@ impl Printers {
         store_id: StoreId,
         job_id: EventId,
         receipt_number: u64,
-        total: Money,
+        totals: &BillTotals,
     ) -> PrintOutcome {
         let Some(device) = receipt_printer(&session.devices) else {
             tracing::info!("no receipt printer is published for this store; nothing to print");
             return PrintOutcome::NoPrinter;
         };
-        // `None`: no config node carries the store's display name yet — see `receipt_document`.
-        let document = receipt_document(None, receipt_number, total);
+        // The store's own identity, from the `store_profile` node the config pull applies
+        // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
+        let document = receipt_document(&session.profile, receipt_number, totals);
         self.dispatch(
             device,
             PrintJob {
@@ -658,6 +744,7 @@ mod tests {
         station_printer, ticket_document, ticket_line,
     };
     use crate::app::{EdgeSession, FiredLine};
+    use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrinterConnection};
     use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
@@ -666,11 +753,27 @@ mod tests {
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::quantity::Quantity;
+    use pos_proto::store_profile::StoreProfile;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use printer_escpos::{Transport, TransportStatus, Unreachable};
     use std::num::NonZeroU16;
     use std::sync::{Arc, Mutex};
+
+    /// A settled bill's totals, for the receipt tests: one 10 % tax line and nothing else.
+    fn totals_of(total: Money) -> BillTotals {
+        let zero = Money::zero(total.currency_code);
+        BillTotals {
+            subtotal: total,
+            discount_total: zero,
+            comp_total: zero,
+            service_charge: zero,
+            tax_lines: Vec::new(),
+            tax_total: zero,
+            rounding_adjustment: zero,
+            total_due: total,
+        }
+    }
 
     fn lines_of(document: &pos_ports::printer::PrintDocument) -> Vec<&str> {
         document
@@ -784,7 +887,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
-                Money::new(CurrencyCode::VND, 99_000),
+                &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             )
             .await;
 
@@ -815,7 +918,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
-                Money::new(CurrencyCode::VND, 99_000),
+                &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             )
             .await;
 
@@ -841,7 +944,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
-                Money::new(CurrencyCode::VND, 99_000),
+                &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             )
             .await;
 
@@ -863,7 +966,7 @@ mod tests {
 
         for _ in 0..2 {
             let outcome = printers
-                .print_receipt(&session, store_id(), event_id(1), 42, total)
+                .print_receipt(&session, store_id(), event_id(1), 42, &totals_of(total))
                 .await;
             assert_eq!(outcome, PrintOutcome::Printed);
         }
@@ -1084,22 +1187,135 @@ mod tests {
     }
 
     #[test]
-    fn a_receipt_with_no_store_name_starts_at_its_number_rather_than_a_blank_line() {
-        // Nothing on the edge knows the store's name yet, and a blank first line on every receipt in
-        // the fleet would be a worse answer than no line.
-        let document = receipt_document(None, 7, Money::new(CurrencyCode::VND, 50_000));
-        assert_eq!(lines_of(&document), vec!["#7", "VND 50000"]);
+    fn a_store_that_has_filled_nothing_in_prints_what_it_always_printed() {
+        // The never-blank rule applied to a legal document: an empty label reads as a value somebody
+        // forgot to type, so an unfilled profile shortens the receipt rather than padding it
+        // (ADR-0106).
+        let document = receipt_document(
+            &StoreProfile::default(),
+            7,
+            &totals_of(Money::new(CurrencyCode::VND, 50_000)),
+        );
+        assert_eq!(
+            lines_of(&document),
+            vec!["#7", "Subtotal  VND 50000", "VND 50000"]
+        );
     }
 
     #[test]
-    fn a_receipt_carries_the_store_the_number_and_the_total_and_ends_in_a_cut() {
-        let document =
-            receipt_document(Some("Bến Thành"), 42, Money::new(CurrencyCode::VND, 99_000));
-        assert_eq!(lines_of(&document), vec!["Bến Thành", "#42", "VND 99000"]);
+    fn a_receipt_names_the_store_and_ends_in_a_cut() {
+        let profile = StoreProfile {
+            legal_name: "Pizza 4P's Vietnam Co., Ltd".to_owned(),
+            trading_name: Some("Bến Thành".to_owned()),
+            address_lines: vec!["8 Thủ Khoa Huân, Quận 1".to_owned()],
+            tax_registration_number: Some("0101243150".to_owned()),
+            tax_registration_label: Some("MST".to_owned()),
+            contact_lines: vec!["028 3822 9838".to_owned()],
+            footer_lines: vec!["Cảm ơn quý khách".to_owned()],
+        };
+        let document = receipt_document(
+            &profile,
+            42,
+            &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+        );
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "Bến Thành",
+                "8 Thủ Khoa Huân, Quận 1",
+                "MST: 0101243150",
+                "#42",
+                "Subtotal  VND 99000",
+                "VND 99000",
+                "028 3822 9838",
+                "Cảm ơn quý khách",
+            ]
+        );
         assert_eq!(
             document.blocks.last(),
             Some(&PrintBlock::Cut),
             "the paper is cut, or the next receipt starts on this one"
+        );
+    }
+
+    #[test]
+    fn an_indian_receipt_prints_cgst_and_sgst_under_the_rate_they_explain() {
+        // The document ADR-0104 exists for: the halves go to different governments, so an invoice
+        // printing their sum is not a lesser rendering of the same fact — it is not a valid invoice.
+        use pos_core::billing::{TaxComponentLine, TaxLine};
+        use pos_proto::ids::TaxClassId;
+
+        let inr = CurrencyCode::parse("INR").expect("INR is three upper-case letters");
+        let money = |amount| Money::new(inr, amount);
+        let totals = BillTotals {
+            subtotal: money(100_000),
+            discount_total: money(0),
+            comp_total: money(0),
+            service_charge: money(0),
+            tax_lines: vec![TaxLine {
+                tax_class_id: TaxClassId::new(Ulid::from_u128(1)),
+                taxable_base: money(100_000),
+                rate_basis_points: 500,
+                tax: money(5_000),
+                components: vec![
+                    TaxComponentLine {
+                        name: "CGST".to_owned(),
+                        rate_basis_points: 250,
+                        tax: money(2_500),
+                    },
+                    TaxComponentLine {
+                        name: "SGST".to_owned(),
+                        rate_basis_points: 250,
+                        tax: money(2_500),
+                    },
+                ],
+            }],
+            tax_total: money(5_000),
+            rounding_adjustment: money(-100),
+            total_due: money(104_900),
+        };
+        let profile = StoreProfile {
+            legal_name: "Pizza 4P's India".to_owned(),
+            tax_registration_number: Some("29ABCDE1234F1Z5".to_owned()),
+            tax_registration_label: Some("GSTIN".to_owned()),
+            ..StoreProfile::default()
+        };
+        let document = receipt_document(&profile, 9, &totals);
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "Pizza 4P's India",
+                "GSTIN: 29ABCDE1234F1Z5",
+                "#9",
+                "Subtotal  INR 100000",
+                "Tax 5.00%  INR 5000",
+                "  CGST 2.50%  INR 2500",
+                "  SGST 2.50%  INR 2500",
+                "Rounding  INR -100",
+                "INR 104900",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_registration_label_with_no_number_prints_no_line() {
+        // A label alone reads as a number somebody forgot to type, which on a tax invoice is worse
+        // than a shorter receipt.
+        let profile = StoreProfile {
+            legal_name: "Pizza 4P's Ginza".to_owned(),
+            tax_registration_label: Some("登録番号".to_owned()),
+            ..StoreProfile::default()
+        };
+        let document = receipt_document(
+            &profile,
+            3,
+            &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
+        );
+        assert!(
+            !lines_of(&document)
+                .iter()
+                .any(|line| line.contains("登録番号")),
+            "a label with nothing after it is not printed"
         );
     }
 
@@ -1207,7 +1423,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
-                Money::new(CurrencyCode::VND, 99_000),
+                &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             )
             .await;
 

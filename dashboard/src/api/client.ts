@@ -1306,6 +1306,33 @@ export const api = {
       cash_denominations: settings.cash_denominations,
     }),
 
+  // Publish a store's registered identity (ADR-0106) as its `store_profile` config node, behind
+  // console.config.publish. The edge composes every receipt from it, which is what turns the store's
+  // paper into a document a Japanese or Indian auditor accepts.
+  publishStoreProfile: (
+    tenantId: string,
+    storeId: string,
+    profile: {
+      legal_name: string;
+      trading_name?: string;
+      address_lines: readonly string[];
+      tax_registration_number?: string;
+      tax_registration_label?: string;
+      contact_lines: readonly string[];
+      footer_lines: readonly string[];
+      country_code?: string;
+    },
+  ) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/store-profile", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      ...profile,
+      trading_name: profile.trading_name ?? null,
+      tax_registration_number: profile.tax_registration_number ?? null,
+      tax_registration_label: profile.tax_registration_label ?? null,
+      country_code: profile.country_code ?? null,
+    }),
+
   // --- media (ADR-0075) ---
   // Upload an image; the server re-encodes it to two bounded renditions and returns the new id.
   uploadMedia: (tenantId: string, file: Blob) =>

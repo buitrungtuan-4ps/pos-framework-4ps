@@ -111,5 +111,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0103](0103-directly-attached-printers.md) | A printer on a cable is a transport, not a second driver | Accepted |
 | [0104](0104-multi-component-and-inclusive-tax.md) | A tax rate is a list, and a price may already contain it | Accepted |
 | [0105](0105-a-country-pack-is-values.md) | A country pack is a list of values, and none of them are in the framework | Accepted |
+| [0106](0106-the-store-is-a-legal-person.md) | A receipt names who sold, and the store's identity is data | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

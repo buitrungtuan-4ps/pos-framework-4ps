@@ -53,6 +53,7 @@ use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
+use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 
@@ -237,6 +238,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<PublishedDevices>(&text).ok())
     {
         session.devices = devices;
+    }
+    // The `store_profile` node (ADR-0106): who this store legally is, as the receipt prints it. An
+    // absent or unparseable node leaves the previous profile in place, which is the never-blank rule
+    // applied where it matters most — a store mid-service must not start printing receipts with no
+    // name because one publish was malformed.
+    if let Some(profile) = document
+        .get("store_profile")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<StoreProfile>(&text).ok())
+    {
+        session.profile = profile;
     }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
