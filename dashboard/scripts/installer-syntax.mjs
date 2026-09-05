@@ -151,7 +151,12 @@ let failures = 0;
 // the check that keeps it from drifting: two definitions of a service registration is one that
 // nobody runs until a store will not come up.
 const onDisk = readFileSync(TEMPLATE, "utf8");
-if (onDisk !== windowsInstallerTemplate()) {
+// Compare content, not line-ending policy. A Windows checkout hands this back with CRLF — git's
+// `autocrlf` is on by default on the runner — while the generator emits LF, and without normalising
+// the gate fails on a file that has not drifted by a single character. `.gitattributes` pins the
+// checked-in file to LF so this should not arise; this is the belt to that pair of braces.
+const lf = (text) => text.replace(/\r\n/gu, "\n");
+if (lf(onDisk) !== lf(windowsInstallerTemplate())) {
   console.error(
     "✗ deploy/edge/install-pos-edge.ps1 no longer matches windowsInstallerTemplate().\n" +
       "  Regenerate it:  node -e 'import(\"./dashboard/src/installers.mjs\").then(m => " +
@@ -160,6 +165,13 @@ if (onDisk !== windowsInstallerTemplate()) {
   failures += 1;
 } else {
   console.log("✓ deploy/edge/install-pos-edge.ps1 matches its generator");
+}
+
+// Written before any failure can exit: a drift failure must not also rob the Windows job of the one
+// file it most needs to parse. The first run of this gate did exactly that — the emission sat at the
+// end of the script, so the checked-in template was never parsed on the run that reported drift.
+if (emitFlag !== -1) {
+  writeFileSync(join(outDir, "install-template.ps1"), onDisk, "utf8");
 }
 
 for (const testCase of CASES) {
@@ -196,8 +208,6 @@ if (failures > 0) {
 }
 
 if (emitFlag !== -1) {
-  // The Windows job parses everything in this directory, the checked-in template included.
-  writeFileSync(join(outDir, "install-template.ps1"), onDisk, "utf8");
   console.log(`wrote ${CASES.length} case(s) plus the checked-in template to ${outDir}`);
 } else {
   console.log(`installer syntax: ${CASES.length} case(s) ok`);

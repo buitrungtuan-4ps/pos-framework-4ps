@@ -1,0 +1,6 @@
+# The generated installers are compared byte-for-byte against their generator by
+# `dashboard/scripts/installer-syntax.mjs`, and the generator emits LF. Without this, a Windows
+# checkout converts them to CRLF and the drift check fails on a file that has not drifted.
+# PowerShell and `sh` both read LF, so pinning it costs nothing on either platform.
+deploy/edge/install-pos-edge.ps1 text eol=lf
+deploy/edge/pos-edge.service     text eol=lf
