@@ -26,7 +26,7 @@
 
 use core::future::Future;
 
-use pos_proto::ids::{DeviceId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::text::ReleaseTag;
 
 use crate::error::PortError;
@@ -75,10 +75,22 @@ pub struct SignedArtifact {
 /// This is how the cloud learns rollout-ring progress ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
 /// A report is pure telemetry — it never changes what the edge runs — and carries only ids the port
 /// already names plus the two facts the cloud needs, never a customer identifier.
+///
+/// # No tenant, deliberately
+///
+/// A report names its **store** and stops there
+/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md) Amendment 2). It used to carry a
+/// `tenant` too, from the days of `POST /internal/ota/report` — a route that read the tenant out of
+/// the request body, which is exactly what made a report un-attributable.
+/// [ADR-0097](../../../docs/adr/0097-internal-route-authentication.md) replaced it with
+/// `POST /sync/stores/{store_id}/report`, where the cloud takes the tenant from the **scoped API
+/// key** and the store from the path, and the adapter stopped transmitting the field.
+///
+/// A self-reported tenant is a claim a store is not entitled to make, so the field is gone rather
+/// than merely unused: a struct member every caller must fill in with a value it knows is
+/// meaningless is an invitation for somebody to start believing it.
 #[derive(Debug, Clone)]
 pub struct UpdateReport {
-    /// The tenant the reporting store belongs to.
-    pub tenant: TenantId,
     /// The store now running `installed`.
     pub store: StoreId,
     /// The release the store is running after the update cycle — the target on a successful install,

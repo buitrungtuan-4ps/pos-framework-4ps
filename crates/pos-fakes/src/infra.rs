@@ -15,7 +15,7 @@ use pos_ports::metrics_sink::{MetricSample, MetricsSink};
 use pos_ports::signer::{KeyId, PublicKey, Signature, Signer};
 use pos_ports::{PortError, PortName};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{DeviceId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::protocol::{Hello, HelloOutcome, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};
 use pos_proto::text::ReleaseTag;
 use pos_proto::time::Timestamp;
@@ -572,7 +572,6 @@ impl FakeCloudSync {
     #[must_use]
     pub fn sample_report() -> UpdateReport {
         UpdateReport {
-            tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
             store: StoreId::new(Ulid::from_u128(0x570E)),
             installed: ReleaseTag::new(Self::KNOWN_RELEASE),
             self_test_passed: Some(true),
