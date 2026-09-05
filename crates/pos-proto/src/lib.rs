@@ -30,6 +30,7 @@
 pub mod campaign;
 pub mod channels;
 pub mod determinism;
+pub mod devices;
 pub mod display;
 pub mod enums;
 pub mod envelope;

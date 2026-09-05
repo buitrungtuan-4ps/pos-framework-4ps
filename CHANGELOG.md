@@ -14,7 +14,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
-## [Unreleased]
+### Added
+
+- **The `devices` config node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
+  production-readiness **C2** slice 1). The vocabulary a store needs to address a printer: for each
+  approved device, its id, kind, connection, address, name, and the kitchen station it serves (absent
+  for the receipt printer at the counter, which serves the bill rather than a station).
+
+  It carries the forward-compatibility the rest of the config tree has: an unknown `kind` — a label
+  printer from a newer cloud — keeps its token instead of failing the node, so a store does not lose
+  its receipt printer to a device it has never heard of. `station_id` is omitted when absent rather
+  than written as null, so a publish diff shows the change and not the shape.
+
+  Publishing it, applying it at the edge, and the dispatcher that turns a settled bill into a receipt
+  are the slices that follow; nothing prints yet.
 
 ### Security
 
