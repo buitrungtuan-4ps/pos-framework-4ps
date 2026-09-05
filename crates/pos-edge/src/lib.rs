@@ -49,6 +49,7 @@ pub mod heartbeat_client;
 pub mod http;
 pub mod idgen;
 pub mod installer;
+pub mod lease_state;
 pub mod order_in;
 pub mod ota;
 pub mod ota_client;
@@ -86,6 +87,7 @@ pub use ota_client::{
     BootConfirmation, BootStanding, NoUpdateLayout, OTA_POLL_INTERVAL, OtaClient, RestartRequest,
     TickOutcome, confirm_boot,
 };
+pub use lease_state::{InMemoryLease, LeaseAuthority};
 pub use ota_state::{InMemoryOtaState, OtaStateAuthority, device_state};
 pub use pairing::{Code, DeviceToken, Pairing};
 pub use queue::{InMemoryQueueNumbers, QueueNumberAuthority};

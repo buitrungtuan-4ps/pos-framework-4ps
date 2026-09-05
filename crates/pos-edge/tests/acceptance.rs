@@ -202,7 +202,13 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let queue = Arc::new(InMemoryQueueNumbers::new());
-    let composed = pos_edge::compose(config, Arc::clone(&edge), Arc::clone(&queue), &shutdown_rx)
+    let composed = pos_edge::compose(
+        config,
+        Arc::clone(&edge),
+        Arc::clone(&queue),
+        Arc::new(pos_edge::InMemoryLease::new()),
+        &shutdown_rx,
+    )
         .await
         .expect("the edge composes");
 

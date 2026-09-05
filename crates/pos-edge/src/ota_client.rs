@@ -38,7 +38,6 @@ use core::future::Future;
 use core::time::Duration;
 use std::sync::Arc;
 
-use pos_core::lease::LeaseStanding;
 use pos_core::ota::SelfTest;
 use pos_ports::cloud_sync::{CloudSync, UpdateReport};
 use pos_ports::signer::Signer;
@@ -47,6 +46,7 @@ use pos_proto::text::ReleaseTag;
 
 use crate::app::Edge;
 use crate::ota::{InstallError, OtaUpdater, UpdateInstaller, UpdateOutcome, UpdatePlan};
+use crate::lease_state::{LeaseAuthority, standing as lease_standing_for};
 use crate::ota_state::{OtaStateAuthority, device_state};
 
 /// How often the loop weighs the published rollout.
@@ -208,6 +208,12 @@ pub enum TickOutcome {
     /// The durable self-test could not be read, so the box was deliberately not weighed: doing so
     /// would silently drop the rollback rule.
     StateUnreadable,
+    /// The lease standing could not be read, so the box was deliberately not weighed
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)). A box that cannot
+    /// read its own lease has not established that it is still the store, and weighing it as
+    /// `Active` is the exact failure the lease exists to remove — so an unreadable lease refuses,
+    /// the same way an unreadable self-test does.
+    LeaseUnreadable,
     /// The updater ran and reached a decision.
     Decided(UpdateOutcome),
     /// The updater ran and failed — a fetch, a verification, or an install step.
@@ -216,16 +222,17 @@ pub enum TickOutcome {
 
 /// The edge OTA loop: an updater over the three seams, the durable self-test authority, the live
 /// session the rollout is read from, and the restart the swap needs.
-pub struct OtaClient<C, S, I, A, St, R> {
+pub struct OtaClient<C, S, I, A, L, St, R> {
     cloud: C,
     updater: OtaUpdater<C, S, I>,
     authority: A,
+    lease: L,
     edge: Arc<Edge<St>>,
     store_id: StoreId,
     restart: R,
 }
 
-impl<C, S, I, A, St, R> core::fmt::Debug for OtaClient<C, S, I, A, St, R> {
+impl<C, S, I, A, L, St, R> core::fmt::Debug for OtaClient<C, S, I, A, L, St, R> {
     /// Names the store and nothing else. The seams hold a socket, a signing key list and a path
     /// layout; none of them belongs in a log line, and the store id is the one field that helps.
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -236,12 +243,13 @@ impl<C, S, I, A, St, R> core::fmt::Debug for OtaClient<C, S, I, A, St, R> {
     }
 }
 
-impl<C, S, I, A, St, R> OtaClient<C, S, I, A, St, R>
+impl<C, S, I, A, L, St, R> OtaClient<C, S, I, A, L, St, R>
 where
     C: CloudSync + Clone,
     S: Signer,
     I: UpdateInstaller,
     A: OtaStateAuthority,
+    L: LeaseAuthority,
     R: RestartRequest,
 {
     /// Composes the loop. The `cloud` is held twice — once by the updater for the artifact fetch and
@@ -253,6 +261,7 @@ where
         installer: I,
         trusted_keys: Vec<pos_ports::signer::PublicKey>,
         authority: A,
+        lease: L,
         edge: Arc<Edge<St>>,
         store_id: StoreId,
         restart: R,
@@ -261,6 +270,7 @@ where
             updater: OtaUpdater::new(cloud.clone(), signer, installer, trusted_keys),
             cloud,
             authority,
+            lease,
             edge,
             store_id,
             restart,
@@ -299,15 +309,24 @@ where
             release: &release,
             revoked_keys: &rollout.revoked_keys,
         };
-        // `Active` because nothing on the edge learns its lease standing yet: ADR-0049's generation
-        // lives in the cloud and no published node carries it. Stated rather than hidden — a box
-        // superseded by a replacement will still update, which is a stale binary rather than a lost
-        // sale, and closing it is a config-node change of its own.
-        match self
-            .updater
-            .run(&device, &plan, LeaseStanding::Active)
+        // The box's real standing (ADR-0108): its own durable held generation, weighed against the
+        // authoritative one the cloud published in the `lease` node. `Superseded` and `Invalid` both
+        // make the updater refuse — a machine a replacement has taken over must not install
+        // anything. A store the cloud has never issued a lease to reads `Active`, unchanged.
+        let lease = match lease_standing_for(&self.lease, self.store_id, session.lease_generation)
             .await
         {
+            Ok(standing) => standing,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "could not read this store's lease standing; not weighing the rollout, because \
+                     weighing it as active would let a superseded box install"
+                );
+                return TickOutcome::LeaseUnreadable;
+            }
+        };
+        match self.updater.run(&device, &plan, lease).await {
             Ok(outcome) => {
                 self.after(outcome).await;
                 TickOutcome::Decided(outcome)

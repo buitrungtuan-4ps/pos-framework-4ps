@@ -22,14 +22,26 @@
 //! *for* a store and nothing at all about how many sales the store is holding *from* it — a box
 //! whose NATS link has been down for a day looks identical to one that is perfectly current. The
 //! depth is a count, never an event body, so it carries no personal data (`docs/pos-spec.md` §13).
+//!
+//! # …and the lease generation it holds
+//!
+//! For the same reason, the ping is where the store says which lease generation it holds
+//! ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)). The cloud knows the
+//! *authoritative* generation — it issued it — but until the box reports its own, a **split** is
+//! invisible: a store that has been replaced and a store that has simply not pulled config yet look
+//! identical from the console. Reporting it is what turns "this box refuses to update" into
+//! "this box holds 3, the store is on 4", which is the difference between a mystery and a diagnosis.
+//! A generation is a counter, not a person, so it carries no personal data either.
 
 use core::future::Future;
 use core::time::Duration;
 use std::sync::Arc;
 
+use pos_core::lease::LeaseGeneration;
 use pos_ports::event_store::EventStore;
 
 use crate::app::Edge;
+use crate::lease_state::LeaseAuthority;
 
 /// A failure of the heartbeat transport itself — the cloud is unreachable or refused the ping.
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +68,13 @@ pub struct HeartbeatReport {
     /// store whose log is unreadable would report the healthiest possible state for the least
     /// healthy one.
     pub outbox_depth: Option<u64>,
+    /// The lease generation this box holds, or `None` if it has never taken one — a store the cloud
+    /// has never issued a lease to, which is every store until an operator does
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+    ///
+    /// `None` is also what an unreadable authority reports, for the same reason the depth does not
+    /// report `0`: the cloud must not be told a generation the box did not actually say.
+    pub lease_generation: Option<u64>,
 }
 
 /// The heartbeat ping the loop rides: POST the store's liveness to the cloud. A seam, so the loop is
@@ -91,24 +110,83 @@ impl HeartbeatSource for NothingToReport {
     }
 }
 
-/// The shipped source: the store's own event log, read through the [`Edge`] that owns it.
+/// The store's own event log, read through the [`Edge`] that owns it.
 ///
 /// A log that cannot be read logs a warning and reports `None` rather than failing the heartbeat —
 /// liveness is the ping's first job, and a box that stops saying "I am here" because it could not
-/// count its outbox would read as offline, which is a worse lie than an unknown depth.
+/// count its outbox would read as offline, which is a worse lie than an unknown depth. The same rule
+/// governs every field a report carries.
+///
+/// This impl reports no lease generation, because an [`Edge`] alone does not hold one; the shipped
+/// binary uses [`StoreReport`], which pairs it with the lease authority.
 impl<S> HeartbeatSource for Arc<Edge<S>>
 where
     S: EventStore + Send + Sync,
 {
     async fn report(&self) -> HeartbeatReport {
-        let outbox_depth = match self.store().outbox_depth(self.store_id()).await {
-            Ok(depth) => Some(depth),
+        HeartbeatReport {
+            outbox_depth: outbox_depth(self).await,
+            lease_generation: None,
+        }
+    }
+}
+
+/// The shipped source: the store's event log **and** the lease generation it holds.
+///
+/// Two facts from two places, because they live in two places — the outbox depth is a count over the
+/// event log, the held generation is a row the box wrote once and never rewrites
+/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)). Pairing them here
+/// keeps the heartbeat one ping rather than two.
+#[derive(Debug, Clone)]
+pub struct StoreReport<S, L> {
+    edge: Arc<Edge<S>>,
+    lease: L,
+}
+
+impl<S, L> StoreReport<S, L> {
+    /// Pairs the store's log with the authority that holds its lease.
+    pub const fn new(edge: Arc<Edge<S>>, lease: L) -> Self {
+        Self { edge, lease }
+    }
+}
+
+impl<S, L> HeartbeatSource for StoreReport<S, L>
+where
+    S: EventStore + Send + Sync,
+    L: LeaseAuthority,
+{
+    async fn report(&self) -> HeartbeatReport {
+        let lease_generation = match self.lease.held(self.edge.store_id()).await {
+            Ok(held) => held.map(LeaseGeneration::value),
             Err(error) => {
-                tracing::warn!(%error, "could not read the outbox depth; the heartbeat reports none");
+                tracing::warn!(
+                    %error,
+                    "could not read the held lease generation; the heartbeat reports none"
+                );
                 None
             }
         };
-        HeartbeatReport { outbox_depth }
+        HeartbeatReport {
+            outbox_depth: outbox_depth(&self.edge).await,
+            lease_generation,
+        }
+    }
+}
+
+/// How far behind the store's event publishing is, or `None` if its log could not be read.
+///
+/// Deliberately not "0 on failure": zero is the *good* answer, so reporting it for a store whose log
+/// is unreadable would report the healthiest possible state for the least healthy one.
+async fn outbox_depth<S>(edge: &Arc<Edge<S>>) -> Option<u64>
+where
+    S: EventStore + Send + Sync,
+{
+    match edge.store().outbox_depth(edge.store_id()).await {
+        Ok(depth) => Some(depth),
+        Err(error) => {
+            tracing::warn!(%error, "could not read the outbox depth; the heartbeat reports none");
+            None
+        }
     }
 }
 
@@ -217,6 +295,7 @@ mod tests {
         async fn report(&self) -> HeartbeatReport {
             HeartbeatReport {
                 outbox_depth: self.0,
+                lease_generation: None,
             }
         }
     }
@@ -289,7 +368,8 @@ mod tests {
         assert_eq!(
             *last.lock().expect("lock"),
             Some(HeartbeatReport {
-                outbox_depth: Some(42)
+                outbox_depth: Some(42),
+                lease_generation: None,
             }),
             "the depth the source read is the depth the transport sent"
         );
