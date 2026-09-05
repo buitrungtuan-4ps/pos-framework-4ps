@@ -465,9 +465,11 @@ store's configured deadline (the store long-polls, so an online store is served 
 second), returning the store's real acceptance or a `503` with the order still queued, and `look_up`
 (`GET /v1/orders`) resolves a timed-out caller. Per-store `store.order_relay.{enabled,wait_ms}` is a
 config-tree value, so intake is toggled/tuned per store from the dashboard. "Stores dial out only" is
-preserved. An optional low-latency `live` mode over a store-held outbound channel — which would amend
-`MessageLink`'s one-directional rule — is a conscious follow-up (ADR-0062), behind a
-`store.order_relay.mode` flag, over this same queue as the durable fallback.
+preserved. The low-latency `live` mode this section once promised as a follow-up **is not being
+built**: ADR-0062 was written and declined it, because the cost of the original design was an idle
+database load (about ten queue queries a second per store) rather than latency on the wire. Both
+poll loops are now woken by a `RelayWake` seam, `MessageLink` stays one-directional, and there is no
+`store.order_relay.mode` — there is no mode to select.
 
 #### P12 · Simulator and capacity validation — *L*
 `pos-simulator`: virtual fleet, order load, network loss, OTA rings, nightly reconciliation.

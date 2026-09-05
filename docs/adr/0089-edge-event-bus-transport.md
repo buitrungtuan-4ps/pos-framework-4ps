@@ -88,8 +88,9 @@ decide this.
    config long-poll. Putting the bus through it doubles its persistent connections at the 500-store
    target and makes one process the single failure for both the console and the event stream.
 4. **Reconnect cost.** A WebSocket adds an HTTP upgrade round-trip per reconnect. Irrelevant to a 5 s
-   batch loop; not irrelevant to the live mode roadmap v3 still defers (its ADR is unwritten), on a
-   link that reconnects often.
+   batch loop, and this reason has since weakened: it leaned on the relay live mode roadmap v3 was
+   deferring, and [ADR-0062](0062-the-relay-wake.md) declined that mode. Reasons 1–3 are what carry
+   the decision now.
 
 **Revisit triggers.** This decision is cheap to reverse — the transport is a URL, and
 `async_nats::connect` accepts either scheme from the same binary (`websockets` is in async-nats'

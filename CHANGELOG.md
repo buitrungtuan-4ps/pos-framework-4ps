@@ -63,6 +63,61 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `config.toml` should name an absolute `store_path`; re-running the installer fixes both and leaves
   an already-installed binary alone.
 
+### Changed
+
+- **The order relay stops asking the database, ten times a second, whether anything has happened —
+  and the live mode it deferred is declined rather than deferred again**
+  ([ADR-0062](docs/adr/0062-the-relay-wake.md), amending
+  [ADR-0061](docs/adr/0061-order-relay.md), production-readiness Wave 8,
+  [issue #97](https://github.com/buitrungtuan-4ps/pos-framework-4ps/issues/97)).
+
+  ADR-0061 shipped the relay's two waiters on a fixed 100 ms re-read of a Postgres table, and parked
+  the harder question — an optional low-latency `live` mode over a store-held connection — as "to be
+  ADR-0062", a number reserved for an ADR nobody wrote. Measuring it first moved the target. The
+  store-facing long-poll re-reads the queue every 100 ms for a twenty-second hold and then starts
+  again, so **an idle store cost about ten queue queries a second for as long as it was switched
+  on** — a shop that sells nothing all night cost the same as one at peak, and at the 500-store fleet
+  `docs/capacity-and-reliability.md` sizes for that is thousands of queries a second of pure idle
+  load through a sixteen-connection pool shared with ingest, rollups, webhooks and the whole console.
+  The latency a live channel was meant to buy is 100 ms of poll granularity per leg, next to a
+  store's own round trip, its reprice, its kitchen routing and the person who confirms the order.
+
+  So **there is no live cloud→store channel**, refused on merit: the cloud cannot dial a store and
+  must not learn how (that property is what lets a shop run on a bare 4G SIM); a second delivery path
+  can disagree with the durable queue about whether an order was handed over; and the tempting
+  shortcut — a per-store subject on the event bus — fails on credentials, because every box holds the
+  same fleet-wide broker token with no permissions block, so any store could read *or publish onto*
+  another store's order inbox, and a queued order carries the guest note, the table and the whole
+  basket. `MessageLink` therefore keeps its four methods permanently, and `store.order_relay.mode` —
+  promised by ADR-0061 and the roadmap as the flag that would select the live mode — is not added,
+  because there is no mode to select.
+
+  What replaces the polling is a `RelayWake` seam. The cloud is the process that writes the row, so
+  it does not need to ask: a parked `submit` is woken when the store's ack commits, and a store's
+  long-poll is woken when an order is enqueued. The two waiter classes get **separate** signals — one
+  shared notification would wake the long-poll and leave the parked submit asleep — and every waiter
+  **subscribes before it reads**, because the gap between "I read and found nothing" and "I began
+  waiting" is exactly where a signal goes missing, and a missed signal on the submit leg is a `503`
+  for an order the store did accept. The re-read on a timer stays as the fallback, clamped to at most
+  half the park deadline so it can never compute to zero re-reads: the queue row is still the only
+  source of truth, so a lost signal is slow, never wrong. Tests pin both halves — an ack resolves a
+  park an order of magnitude inside the fallback, an enqueue ends a long-poll far inside it, and an
+  outcome written *without* a signal still resolves the park on the fallback slice.
+
+  The wake is in-process because `deploy/compose.yml` runs one container per service and every
+  deployment in `k8s/` declares `replicas: 1`, so every writer and every waiter are in the same
+  process. A second instance is a second implementor of the same trait — Postgres `LISTEN`/`NOTIFY`
+  is the obvious one — not a redesign of the relay; ADR-0062 records the obligation that comes with
+  it, since a cross-process listener can die quietly and move the whole fleet onto the fallback timer.
+
+  Separately, the store's reconnect backoff **gains jitter**. It was a fixed five seconds, and the
+  cloud deploys with `Recreate`, so every store in the fleet lost its long-poll at the same instant
+  and retried in lockstep until the cloud came back. Retries now spread uniformly over
+  `[2.5 s, 7.5 s]`.
+
+  **Upgrade note.** None. No route, header, scope, `PROTOCOL_VERSION`, migration, config key or
+  dependency changes; `store.order_relay.{enabled,wait_ms}` behave exactly as before.
+
 ### Fixed
 
 - **The fleet's stream ceiling is now the cloud's to set, and something finally reads how full it is**
