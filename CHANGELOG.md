@@ -42,6 +42,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   environment file. A box presenting an old tenant-wide key authenticates and is then refused on
   every sync call.
 
+- **QR ordering was off on every deployed box** (production-readiness **C3**,
+  [ADR-0057](docs/adr/0057-qr-ordering.md)). `pos_cloud` treats a missing `table_token_secret` as
+  "QR ordering off" and says so in one `warn` line at boot — and `bootstrap.sh`, which generates the
+  admin setup token, the internal shared secret, the database password and Garage's keys, never
+  wrote it. So a box came up with the QR route disabled, the printable table-QR sheet leading
+  nowhere, and nothing to show for it but a log line. `docs/fork-checklist.md` claimed the installer
+  generated it, which is what let the gap survive.
+
+  `bootstrap.sh` now generates it on a fresh box, and **appends it on a later run to a box that
+  predates the line** — the one reconcile in that file that refuses to touch a value it finds,
+  because rotating this secret invalidates every table QR already printed and stuck to a table.
+
 ### Fixed
 
 - **A store that restarts with its broadband down can now sell** (production-readiness **C1**,
