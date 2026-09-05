@@ -55,8 +55,19 @@ export type Screen = {
 const ADMIN_MANAGERS: readonly AdminRole[] = ["owner", "admin"];
 
 export const SCREENS = {
-  reports: {
+  // The tenant-scoped index is the per-store hub (ADR-0099): the first screen after picking a shop
+  // answers "is this shop all right", and Reports — which answers "how much did it make" — moved to
+  // its own path. A bookmark of `/t/<tenant>?store=X` therefore lands on the hub now; nothing 404s,
+  // and Reports keeps every capability it had.
+  storeHub: {
     path: "/",
+    key: "nav.storeHub",
+    scope: "store",
+    tenantScoped: true,
+    inPalette: true,
+  },
+  reports: {
+    path: "/reports",
     key: "nav.reports",
     scope: "store",
     tenantScoped: true,
@@ -243,7 +254,7 @@ export function specOf(screen: ScreenId): Screen {
 export const NAV_GROUPS: readonly { key: MessageKey; items: readonly ScreenId[] }[] = [
   {
     key: "nav.group.overview",
-    items: ["reports", "fleet", "ota", "reconcile", "alerts", "audit"],
+    items: ["storeHub", "reports", "fleet", "ota", "reconcile", "alerts", "audit"],
   },
   {
     key: "nav.group.masterData",

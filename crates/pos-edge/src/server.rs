@@ -52,17 +52,27 @@ const SYNC_KEY_ENV: &str = "POS_EDGE_SYNC_KEY";
 
 /// The environment variable carrying the event stream's server URL
 /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)). It lives here rather than in
-/// `config.toml` because it is where a credential would be embedded (`nats://user:pass@host`), and a
-/// credential never goes in `config.toml` (ADR-0086) — the same mode-0600 env file carries it. Absent
-/// (or empty) means the outbox is not published; the store trades and keeps every event.
+/// `config.toml` because it is where a credential would be embedded (`tls://:<token>@host:4222`), and
+/// a credential never goes in `config.toml` (ADR-0086) — the same mode-0600 env file carries it.
+/// Absent (or empty) means the outbox is not published; the store trades and keeps every event.
+///
+/// The console cannot fill this in: the broker token is one **fleet-wide** secret held on the cloud
+/// box, unlike the per-store sync key the new-store wizard does emit, so the generated `env` carries
+/// the line commented and the operator completes it (ADR-0087 Amendment 1).
 const NATS_URL_ENV: &str = "POS_EDGE_NATS_URL";
 
-/// The stream limits the edge asks for when it ensures its own stream exists. Matched to the
+/// The stream limits the edge asks for when it ensures the fleet's stream exists. Matched to the
 /// store-box envelope in `docs/capacity-and-reliability.md`: a few days of a busy store's events, so
 /// a weekend of cloud downtime drains rather than discards.
+///
+/// **This is a fleet ceiling, not a per-store one** (ADR-0087 Amendment 1): every store publishes
+/// into `POS_FLEET`, so the fill rate is the whole estate's. Reaching it refuses new events rather
+/// than dropping old ones, and the outbox holds — visible as the 80% capacity alert (ADR-0073), not
+/// as loss. Sizing these two against a real estate is the A·P4 **O4** capacity probe.
 const NATS_MAX_MESSAGES: i64 = 1_000_000;
 
-/// The byte ceiling for the same stream — 1 GiB, sized alongside [`NATS_MAX_MESSAGES`].
+/// The byte ceiling for the same stream — 1 GiB, sized alongside [`NATS_MAX_MESSAGES`], and a fleet
+/// ceiling for the same reason.
 const NATS_MAX_BYTES: i64 = 1_073_741_824;
 
 /// How often the config-pull loop pulls when nothing is failing. The cloud answers immediately (no

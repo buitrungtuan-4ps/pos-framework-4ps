@@ -18,6 +18,134 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console's own flows are measured, and the price-change flow costs eight clicks** (roadmap v3
+  **Q7**, the second half). `ui/` got a step budget the day Q7 landed; `dashboard/` did not, so
+  nothing measured the flows an operator runs from the office — and the one that matters most is
+  changing a price. `dashboard/scripts/step-budget.mjs` now resolves every declared click against
+  the source (a sidebar entry against `NAV_GROUPS`, an in-app link against the `screenHref` call
+  that builds it, a handler against the screen's own interactive elements) and runs from
+  `pnpm build`, so the `dashboard` CI job fails when a flow is renamed out from under its
+  declaration.
+
+  **It measures; it does not yet rule.** §6's two-and-three-tap ceiling is about a till in service,
+  and applying it unchanged to a back-office console would be a number chosen to look strict rather
+  than one anybody had argued for. So every console flow declares no ceiling, the gate fails only on
+  an unresolvable declaration, and it reports the cost. The first numbers are in
+  [`docs/ui-ux.md`](docs/ui-ux.md) §1.6: **8** clicks to change a price and publish it, 5 to
+  provision a store, 3 to change a capability, 2 to acknowledge an alert, 1 to see whether a shop is
+  online.
+
+  The price flow is the one to argue about, and the argument is not the eight: six clicks author the
+  change and the last two publish it, and a price saved without that second step leaves the till
+  charging the old one with nothing on either screen saying so. Shortening it should shorten the
+  first six.
+
+  It also earned its keep immediately, by refusing a declaration that claimed the new-store wizard
+  was one sidebar click away. It is in `SCREENS` and in no nav group — it is reached from the Stores
+  screen — so that flow is five clicks, not four.
+
+- **The console has a landing page that answers "is this shop all right"** (roadmap v3 **Q4**,
+  [ADR-0099](docs/adr/0099-store-hub.md)). Q4's URL half shipped long ago — a tenant is a path
+  segment and the store a `?store=` query, so a console link is shareable — and the screen it was
+  *for* was never built, which is why the slice read as done.
+
+  The tenant-scoped index now renders a six-card **store overview**: whether the box is online and
+  when it last checked in, whether it holds the configuration that was published to it, what it took
+  on its latest trading day, how many tills are open, how many items are out of stock, and what is
+  firing against it. Each card links to the screen that can act on the answer; the hub itself is
+  read-only, because a hub that writes is a second copy of five editors.
+
+  **Reports moves to `/reports`** and keeps every capability. It is a good screen and it was the
+  wrong *first* screen: it answered how much the shop made before saying whether the shop was
+  online. A bookmark of `/t/<tenant>?store=X` now opens the overview; nothing 404s.
+
+  **Two cards are honest approximations and say so on the card.** "Shifts open" is a count of tills,
+  not a list of names — the cloud projects no roster, and a roster would be employee personal data
+  needing a lawful basis rather than a card. "Out of stock" is the day's net count, not the live
+  list — the events are counted but no projection folds them into "which dishes". Both are recorded
+  as follow-ups in the ADR instead of being dressed up. Takings is the only card behind a permission,
+  because prices are T2; a shift count and an out-of-stock count are operational facts, and gating
+  them behind the revenue permission would have left an Ops admin unable to see that the kitchen had
+  run out of something.
+
+  No new route, projection, migration or permission: the hub is composed from four reads the console
+  already made.
+
+### Fixed
+
+- **Every store the console has ever provisioned published none of its sales** (roadmap v3 **E3**).
+  The new-store wizard's `config.toml` generator emitted no `[nats]` section, and
+  `spawn_event_publish` returns early without one — logging that the outbox is not being published
+  and then trading normally. So a box brought online exactly as the runbook says committed every
+  sale locally, durably, and shipped nothing: the cloud's rollups, reports and reconciliation all
+  read a stream nothing published to. Nothing surfaced it, because a store that publishes nothing
+  looks exactly like a store the cloud has not heard from yet.
+
+  The generator now emits the section, and the environment file's `POS_EDGE_NATS_URL` template is
+  the shape that works — `tls://:<token>@<your cloud host>:4222`. It previously read `nats://`,
+  which connects in plaintext and is refused by the broker E7 put TLS on, against a placeholder
+  host. It stays **commented**: the broker token is one secret for the whole fleet, held on the
+  cloud box, unlike the per-store key the wizard does emit, so the console will not put it in a
+  browser and then into every machine in the estate. The generated file carries the one command
+  that recovers it. A `[nats]` section with no URL logs a warning naming the missing variable —
+  configured, not yet armed, which is the truth.
+
+  **The values are fleet-wide, and that was a decision, not a default** ([ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md)
+  Amendment 1). The tree carried two incompatible conventions: three doc comments said one stream
+  per store (`POS_STORE_<id>`), while `bootstrap.sh` documents arming the cloud with `POS_FLEET` and
+  `pos_cloud` binds exactly **one** durable consumer to **one** named stream — so a fleet of
+  per-store streams would have been ingested one store deep. Every store now publishes into
+  `POS_FLEET` on `pos.fleet.events`, the same on every box, matching `cloud.toml`. The shared
+  *subject* is the load-bearing half: the edge's handshake is a create-or-get, which does not add a
+  subject to a stream that already exists, so a per-store subject inside a shared stream would have
+  been captured for the first box to connect and refused for every one after it — a failure that
+  appears only on store number two, in production, long after the console was tested against one
+  shop.
+
+  **Upgrade note.** A store already in the field needs the `[nats]` table added to its `config.toml`
+  and `POS_EDGE_NATS_URL` set in `/etc/pos-edge/env`; re-downloading the two files from the store's
+  wizard produces both. Nothing is lost in the meantime — the outbox is durable and drains from the
+  beginning once the stream is reachable. `NATS_MAX_MESSAGES` (1 000 000) and `NATS_MAX_BYTES`
+  (1 GiB) are now a **fleet** ceiling rather than a per-store one; reaching either refuses new events
+  rather than dropping old ones, so it shows up as the 80% capacity alert and a growing outbox, not
+  as loss. Sizing them against a real estate is the A·P4 **O4** capacity probe.
+
+- **A tip can now actually be taken, and a store's refused tender is no longer offered** (roadmap v3
+  **B1.3** and the **E5** residual). The domain halves of both shipped in #181 and neither could
+  fire.
+
+  **Tips.** `Payment.tip` reached the edge, `decide_bill` required `Capability::Tips`, and the
+  settled event recorded the amount — but the till had **no tip entry anywhere**, so `tip_amount`
+  was zero on every payment a real store took, whatever the capability said. The Pay and counter
+  screens now carry a tip row (no tip · 5% · 10% · 15%), shown only when the store takes tips.
+
+  The tip comes out of the **change**, not out of the sale: the quick-cash keys, the exact-amount
+  default and the change on screen are all computed against sale + tip, so the figure the cashier
+  reads is the one the edge records. B1.3's second defect was exactly this subtraction missing on
+  the edge — a till telling a cashier to hand back money the guest had just left — and getting it
+  wrong on the screen would have been the same lie from the other side.
+
+  **Tender.** No route serialized the store's `accepted_tender`, so a cash-only store still showed a
+  Card button and the edge's refusal landed as a `400` in front of the guest. Both pay screens now
+  hide a method the store does not accept. An unrestricted store (`null`, not an empty list) keeps
+  accepting everything, including a method added to the enum later.
+
+  **And the fifth hardcoded `VND`.** `ui/src/screens/Takeaway.tsx` still offered VND's three
+  banknotes on any currency — the same defect fixed one file over in `Pay.tsx`, written the same way
+  and missed. E5 named three sites, #181 said four; there were five.
+
+### Changed
+
+- **`docs/ui-ux.md` §6: the step budget governs the steps a task *requires*.** An optional
+  enhancement — a tip on a settle — is declared as its own task with its own ceiling rather than
+  counted against the flow it sits inside. Without the distinction the rule pushes an optional
+  control behind a button to keep a number down, which costs a tap in the case the operator wants it
+  and buys nothing in the case they do not. The two tipped settles are declared at **four** on that
+  basis, each with its reason in its own note; `ui/scripts/step-budget.mjs` now resolves 15 tasks
+  and 27 taps.
+
+### Added
+
 - **The till is told whether its store takes tips, and which tender it accepts** (roadmap v3
   **B1.3** and **E5**, `GET /api/menu`).
 

@@ -4,8 +4,8 @@ import { ApiError, api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
-import { formatMoney, money } from "../lib/money";
-import { settle } from "../state/store";
+import { formatMoney, money, quickCashFor } from "../lib/money";
+import { settle, tenderAccepted, tipsEnabled } from "../state/store";
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
 // (ADR-0093).
@@ -22,6 +22,7 @@ export function Takeaway() {
   const [orders, setOrders] = createSignal<CounterOrder[] | null>(null);
   const [chosen, setChosen] = createSignal<CounterOrder | null>(null);
   const [tender, setTender] = createSignal<number | null>(null);
+  const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -43,12 +44,22 @@ export function Takeaway() {
   // against, so the number read to the customer and the number charged are one calculation.
   const total = () => chosen()?.total_due.amount_minor ?? 0;
   const currency = () => chosen()?.total_due.currency_code ?? "";
+  // As on the table pay screen: the tip comes out of the change, not out of the sale, so the figure
+  // shown is the one the edge records (roadmap **B1.3**).
   const change = () => {
     const offered = tender();
-    return offered !== null && offered >= total() ? offered - total() : 0;
+    const owed = total() + tip();
+    return offered !== null && offered >= owed ? offered - owed : 0;
   };
-  // The same VND quick-cash ladder the table pay screen offers, so a cashier's hands learn one pad.
-  const quickCash = () => [total(), 50_000, 100_000, 200_000].filter((amount) => amount >= total());
+  const tipKeys = () => [5, 10, 15].map((percent) => (total() * percent) / 100);
+  // The same quick-cash ladder the table pay screen offers, so a cashier's hands learn one pad —
+  // and, since roadmap **E5**, keyed on this order's own currency rather than VND's three notes.
+  // This was the fifth hardcoded-VND site: E5 named three, the audit found a fourth, and this is the
+  // one that survived the fix to `Pay.tsx` because it was written the same way one file over.
+  const quickCash = () => {
+    const owed = total() + tip();
+    return [owed, ...quickCashFor(currency(), owed)];
+  };
 
   const back = () => {
     setChosen(null);
@@ -91,12 +102,13 @@ export function Takeaway() {
   };
 
   const payCash = () => {
-    const offered = tender() ?? total();
+    const offered = tender() ?? total() + tip();
     void pay([
       {
         method: "PAYMENT_METHOD_CASH",
         tendered: money(currency(), offered),
         applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
       },
     ]);
   };
@@ -105,8 +117,9 @@ export function Takeaway() {
     void pay([
       {
         method: "PAYMENT_METHOD_CARD",
-        tendered: money(currency(), total()),
+        tendered: money(currency(), total() + tip()),
         applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
       },
     ]);
 
@@ -199,6 +212,33 @@ export function Takeaway() {
                     )}
                   </Show>
 
+                  <Show when={tipsEnabled()}>
+                    <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
+                    <div class="grid grid-cols-4 gap-2">
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface"
+                        classList={{ "border-accent": tip() === 0 }}
+                        onClick={() => setTip(0)}
+                      >
+                        {t("pay.tip_none")}
+                      </button>
+                      <For each={tipKeys()}>
+                        {(amount) => (
+                          <button
+                            type="button"
+                            class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
+                            classList={{ "border-accent": tip() === amount && amount > 0 }}
+                            onClick={() => setTip(amount)}
+                          >
+                            {formatMoney(money(currency(), amount))}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+
+                  <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
                   <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
                   <div class="grid grid-cols-2 gap-2">
                     <For each={quickCash()}>
@@ -220,22 +260,27 @@ export function Takeaway() {
                     {t("pay.change")}:{" "}
                     <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
                   </p>
+                  </Show>
 
                   <div class="mt-4 flex flex-col gap-2">
-                    <button
-                      type="button"
-                      class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
-                      onClick={() => payCash()}
-                    >
-                      {t("pay.take_cash")}
-                    </button>
-                    <button
-                      type="button"
-                      class="min-h-touch rounded-token border border-line bg-surface"
-                      onClick={() => payCard()}
-                    >
-                      {t("pay.card")}
-                    </button>
+                    <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+                      <button
+                        type="button"
+                        class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
+                        onClick={() => payCash()}
+                      >
+                        {t("pay.take_cash")}
+                      </button>
+                    </Show>
+                    <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface"
+                        onClick={() => payCard()}
+                      >
+                        {t("pay.card")}
+                      </button>
+                    </Show>
                   </div>
                 </>
               }

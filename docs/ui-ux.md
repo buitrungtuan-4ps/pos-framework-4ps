@@ -22,7 +22,43 @@ The real users are staff standing for eight-hour shifts, with wet or greasy hand
 3. **Stable positions — muscle memory is an asset.** Pay, fire, and open-table buttons never move. Adaptive behaviour may change *what is shown and in what priority*, never *where the primary controls live*.
 4. **Disciplined context awareness.** By role: a server starts on the floor plan, a cashier on the payment queue, a cook on their station. By state: offline and printer errors surface where they matter. By phase: end-of-shift raises the close action. Never hide a function that is currently needed to "keep it clean".
 5. **System state is always visible.** A thin persistent bar shows online/offline, print queue, and sync lag. No modals, no covering content. Offline is a normal working state, not an error.
-6. **One screen answers one question.** Common actions take at most two taps from the role's home screen; rare actions at most three. **This is measured, not asserted** (roadmap-v3 **Q7**): `ui/scripts/step-budget.mjs` declares the tap count of thirteen selling tasks, resolves every declared tap against the source — the route must exist in `App.tsx` and an interactive element on that screen must really call the named action — and fails the `ui` CI job if a flow exceeds its budget or the declaration has drifted from the code. Run it alone with `pnpm steps`; it prints every task and marks the ones sitting at their ceiling, which are the flows to defend hardest. What it **cannot** see is a required tap nobody declared: catching that needs a browser driving a running edge, and that harness does not exist yet ([gate register](gate-register.md)). So the gate stops a budget being quietly raised and a flow being quietly renamed; a reviewer still owns "did this change add a step?", and the printed map is what makes that a five-second question.
+6. **One screen answers one question.** Common actions take at most two taps from the role's home screen; rare actions at most three. **This is measured, not asserted** (roadmap-v3 **Q7**): `ui/scripts/step-budget.mjs` declares the tap count of thirteen selling tasks, resolves every declared tap against the source — the route must exist in `App.tsx` and an interactive element on that screen must really call the named action — and fails the `ui` CI job if a flow exceeds its budget or the declaration has drifted from the code. Run it alone with `pnpm steps`; it prints every task and marks the ones sitting at their ceiling, which are the flows to defend hardest.
+
+**The budget governs the steps a task *requires*.** An optional enhancement to a flow — a tip on a
+settle, say — is declared as its own task with its own ceiling, rather than counted against the flow
+it sits inside. Without that distinction the rule pushes an optional control behind a button to keep
+a number down, which costs the operator a tap in the case they *do* want it and buys nothing in the
+case they do not. Two tasks here are declared at **four** on that basis (the two tipped settles) and
+each says in its own note why it is not three. What it **cannot** see is a required tap nobody declared: catching that needs a browser driving a running edge, and that harness does not exist yet ([gate register](gate-register.md)). So the gate stops a budget being quietly raised and a flow being quietly renamed; a reviewer still owns "did this change add a step?", and the printed map is what makes that a five-second question.
+
+**The console is measured too, and its ceiling is not yet decided.**
+`dashboard/scripts/step-budget.mjs` (roadmap-v3 **Q7**, the second half) does the same resolution for
+the back-office flows: a click is a sidebar entry, an in-app link, or a handler on a screen, and each
+is checked against `SCREENS`, `NAV_GROUPS`, `COMPONENTS` and the screen's own source. It runs from
+`pnpm build`, so the `dashboard` CI job fails on drift.
+
+What it deliberately does **not** do yet is rule. The two-and-three-tap ceiling above is about a till
+in service; applying it unchanged to a console would be a number chosen to look strict rather than
+one anybody had argued for. So every console flow declares `budget: null`, the gate fails only on an
+unresolvable declaration, and it *reports* the measured cost. The first run's numbers:
+
+| Console flow | Clicks |
+| --- | --- |
+| Change an item's price on a menu **and publish it** | **8** |
+| Provision a new store and get its installer | 5 |
+| Turn a capability off for a store and publish it | 3 |
+| Acknowledge a firing alert | 2 |
+| Check whether a shop is online | 1 |
+
+The price flow is the one to argue about, and the argument is not really about the eight. Six of the
+clicks author the change and the last two publish it — and a price saved without that second step
+leaves the till charging the old one, with nothing on either screen saying so. **Shortening this
+should shorten the first six, not merge the publish into the save**: the two-step shape is what makes
+"change a price in the office at 11am, effective at the counter when you say so" possible at all.
+
+The gate also earned its keep on its first run: it refused a declaration that claimed the new-store
+wizard was one sidebar click away. It is in `SCREENS` and in no nav group — it is reached from the
+Stores screen — so the flow is five clicks, not four, and nothing but a resolver would have noticed.
 7. **Errors always have an exit.** Every error state offers the next action — retry, switch to the backup printer, call a manager by PIN. No dead ends, and never a raw error code in front of staff.
 8. **Money is king.** The largest type on the screen, tabular figures, locale-aware thousands separators, and never a displayed value that differs from the real one for cosmetic rounding.
 9. **Four device classes, four layouts.**

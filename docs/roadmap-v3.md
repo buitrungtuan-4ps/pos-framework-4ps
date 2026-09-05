@@ -48,8 +48,8 @@ rename or removal); every new behaviour sits behind a **capability flag or a con
 
 ### v1.0 code-complete (recomputed 2026-09-04, item by item against the tree)
 
-v1.0 is `A·P1 → A·P3` + `A·P1x` + `B·W1` + `B9.1`. **Every slice in it has landed.** The nine that were
-open on 2026-09-04 are the last of them:
+v1.0 is `A·P1 → A·P3` + `A·P1x` + `B·W1` + `B9.1`. The nine that were open on 2026-09-04 closed that
+day:
 
 | # | Slice | What landed |
 | --- | --- | --- |
@@ -59,9 +59,22 @@ open on 2026-09-04 are the last of them:
 | 4 | **E5 residual** | Four sites, not three. The unnamed one was the only *wrong number* rather than a wrong label: `parseWhole(amount(), "VND")` is out by a factor of 100 on any two-decimal currency. |
 | 5 | **Q5 tail** | Two of the four documented webhook headers described a per-event delivery model that was never built, so this was not a rename. `pos-api-version` dropped (nothing read it), the two dead scopes deleted (`POST /admin/api-keys` still *accepted* them, so a key could promise authority no route consults), and `/v1/orders` + `/sync` given budgets — per-tenant after auth for orders, per-connection before auth for sync, because the store id on `/sync` is caller-supplied and keying on it would let anyone exhaust one named shop's budget. |
 | 6 | **Q6** | [`docs/guides/integrate-with-the-api.md`](guides/integrate-with-the-api.md): auth, an API tour, webhooks with a complete receiver, and an explicit list of what is deliberately not there. |
-| 7 | **Q7** | `ui/scripts/step-budget.mjs` — thirteen selling tasks, every declared tap resolved against `App.tsx` and the screen that renders it, run by `pnpm build`. Honest about the one case it cannot see: a required tap nobody declared. |
+| 7 | **Q7** | `ui/scripts/step-budget.mjs` — thirteen selling tasks, every declared tap resolved against `App.tsx` and the screen that renders it, run by `pnpm build`. Honest about the one case it cannot see: a required tap nobody declared. The console half followed: `dashboard/scripts/step-budget.mjs` measures five office flows the same way and reports rather than rules, because the till's two-and-three-tap ceiling is not a console's. |
 | 8 | **R3** | A per-store `install-pos-edge.sh` on the wizard's Handoff screen, embedding both files, laying out the update slots, and deliberately leaving an already-installed binary alone so a box that updated itself is not rolled back. |
 | 9 | **E4** | The Windows service wrapper (`crates/pos-edge/src/service.rs`). The old instructions could not have worked — a console program never answers SCM's start handshake — and OTA could not have worked even with a shim, because SCM treats a clean exit as a deliberate stop, so a store that installed a release would have gone dark. `ServeOutcome` now says whether a stop was a restart, and the wrapper turns that into an exit code a failure action acts on. |
+
+**Then auditing those nine against the tree found five of them half-landed**, and the reason is worth
+keeping: each was reported done on the strength of the half that shipped. The domain change and the
+operator change are separate files, often separate languages, and a slice whose domain half is
+written, tested and merged *looks* finished from the inside.
+
+| Slice | The half that was missing | Now |
+| --- | --- | --- |
+| **B1.3** | `Payment.tip` reached the edge and was recorded; the till had no tip entry, so the amount was zero on every real payment | **Closed** (#183) |
+| **E5** | A fifth hardcoded-`VND` site in `Takeaway.tsx` — the same defect fixed one file over, written the same way and missed | **Closed** (#183) |
+| **E3** | The wizard emitted no `[nats]` section, so every provisioned store published nothing at all | **Closed** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md) Amendment 1 settles the stream layout the value needed) |
+| **Q4** | The URL context half shipped; the per-store landing screen it was for did not | **Closed** — six cards on the tenant-scoped index ([ADR-0099](adr/0099-store-hub.md)); Reports moved to `/reports` |
+| **Q7** | `ui/` got its step budget; `dashboard/` has none, so the console's own flows are unmeasured | **Closed** — `dashboard/scripts/step-budget.mjs` resolves five console flows against the source; the price-change flow measures **8** clicks, and the ceiling is the owner's to set from that ([`ui-ux.md`](ui-ux.md) §1.6) |
 
 **What is not done is everything that needs a machine.** [`gate-register.md`](gate-register.md) §6 is
 the list, and E4 narrowed one row rather than closing it: the wrapper is compiled by the
@@ -123,7 +136,14 @@ derivable from the number, which is the other half of why it was never useful on
 - **R1** — Release workflow: build + minisign-sign (keys in GitHub secrets, never on the VPS) + publish. **Done**; the artifact now carries its version too (R1b).
 - **E1** — `cloud_url` into `EdgeConfig` + wire the config-pull and heartbeat loops into `serve()`. **Loops done; the provisioning half is not — see E6.**
 - **E2** — OS-keyring `KeyVault` adapter + the `/setup` activation screen in the edge UI. **Done; reachable only once E6 lands.**
-- **E3** — Wire the relay client + NATS event publish. **Wired; neither can reach production — see E6 and E7.**
+- **E3** — Wire the relay client + NATS event publish. **Done.** The loops landed here, E6 gave them a
+  cloud to reach and E7 gave the bus a published TLS port — and the last gap was the quietest of the
+  three: nothing generated the `[nats]` section, so every store the console provisioned ran the
+  publish loop's early return and shipped none of its sales. Closing it needed a decision the tree
+  did not contain: three doc comments said one stream per store while `pos_cloud` binds one durable
+  consumer to one named stream. [ADR-0087](adr/0087-edge-relay-and-event-publish.md) Amendment 1
+  settles it — one fleet stream, one subject, identical on every box — and says why the *subject*
+  being shared is the load-bearing half rather than a tidiness choice.
 
 ### A·P1x — Close the chain (found by the 2026-09-02 tree audit)
 
@@ -307,7 +327,14 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
   - **Q3c** — ETag on read, `If-Match` required on PATCH, `412` on mismatch. **Done** ([ADR-0094](adr/0094-console-optimistic-concurrency.md), [ADR-0095](adr/0095-conditional-writes-for-collections.md)): six keyed upserts split into `create_*`/`update_*` so a conditional write has something to be conditional on, and collections that had no single row to version gained one.
 
   **Q3 is closed.** All three sub-slices landed, including the 22 plain-text `400` sites the census missed on its first pass.
-- **Q4** — Store hub + URL context `/t/:tenant/s/:store`. **Done** (option A: the tenant is a path segment and the store a `?store=` query, so a link is shareable and a bookmark survives an org switch).
+- **Q4** — Store hub + URL context `/t/:tenant/s/:store`. **Done, both halves.** The URL is option A
+  (the tenant a path segment, the store a `?store=` query, so a link is shareable and a bookmark
+  survives an org switch). The hub itself is six read-only cards on the tenant-scoped index
+  ([ADR-0099](adr/0099-store-hub.md)), composed from reads that already existed — no route, no
+  projection, no migration, no permission — with Reports moved to `/reports`. Two of the six are
+  counts rather than lists, and the ADR records why: the cloud projects neither a live out-of-stock
+  set nor a shift roster, and the roster is employee personal data needing a lawful basis rather
+  than a card.
 - **Q5** — `/admin` becomes a real contract: pagination/`q`/sort on the unbounded lists; `/admin` into OpenAPI + the drift gate; fix the webhook header docs↔code mismatch; implement or drop `pos-api-version`; wire or delete the two dead scopes; rate-limit `/v1/orders` and `/sync`.
 - **Q6** — Integrator docs: webhook quickstart (correct HMAC header), auth guide, API tour.
 - **Q7** — UX step budget: a measured action budget for ~12 common tasks, failable in e2e (add item ≤2 taps, cash settle ≤3, price change ≤4 clicks).

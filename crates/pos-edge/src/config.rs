@@ -81,12 +81,19 @@ const fn default_sign_in_idle_timeout_minutes() -> u64 {
 /// Both fields must match the cloud consumer's `stream` / `filter_subject`, or the events land
 /// somewhere nothing reads. Neither is a secret, which is why they live in `config.toml` while the
 /// server URL does not.
+///
+/// **Both are fleet-wide, and identical on every store** ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)
+/// Amendment 1): the cloud binds one durable consumer to one named stream, so per-store streams
+/// would be ingested one store deep, and a per-store *subject* inside a shared stream would be
+/// refused for every box after the first — the handshake's create-or-get does not add a subject to a
+/// stream that already exists. The store the event came from is inside the event, not in the
+/// subject.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NatsConfig {
-    /// The stream name — one per store, e.g. `POS_STORE_<id>`.
+    /// The stream name — one for the fleet, `POS_FLEET`, matching `cloud.toml`'s `[nats] stream`.
     pub stream: String,
-    /// The subject every event is published to.
+    /// The subject every event is published to — `pos.fleet.events`, the same on every store.
     pub subject: String,
 }
 
@@ -240,14 +247,44 @@ mod tests {
 
     #[test]
     fn a_nats_section_parses_stream_and_subject() {
+        // The fleet shape the console generates, and the one `cloud.toml` is armed with: one stream,
+        // one subject, identical on every store (ADR-0087 Amendment 1).
         let text = "store_id = \"01JQ0000000000000000000001\"\n\
                     [nats]\n\
-                    stream = \"POS_STORE_01JQ0000000000000000000001\"\n\
-                    subject = \"pos.store.01JQ0000000000000000000001.events\"";
+                    stream = \"POS_FLEET\"\n\
+                    subject = \"pos.fleet.events\"";
         let config = EdgeConfig::from_toml_str(text).expect("parses");
         let nats = config.nats.expect("the section is present");
-        assert_eq!(nats.stream, "POS_STORE_01JQ0000000000000000000001");
-        assert_eq!(nats.subject, "pos.store.01JQ0000000000000000000001.events");
+        assert_eq!(nats.stream, "POS_FLEET");
+        assert_eq!(nats.subject, "pos.fleet.events");
+    }
+
+    #[test]
+    fn a_top_level_key_below_the_nats_table_is_refused_rather_than_misread() {
+        // Why the console's generator puts `[nats]` last and says so in a comment (E3): TOML reads
+        // every key after a table header as part of that table, so an operator who uncommented
+        // `store_path` below the header would be setting `nats.store_path`. `deny_unknown_fields`
+        // makes that a load-time refusal, which is the whole reason the warning can be trusted — the
+        // alternative would be a store quietly ignoring its own configuration.
+        let above = "store_id = \"01JQ0000000000000000000001\"\n\
+                     store_path = \"store.sqlite\"\n\
+                     [nats]\n\
+                     stream = \"POS_FLEET\"\n\
+                     subject = \"pos.fleet.events\"";
+        let below = "store_id = \"01JQ0000000000000000000001\"\n\
+                     [nats]\n\
+                     stream = \"POS_FLEET\"\n\
+                     subject = \"pos.fleet.events\"\n\
+                     store_path = \"store.sqlite\"";
+        // The same three lines in the order the generator emits them.
+        assert_eq!(
+            EdgeConfig::from_toml_str(above)
+                .expect("parses with the table last")
+                .store_path,
+            std::path::PathBuf::from("store.sqlite")
+        );
+        // And the same three lines with only the position changed.
+        assert!(EdgeConfig::from_toml_str(below).is_err());
     }
 
     #[test]
