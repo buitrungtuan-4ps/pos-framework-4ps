@@ -16,6 +16,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The pre-production security review exists** (production-readiness **S6**). Gate **L5**, the
+  independent pentest, was sequenced after a document nobody had written, so it could not be booked.
+  [`docs/security-review.md`](docs/security-review.md) is that document: the three trust zones and
+  what an attacker reaches from each, every authenticated surface with the gate that holds it, the
+  credential inventory with what throttles each one, the three independent tenant-isolation layers
+  (and which of them is actually primary — it is not the one people assume), the T1/T2/T3 data map,
+  the artefact trust chain, and the seven open items ranked by what an attacker would reach first.
+
+  Its last section is a **scope statement for the pentest**: the five places worth the engagement's
+  time and why, and the two that are hardware gates rather than software. Every claim cites the file
+  that implements it, so the reviewer can check the document against the tree rather than trust it.
+
 - **Tenants, brands and devices can be renamed and archived** (production-readiness **O2**). The
   registry has had `PATCH /admin/tenants/{id}`, `/admin/brands/{id}` and
   `/admin/stores/{id}/devices/{id}` since WS-C — audited, etag-guarded, and with **no client calling

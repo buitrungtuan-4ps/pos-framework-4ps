@@ -79,7 +79,7 @@ These are not deferrals. They gate the *first live store*, not a later country p
 | L2 | **Confirm consent status, retention period, and a DPIA for customer analytics** | Analytics on customer data. `retention_days` is a value someone chooses, not a default to inherit | [ADR-0076](adr/0076-subject-request-tooling.md) · [ADR-0035](adr/0035-retention-and-pii-masking.md) |
 | L3 | **Clear any cross-border transfer** — a DTA or explicit consent — before data leaves the country of collection | Any hosting region outside it. The hosting-region decision itself (APPI/DPDP) is B10.4 | [ADR-0076](adr/0076-subject-request-tooling.md) · [`roadmap-v3.md`](roadmap-v3.md) B10.4 |
 | L4 | **Name the Data Protection contact** an EU-resident rights request escalates to | Nothing technical. The tool hands over the payload; it never auto-fulfils | [ADR-0076](adr/0076-subject-request-tooling.md) |
-| L5 | **Independent pentest**, after the security review | Production sign-off | [`roadmap-v3.md`](roadmap-v3.md) B10.4 |
+| L5 | **Independent pentest**, after the security review — which now exists: [`security-review.md`](security-review.md), whose last section is the engagement's scope statement | Production sign-off | [`roadmap-v3.md`](roadmap-v3.md) B10.4, [`security-review.md`](security-review.md) §9 |
 
 ## 6. Real hardware — cannot be cleared in CI
 
