@@ -1,0 +1,26 @@
+[package]
+name        = "pos-render"
+version     = "0.1.0"
+description = "Turns a line of text in any script into the 1-bit raster a thermal printer prints."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-ports = { path = "../pos-ports" }
+# Shaping. The HarfBuzz project's own Rust port: it reorders Devanagari matras, forms Khmer and
+# Indic conjuncts, and applies the OpenType features Vietnamese tone marks need. No C toolchain,
+# which is what keeps the edge cross-compiling to Windows and ARM (ADR-0102).
+#
+# `harfrust` rather than `rustybuzz`, and `skrifa` rather than `ttf-parser`, because RUSTSEC-2026-0206
+# and RUSTSEC-2026-0192 declared both of those unmaintained. These two are the successors their own
+# advisories name, they are actively maintained (HarfBuzz and Google Fonts' fontations), and they
+# share one font parser — `read-fonts` — so the tree gains no second one.
+harfrust = { version = "0.13.3", default-features = false, features = ["std"] }
+# Outlines, over the same `read-fonts` parser harfrust uses.
+skrifa = { version = "0.46.2", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

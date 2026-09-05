@@ -13,7 +13,7 @@ pos-proto = { path = "../../pos-proto" }
 pos-ports = { path = "../../pos-ports" }
 serde_json.workspace = true
 # ADR-0015: rusqlite bundled so the edge depends on no system SQLite on Windows or Linux.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 # ADR-0015: the async EventStore/ConfigStore surface bridged onto the blocking single-writer
 # thread. Only `sync` in the production tree — the channel and oneshot, no runtime; `rt` is a
 # dev-dependency for the contract suite's `block_on`.

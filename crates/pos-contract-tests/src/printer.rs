@@ -67,6 +67,7 @@ fn usb_with_drawer() -> PrinterCapabilities {
         connection: PrinterConnection::Usb,
         code_page: CodePage::Ascii,
         columns: core::num::NonZeroU16::MIN.saturating_add(41),
+        dots_per_line: core::num::NonZeroU16::MIN.saturating_add(575),
         prints_bitmaps: true,
         cuts_paper: true,
         kicks_drawer: true,

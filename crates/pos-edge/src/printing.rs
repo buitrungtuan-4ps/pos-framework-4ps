@@ -29,6 +29,8 @@ use std::fmt;
 use std::num::NonZeroU16;
 use std::sync::{Arc, Mutex};
 
+use pos_render::TextRenderer;
+use printer_escpos::device::DeviceTransport;
 use printer_escpos::tcp::TcpTransport;
 use printer_escpos::{EscPosPrinter, Transport};
 
@@ -334,14 +336,13 @@ impl TransportFactory for TcpTransports {
     fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
         match connection_of(device) {
             PrinterConnection::Network => Ok(Box::new(TcpTransport::new(&device.address))),
-            // Named, not silently treated as a network printer: dialling port 9100 at a USB
-            // printer's "address" would fail with a message about the network, which is the wrong
-            // thing to hand an operator holding a USB cable.
+            // A directly-attached printer's address is a device path — `/dev/usb/lp0`,
+            // `/dev/ttyUSB0`, `\\.\COM3` — rather than a host
+            // ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)). Dialling port 9100
+            // at one would fail with a message about the network, which is the wrong thing to hand
+            // an operator holding a USB cable, so the two are kept apart here.
             PrinterConnection::Usb | PrinterConnection::Serial => {
-                Err(PortError::failed_precondition(
-                    PortName::PrinterDriver,
-                    "this build talks to network printers only; USB and serial need hardware bring-up",
-                ))
+                Ok(Box::new(DeviceTransport::new(&device.address)))
             }
             // `PrinterConnection` is `#[non_exhaustive]`.
             _ => Err(PortError::failed_precondition(
@@ -359,6 +360,14 @@ impl TransportFactory for TcpTransports {
 /// is what would need the real figure, and that needs the number to come from the console.
 const ASSUMED_COLUMNS: u16 = 42;
 
+/// Printable dots per line this build assumes of a printer it has never talked to.
+///
+/// 576 is 80 mm at 203 dpi, the same paper `ASSUMED_COLUMNS` assumes, so the two agree about the
+/// printer. A 58 mm printer given this renders a raster wider than its head, which shears — the same
+/// class of wrong answer as the column count, and it needs the same fix: the width coming from the
+/// console with the device (ADR-0102).
+const ASSUMED_DOTS_PER_LINE: u16 = 576;
+
 /// What this build assumes about a published printer.
 ///
 /// A device proposal carries an address, a kind and — since ADR-0100's approval change — a
@@ -368,16 +377,18 @@ const ASSUMED_COLUMNS: u16 = 42;
 ///
 /// - `code_page: Ascii` — the repertoire every ESC/POS printer has. Claiming more would print
 ///   question marks; claiming [`CodePage::Unsupported`] would refuse plain ASCII too.
-/// - `prints_bitmaps: false` — this build cannot *produce* a bitmap, so claiming the printer could
-///   accept one would only mean asking for a document nothing can render.
+/// - `prints_bitmaps` — whether a font is loaded, and nothing about the hardware. `GS v 0` is
+///   universal on ESC/POS, so the printer is not the constraint; the framework's ability to
+///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).
 /// - `kicks_drawer: false` — no drawer is opened from here at all. ADR-0100 is explicit that the
 ///   drawer is not this module's decision.
-fn assumed_capabilities(device: &PublishedDevice) -> PrinterCapabilities {
+fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> PrinterCapabilities {
     PrinterCapabilities {
         connection: connection_of(device),
         code_page: CodePage::Ascii,
         columns: NonZeroU16::new(ASSUMED_COLUMNS).unwrap_or(NonZeroU16::MIN),
-        prints_bitmaps: false,
+        dots_per_line: NonZeroU16::new(ASSUMED_DOTS_PER_LINE).unwrap_or(NonZeroU16::MIN),
+        prints_bitmaps: can_rasterise,
         cuts_paper: true,
         kicks_drawer: false,
     }
@@ -391,6 +402,9 @@ fn assumed_capabilities(device: &PublishedDevice) -> PrinterCapabilities {
 pub struct Printers {
     transports: Arc<dyn TransportFactory>,
     open: Mutex<HashMap<DeviceId, HeldPrinter>>,
+    /// The renderer that turns a line no code page covers into a raster, or `None` on a box with no
+    /// font installed — which prints ASCII and refuses the rest, the behaviour before ADR-0102.
+    renderer: Option<TextRenderer>,
 }
 
 /// One printer held open for the life of the process.
@@ -406,6 +420,9 @@ impl fmt::Debug for Printers {
         f.debug_struct("Printers")
             .field("transports", &self.transports)
             .field("open", &held)
+            // Whether fonts are loaded, not which — the list is long and says nothing an operator
+            // reading a log needs. `load_fonts` logs the faces and the script coverage at boot.
+            .field("can_rasterise", &self.renderer.is_some())
             .finish()
     }
 }
@@ -423,7 +440,25 @@ impl Printers {
         Self {
             transports,
             open: Mutex::new(HashMap::new()),
+            renderer: None,
         }
+    }
+
+    /// Gives this dispatcher the fonts to rasterise with.
+    ///
+    /// Without it, a line outside the printer's code page is [`PrintOutcome::Unprintable`] — which
+    /// for a Vietnamese, Japanese or Indic menu means every ticket. With it, such a line is drawn
+    /// and sent as a raster instead (ADR-0102).
+    #[must_use]
+    pub fn with_fonts(mut self, renderer: TextRenderer) -> Self {
+        self.renderer = Some(renderer);
+        self
+    }
+
+    /// Whether this dispatcher can turn text into a raster.
+    #[must_use]
+    pub const fn can_rasterise(&self) -> bool {
+        self.renderer.is_some()
     }
 
     /// Prints the guest's receipt for a settled bill on the store's receipt printer.
@@ -488,15 +523,80 @@ impl Printers {
         .await
     }
 
+    /// Turns every line the printer's own character set cannot carry into a raster.
+    ///
+    /// The framework's half of the port's contract (ADR-0026 §5): the adapter sends `Text` as text,
+    /// so deciding a line is sendable is the caller's job, and getting it wrong prints a row of
+    /// question marks in front of a customer. Before ADR-0102 the only answer available here was to
+    /// refuse the whole document; now the line is drawn.
+    ///
+    /// # Errors
+    ///
+    /// The count of characters that could not be rendered at all — no code page, and no font loaded
+    /// to draw them with. The caller reports [`PrintOutcome::Unprintable`], which is still better
+    /// than sending bytes the printer will mangle.
+    fn prepare(
+        &self,
+        capabilities: &PrinterCapabilities,
+        document: PrintDocument,
+    ) -> Result<PrintDocument, usize> {
+        let mut blocks = Vec::with_capacity(document.blocks.len());
+        let mut refused = 0_usize;
+        for block in document.blocks {
+            let PrintBlock::Text { line, style } = &block else {
+                blocks.push(block);
+                continue;
+            };
+            // The printer's own font covers it: text is a fraction of the bytes and comes out of the
+            // head faster, so an ASCII receipt still goes as text after this change.
+            if capabilities.needs_bitmap(line) == Ok(false) {
+                blocks.push(block);
+                continue;
+            }
+            let Some(renderer) = self.renderer.as_ref() else {
+                refused = refused.saturating_add(line.chars().count());
+                continue;
+            };
+            match renderer.render(line, *style, capabilities.dots_per_line) {
+                Ok(drawn) => {
+                    if !drawn.substituted.is_empty() {
+                        // The characters, not the line: which glyphs are missing is what an operator
+                        // needs to install a font for, and it is not personal data.
+                        tracing::warn!(
+                            missing = ?drawn.substituted,
+                            "no installed font covers these characters; they printed as boxes"
+                        );
+                    }
+                    blocks.push(drawn.bitmap.into_block());
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "a line could not be rendered");
+                    refused = refused.saturating_add(line.chars().count());
+                }
+            }
+        }
+        if refused > 0 {
+            return Err(refused);
+        }
+        Ok(PrintDocument { blocks })
+    }
+
     /// Sends one job to one device.
-    async fn dispatch(&self, device: &PublishedDevice, job: PrintJob) -> PrintOutcome {
-        let capabilities = assumed_capabilities(device);
-        if !renderable(&capabilities, &job.document) {
-            tracing::warn!(
-                device = %device.device_id,
-                "the document needs a character this printer cannot render as text and this build cannot rasterise"
-            );
-            return PrintOutcome::Unprintable;
+    async fn dispatch(&self, device: &PublishedDevice, mut job: PrintJob) -> PrintOutcome {
+        let capabilities = assumed_capabilities(device, self.can_rasterise());
+        match self.prepare(&capabilities, job.document) {
+            Ok(document) => job.document = document,
+            Err(line) => {
+                // Never the line's text: a document may carry a buyer's name and tax code
+                // (`pos_ports::printer`).
+                tracing::warn!(
+                    device = %device.device_id,
+                    characters = line,
+                    "the document needs characters this printer cannot render as text and no font \
+                     is loaded to rasterise them"
+                );
+                return PrintOutcome::Unprintable;
+            }
         }
         let printer = match self.printer_for(device, capabilities) {
             Ok(printer) => printer,
@@ -549,22 +649,13 @@ impl Printers {
     }
 }
 
-/// Whether every text line in `document` can be sent to a printer with these capabilities.
-///
-/// The framework's half of the port's contract (ADR-0026 §5): the adapter sends `Text` as text, so
-/// deciding a line is sendable is the caller's job and getting it wrong prints garbage.
-fn renderable(capabilities: &PrinterCapabilities, document: &PrintDocument) -> bool {
-    document.blocks.iter().all(|block| match block {
-        PrintBlock::Text { line, .. } => capabilities.needs_bitmap(line) == Ok(false),
-        _ => true,
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    use super::TcpTransports;
     use super::{
-        PrintOutcome, Printers, TicketLine, TransportFactory, connection_of, receipt_document,
-        receipt_printer, short_reference, station_printer, ticket_document, ticket_line,
+        ASSUMED_DOTS_PER_LINE, PrintOutcome, Printers, TicketLine, TransportFactory,
+        assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
+        station_printer, ticket_document, ticket_line,
     };
     use crate::app::{EdgeSession, FiredLine};
     use pos_ports::PortError;
@@ -578,6 +669,7 @@ mod tests {
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
     use printer_escpos::{Transport, TransportStatus, Unreachable};
+    use std::num::NonZeroU16;
     use std::sync::{Arc, Mutex};
 
     fn lines_of(document: &pos_ports::printer::PrintDocument) -> Vec<&str> {
@@ -784,10 +876,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_kitchen_ticket_a_printer_cannot_spell_is_refused_rather_than_printed_as_noise() {
-        // The gap ADR-0100 leaves open: a Vietnamese item name needs CP1258 or a rasteriser and this
-        // build has neither. Refusing is the only correct answer — question marks on a kitchen ticket
-        // are how the wrong dish gets made. The KDS still shows the order.
+    async fn a_kitchen_ticket_a_printer_cannot_spell_is_refused_when_no_font_is_installed() {
+        // The remaining half of the ADR-0102 story, and the one an operator has to be told about: a
+        // box with no font package installed can draw nothing, so a Vietnamese item name is still
+        // refused. Refusing beats sending the bytes — question marks on a kitchen ticket are how the
+        // wrong dish gets made — and the KDS still shows the order. The companion test below is the
+        // same ticket on a box that *has* fonts.
         let (printers, recorder) = recorder(true);
         let oven = station(1);
         let session = EdgeSession {
@@ -1006,6 +1100,171 @@ mod tests {
             document.blocks.last(),
             Some(&PrintBlock::Cut),
             "the paper is cut, or the next receipt starts on this one"
+        );
+    }
+
+    /// The fonts a test box renders with, or `None` where the machine running the suite has no
+    /// font packages — the same condition a store hits, and the reason this is a skip rather than a
+    /// failure. `pos-render`'s own suite covers the rendering itself.
+    fn fonts() -> Option<pos_render::TextRenderer> {
+        let mut library = pos_render::FontLibrary::new();
+        for directory in [
+            "/usr/share/fonts/truetype",
+            "/usr/share/fonts/opentype",
+            "C:\\Windows\\Fonts",
+        ] {
+            let _ = library.add_directory(std::path::Path::new(directory));
+        }
+        if library.is_empty() || !library.covers('ở') {
+            return None;
+        }
+        Some(pos_render::TextRenderer::new(
+            library,
+            NonZeroU16::new(24).expect("positive"),
+        ))
+    }
+
+    fn recorder_with_fonts(reachable: bool) -> Option<(Printers, Arc<Recorder>)> {
+        let renderer = fonts()?;
+        let recorder = Arc::new(Recorder {
+            written: Mutex::new(Vec::new()),
+            reachable,
+        });
+        let printers = Printers::over(Arc::new(Recorders {
+            recorder: Arc::clone(&recorder),
+        }))
+        .with_fonts(renderer);
+        Some((printers, recorder))
+    }
+
+    #[tokio::test]
+    async fn a_vietnamese_kitchen_ticket_prints_when_a_font_is_installed() {
+        // The whole point of ADR-0102, end to end: the same ticket that is refused above comes out
+        // of the printer here, because the line the firmware cannot spell is drawn and sent as a
+        // raster instead.
+        let Some((printers, recorder)) = recorder_with_fonts(true) else {
+            return;
+        };
+        let oven = station(1);
+        let session = EdgeSession {
+            devices: PublishedDevices::new(vec![device(3, DeviceKind::Printer, Some(oven))]),
+            stations: StationPlan::from_parts(
+                vec![KitchenStation {
+                    station_id: oven,
+                    name: DisplayName::new("Oven"),
+                    backup_station_id: None,
+                }],
+                Vec::new(),
+                None,
+            ),
+            ..EdgeSession::bootstrap()
+        };
+
+        let outcome = printers
+            .print_ticket(
+                &session,
+                store_id(),
+                event_id(1),
+                oven,
+                "A1",
+                &TicketLine {
+                    item: "Bún chả".to_owned(),
+                    quantity: "2".to_owned(),
+                    modifiers: Vec::new(),
+                },
+            )
+            .await;
+
+        assert_eq!(outcome, PrintOutcome::Printed);
+        let written = recorder.written.lock().expect("the recorder");
+        assert_eq!(written.len(), 1, "one ticket");
+        let bytes = written.first().expect("a ticket");
+        // `GS v 0` — the raster command. Its presence is what says the diacritics went out as an
+        // image rather than as bytes the printer would have mangled.
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
+            "the ticket should carry a raster image"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ascii_line_still_goes_out_as_text_when_fonts_are_loaded() {
+        // Rasterising everything would work and would be wrong: text is a fraction of the bytes and
+        // comes out of the head faster, so the code page is still used where it is sufficient.
+        let Some((printers, recorder)) = recorder_with_fonts(true) else {
+            return;
+        };
+        let session = session_with(PublishedDevices::new(vec![device(
+            2,
+            DeviceKind::Printer,
+            None,
+        )]));
+        let outcome = printers
+            .print_receipt(
+                &session,
+                store_id(),
+                event_id(1),
+                42,
+                Money::new(CurrencyCode::VND, 99_000),
+            )
+            .await;
+
+        assert_eq!(outcome, PrintOutcome::Printed);
+        let written = recorder.written.lock().expect("the recorder");
+        let bytes = written.first().expect("a receipt");
+        assert!(
+            !bytes
+                .windows(4)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
+            "an ASCII receipt needs no raster"
+        );
+    }
+
+    #[test]
+    fn a_printer_only_claims_it_prints_bitmaps_when_this_box_can_make_one() {
+        // `prints_bitmaps` describes the framework's ability, not the hardware's: `GS v 0` is
+        // universal on ESC/POS, so the printer is never the constraint. Claiming it while no font is
+        // loaded would mean asking for a document nothing can render.
+        let printer = device(1, DeviceKind::Printer, None);
+        assert!(!assumed_capabilities(&printer, false).prints_bitmaps);
+        assert!(assumed_capabilities(&printer, true).prints_bitmaps);
+        // And the paper width it assumes matches the column count it assumes: 80 mm at 203 dpi.
+        assert_eq!(
+            assumed_capabilities(&printer, true).dots_per_line.get(),
+            ASSUMED_DOTS_PER_LINE
+        );
+    }
+
+    #[test]
+    fn a_directly_attached_printer_gets_a_channel_rather_than_a_refusal() {
+        // Before ADR-0103 this arm returned "this build talks to network printers only". A store
+        // with a USB printer had no way to print at all, and a cash drawer — which may only ever
+        // open over USB (architecture.md §5) — had no transport to open over.
+        let usb = PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            address: "/dev/usb/lp0".to_owned(),
+            ..device(1, DeviceKind::Printer, None)
+        };
+        assert!(
+            TcpTransports.open(&usb).is_ok(),
+            "a USB printer should get a device channel"
+        );
+
+        let serial = PublishedDevice {
+            connection: DeviceConnection::Serial.into(),
+            address: "/dev/ttyUSB0".to_owned(),
+            ..device(2, DeviceKind::Printer, None)
+        };
+        assert!(TcpTransports.open(&serial).is_ok(), "and so should serial");
+
+        // Opening the channel is not reaching the printer: nothing is touched until the first write,
+        // so a device path that does not exist fails where every other unreachable printer does.
+        let network = device(3, DeviceKind::Printer, None);
+        assert!(
+            TcpTransports.open(&network).is_ok(),
+            "and the LAN still works"
         );
     }
 }

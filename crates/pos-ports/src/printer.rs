@@ -116,6 +116,17 @@ pub struct PrinterCapabilities {
     /// Characters per line in the standard font. Receipt layout is computed from this, so
     /// a wrong value produces wrapped totals.
     pub columns: NonZeroU16,
+    /// Printable dots per line — the width of a raster this printer will accept.
+    ///
+    /// Separate from [`columns`](Self::columns) because the two answer different questions and
+    /// neither derives from the other: `columns` is how much *text* fits, which depends on the
+    /// firmware's font, while this is how wide a *bitmap* may be, which is a property of the print
+    /// head. The common values are 384 for 58 mm paper and 576 for 80 mm, both at 203 dpi.
+    ///
+    /// A raster wider than this is not clipped by the printer — the excess wraps onto the next
+    /// line and shears the image — so [ADR-0102](../../../docs/adr/0102-printing-any-script.md)
+    /// makes the renderer take this as its width rather than guess.
+    pub dots_per_line: NonZeroU16,
     /// Whether it can print raster images, which is what bitmap fallback needs.
     pub prints_bitmaps: bool,
     /// Whether it can cut paper.
@@ -344,6 +355,7 @@ mod tests {
             connection,
             code_page,
             columns: NonZeroU16::new(42).expect("positive"),
+            dots_per_line: NonZeroU16::new(576).expect("positive"),
             prints_bitmaps: true,
             cuts_paper: true,
             kicks_drawer: true,

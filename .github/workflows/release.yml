@@ -47,7 +47,7 @@ jobs:
     # runner emits the arm64 binary through the aarch64 GNU linker, the same trick as deploy.yml).
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A tag push checks out the tag; a manual run checks out the tag the operator named.
           ref: ${{ github.event.inputs.tag || github.ref_name }}

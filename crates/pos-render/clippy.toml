@@ -1,0 +1,53 @@
+# This file REPLACES the workspace-root clippy.toml rather than merging with it, so
+# every key the root sets is restated below. `cargo xtask lint-config` fails the
+# build if one is missing.
+#
+# The one deliberate difference: `disallowed-types` is empty here, because
+# `ttf_parser::OutlineBuilder` — the only way to read a glyph's outline — hands its
+# coordinates as `f32`, and a type named in a trait this crate must implement cannot
+# be avoided by writing the code differently.
+#
+# That does NOT open the door to floating-point rendering. `clippy::float_arithmetic`
+# is a workspace *lint* (`[workspace.lints.clippy]` in the root Cargo.toml), not a
+# clippy.toml key, so it still applies to this crate at `deny`: an `f32` may be
+# named and converted, and cannot be computed with. Every coordinate is rounded to
+# whole font units at the boundary in `font.rs` and everything after it is
+# fixed-point integer arithmetic, which is what lets ADR-0102 promise that two
+# stores rasterise the same receipt to the same bytes.
+msrv = "1.94.0"
+
+disallowed-types = []
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "take time from the ClockSource port, so tests can drive a shift across midnight" },
+    { path = "std::time::Instant::now",    reason = "take time from the ClockSource port" },
+    { path = "std::process::exit",         reason = "return an error to main instead" },
+    { path = "std::thread::sleep",         reason = "blocking in an async task; use a timer or spawn_blocking" },
+]
+
+disallowed-macros = [
+    { path = "std::print",   reason = "use tracing; logs travel to the cloud" },
+    { path = "std::println", reason = "use tracing; logs travel to the cloud" },
+    { path = "std::eprint",  reason = "use tracing" },
+    { path = "std::eprintln", reason = "use tracing" },
+]
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+allow-print-in-tests  = true
+allow-dbg-in-tests    = false
+
+too-many-arguments-threshold = 8
+
+doc-valid-idents = [
+    "SQLite", "PostgreSQL", "JetStream", "NATS", "ULID", "ESC/POS", "ICU",
+    "TOTP", "WebP", "SolidJS", "mDNS", "SNTP", "Argon2", "JSONB", "SemVer",
+    "OpenAPI", "PostgreSQL", "MessageFormat",
+    # Product and vendor names that appear in port documentation as prose.
+    "MinIO", "ShopeeFood", "GrabFood", "DPAPI", "ShiftJIS",
+    # Scripts and typography, which this crate's documentation is largely about.
+    "HarfBuzz", "OpenType", "TrueType", "Devanagari", "Hiragana", "Katakana",
+    "Hangul", "Kanji", "Bézier",
+    "..",
+]

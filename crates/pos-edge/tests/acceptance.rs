@@ -194,6 +194,10 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         store_path: "unused-in-memory.sqlite".into(),
         nats: None,
         sign_in_idle_timeout_minutes: 30,
+        // No fonts: this suite exercises the domain, and printing is an effect it does not compose.
+        // A store that does load them still prints ASCII the same way (ADR-0102).
+        font_directories: Vec::new(),
+        font_size_dots: 24,
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
