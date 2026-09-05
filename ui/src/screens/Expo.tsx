@@ -54,6 +54,7 @@ export function Expo() {
               <button
                 type="button"
                 class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+                data-step="runAway"
                 onClick={() => runAway(group.lines)}
               >
                 {t("expo.all_away")}

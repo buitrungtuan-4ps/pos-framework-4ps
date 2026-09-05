@@ -51,6 +51,7 @@ export function Order() {
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
       disabled={!item.available}
+      data-step="addItem"
       onClick={() => void guard(() => addItem(params.id, item))}
     >
       <span>{caption}</span>
@@ -103,6 +104,7 @@ export function Order() {
                   <button
                     type="button"
                     class="rounded-token bg-accent px-3 py-1 text-accent-ink"
+                    data-step="fire"
                     onClick={() => void guard(() => fire(line.orderLineId))}
                   >
                     {t("order.fire")}
@@ -116,6 +118,7 @@ export function Order() {
         <button
           type="button"
           class="mt-4 min-h-touch w-full rounded-token bg-accent px-4 text-lg font-semibold text-accent-ink"
+          data-step="takePayment"
           onClick={() => void takePayment()}
         >
           {t("order.take_payment")}

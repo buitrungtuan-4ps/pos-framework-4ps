@@ -26,6 +26,7 @@ export function Kds() {
             <button
               type="button"
               class="flex min-h-money flex-col items-start gap-1 rounded-token border border-line bg-surface-raised p-4 text-left"
+              data-step="onBump"
               onClick={() => onBump(line.orderId, line.orderLineId)}
             >
               <span class="text-sm text-ink-muted">{t("common.table", { label: line.tableLabel })}</span>

@@ -57,6 +57,7 @@ export function Floor() {
               <button
                 type="button"
                 class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left"
+                data-step="onCard"
                 onClick={() => void onCard(table.id)}
               >
                 <span class="text-xl font-semibold">{t("common.table", { label: table.label })}</span>

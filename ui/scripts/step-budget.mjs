@@ -206,27 +206,53 @@ function tapActions(path, text) {
   const source = parse(path, text);
   const handlers = new Set(["onClick", "onSubmit", "onChange"]);
   const actions = new Set();
-  const collectCalls = (node) => {
+  const marked = new Set();
+  const collectCalls = (node, into) => {
     if (ts.isCallExpression(node)) {
       const target = node.expression;
       if (ts.isIdentifier(target)) {
-        actions.add(target.text);
+        into.add(target.text);
       } else if (ts.isPropertyAccessExpression(target)) {
-        actions.add(target.name.text);
+        into.add(target.name.text);
       }
     }
-    ts.forEachChild(node, collectCalls);
+    ts.forEachChild(node, (child) => collectCalls(child, into));
+  };
+  // Per *element*, not per file: the `data-step` and the handler have to be on the same tag, or the
+  // attribute could name an action some other button on the screen happens to call
+  // ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md)).
+  const visitElement = (attributes) => {
+    const called = new Set();
+    let step = null;
+    for (const attribute of attributes.properties) {
+      if (!ts.isJsxAttribute(attribute) || attribute.initializer === undefined) {
+        continue;
+      }
+      const name = attribute.name.getText();
+      if (handlers.has(name)) {
+        collectCalls(attribute.initializer, called);
+      }
+      if (name === "data-step" && ts.isStringLiteral(attribute.initializer)) {
+        step = attribute.initializer.text;
+      }
+    }
+    for (const action of called) {
+      actions.add(action);
+    }
+    // The attribute counts only when the element it sits on really calls what it names. That is the
+    // half of the lock the browser harness cannot check for itself.
+    if (step !== null && called.has(step)) {
+      marked.add(step);
+    }
   };
   const walk = (node) => {
-    if (ts.isJsxAttribute(node) && handlers.has(node.name.getText())) {
-      if (node.initializer !== undefined) {
-        collectCalls(node.initializer);
-      }
+    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+      visitElement(node.attributes);
     }
     ts.forEachChild(node, walk);
   };
   walk(source);
-  return actions;
+  return { actions, marked };
 }
 
 const routes = routeTable();
@@ -248,7 +274,7 @@ function actionsForRoute(route) {
   const resolved =
     text === null
       ? { error: `route ${route} renders ${component}, but src/screens/${component}.tsx is missing` }
-      : { actions: tapActions(path, text), component };
+      : { ...tapActions(path, text), component };
   screenCache.set(route, resolved);
   return resolved;
 }
@@ -269,6 +295,15 @@ for (const { task, budget, steps } of TASKS) {
     if (!resolved.actions.has(step.action)) {
       failures.push(
         `"${task}" step ${index + 1} claims a tap calling \`${step.action}\` on ${step.route} (${resolved.component}), and no interactive element there calls it — the flow changed, or the declaration is stale`,
+      );
+      continue;
+    }
+    // The element the browser harness will click has to be findable. Without this the two gates
+    // drift apart: the analyser stays green on a flow the harness cannot walk, which is the
+    // failure ADR-0109 exists to prevent.
+    if (!resolved.marked.has(step.action)) {
+      failures.push(
+        `"${task}" step ${index + 1} calls \`${step.action}\` on ${step.route} (${resolved.component}), but no element there carries \`data-step="${step.action}"\` — add it to the element with that handler, or the browser step gate cannot find the tap`,
       );
     }
   }
