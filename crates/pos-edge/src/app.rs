@@ -70,9 +70,15 @@ use crate::idgen::EdgeIdGenerator;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
 
-/// Which tenant, brand and store this edge is — the envelope context every event carries. Assigned
-/// at activation ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)); all three are identifiers,
-/// not PII.
+/// Which tenant, brand and store this edge is — the envelope context every event carries. All three
+/// are identifiers, not PII.
+///
+/// Only the store id is the box's own knowledge. The tenant and brand are
+/// [`UNASSIGNED`](Self::UNASSIGNED): a box has no way to learn them (activation hands it a device id
+/// and a credential, [ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)), and the cloud stamps
+/// both from its store registry as it ingests
+/// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)). This doc used to say
+/// activation supplied them; it never did.
 #[derive(Debug, Clone, Copy)]
 pub struct StoreIdentity {
     /// Owning tenant.
@@ -84,13 +90,27 @@ pub struct StoreIdentity {
 }
 
 impl StoreIdentity {
-    /// The identity for a store, with bootstrap tenant and brand ids until activation
-    /// ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)) supplies the real ones.
+    /// The tenant and brand a store puts on its own events: **neither**.
+    ///
+    /// The nil ULID, and deliberately so ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// A box does not know which tenant owns it and has no way to find out — activation hands it a
+    /// device id and a credential, not an org chart — so the honest value is one that reads as
+    /// "nobody". Until that ADR this was `ULID(1)`, which reads as a tenant that might exist, and
+    /// every store in the fleet stamped it: the column row-level isolation is defined on held one
+    /// constant, fleet-wide.
+    ///
+    /// The cloud overwrites both from its store registry as it ingests, so the *stored* log is
+    /// correct whatever a box asserts. This value is what the log holds only in a store's own SQLite,
+    /// where there is exactly one tenant and the question does not arise.
+    pub const UNASSIGNED: Ulid = Ulid::from_u128(0);
+
+    /// The identity for a store: its own id, and a tenant and brand it does not claim to know
+    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
     #[must_use]
     pub fn for_store(store_id: StoreId) -> Self {
         Self {
-            tenant_id: TenantId::new(Ulid::from_u128(1)),
-            brand_id: BrandId::new(Ulid::from_u128(1)),
+            tenant_id: TenantId::new(Self::UNASSIGNED),
+            brand_id: BrandId::new(Self::UNASSIGNED),
             store_id,
         }
     }

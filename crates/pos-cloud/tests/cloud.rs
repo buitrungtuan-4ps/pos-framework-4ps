@@ -88,20 +88,21 @@ use pos_cloud::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
-use pos_cloud::{Cloud, IngestOutcome, http};
+use pos_cloud::{Cloud, IngestOutcome, StoreOwner, StoreOwners, http};
 use pos_contract_tests::fixtures;
 use pos_core::activation::{ActivationCode, CodeStatus};
 use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
+use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
-    AreaId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId, StationId,
-    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
+    AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
+    StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
@@ -1272,6 +1273,91 @@ async fn text_body(response: axum::response::Response) -> String {
 }
 
 // --- The application spine, exercised directly (no HTTP) ----------------------------------------
+
+/// Reads a fake store's whole log back, for asserting on what was actually written.
+async fn read_back(store: &FakeStore) -> Vec<EventEnvelope<RawPayload>> {
+    let page = core::num::NonZeroU32::new(64).expect("positive");
+    EventStore::read(store, &EventQuery::first(store_id(), page))
+        .await
+        .expect("read back")
+}
+
+/// A registry that answers for one store and nothing else (ADR-0101).
+#[derive(Debug)]
+struct FakeOwners {
+    store: StoreId,
+    owner: StoreOwner,
+}
+
+impl StoreOwners for FakeOwners {
+    fn owner_of(
+        &self,
+        store_id: StoreId,
+    ) -> pos_ports::dynamic::BoxFuture<'_, Result<Option<StoreOwner>, PortError>> {
+        let answer = (store_id == self.store).then_some(self.owner);
+        Box::pin(async move { Ok(answer) })
+    }
+}
+
+#[tokio::test]
+async fn an_ingested_event_is_filed_under_the_registrys_tenant_not_the_one_it_claimed() {
+    // production-readiness S2 / ADR-0101. Every store in the fleet stamped `ULID(1)` for tenant and
+    // brand, so the column row-level isolation is defined on held one constant fleet-wide. The stamp
+    // is what makes it mean something.
+    let real_tenant = TenantId::new(Ulid::from_u128(0x7E_4A_47));
+    let real_brand = BrandId::new(Ulid::from_u128(0xB_4A_4D));
+    let cloud = Cloud::with_store_owners(
+        FakeStore::new(),
+        Arc::new(FakeOwners {
+            store: store_id(),
+            owner: StoreOwner {
+                tenant_id: real_tenant,
+                brand_id: real_brand,
+            },
+        }),
+    );
+
+    let events = fixtures::activations(store_id(), 1, 2);
+    assert_ne!(
+        events[0].tenant_id, real_tenant,
+        "the fixture claims something else, which is the point"
+    );
+
+    cloud.ingest(&events).await.expect("ingest");
+
+    let stored = read_back(cloud.store()).await;
+    assert_eq!(stored.len(), 2);
+    for event in &stored {
+        assert_eq!(event.tenant_id, real_tenant);
+        assert_eq!(event.brand_id, real_brand);
+    }
+}
+
+#[tokio::test]
+async fn an_event_from_a_store_the_registry_does_not_know_is_kept_rather_than_lost() {
+    // A provisioned store has a registry row by construction, so this is a diagnostic, not a path.
+    // Refusing would stall the fleet's ingest behind one lookup; dropping would turn a provisioning
+    // bug into lost trading history. It keeps its own claim, and the warning names the store.
+    let stranger = StoreId::new(Ulid::from_u128(0x5_7A_46));
+    let cloud = Cloud::with_store_owners(
+        FakeStore::new(),
+        Arc::new(FakeOwners {
+            store: stranger,
+            owner: StoreOwner {
+                tenant_id: TenantId::new(Ulid::from_u128(1)),
+                brand_id: BrandId::new(Ulid::from_u128(1)),
+            },
+        }),
+    );
+
+    let events = fixtures::activations(store_id(), 1, 1);
+    let claimed = events[0].tenant_id;
+    let outcome = cloud.ingest(&events).await.expect("ingest");
+
+    assert_eq!(outcome.appended, 1, "the event is stored, not dropped");
+    let stored = read_back(cloud.store()).await;
+    assert_eq!(stored.first().map(|event| event.tenant_id), Some(claimed));
+}
 
 #[tokio::test]
 async fn ingest_is_idempotent_by_event_id() {

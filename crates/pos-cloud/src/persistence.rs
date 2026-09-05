@@ -40,6 +40,7 @@ use store_postgres::{
 };
 
 use pos_ports::PortError;
+use pos_ports::dynamic::BoxFuture;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
@@ -78,6 +79,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
+use crate::cloud::{StoreOwner, StoreOwners};
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
@@ -1251,6 +1253,44 @@ fn pending_order(row: PendingOrderRow) -> Result<PendingOrder, PortError> {
     let payload: QueuedOrderPayload = serde_json::from_value(row.payload)
         .map_err(|error| PortError::internal(pos_ports::PortName::OrderIn, error.to_string()))?;
     Ok(PendingOrder { queued_id, payload })
+}
+
+impl StoreOwners for PostgresStoreDirectory {
+    /// Resolves the store's owner from the registry, for the stamp `Cloud::ingest` puts on every
+    /// event ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    ///
+    /// A stored id that will not parse is treated as **unknown**, not as a nil owner: filing a
+    /// store's events under a fabricated tenant is the failure this stamp exists to prevent, and the
+    /// batch keeps its own claim while the warning names the row.
+    fn owner_of(&self, store_id: StoreId) -> BoxFuture<'_, Result<Option<StoreOwner>, PortError>> {
+        Box::pin(async move {
+            let Some((tenant, brand)) =
+                PostgresStoreDirectory::owner_of(self, &store_id.to_string()).await?
+            else {
+                return Ok(None);
+            };
+            let Ok(tenant_id) = tenant.parse::<Ulid>().map(TenantId::new) else {
+                tracing::warn!(
+                    store = %store_id,
+                    "the registry's tenant id for this store is not a ULID"
+                );
+                return Ok(None);
+            };
+            // A store under no brand, and a brand id the registry cannot spell, both land on the nil
+            // id — "no brand", which is the truth in the first case and the safe reading in the
+            // second. Neither is a reason to refuse the tenant, which is the column that isolates.
+            let brand_id = brand
+                .and_then(|brand| brand.parse::<Ulid>().ok())
+                .map_or_else(
+                    pos_proto::ids::BrandId::default,
+                    pos_proto::ids::BrandId::new,
+                );
+            Ok(Some(StoreOwner {
+                tenant_id,
+                brand_id,
+            }))
+        })
+    }
 }
 
 impl StoreDirectory for PostgresStoreDirectory {

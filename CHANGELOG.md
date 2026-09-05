@@ -16,6 +16,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **The cloud stamps an ingested event's tenant; the store no longer claims one**
+  ([ADR-0101](docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**). Every
+  store in the fleet stamped `ULID(1)` as its tenant and brand on every event it published — the doc
+  comment said activation would supply the real ones, and activation hands a box a device id and a
+  credential, nothing else. So the column row-level tenant isolation is defined on held one constant
+  for the whole fleet.
+
+  `Cloud::ingest` now rewrites both from the store registry, at the single funnel the NATS cursor and
+  `POST /internal/ingest` both pass through. One lookup per distinct store in a batch. Idempotency is
+  untouched: the log's key is `(business_date, event_id)` and carries no tenant, so there is no
+  migration and no backfill.
+
+  Three things this closes that were not obvious. The `events` row-level policy was real but dormant,
+  and would have **inverted into a fleet-wide read** the moment the posture ADR-0016 describes was
+  switched on — a real tenant seeing none of its own events while anything holding `ULID(1)` saw
+  everyone's. Reconciliation filters on `tenant_id` and would have answered "I am missing all of
+  these" for ever once it had a caller. And `brand_id` was simply untrue in the log.
+
+  The edge keeps a placeholder, renamed to say what it is: `StoreIdentity::UNASSIGNED`, the nil ULID.
+  A nil id that reaches a report reads as "nobody", which is the truth; `ULID(1)` reads as a tenant
+  that might exist. Putting the real ids in `config.toml` was considered and rejected — it keeps the
+  trust where the problem is, and a mistyped ULID would file a store's whole history under the wrong
+  tenant with nothing in the system disagreeing.
+
+  **Not closed, and said so in the ADR:** the broker's subject and credential are fleet-wide, so a
+  caller holding them can still publish under another store's id — the stamp then files those events
+  under *that* store's real tenant. This narrows the claim from "any tenant" to "any store in the
+  fleet"; per-store mTLS ([ADR-0089](docs/adr/0089-edge-event-bus-transport.md)) is the path to
+  closing it.
+
 - **The console's security headers reach the console** (production-readiness **S3**). The
   `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` layer
   was applied inside one router while a comment beside it claimed the composed service carried the

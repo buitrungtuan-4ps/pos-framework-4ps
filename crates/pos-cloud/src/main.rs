@@ -71,7 +71,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
     // config routes author, and the webhook-endpoint store the `/admin` webhook routes register into.
-    let cloud = Cloud::new(store.clone());
+    // Stamped, not trusted: every ingested event's tenant and brand come from this registry lookup,
+    // overwriting what the publishing box claimed
+    // ([ADR-0101](../../docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**).
+    // The tenant is the column row-level isolation is defined on, and until this line every store in
+    // the fleet stamped the same constant.
+    let cloud = Cloud::with_store_owners(store.clone(), Arc::new(store.store_directory()));
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
     // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
