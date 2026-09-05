@@ -5,6 +5,7 @@
 
 use core::time::Duration;
 use std::sync::Arc;
+use std::num::NonZeroU16;
 
 use tokio::net::TcpListener;
 
@@ -385,6 +386,9 @@ where
 
     // Share the edge's fan-out with the /ws route so a committed change reaches every device, and
     // the loaded pairing state so `/api/pair` and the gates agree.
+    // Loaded before the configuration is handed to the application state, and logged there:
+    // an operator needs to know at start-up whether tonight's tickets can print (ADR-0102).
+    let fonts = load_fonts(&config);
     let state =
         AppState::with_fanout(config, edge.fanout().clone()).with_pairing(Arc::clone(&pairing));
 
@@ -404,7 +408,10 @@ where
     // routes run after a commit, not state a route reads: the application loop deliberately holds no
     // printer, and every composition that omits this — the fakes-backed example, a route test —
     // reports `NO_PRINTER`, which is the truth for it rather than a silent no-op.
-    let printers = Arc::new(crate::printing::Printers::tcp());
+    let printers = Arc::new(match fonts {
+        Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
+        None => crate::printing::Printers::tcp(),
+    });
     let mut app = crate::http::router(state)
         .merge(crate::http::domain_router(
             edge,
@@ -625,6 +632,66 @@ where
 /// provisioned before ADR-0055 Amendment 1 answers `None`, and so does the on-fakes example — both
 /// keep trading and simply do not self-update, which is why this is a detection rather than a
 /// refusal to start.
+/// Loads the store's printing fonts, and says at boot which scripts it can print.
+///
+/// A thermal printer's own character set does not reach Vietnamese, let alone Japanese or
+/// Devanagari, so anything past plain ASCII is drawn here and sent as a raster
+/// ([ADR-0102](../../../docs/adr/0102-printing-any-script.md)). Fonts are a deployment asset, so
+/// this can legitimately find nothing — a LAN-only demo box, or a store whose install step was
+/// missed. That is not fatal: the box trades, and prints what the printer's own font covers.
+///
+/// It is, however, logged loudly and precisely, because the failure it produces otherwise — a
+/// kitchen ticket that never comes out during service — is expensive and hard to trace back to a
+/// missing package.
+fn load_fonts(config: &EdgeConfig) -> Option<pos_render::TextRenderer> {
+    let mut library = pos_render::FontLibrary::new();
+    for directory in &config.font_directories {
+        match library.add_directory(directory) {
+            Ok(0) => tracing::debug!(directory = %directory.display(), "no fonts there"),
+            Ok(added) => {
+                tracing::debug!(directory = %directory.display(), added, "loaded fonts");
+            }
+            Err(error) => {
+                tracing::debug!(directory = %directory.display(), %error, "could not read");
+            }
+        }
+    }
+    if library.is_empty() {
+        tracing::warn!(
+            directories = ?config.font_directories,
+            "no printing fonts found: this store can print plain ASCII and will refuse any line \
+             outside it — install a font package (deploy/edge/README.md) or set font_directories"
+        );
+        return None;
+    }
+
+    let printable: Vec<&str> = library
+        .coverage()
+        .iter()
+        .filter(|script| script.covered)
+        .map(|script| script.script)
+        .collect();
+    let missing: Vec<&str> = library
+        .coverage()
+        .iter()
+        .filter(|script| !script.covered)
+        .map(|script| script.script)
+        .collect();
+    // The one line an operator needs to see to know whether tonight's tickets will print.
+    tracing::info!(
+        faces = library.len(),
+        can_print = ?printable,
+        cannot_print = ?missing,
+        "printing fonts loaded"
+    );
+
+    let size = NonZeroU16::new(config.font_size_dots).unwrap_or(
+        // A zero or absurd size would render nothing at all; 24 dots is the documented default.
+        NonZeroU16::new(24).unwrap_or(NonZeroU16::MIN),
+    );
+    Some(pos_render::TextRenderer::new(library, size))
+}
+
 fn ota_installer(config: &EdgeConfig) -> Option<SystemdInstaller> {
     let installer = SystemdInstaller::new(
         crate::installer::binary_directory(&config.store_path),

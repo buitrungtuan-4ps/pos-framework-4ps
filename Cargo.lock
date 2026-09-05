@@ -1693,6 +1693,7 @@ dependencies = [
  "pos-fakes",
  "pos-ports",
  "pos-proto",
+ "pos-render",
  "printer-escpos",
  "rust-embed",
  "serde",

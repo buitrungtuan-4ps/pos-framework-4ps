@@ -57,6 +57,7 @@ key-vault-keyring = { path = "../adapters/key-vault-keyring" }
 # which is precisely why nothing printed. Its TCP transport is the network case; USB and serial land
 # with hardware bring-up (`docs/gate-register.md` §6).
 printer-escpos = { path = "../adapters/printer-escpos" }
+pos-render     = { path = "../pos-render" }
 
 # The `Signer` the OTA loop verifies an artifact with (ADR-0047, roadmap R5-d). A workspace path
 # crate whose own subtree (ed25519-dalek, blake2) is already in the lock through the adapter's own

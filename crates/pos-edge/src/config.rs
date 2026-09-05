@@ -68,6 +68,53 @@ pub struct EdgeConfig {
     /// between its own two requests.
     #[serde(default = "default_sign_in_idle_timeout_minutes")]
     pub sign_in_idle_timeout_minutes: u64,
+    /// Where to load printing fonts from
+    /// ([ADR-0102](../../../docs/adr/0102-printing-any-script.md)).
+    ///
+    /// A thermal printer's firmware carries a few hundred glyphs, which is not Vietnamese and is
+    /// nowhere near Japanese or Devanagari, so anything outside plain ASCII is drawn by this box and
+    /// sent as a raster. That needs fonts, and fonts are a deployment asset rather than framework
+    /// code — a framework that embedded one would ship every store several megabytes it will not
+    /// print and still not cover the next country.
+    ///
+    /// Every `.ttf`, `.otf` and `.ttc` directly inside each directory is loaded, directories in the
+    /// order given and files within one in filename order. That order is the fallback order: put the
+    /// face for ordinary Latin text first. Defaults to the standard system font directories for the
+    /// platform, which is where the packages `deploy/edge/README.md` names install to.
+    ///
+    /// A box that loads no font still trades and still prints ASCII; it refuses the lines it cannot
+    /// draw, and says which scripts it can print at start-up.
+    #[serde(default = "default_font_directories")]
+    pub font_directories: Vec<PathBuf>,
+    /// How tall printed text is, in printer dots per em. Defaults to 24, which is a comfortable
+    /// receipt body at the 203 dpi every common thermal printer runs at.
+    ///
+    /// Only applies to rasterised lines. A line the printer's own character set covers is still sent
+    /// as text and drawn in the firmware's font, which this does not change.
+    #[serde(default = "default_font_size_dots")]
+    pub font_size_dots: u16,
+}
+
+/// The standard font directories for this platform.
+///
+/// Not a guess at one distribution's layout: each entry is where that platform's own font packages
+/// install to, so a box that ran the install step in `deploy/edge/README.md` is already covered and
+/// `font_directories` only has to be set for a font kept somewhere else.
+fn default_font_directories() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![PathBuf::from(r"C:\Windows\Fonts")]
+    } else {
+        vec![
+            PathBuf::from("/usr/share/fonts/truetype"),
+            PathBuf::from("/usr/share/fonts/opentype"),
+            PathBuf::from("/usr/local/share/fonts"),
+        ]
+    }
+}
+
+/// Printer dots per em for rasterised text.
+const fn default_font_size_dots() -> u16 {
+    24
 }
 
 /// Thirty minutes, as [`crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT`].
@@ -109,6 +156,8 @@ impl EdgeConfig {
             store_path: default_store_path(),
             nats: None,
             sign_in_idle_timeout_minutes: default_sign_in_idle_timeout_minutes(),
+            font_directories: default_font_directories(),
+            font_size_dots: default_font_size_dots(),
         }
     }
 

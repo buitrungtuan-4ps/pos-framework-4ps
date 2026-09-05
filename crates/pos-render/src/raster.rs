@@ -10,9 +10,10 @@
 //! targets and optimisation levels, and a rounding difference at a coverage threshold flips a pixel,
 //! which changes the raster, which changes the bytes on the wire. So every coordinate here is a
 //! fixed-point integer in units of 1/[`SUBPIXEL`] of a pixel, every curve is flattened by exact
-//! integer arithmetic, and coverage is counted rather than measured. The workspace bans `f32` and
-//! `f64` outright (`clippy.toml`) for the neighbouring reason — money is an integer — and this
-//! module needs no exemption from it.
+//! integer arithmetic, and coverage is counted rather than measured. No float is named in this
+//! module at all: the crate's `clippy.toml` lifts the workspace ban on the *type* only for the font
+//! parser's outline callback in [`crate::text`], and `clippy::float_arithmetic` stays denied
+//! everywhere, so no float can be computed with anywhere in this crate.
 //!
 //! # The algorithm
 //!
@@ -139,11 +140,6 @@ impl Canvas {
         }
     }
 
-    /// Whether anything has been drawn.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.edges.is_empty()
-    }
-
     /// Adds a straight edge. Horizontal edges are dropped: they cross no sample line, and keeping
     /// them would only add work.
     pub(crate) fn line(&mut self, from: Point, to: Point) {
@@ -228,7 +224,7 @@ impl Canvas {
         let mut crossings: Vec<(i32, i32)> = Vec::new();
 
         for row in 0..self.height {
-            coverage.iter_mut().for_each(|cell| *cell = 0);
+            coverage.fill(0);
             let row_top = i32::try_from(row).unwrap_or(i32::MAX).saturating_mul(SUBPIXEL);
             for sample in 0..SAMPLES_PER_ROW {
                 // The centre of the sample band, so a shape exactly filling the row is fully inked
@@ -331,16 +327,15 @@ fn add_span(coverage: &mut [u32], from: i32, to: i32) {
     if to <= from {
         return;
     }
-    let first = (from / SUBPIXEL) as usize;
-    let last = ((to - 1) / SUBPIXEL) as usize;
+    // Both are non-negative: `from` was clamped to zero above and `to` is greater than it.
+    let first = usize::try_from(from / SUBPIXEL).unwrap_or(0);
+    let last = usize::try_from((to - 1) / SUBPIXEL).unwrap_or(0);
     for pixel in first..=last {
         let left = i32::try_from(pixel).unwrap_or(i32::MAX).saturating_mul(SUBPIXEL);
         let right = left.saturating_add(SUBPIXEL);
         let overlap = to.min(right) - from.max(left);
-        if overlap > 0 {
-            if let Some(cell) = coverage.get_mut(pixel) {
-                *cell = cell.saturating_add(overlap.unsigned_abs());
-            }
+        if let Some(cell) = coverage.get_mut(pixel).filter(|_| overlap > 0) {
+            *cell = cell.saturating_add(overlap.unsigned_abs());
         }
     }
 }

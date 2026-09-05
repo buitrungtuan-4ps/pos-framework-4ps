@@ -185,7 +185,7 @@ impl FontLibrary {
         let name = path
             .file_name()
             .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
-        let added = self.add_bytes(&name, data);
+        let added = self.add_bytes(&name, &data);
         if added == 0 {
             return Err(LoadError::NotAFont {
                 path: path.to_path_buf(),
@@ -196,11 +196,11 @@ impl FontLibrary {
 
     /// Loads every face in an in-memory font file. Returns how many were added, which is zero when
     /// the bytes are not a font.
-    pub fn add_bytes(&mut self, name: &str, data: Vec<u8>) -> usize {
-        let count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+    pub fn add_bytes(&mut self, name: &str, data: &[u8]) -> usize {
+        let count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
         let mut added = 0;
         for index in 0..count {
-            let Ok(face) = ttf_parser::Face::parse(&data, index) else {
+            let Ok(face) = ttf_parser::Face::parse(data, index) else {
                 continue;
             };
             // A face with no outlines is a bitmap-only or metrics-only file; it can report coverage
@@ -214,7 +214,7 @@ impl FontLibrary {
                 } else {
                     name.to_owned()
                 },
-                data: data.clone(),
+                data: data.to_vec(),
                 index,
                 units_per_em: face.units_per_em(),
                 ascender: face.ascender(),
@@ -227,39 +227,38 @@ impl FontLibrary {
         added
     }
 
-    /// Loads every font file directly inside `directory`, in filename order so that a library built
-    /// twice from the same directory has the same fallback order.
+    /// Loads every font file under `directory`, including its subdirectories.
+    ///
+    /// Recursive because that is how font packages install: on Linux the `DejaVu` package writes to
+    /// `/usr/share/fonts/truetype/dejavu/`, so a scan of `/usr/share/fonts/truetype` alone would
+    /// find nothing and a store would silently have no fonts. Paths are visited in sorted order, so
+    /// a library built twice from the same tree has the same fallback order.
     ///
     /// A file that is not a font is skipped rather than failing the load: font directories collect
     /// `README`s and licence files. Returns how many faces were added.
     ///
     /// # Errors
     ///
-    /// [`LoadError::Unreadable`] if the directory itself cannot be listed.
+    /// [`LoadError::Unreadable`] if the directory itself cannot be listed. A subdirectory that
+    /// cannot be listed is skipped — one unreadable corner of `/usr/share/fonts` should not stop a
+    /// store printing.
     pub fn add_directory(&mut self, directory: &Path) -> Result<usize, LoadError> {
-        let listing = std::fs::read_dir(directory).map_err(|source| LoadError::Unreadable {
-            path: directory.to_path_buf(),
-            source,
+        let mut files = Vec::new();
+        collect_fonts(directory, MAX_FONT_DEPTH, &mut files).map_err(|source| {
+            LoadError::Unreadable {
+                path: directory.to_path_buf(),
+                source,
+            }
         })?;
-        let mut paths: Vec<PathBuf> = listing
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension().is_some_and(|extension| {
-                    let extension = extension.to_ascii_lowercase();
-                    extension == "ttf" || extension == "otf" || extension == "ttc"
-                })
-            })
-            .collect();
-        paths.sort();
+        files.sort();
 
         let mut added = 0;
-        for path in paths {
+        for path in files {
             if let Ok(data) = std::fs::read(&path) {
                 let name = path
                     .file_name()
                     .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
-                added += self.add_bytes(&name, data);
+                added += self.add_bytes(&name, &data);
             }
         }
         Ok(added)
@@ -313,12 +312,6 @@ impl FontLibrary {
     pub(crate) fn face(&self, index: usize) -> Option<&LoadedFace> {
         self.faces.get(index)
     }
-
-    /// The face to fall back to when nothing covers a character: the first one, whose `.notdef`
-    /// glyph is the standard "this font has no such character" box.
-    pub(crate) fn first(&self) -> Option<&LoadedFace> {
-        self.faces.first()
-    }
 }
 
 /// Whether one named script can be printed.
@@ -344,6 +337,38 @@ const PROBES: [(&str, &str); 8] = [
     ("Thai", "อาหาร"),
     ("Arabic", "طعام"),
 ];
+
+/// How deep to walk a font directory. Deep enough for every packaging layout in use, shallow enough
+/// that a symlink loop or a misconfigured path cannot walk a whole filesystem at boot.
+const MAX_FONT_DEPTH: u8 = 8;
+
+/// Collects font files under `directory`, depth-first.
+fn collect_fonts(
+    directory: &Path,
+    depth: u8,
+    into: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    if depth == 0 {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(directory)? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        // `file_type` rather than `metadata`: it does not follow symlinks, so a link pointing back
+        // up the tree is seen as a link and not descended into.
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            // A subdirectory that cannot be read is skipped, not fatal.
+            let _ = collect_fonts(&path, depth.saturating_sub(1), into);
+        } else if path.extension().is_some_and(|extension| {
+            let extension = extension.to_ascii_lowercase();
+            extension == "ttf" || extension == "otf" || extension == "ttc"
+        }) {
+            into.push(path);
+        }
+    }
+    Ok(())
+}
 
 /// The codepoints a face has a real glyph for, as sorted inclusive ranges.
 ///
@@ -408,7 +433,7 @@ mod tests {
     #[test]
     fn bytes_that_are_not_a_font_add_no_faces() {
         let mut library = FontLibrary::new();
-        assert_eq!(library.add_bytes("notes.txt", b"not a font".to_vec()), 0);
+        assert_eq!(library.add_bytes("notes.txt", b"not a font"), 0);
         assert!(library.is_empty());
     }
 

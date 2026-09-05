@@ -195,12 +195,12 @@ impl TextRenderer {
             // Script, direction and language from the text itself. This is what selects the Indic
             // or Arabic shaper rather than the default one.
             buffer.guess_segment_properties();
-            let shaped = rustybuzz::shape(&shaper, &[], buffer);
+            let glyphs = rustybuzz::shape(&shaper, &[], buffer);
 
             let upem = i64::from(face.units_per_em());
             let scale = i64::from(size).saturating_mul(i64::from(SUBPIXEL));
-            let infos = shaped.glyph_infos();
-            let positions = shaped.glyph_positions();
+            let infos = glyphs.glyph_infos();
+            let positions = glyphs.glyph_positions();
             for (info, position) in infos.iter().zip(positions.iter()) {
                 // A cluster indexes the run's bytes; a run that shaped to fewer glyphs than
                 // characters (a conjunct) still points every glyph at a real character.
@@ -409,10 +409,10 @@ impl OutlineSink<'_> {
     /// Closes a contour the font left open. A well-formed glyph closes its own, but the fill rule
     /// needs closed contours and an unclosed one would leak ink across the row.
     fn close_open_contour(&mut self) {
-        if let (Some(start), Some(current)) = (self.start, self.current) {
-            if start != current {
-                self.canvas.line(current, start);
-            }
+        if let (Some(start), Some(current)) = (self.start, self.current)
+            && start != current
+        {
+            self.canvas.line(current, start);
         }
         self.start = None;
         self.current = None;
@@ -492,7 +492,7 @@ mod tests {
     /// The 80 mm paper almost every counter printer uses, at 203 dpi.
     const EIGHTY_MM: u16 = 576;
 
-    fn renderer() -> Option<TextRenderer> {
+    fn on_dejavu() -> Option<TextRenderer> {
         let path = Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
         if !path.exists() {
             return None;
@@ -507,15 +507,15 @@ mod tests {
         bitmap
             .bits()
             .iter()
-            .map(|byte| u32::from(byte.count_ones()))
+            .map(|byte| byte.count_ones())
             .sum()
     }
 
     #[test]
     fn a_renderer_with_no_fonts_says_so_rather_than_printing_nothing() {
-        let renderer = TextRenderer::new(FontLibrary::new(), dots(24));
+        let bare = TextRenderer::new(FontLibrary::new(), dots(24));
         assert_eq!(
-            renderer.render("Total", TextStyle::default(), dots(EIGHTY_MM)),
+            bare.render("Total", TextStyle::default(), dots(EIGHTY_MM)),
             Err(RenderError::NoFonts)
         );
     }
@@ -523,20 +523,20 @@ mod tests {
     #[test]
     fn vietnamese_renders() {
         // The line that could not be printed before this crate existed.
-        let Some(renderer) = renderer() else { return };
-        let rendered = renderer
+        let Some(renderer) = on_dejavu() else { return };
+        let line = renderer
             .render("Phở bò tái nạm", TextStyle::default(), dots(EIGHTY_MM))
             .expect("a line with fonts loaded");
-        assert!(rendered.substituted.is_empty(), "every character has a glyph");
-        assert!(!rendered.bitmap.is_blank(), "something should be inked");
-        assert_eq!(rendered.bitmap.width().get(), EIGHTY_MM);
+        assert!(line.substituted.is_empty(), "every character has a glyph");
+        assert!(!line.bitmap.is_blank(), "something should be inked");
+        assert_eq!(line.bitmap.width().get(), EIGHTY_MM);
     }
 
     #[test]
     fn a_tone_mark_puts_more_ink_on_the_page_than_the_bare_vowel() {
         // The diacritics are the whole point: if shaping dropped them, "Phơ" and "Phở" would be the
         // same picture, and the kitchen would read the wrong dish.
-        let Some(renderer) = renderer() else { return };
+        let Some(renderer) = on_dejavu() else { return };
         let plain = renderer
             .render("Pho", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
@@ -551,20 +551,20 @@ mod tests {
 
     #[test]
     fn a_character_no_face_covers_is_substituted_and_reported_rather_than_failing() {
-        let Some(renderer) = renderer() else { return };
-        let rendered = renderer
+        let Some(renderer) = on_dejavu() else { return };
+        let line = renderer
             .render("Sushi 寿司", TextStyle::default(), dots(EIGHTY_MM))
             .expect("the line still renders");
-        assert_eq!(rendered.substituted, vec!['寿', '司']);
+        assert_eq!(line.substituted, vec!['寿', '司']);
         assert!(
-            !rendered.bitmap.is_blank(),
+            !line.bitmap.is_blank(),
             "the Latin part must still print — a ticket with a box beats no ticket"
         );
     }
 
     #[test]
     fn a_long_line_wraps_instead_of_losing_its_end() {
-        let Some(renderer) = renderer() else { return };
+        let Some(renderer) = on_dejavu() else { return };
         let short = renderer
             .render("Pizza", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn double_size_is_taller_and_emphasis_is_heavier() {
-        let Some(renderer) = renderer() else { return };
+        let Some(renderer) = on_dejavu() else { return };
         let plain = renderer
             .render("TOTAL", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn centring_moves_the_ink_rather_than_changing_it() {
-        let Some(renderer) = renderer() else { return };
+        let Some(renderer) = on_dejavu() else { return };
         let left = renderer
             .render("4P's", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn the_same_line_renders_to_the_same_bytes_every_time() {
         // ADR-0102's determinism claim, as a test rather than a hope.
-        let Some(renderer) = renderer() else { return };
+        let Some(renderer) = on_dejavu() else { return };
         let once = renderer
             .render("Bún chả Hà Nội", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
@@ -667,11 +667,11 @@ mod tests {
 
     #[test]
     fn an_empty_line_is_a_blank_row_rather_than_an_error() {
-        let Some(renderer) = renderer() else { return };
-        let rendered = renderer
+        let Some(renderer) = on_dejavu() else { return };
+        let line = renderer
             .render("", TextStyle::default(), dots(EIGHTY_MM))
             .expect("renders");
-        assert!(rendered.bitmap.is_blank());
-        assert!(rendered.bitmap.height() > 0, "still occupies a row");
+        assert!(line.bitmap.is_blank());
+        assert!(line.bitmap.height() > 0, "still occupies a row");
     }
 }
