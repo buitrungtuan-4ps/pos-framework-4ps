@@ -125,3 +125,33 @@ already written to expect.
 stays where *Deliberately deferred* left it — `UpdateInstaller` has no production implementation (the
 ADR-0055 hardware gate) and `POST /internal/ota/artifact` does not exist. This amendment only makes it
 possible for the loop to be truthful when it lands.
+
+**Amendment 2 (2026-09-05) — a report no longer carries a tenant, because nothing ever read it.**
+`UpdateReport.tenant` is **removed**. The struct now carries `store`, `installed` and
+`self_test_passed`, and nothing else.
+
+The field was correct when Slice 1 wrote it and was made dead by
+[ADR-0097](0097-internal-route-authentication.md), which moved reporting from
+`POST /internal/ota/report` — an unauthenticated route that read `tenant_id` out of the **body**, which
+is precisely what made a report un-attributable — to `POST /sync/stores/{store_id}/report`, where the
+cloud takes the tenant from the scoped API key and the store from the path. Since that move,
+`cloud-sync-http`'s request body has not serialised the field at all.
+
+What made this worth closing rather than tolerating is what the edge had to do to satisfy the type.
+`pos_edge::ota_client` grew a helper, `unsent_tenant()`, returning a nil ULID with a comment
+explaining that whatever it returns never leaves the box. That is a field a caller must fill in with a
+value it knows to be meaningless — the shape that teaches the next reader the tenant is a real input
+and invites somebody to start trusting it. A self-reported tenant is exactly the claim ADR-0097 exists
+to refuse; leaving the field in the port kept a door propped open for it.
+
+**Why remove rather than deprecate.** `docs/naming-and-api.md` §11's additive-only rule governs the
+**wire**, and this field is not on the wire — it is a Rust struct member that every implementation
+sets and none transmits. Removing it changes no bytes and no `PROTOCOL_VERSION`; it is a compile-time
+change inside the workspace, and the compiler finds every site.
+
+**The legacy route stays, for now.** `POST /internal/ota/report` still exists in `pos-cloud` behind
+ADR-0097's shared secret, still parses `tenant_id` from its body, and is what `docs/openapi.json`
+documents. No edge in this tree calls it — the shipped loop uses `/sync` — so it is a compatibility
+surface for an older edge rather than a live path. Retiring it is a route removal with its own
+deprecation window and is **not** in this amendment's scope; it is recorded here so the next reader
+knows the two paths disagree about tenancy on purpose, and which one is authoritative.

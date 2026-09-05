@@ -42,9 +42,8 @@ use pos_core::lease::LeaseStanding;
 use pos_core::ota::SelfTest;
 use pos_ports::cloud_sync::{CloudSync, UpdateReport};
 use pos_ports::signer::Signer;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::StoreId;
 use pos_proto::text::ReleaseTag;
-use pos_proto::ulid::Ulid;
 
 use crate::app::Edge;
 use crate::ota::{InstallError, OtaUpdater, UpdateInstaller, UpdateOutcome, UpdatePlan};
@@ -57,21 +56,6 @@ use crate::ota_state::{OtaStateAuthority, device_state};
 /// the config loop refreshed anyway, so a faster cadence buys nothing and a store that has just been
 /// added to a ring is not waiting on a deadline.
 pub const OTA_POLL_INTERVAL: Duration = Duration::from_secs(600);
-
-/// The tenant an [`UpdateReport`] carries from the edge, which the wire does not transmit.
-///
-/// `UpdateReport.tenant` predates [ADR-0097](../../../docs/adr/0097-internal-route-authentication.md):
-/// the old `/internal/ota/report` route read the tenant out of the body, which is exactly what made
-/// a report un-attributable. On `POST /sync/stores/{store_id}/report` the cloud takes the tenant
-/// from the scoped key and the store from the path, and `cloud-sync-http`'s request body does not
-/// serialise this field at all — so whatever is put here never leaves the box.
-///
-/// A nil ULID rather than an invented one, so that anybody who does find this value somewhere can
-/// see at a glance that it is not a claim about a tenant. Deleting the field is a `pos-ports` change
-/// and therefore ADR-first; it is flagged, not done here.
-fn unsent_tenant() -> TenantId {
-    TenantId::new(Ulid::from_u128(0))
-}
 
 /// How the loop asks the process to end so the service manager restarts it into the binary that is
 /// now on disk.
@@ -343,7 +327,6 @@ where
             // come up, the boot marker reverts the box and `confirm_boot` reports the correction —
             // so an optimistic report here is self-healing rather than sticky.
             UpdateOutcome::Installed { version } => UpdateReport {
-                tenant: unsent_tenant(),
                 store: self.store_id,
                 installed: ReleaseTag::new(version.to_string()),
                 self_test_passed: Some(true),
@@ -351,7 +334,6 @@ where
             // A rollback reverted the symlink, so the version still running is this binary's own —
             // and it stays that way until the restart takes effect.
             UpdateOutcome::RolledBack => UpdateReport {
-                tenant: unsent_tenant(),
                 store: self.store_id,
                 installed: crate::version::tag(),
                 self_test_passed: Some(false),
@@ -455,7 +437,6 @@ pub async fn confirm_boot<C, A, B>(
         }
     };
     let report = UpdateReport {
-        tenant: unsent_tenant(),
         store: store_id,
         installed: crate::version::tag(),
         self_test_passed,
@@ -467,7 +448,7 @@ pub async fn confirm_boot<C, A, B>(
 
 #[cfg(test)]
 mod tests {
-    use super::{OTA_POLL_INTERVAL, RestartRequest, TickOutcome, unsent_tenant};
+    use super::{OTA_POLL_INTERVAL, RestartRequest, TickOutcome};
     use core::time::Duration;
 
     #[derive(Debug, Default)]
@@ -543,15 +524,6 @@ mod tests {
             counting.asked.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "the loop takes its requester by value, so it must work behind an Arc"
-        );
-    }
-
-    #[test]
-    fn the_tenant_a_report_carries_is_nil_because_the_wire_derives_it_from_the_key() {
-        assert_eq!(
-            unsent_tenant().to_string(),
-            pos_proto::ulid::Ulid::from_u128(0).to_string(),
-            "a nil id, so it reads as 'not a claim' rather than as a wrong tenant"
         );
     }
 

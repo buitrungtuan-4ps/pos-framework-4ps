@@ -14,6 +14,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Removed
+
+- **A store's update report no longer carries a tenant it was never entitled to claim**
+  ([ADR-0078](docs/adr/0078-sync-and-ota-closure.md) Amendment 2). `UpdateReport.tenant` is gone; the
+  struct now names the **store** and stops there.
+
+  The field was correct when it was written and was made dead by
+  [ADR-0097](docs/adr/0097-internal-route-authentication.md), which moved reporting from
+  `POST /internal/ota/report` — a route that read `tenant_id` out of the request **body**, which is
+  exactly what made a report un-attributable — to `POST /sync/stores/{store_id}/report`, where the
+  cloud takes the tenant from the scoped API key and the store from the path. The HTTP adapter has
+  not serialised the field since.
+
+  What made it worth closing rather than tolerating: to satisfy the type, the edge had grown
+  `unsent_tenant()`, a helper returning a nil ULID with a comment explaining that whatever it returns
+  never leaves the box. A field every caller must fill in with a value it knows is meaningless is an
+  invitation for somebody to start believing it — and a self-reported tenant is the claim ADR-0097
+  exists to refuse.
+
+  **Upgrade note.** No `PROTOCOL_VERSION` bump and no wire change: this field was never transmitted,
+  so no bytes move. It is a compile-time change inside the workspace — a fork carrying its own
+  `CloudSync` implementation drops one struct field, and the compiler finds every site. The legacy
+  `POST /internal/ota/report` route is deliberately **unchanged**: it still exists behind ADR-0097's
+  shared secret and still reads `tenant_id` from its body, as a compatibility surface for an older
+  edge. Retiring it is a route removal with its own deprecation window, recorded in the amendment as
+  out of scope.
+
 ### Added
 
 - **The buyer on a B2B tax invoice, and the twentieth port to keep them in**

@@ -26,7 +26,7 @@ use core::future::Future;
 use cloud_sync_http::{HttpCloudSync, HttpResponse, HttpTransport, TransportError};
 use pos_contract_tests::harness::{CloudSyncHarness, Setup};
 use pos_ports::{Signature, UpdateReport};
-use pos_proto::ids::{DeviceId, StoreId, TenantId};
+use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
 
@@ -237,7 +237,6 @@ impl CloudSyncHarness for HttpHarness {
 
     fn sample_report(&self) -> UpdateReport {
         UpdateReport {
-            tenant: TenantId::new(Ulid::from_u128(0x7E5A)),
             store: reporting_store(),
             installed: ReleaseTag::new(KNOWN_RELEASE),
             self_test_passed: Some(true),
