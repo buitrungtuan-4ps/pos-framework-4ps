@@ -27,6 +27,11 @@ pub struct DeviceProposalRow {
     pub name: String,
     /// The device's network address.
     pub address: String,
+    /// `usb`, `network` or `serial` — recorded at approval, `None` while pending.
+    pub connection: Option<String>,
+    /// The kitchen station this device serves — recorded at approval, `None` for the counter's
+    /// receipt printer and while pending.
+    pub station_id: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
 }
@@ -84,7 +89,8 @@ impl PostgresDeviceProposals {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT id, store_id, kind, name, address, status FROM device_proposals \
+                "SELECT id, store_id, kind, name, address, connection, station_id, status \
+                 FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
                 &[&tenant_id, &store_id, &status],
@@ -99,25 +105,39 @@ impl PostgresDeviceProposals {
                 kind: row.get(2),
                 name: row.get(3),
                 address: row.get(4),
-                status: row.get(5),
+                connection: row.get(5),
+                station_id: row.get(6),
+                status: row.get(7),
             })
             .collect())
     }
 
     /// Moves a **pending** proposal to `status` (`approved`/`rejected`) within `tenant_id`, stamping
-    /// `resolved_at`. Returns whether a pending row was found and changed — so resolving an
+    /// `resolved_at` and the two facts approval carries: how the device is attached, and the station
+    /// it serves (ADR-0100). Returns whether a pending row was found and changed — so resolving an
     /// already-resolved or unknown id changes nothing.
+    ///
+    /// A rejection passes `None` for both, and they stay null: they describe a device the store will
+    /// address, and a rejected one never will.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
-    pub async fn mark(&self, tenant_id: &str, id: &str, status: &str) -> Result<bool, PortError> {
+    pub async fn mark(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        status: &str,
+        connection_kind: Option<&str>,
+        station_id: Option<&str>,
+    ) -> Result<bool, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let changed = connection
             .execute(
-                "UPDATE device_proposals SET status = $3, resolved_at = now() \
+                "UPDATE device_proposals \
+                 SET status = $3, resolved_at = now(), connection = $4, station_id = $5 \
                  WHERE tenant_id = $1 AND id = $2 AND status = 'pending'",
-                &[&tenant_id, &id, &status],
+                &[&tenant_id, &id, &status, &connection_kind, &station_id],
             )
             .await
             .map_err(unavailable)?;

@@ -53,6 +53,40 @@ wire_enum! {
     Serial = "SERIAL",
 }
 
+impl DeviceConnection {
+    /// The short, lowercase spelling used in the console and in the cloud's `device_proposals`
+    /// column — `usb`, `network`, `serial`.
+    ///
+    /// Distinct from [`crate::wire_enum::WireEnum::as_wire`], which produces the prefixed token the
+    /// *config node* carries (`DEVICE_CONNECTION_USB`). Two spellings because they answer to two
+    /// different rules: the node's is forward-compatible and prefixed so an older store can retain a
+    /// token it does not know, while a database column and a `<select>` want the plain word. The
+    /// mapping lives here, once, rather than in whichever layer needed it first.
+    #[must_use]
+    pub const fn short_name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Usb => "usb",
+            Self::Network => "network",
+            Self::Serial => "serial",
+        }
+    }
+
+    /// Parses a short name, or `None` for one this build does not know.
+    ///
+    /// `unspecified` deliberately does not parse: it is the wire's degradation value, never a thing
+    /// an operator picks or a column should hold.
+    #[must_use]
+    pub fn from_short_name(name: &str) -> Option<Self> {
+        match name {
+            "usb" => Some(Self::Usb),
+            "network" => Some(Self::Network),
+            "serial" => Some(Self::Serial),
+            _ => None,
+        }
+    }
+}
+
 /// One approved device the store may address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +159,25 @@ mod tests {
             name: DisplayName::new("Counter"),
             station_id: station,
         }
+    }
+
+    #[test]
+    fn the_two_spellings_of_a_connection_agree_and_unspecified_does_not_parse() {
+        for connection in [
+            DeviceConnection::Usb,
+            DeviceConnection::Network,
+            DeviceConnection::Serial,
+        ] {
+            assert_eq!(
+                DeviceConnection::from_short_name(connection.short_name()),
+                Some(connection)
+            );
+        }
+        assert_eq!(
+            DeviceConnection::from_short_name("unspecified"),
+            None,
+            "the wire's degradation value is not something an operator picks"
+        );
     }
 
     #[test]

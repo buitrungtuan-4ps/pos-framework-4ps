@@ -16,6 +16,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Approving a device now records how it is attached and which kitchen it serves**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2** slice 2a).
+  A proposal carries only what a box can *discover* on its LAN — kind, name, address. It cannot
+  discover that the printer at the counter is on USB with a cash drawer under it, or that the one at
+  `192.168.1.50` belongs to the oven. Both facts decide behaviour, so approval is where a human
+  states them, which is what approval was for.
+
+  `POST /admin/devices/proposals/{id}/approve` now takes `connection` (required: `usb`, `network` or
+  `serial`) and an optional `station_id`; an approval without a connection is a `400` naming the
+  field rather than a guess. The guess would have to be `network` — safe, since a network device
+  never opens a drawer, and silently wrong for the store whose receipt printer is on USB. Absent
+  `station_id` means the counter's receipt printer, which serves the bill rather than a station.
+
+  The console's Devices screen asks at the point of approval, offering the *proposing store's*
+  stations by name rather than a ULID. A rejection carries neither fact: they describe a device the
+  store will address, and a rejected one never will.
+
 - **The `devices` config node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
   production-readiness **C2** slice 1). The vocabulary a store needs to address a printer: for each
   approved device, its id, kind, connection, address, name, and the kitchen station it serves (absent

@@ -41,6 +41,7 @@ use store_postgres::{
 
 use pos_ports::PortError;
 use pos_proto::campaign::PublishedCampaign;
+use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
@@ -1063,6 +1064,8 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 kind: row.kind,
                 name: row.name,
                 address: row.address,
+                connection: row.connection,
+                station_id: row.station_id,
                 status: row.status,
             })
             .collect())
@@ -1073,15 +1076,24 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         tenant: TenantId,
         id: DeviceProposalId,
         approved: bool,
+        connection: Option<DeviceConnection>,
+        station: Option<StationId>,
     ) -> Result<bool, DeviceProposalError> {
         let status = if approved {
             DeviceProposalStatus::Approved
         } else {
             DeviceProposalStatus::Rejected
         };
-        self.mark(&tenant.to_string(), &id.to_string(), status.as_wire())
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))
+        let station = station.map(|id| id.to_string());
+        self.mark(
+            &tenant.to_string(),
+            &id.to_string(),
+            status.as_wire(),
+            connection.map(DeviceConnection::as_wire),
+            station.as_deref(),
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))
     }
 }
 

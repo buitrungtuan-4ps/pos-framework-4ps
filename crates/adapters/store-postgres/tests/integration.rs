@@ -4949,10 +4949,11 @@ mod device_proposals {
                 .expect("tenant pending");
             assert_eq!(all_pending.len(), 3, "the whole tenant's queue");
 
-            // Approve one; it leaves the pending list and joins the approved one.
+            // Approve one; it leaves the pending list and joins the approved one, carrying the two
+            // facts approval adds (ADR-0100).
             assert!(
                 devices
-                    .mark(TENANT_A, "DEV1", "approved")
+                    .mark(TENANT_A, "DEV1", "approved", Some("usb"), None)
                     .await
                     .expect("approve"),
                 "a pending proposal is resolved"
@@ -4962,7 +4963,17 @@ mod device_proposals {
                 .await
                 .expect("store-1 approved");
             assert_eq!(approved.len(), 1);
-            assert_eq!(approved.first().expect("one row").id, "DEV1");
+            let row = approved.first().expect("one row");
+            assert_eq!(row.id, "DEV1");
+            assert_eq!(
+                row.connection.as_deref(),
+                Some("usb"),
+                "approval's connection is stored, not discarded"
+            );
+            assert_eq!(
+                row.station_id, None,
+                "a counter printer serves the bill, not a station"
+            );
             assert_eq!(
                 devices
                     .fetch(TENANT_A, Some("store-1"), "pending")
@@ -4976,7 +4987,7 @@ mod device_proposals {
             // Resolving again is a no-op: the row is no longer pending.
             assert!(
                 !devices
-                    .mark(TENANT_A, "DEV1", "rejected")
+                    .mark(TENANT_A, "DEV1", "rejected", None, None)
                     .await
                     .expect("re-resolve"),
                 "an already-resolved proposal does not transition again"
@@ -4984,7 +4995,7 @@ mod device_proposals {
             // And another tenant cannot resolve this tenant's proposal.
             assert!(
                 !devices
-                    .mark("tenant-b", "DEV2", "approved")
+                    .mark("tenant-b", "DEV2", "approved", Some("network"), None)
                     .await
                     .expect("cross-tenant"),
                 "the tenant scope stops one tenant resolving another's proposal"

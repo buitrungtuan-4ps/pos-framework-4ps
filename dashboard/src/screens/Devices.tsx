@@ -1,15 +1,22 @@
 // The printer/KDS onboarding queue (ADR-0041): a store reports the devices it found on its network;
 // the super-admin approves or rejects each pending proposal here. Tenant-scoped, on the F2 CRUD kit.
 
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { DeviceProposalSummary, Store } from "../api/types";
+import type { DeviceProposalSummary, Station, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
-import { type Column, ConfirmDialog, DataTable, EmptyState, TechnicalDetails } from "../components/kit";
+import {
+  type Column,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  Modal,
+  TechnicalDetails,
+} from "../components/kit";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
 
@@ -22,6 +29,13 @@ export function Devices() {
   const [busy, setBusy] = createSignal(false);
   // A proposal has no friendly name, so rejection is a plain danger confirm (no type-to-confirm).
   const [pendingReject, setPendingReject] = createSignal<DeviceProposalSummary | null>(null);
+  // Approving is not a plain confirm: it is where an operator states the two facts the store could
+  // not discover (ADR-0100). How the device is attached decides whether a cash drawer may be opened
+  // at all, and which station it serves decides where a fired line's ticket goes.
+  const [pendingApprove, setPendingApprove] = createSignal<DeviceProposalSummary | null>(null);
+  const [connection, setConnection] = createSignal("network");
+  const [station, setStation] = createSignal("");
+  const [stations, setStations] = createSignal<Station[]>([]);
 
   // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
   // name a store that predates the backfill, or one already archived).
@@ -47,12 +61,31 @@ export function Devices() {
   // Load on open and whenever the tenant changes — never with an empty context (F0).
   onScopedContext("tenant", () => void load());
 
+  // Opens the approval dialog, pulling the *proposing store's* stations so the picker offers real
+  // names rather than asking for a ULID. A store with no stations configured still approves — the
+  // device is then the counter's receipt printer, which serves the bill and no station.
+  const startApprove = async (row: DeviceProposalSummary) => {
+    setConnection("network");
+    setStation("");
+    setPendingApprove(row);
+    try {
+      setStations(await api.listStations(tenantId(), row.store_id));
+    } catch {
+      // A station list that will not load is not a reason to block approval: the picker simply
+      // offers nothing, and the device approves as the counter's printer.
+      setStations([]);
+    }
+  };
+
   const decide = async (id: string, approve: boolean) => {
     setBusy(true);
     try {
-      await (approve ? api.approveDevice(tenantId(), id) : api.rejectDevice(tenantId(), id));
+      await (approve
+        ? api.approveDevice(tenantId(), id, connection(), station() || undefined)
+        : api.rejectDevice(tenantId(), id));
       toast.ok(approve ? t("devices.approved") : t("devices.rejected"));
       setPendingReject(null);
+      setPendingApprove(null);
       await load();
     } catch (caught) {
       const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -110,7 +143,7 @@ export function Devices() {
                 actionsHeader={t("common.actions")}
                 actions={(row) => (
                   <div class="flex gap-2">
-                    <Button disabled={busy()} onClick={() => void decide(row.id, true)}>
+                    <Button disabled={busy()} onClick={() => void startApprove(row)}>
                       {t("action.approve")}
                     </Button>
                     <Button variant="danger" disabled={busy()} onClick={() => setPendingReject(row)}>
@@ -129,6 +162,57 @@ export function Devices() {
             <AuditTrail entityType="device_proposal" />
           </Card>
         </div>
+
+        <Modal
+          open={pendingApprove() !== null}
+          title={t("devices.approveTitle")}
+          closeLabel={t("action.close")}
+          onClose={() => setPendingApprove(null)}
+          footer={
+            <Button
+              disabled={busy()}
+              onClick={() => {
+                const proposal = pendingApprove();
+                if (proposal) {
+                  void decide(proposal.id, true);
+                }
+              }}
+            >
+              {t("action.approve")}
+            </Button>
+          }
+        >
+          <p class="mb-4 text-sm text-ink-muted">{t("devices.approveHint")}</p>
+          <label class="mb-4 block">
+            <span class="mb-1 block text-sm font-medium text-ink">
+              {t("devices.connectionLabel")}
+            </span>
+            <select
+              class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+              value={connection()}
+              onChange={(event) => setConnection(event.currentTarget.value)}
+            >
+              <option value="network">{t("devices.connection.network")}</option>
+              <option value="usb">{t("devices.connection.usb")}</option>
+              <option value="serial">{t("devices.connection.serial")}</option>
+            </select>
+            <span class="mt-1 block text-xs text-ink-muted">{t("devices.connectionHint")}</span>
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-sm font-medium text-ink">{t("devices.stationLabel")}</span>
+            <select
+              class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+              value={station()}
+              onChange={(event) => setStation(event.currentTarget.value)}
+            >
+              <option value="">{t("devices.stationNone")}</option>
+              <For each={stations()}>
+                {(entry) => <option value={entry.station_id}>{entry.name}</option>}
+              </For>
+            </select>
+            <span class="mt-1 block text-xs text-ink-muted">{t("devices.stationHint")}</span>
+          </label>
+        </Modal>
 
         <ConfirmDialog
           open={pendingReject() !== null}

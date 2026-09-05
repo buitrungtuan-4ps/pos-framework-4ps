@@ -95,6 +95,7 @@ use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_proto::BusinessDate;
+use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -3212,6 +3213,9 @@ struct DeviceRow {
     kind: DeviceKind,
     name: String,
     address: String,
+    /// Recorded at approval, not at discovery (ADR-0100).
+    connection: Option<DeviceConnection>,
+    station_id: Option<StationId>,
     status: DeviceProposalStatus,
 }
 
@@ -3230,6 +3234,10 @@ impl DeviceProposalStore for FakeDevices {
             kind: proposal.kind,
             name: proposal.name.clone(),
             address: proposal.address.clone(),
+            // Pending genuinely does not know these: discovery cannot find how a printer is attached
+            // or which station it serves (ADR-0100). Approval fills them in.
+            connection: None,
+            station_id: None,
             status: DeviceProposalStatus::Pending,
         });
         Ok(())
@@ -3257,6 +3265,8 @@ impl DeviceProposalStore for FakeDevices {
                 kind: row.kind.as_wire().to_owned(),
                 name: row.name.clone(),
                 address: row.address.clone(),
+                connection: row.connection.map(|kind| kind.short_name().to_owned()),
+                station_id: row.station_id.map(|id| id.to_string()),
                 status: row.status.as_wire().to_owned(),
             })
             .collect())
@@ -3267,6 +3277,8 @@ impl DeviceProposalStore for FakeDevices {
         tenant: TenantId,
         id: DeviceProposalId,
         approved: bool,
+        connection: Option<DeviceConnection>,
+        station: Option<StationId>,
     ) -> Result<bool, DeviceProposalError> {
         let mut rows = self.rows.lock().expect("lock");
         for row in rows.iter_mut() {
@@ -3276,6 +3288,8 @@ impl DeviceProposalStore for FakeDevices {
                 } else {
                     DeviceProposalStatus::Rejected
                 };
+                row.connection = connection;
+                row.station_id = station;
                 return Ok(true);
             }
         }
@@ -3357,7 +3371,9 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approve = router
         .clone()
         .oneshot(post_with_cookie(
-            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
             &serde_json::json!({}),
             &cookie,
         ))
@@ -3371,6 +3387,74 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let approved = json_body(after).await;
     assert_eq!(approved.as_array().expect("array").len(), 1);
     assert_eq!(approved[0]["address"], "192.168.1.50:9100");
+    assert_eq!(
+        approved[0]["connection"], "network",
+        "the store reads back what approval said about how the device is attached (ADR-0100)"
+    );
+    assert!(
+        approved[0]["station_id"].is_null(),
+        "no station named means the counter's receipt printer"
+    );
+}
+
+/// Approving without saying how the device is attached is refused, not guessed at (**ADR-0100**).
+///
+/// The guess would have to be `network`, which is safe — a network device never opens a cash drawer
+/// — and silently wrong for the store whose receipt printer is on USB with a drawer under it. The
+/// refusal names the field, so the console can point at it.
+#[tokio::test]
+async fn approving_a_device_without_a_connection_is_refused() {
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let router = device_app(provisioned_admin(), keys.clone(), devices);
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let proposal = serde_json::json!({
+        "kind": "printer", "name": "Counter", "address": "192.168.1.51:9100"
+    });
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            &proposal,
+            &token,
+        ))
+        .await
+        .expect("route the propose");
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    let unknown = router
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=carrier-pigeon"
+            ),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(
+        unknown.status(),
+        StatusCode::BAD_REQUEST,
+        "a connection this build does not know is refused, not stored"
+    );
 }
 
 #[tokio::test]
@@ -3418,7 +3502,9 @@ async fn approving_a_device_proposal_records_to_the_audit_trail() {
     let approve = router
         .clone()
         .oneshot(post_with_cookie(
-            &format!("/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}"),
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
             &serde_json::json!({}),
             &cookie,
         ))

@@ -663,10 +663,16 @@ export const api = {
       "GET",
       `/admin/devices/proposals?${tenantQuery(tenantId)}`,
     ),
-  approveDevice: (tenantId: string, id: string) =>
+  // Approving carries the two facts discovery cannot find (ADR-0100): how the device is attached,
+  // which decides whether a cash drawer may be opened at all, and the kitchen station it serves —
+  // omitted for the counter's receipt printer, which serves the bill rather than a station. The
+  // route refuses an approval with no connection rather than guessing one.
+  approveDevice: (tenantId: string, id: string, connection: string, stationId?: string) =>
     requestVoid(
       "POST",
-      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}`,
+      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}` +
+        `&connection=${encodeURIComponent(connection)}` +
+        (stationId ? `&station_id=${encodeURIComponent(stationId)}` : ""),
     ),
   rejectDevice: (tenantId: string, id: string) =>
     requestVoid(

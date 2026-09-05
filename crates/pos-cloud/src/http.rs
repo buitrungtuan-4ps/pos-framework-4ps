@@ -92,6 +92,7 @@ use pos_proto::channels::{
     PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
 };
 use pos_proto::determinism::ClockSource;
+use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -1857,6 +1858,16 @@ struct ProposeDeviceResponse {
 struct DeviceTenantQuery {
     /// The tenant whose proposals to act on (a 26-character ULID).
     tenant_id: String,
+    /// How an **approved** device is attached: `usb`, `network` or `serial`
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)). Required on approve,
+    /// ignored on reject. Discovery cannot find this out, and it decides whether a cash drawer may
+    /// be opened at all, so approval is where a human states it.
+    #[serde(default)]
+    connection: Option<String>,
+    /// The kitchen station an **approved** device serves (a ULID). Absent means the counter's
+    /// receipt printer, which serves the bill rather than a station. Ignored on reject.
+    #[serde(default)]
+    station_id: Option<String>,
 }
 
 /// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
@@ -2081,7 +2092,39 @@ where
         Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
         Err(refusal) => return refusal,
     };
-    match state.devices.resolve(tenant_id, id, approved).await {
+    // Approval carries the two facts discovery cannot find (ADR-0100). A rejection carries neither:
+    // they describe a device the store will address, and a rejected one never will.
+    let (connection, station) = if approved {
+        let Some(raw) = query.connection.as_deref() else {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "connection is required to approve a device: usb, network, or serial",
+                &[("connection", "REQUIRED")],
+            );
+        };
+        let Some(connection) = DeviceConnection::from_short_name(raw) else {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "connection must be one of usb, network, serial",
+                &[("connection", "INVALID_ENUM_VALUE")],
+            );
+        };
+        let station = match query.station_id.as_deref() {
+            None => None,
+            Some(raw) => match parse_ulid_fields([("station_id", raw)]) {
+                Ok([station]) => Some(StationId::new(station)),
+                Err(refusal) => return refusal,
+            },
+        };
+        (Some(connection), station)
+    } else {
+        (None, None)
+    };
+    match state
+        .devices
+        .resolve(tenant_id, id, approved, connection, station)
+        .await
+    {
         Ok(found) => {
             // Only a resolve that actually acted on a pending proposal is worth an entry; resolving
             // an already-resolved id is an idempotent `204` and records nothing. `resolved_by` is the
