@@ -189,11 +189,15 @@ impl PostgresTaxRates {
         for row in rows {
             transaction
                 .execute(
-                    // `$5::jsonb` rather than a jsonb parameter, because the caller hands this
-                    // over as JSON text and casting in SQL keeps the adapter free of a JSON type.
+                    // `$5::text::jsonb`, not `$5::jsonb`. The caller hands the components over as
+                    // JSON *text* and this adapter stays free of a JSON type — but a bare
+                    // `$5::jsonb` makes PostgreSQL deduce the parameter itself as `jsonb`, and
+                    // `tokio-postgres` then refuses to serialise a Rust `String` into it ("error
+                    // serializing parameter 4"). Casting through `text` pins the parameter to the
+                    // type the caller actually sends. Same shape as `role_templates.permissions`.
                     "INSERT INTO catalog_tax_rates \
                      (tenant_id, tax_class_id, sales_channel, rate_bps, components) \
-                     VALUES ($1, $2, $3, $4, $5::jsonb)",
+                     VALUES ($1, $2, $3, $4, $5::text::jsonb)",
                     &[
                         &tenant_id,
                         &row.tax_class_id,

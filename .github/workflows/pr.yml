@@ -243,6 +243,68 @@ jobs:
         run: gitleaks git --redact --verbose --log-opts="origin/${{ github.base_ref }}..HEAD"
 
   # ---------------------------------------------------------------------------
+  # The SQL, against a real PostgreSQL, before merge rather than after.
+  #
+  # `test` above proves the domain, which touches no database — and that is the
+  # point of the sans-I/O core. But `store-postgres` is nothing *but* SQL, and a
+  # statement is only checked by a server that parses it. Two shipped statements
+  # reached `main` broken because nothing here did:
+  #
+  #   * the store heartbeat, where `CASE WHEN … THEN NULL ELSE $3 END` left both
+  #     arms unknown-typed and PostgreSQL deduced `$3` as `text` against the
+  #     `bigint` the same parameter carried in the column list; and
+  #   * the tax-rate save, where `$5::jsonb` made the *parameter* `jsonb`, which
+  #     `tokio-postgres` then refused to serialise a Rust `String` into.
+  #
+  # Both compile. Both pass every fake. Both fail on the first real connection —
+  # so a store's heartbeat and every tax-rate save were broken in production for
+  # two merges, found only by reading a post-merge job nobody watches.
+  #
+  # This is its own job rather than a service on `test`, so the workspace suite
+  # keeps its "no services" property and neither job waits on the other. The
+  # suite is 92 cases in about twenty seconds; the file this was split out of
+  # calls the pre-merge gate too slow for it, which the clock does not support.
+  # MinIO and NATS stay in `main`: those need a `docker run` with a command a
+  # service block cannot pass, which is a different cost.
+  # ---------------------------------------------------------------------------
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      # Pinned by digest (postgres:16 as of this commit), not tag: a tag is
+      # mutable, and a silently changed database version is a long afternoon.
+      # Same digest `main` uses — two gates disagreeing on the version would be
+      # worse than one.
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: poscloud
+        ports:
+          - 5432:5432
+        # Do not start the test step until the database answers, or the first
+        # connection races the container's boot and fails intermittently.
+        options: >-
+          --health-cmd "pg_isready -U pos -d poscloud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # libpq key=value form. `pos` is the image's superuser, so it owns `events`
+      # and bypasses the row-level policy — which is what the trusted ingest
+      # adapter does; the RLS cases drop to the `app_tenant` role to prove the
+      # policy still bites.
+      DATABASE_URL: "host=localhost port=5432 user=pos password=pos dbname=poscloud"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+      - name: store-postgres against a real PostgreSQL
+        # Single-threaded: every case shares the one database and truncates
+        # between cases (see the crate's tests/integration.rs).
+        run: cargo test -p store-postgres --features integration --locked -- --test-threads=1
+
+  # ---------------------------------------------------------------------------
   # Documentation gates. Deliberately escapable with an explicit sentence: the
   # goal is a conscious decision, not a bureaucratic block.
   # ---------------------------------------------------------------------------

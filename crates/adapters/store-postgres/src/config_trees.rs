@@ -306,8 +306,9 @@ impl PostgresConfigTrees {
                 "INSERT INTO store_liveness \
                  (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at, \
                   lease_generation, lease_reported_at) \
-                 VALUES ($1, $2, $3, $4, CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3 END, \
-                         $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3 END) \
+                 VALUES ($1, $2, $3, $4, \
+                         CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3::bigint END, \
+                         $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3::bigint END) \
                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                  last_seen_at = EXCLUDED.last_seen_at, \
                  outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
