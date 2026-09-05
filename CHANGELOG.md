@@ -14,6 +14,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A superseded machine stops taking updates, because the store's lease finally has two ends**
+  ([ADR-0108](docs/adr/0108-the-lease-generation-is-authority.md), production-readiness **R4**).
+
+  [ADR-0049](docs/adr/0049-single-active-lease.md) made "one store, one active machine" a comparison
+  of two generations. **Neither generation existed anywhere.** `lease` appeared in no cloud table, no
+  route, and nothing on the edge; the over-the-air update loop passed `Active` as a literal and said
+  so in a comment. A mini-PC that had been replaced went on installing updates as though it were
+  still the store.
+
+  The cloud now owns a per-store lease generation whose only write is a **bump** — there is no
+  set-to-a-value and no decrement, because an authority that takes a number from its caller is not
+  one — and publishes it to the store as a derived `lease` configuration node. The till **takes its
+  generation once**, on first sight, and thereafter only compares: enforced by the schema
+  (`INSERT … ON CONFLICT DO NOTHING`), so a machine a replacement has taken over cannot promote
+  itself back on the next configuration pull, or across the restart an update performs.
+
+  **A store the cloud has never issued a lease to behaves exactly as before.** The refusal begins the
+  first time an operator issues one, from the Fleet screen's **Issue a new lease** — which asks for
+  the store's name typed out, because it retires the machine currently running the shop. Each till
+  reports the generation it holds on its heartbeat, so the console shows *"this box holds 3, the
+  store is on 4"* rather than an unexplained refusal.
+
+  **Deliberately not in this change:** a superseded box still *sells*. Read-only selling is
+  ADR-0049's separate assignment and has a far worse failure mode if it fires wrongly — a shop that
+  cannot take money. The legal invoice-number range ADR-0049 pairs with the generation also stays
+  where it was, waiting on `Fiscalization`.
+
+  **Upgrade note.** Two additive migrations, applied on boot: `store_lease` and two nullable
+  `store_liveness` columns in the cloud, and `store_lease` on each till (edge migration `0008`). One
+  new console permission requirement — issuing a lease is behind `console.stores.manage`, the same
+  permission that creates and archives stores. No `PROTOCOL_VERSION` change: the heartbeat's new
+  field is optional and an older till simply omits it.
+
 ### Removed
 
 - **A store's update report no longer carries a tenant it was never entitled to claim**

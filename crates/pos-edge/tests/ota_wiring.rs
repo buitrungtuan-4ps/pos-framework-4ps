@@ -33,9 +33,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pos_core::ota::{ReleaseVersion, SelfTest};
 use pos_edge::config_client::session_from_config;
 use pos_edge::{
-    BootStanding, Edge, EdgeSession, InMemoryOtaState, InMemoryReceipts, NoUpdateLayout, OtaClient,
-    OtaStateAuthority, RestartRequest, StoreIdentity, SystemdInstaller, TickOutcome,
-    UpdateInstaller, UpdateOutcome, confirm_boot,
+    BootStanding, Edge, EdgeSession, InMemoryLease, InMemoryOtaState, InMemoryReceipts,
+    NoUpdateLayout, OtaClient, OtaStateAuthority, RestartRequest, StoreIdentity, SystemdInstaller,
+    TickOutcome, UpdateInstaller, UpdateOutcome, confirm_boot,
 };
 use pos_fakes::{FakeCloudSync, FakeSigner, FakeStore};
 use pos_proto::ids::StoreId;
@@ -161,6 +161,7 @@ fn client(
     FakeSigner,
     SystemdInstaller,
     InMemoryOtaState,
+    InMemoryLease,
     FakeStore,
     Arc<CountingRestart>,
 > {
@@ -170,6 +171,10 @@ fn client(
         installer,
         vec![FakeSigner::key(1)],
         InMemoryOtaState::new(),
+        // No `lease` node in these documents, so the store has never been issued a lease and every
+        // tick weighs itself `Active` — which is what these tests are about (ADR-0108). The
+        // supersession path is exercised in `lease_state`'s own tests.
+        InMemoryLease::new(),
         edge_with(document),
         store(),
         restart,

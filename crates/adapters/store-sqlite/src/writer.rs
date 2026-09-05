@@ -163,6 +163,19 @@ pub(crate) enum Command {
         store_id: StoreId,
         reply: oneshot::Sender<Result<Option<SelfTestRow>, PortError>>,
     },
+    /// Take the store's lease generation if it holds none yet, and report the one it holds either
+    /// way (migration 0008, ADR-0108). **Take-once**: an existing row is never overwritten, so a
+    /// superseded box cannot re-promote itself by adopting the newer generation it just read.
+    TakeLease {
+        store_id: StoreId,
+        generation: i64,
+        reply: oneshot::Sender<Result<i64, PortError>>,
+    },
+    /// The lease generation the store holds, or `None` if it has never taken one.
+    HeldLease {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<Option<i64>, PortError>>,
+    },
     /// One subject's stored row (ADR-0107), or `None`. Deliberately by id: there is no
     /// read-them-all, because a query that could enumerate personal data is a query that can export
     /// it.
@@ -354,6 +367,16 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             }
             Command::LastSelfTest { store_id, reply } => {
                 let _ = reply.send(last_self_test(&conn, store_id));
+            }
+            Command::TakeLease {
+                store_id,
+                generation,
+                reply,
+            } => {
+                let _ = reply.send(take_lease(&conn, store_id, generation));
+            }
+            Command::HeldLease { store_id, reply } => {
+                let _ = reply.send(held_lease(&conn, store_id));
             }
             Command::LookUpIntake {
                 store_id,
@@ -825,6 +848,51 @@ fn last_self_test(conn: &Connection, store_id: StoreId) -> Result<Option<SelfTes
                 passed: row.get::<_, i64>(1)? != 0,
             })
         },
+    )
+    .optional()
+    .map_err(|error| db_error(port, error))
+}
+
+/// Takes the store's lease generation if it holds none, and returns the one it holds either way
+/// (migration 0008, [ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+///
+/// `ON CONFLICT DO NOTHING` is the whole mechanism, and it is deliberately not an upsert: a box that
+/// already holds a generation keeps it, so the value that comes back from a superseded box is the
+/// *old* one and `lease_standing` reads `Superseded`. Make this an `UPDATE` and a replaced machine
+/// re-promotes itself on its next config pull.
+///
+/// The read that follows is in the same connection and this writer is single-threaded, so the insert
+/// and the read-back cannot be interleaved by another writer — the returned value is exactly what the
+/// store holds after the take.
+///
+/// Reported under [`PortName::CloudSync`], like the self-test beside it: this state exists to serve
+/// the cloud-facing OTA path, and a fault here must not surface under whichever port happens to sit
+/// near it in a metric label.
+fn take_lease(conn: &Connection, store_id: StoreId, generation: i64) -> Result<i64, PortError> {
+    let port = PortName::CloudSync;
+    conn.execute(
+        "INSERT INTO store_lease (store_id, generation, taken_time)
+         VALUES (?1, ?2, datetime('now'))
+         ON CONFLICT (store_id) DO NOTHING",
+        params![store_id.to_string(), generation],
+    )
+    .map_err(|error| db_error(port, error))?;
+    conn.query_row(
+        "SELECT generation FROM store_lease WHERE store_id = ?1",
+        params![store_id.to_string()],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(|error| db_error(port, error))
+}
+
+/// The lease generation the store holds, or `None` if it has never taken one — a box the cloud has
+/// never issued a lease to, which is every box until a store is first given one.
+fn held_lease(conn: &Connection, store_id: StoreId) -> Result<Option<i64>, PortError> {
+    let port = PortName::CloudSync;
+    conn.query_row(
+        "SELECT generation FROM store_lease WHERE store_id = ?1",
+        params![store_id.to_string()],
+        |row| row.get::<_, i64>(0),
     )
     .optional()
     .map_err(|error| db_error(port, error))

@@ -37,8 +37,9 @@ use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
 use crate::event_publish::EventPublisher;
-use crate::heartbeat_client::HeartbeatClient;
+use crate::heartbeat_client::{HeartbeatClient, StoreReport};
 use crate::installer::SystemdInstaller;
+use crate::lease_state::LeaseAuthority;
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
@@ -142,11 +143,12 @@ pub enum ServeOutcome {
 /// # Errors
 ///
 /// As [`serve_until`].
-pub async fn serve<S, Q, A>(
+pub async fn serve<S, Q, A, L>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
+    lease_authority: L,
 ) -> Result<ServeOutcome, EdgeError>
 where
     S: EventStore
@@ -159,8 +161,17 @@ where
         + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
+    L: LeaseAuthority + Clone + 'static,
 {
-    serve_until(config, edge, queue, ota_authority, shutdown_signal()).await
+    serve_until(
+        config,
+        edge,
+        queue,
+        ota_authority,
+        lease_authority,
+        shutdown_signal(),
+    )
+    .await
 }
 
 /// As [`serve`], but the caller says what a stop is.
@@ -180,11 +191,12 @@ where
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve_until<S, Q, A, F>(
+pub async fn serve_until<S, Q, A, L, F>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
+    lease_authority: L,
     stop: F,
 ) -> Result<ServeOutcome, EdgeError>
 where
@@ -198,6 +210,7 @@ where
         + 'static,
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
+    L: LeaseAuthority + Clone + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
     // Read what binding and the startup banner need before `config` moves into the composition.
@@ -239,7 +252,7 @@ where
     });
 
     let ota_edge = Arc::clone(&edge);
-    let composed = compose(config, edge, queue, &shutdown_rx).await?;
+    let composed = compose(config, edge, queue, lease_authority.clone(), &shutdown_rx).await?;
 
     // The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid out
     // to install one into. Either missing is an ordinary state, not a fault: a LAN-only store and a
@@ -249,6 +262,7 @@ where
             client: composed.cloud.clone(),
             installer,
             authority: ota_authority,
+            lease: lease_authority,
             edge: ota_edge,
             store_id,
             boot,
@@ -351,10 +365,11 @@ pub struct Composed {
 /// [`EdgeError::Config`] if the configuration would misbehave, [`EdgeError::Country`] if the
 /// compiled-in country modules disagree, or [`EdgeError::DeviceRegistry`] if the pairing or sign-in
 /// table could not be read.
-pub async fn compose<S, Q>(
+pub async fn compose<S, Q, L>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
+    lease_authority: L,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Composed, EdgeError>
 where
@@ -367,6 +382,7 @@ where
         + Sync
         + 'static,
     Q: QueueNumberAuthority + 'static,
+    L: LeaseAuthority + 'static,
 {
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
@@ -469,6 +485,7 @@ where
             store_id,
             &config_edge,
             queue,
+            lease_authority,
             nats.as_ref(),
             held_config_version,
             shutdown_rx,
@@ -494,12 +511,20 @@ where
 /// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
 /// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
 /// box still binds, pairs, and serves the LAN, and the operator UI routes it to `/setup`.
-async fn compose_cloud_surface<S, Q>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the cloud surface needs everything the cloud loops need: the router to merge onto, \
+              where the cloud is, which store this is, the live session, the queue and lease \
+              authorities, the optional stream, the held config version, and the shutdown. Every \
+              one is passed straight through to a loop that needs exactly it"
+)]
+async fn compose_cloud_surface<S, Q, L>(
     app: axum::Router,
     cloud_url: &url::Url,
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
+    lease: L,
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
@@ -507,6 +532,7 @@ async fn compose_cloud_surface<S, Q>(
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
+    L: LeaseAuthority + 'static,
 {
     // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
     let vault = Arc::new(KeyringVault::new(OsKeyring::new()));
@@ -549,6 +575,7 @@ where
                 store_id,
                 edge,
                 queue,
+                lease,
                 sync_key,
                 held_config_version,
                 shutdown_rx,
@@ -631,11 +658,12 @@ async fn resolve_sync_key<V: KeyVault>(vault: &V) -> Option<String> {
 /// `sync_key`. A `None` key (neither in the vault nor the environment) is logged and skipped — the box
 /// is activated but has nothing to authenticate the `/sync` surface with, so it trades locally and
 /// awaits a provisioned key. The loops share the passed shutdown, so they drain with the server.
-fn spawn_cloud_loops<S, Q>(
+fn spawn_cloud_loops<S, Q, L>(
     cloud_url: &url::Url,
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
+    lease: L,
     sync_key: Option<String>,
     held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
@@ -643,6 +671,7 @@ fn spawn_cloud_loops<S, Q>(
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
+    L: LeaseAuthority + 'static,
 {
     let Some(sync_key) = sync_key else {
         tracing::warn!(
@@ -671,10 +700,12 @@ where
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet
-    // console can see a box whose events are piling up behind a down link (ADR-0068).
+    // console can see a box whose events are piling up behind a down link (ADR-0068) — and the lease
+    // generation it holds, so a box that has been *replaced* is distinguishable from one that is
+    // merely quiet (ADR-0108).
     let heartbeat_client = HeartbeatClient::reporting(
         HeartbeatHttpTransport::new(client.clone(), store_id),
-        Arc::clone(edge),
+        StoreReport::new(Arc::clone(edge), lease),
         HEARTBEAT_INTERVAL,
     );
     tokio::spawn(heartbeat_client.run(wait_for_shutdown(shutdown_rx.clone())));
@@ -829,7 +860,7 @@ fn settle_boot(installer: Option<&SystemdInstaller>) -> Result<BootStanding, Boo
 
 /// Everything the OTA loop needs and nothing else does, grouped so [`spawn_ota`] takes one argument
 /// instead of seven.
-struct OtaWiring<A, S> {
+struct OtaWiring<A, L, S> {
     /// The keyed `/sync` client, from [`Composed::cloud`]. `None` for a LAN-only, unactivated or
     /// unkeyed box.
     client: Option<CloudHttpClient>,
@@ -837,6 +868,10 @@ struct OtaWiring<A, S> {
     installer: Option<SystemdInstaller>,
     /// Where the durable self-test lives (ADR-0048's highest-precedence rule reads it).
     authority: A,
+    /// Where the lease generation this box holds lives ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+    /// Separate from `authority` because the two answer different questions — "did the last install
+    /// pass" and "is this machine still the store" — and the second one outranks any rollout.
+    lease: L,
     /// The live session the published rollout and this box's placement are read from.
     edge: Arc<Edge<S>>,
     store_id: StoreId,
@@ -863,9 +898,10 @@ struct OtaWiring<A, S> {
 /// nothing else; a store with no cloud has nobody to tell, which is the one honest reason to stay
 /// silent. **Updating** needs somewhere to put a binary (`bin/current`) and keys to judge one with;
 /// without either the box keeps trading on what it has, and still says what that is.
-fn spawn_ota<A, S>(wiring: OtaWiring<A, S>, shutdown_rx: &tokio::sync::watch::Receiver<bool>)
+fn spawn_ota<A, L, S>(wiring: OtaWiring<A, L, S>, shutdown_rx: &tokio::sync::watch::Receiver<bool>)
 where
     A: OtaStateAuthority + 'static,
+    L: LeaseAuthority + 'static,
     S: EventStore + Send + Sync + 'static,
 {
     let Some(client) = wiring.client else {
@@ -919,6 +955,7 @@ where
         installer.clone(),
         trusted,
         wiring.authority,
+        wiring.lease,
         wiring.edge,
         store_id,
         wiring.restart,

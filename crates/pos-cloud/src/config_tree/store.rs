@@ -102,6 +102,7 @@ pub trait ConfigTreeStore {
         store: StoreId,
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
+        lease_generation: Option<u64>,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 }
 

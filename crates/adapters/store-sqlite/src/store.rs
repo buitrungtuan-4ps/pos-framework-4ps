@@ -204,6 +204,54 @@ impl SqliteStore {
         Ok(row.map(|row| (row.version, row.passed)))
     }
 
+    /// Takes the store's lease generation if it holds none yet, and reports the one it holds either
+    /// way (migration 0008, [ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+    ///
+    /// **Take-once, and there is deliberately no setter beside this.** A box that already holds a
+    /// generation keeps it, so a machine a replacement has superseded reads back its *own* older
+    /// generation and stays superseded across every config pull and every reboot. A box that must
+    /// legitimately hold a newer one is a box being re-provisioned, which starts from a fresh file.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached, the write fails, or `generation` does not fit
+    /// SQLite's signed 64-bit integer — a value past `i64::MAX` is refused rather than wrapped into a
+    /// generation the store never issued.
+    pub async fn take_lease(&self, store_id: StoreId, generation: u64) -> Result<u64, PortError> {
+        let generation = i64::try_from(generation).map_err(|error| {
+            PortError::invalid_argument(
+                PortName::CloudSync,
+                "a lease generation past i64::MAX cannot be stored",
+            )
+            .with_source(error)
+        })?;
+        let held = self
+            .ask(PortName::CloudSync, move |reply| Command::TakeLease {
+                store_id,
+                generation,
+                reply,
+            })
+            .await?;
+        stored_generation(held)
+    }
+
+    /// The lease generation this store holds, or `None` if it has never taken one.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached, the read fails, or the stored value is negative
+    /// — which this adapter cannot write, so it means the file was tampered with rather than that the
+    /// box holds a strange generation.
+    pub async fn held_lease(&self, store_id: StoreId) -> Result<Option<u64>, PortError> {
+        let held = self
+            .ask(PortName::CloudSync, move |reply| Command::HeldLease {
+                store_id,
+                reply,
+            })
+            .await?;
+        held.map(stored_generation).transpose()
+    }
+
     /// Sends a command to the writer thread and awaits its reply.
     /// [`Self::ask`] for a registry command, so nine call sites need not each wrap the variant and
     /// name the port. Always [`PortName::DeviceRegistry`]: a registry fault must not be reported
@@ -423,6 +471,22 @@ fn parse_id<T: From<Ulid>>(text: &str, what: &str) -> Result<T, PortError> {
         PortError::internal(
             PortName::DeviceRegistry,
             format!("a stored {what} is not a ULID"),
+        )
+        .with_source(error)
+    })
+}
+
+/// Converts a stored lease generation back into the `u64` the domain uses (migration 0008).
+///
+/// SQLite has no unsigned integer, so the column is signed and this adapter is the only writer —
+/// which means a negative value cannot have come from a take. Refusing it rather than clamping is
+/// the honest reading: a tampered or corrupt row must not silently become generation `0`, which is
+/// the *first* generation a store issues and would read as `Superseded` against every later one.
+fn stored_generation(value: i64) -> Result<u64, PortError> {
+    u64::try_from(value).map_err(|error| {
+        PortError::internal(
+            PortName::CloudSync,
+            "the stored lease generation is negative, which this adapter never writes",
         )
         .with_source(error)
     })

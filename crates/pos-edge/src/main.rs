@@ -111,6 +111,10 @@ where
     // highest-precedence rule reads it, and an install deliberately restarts the edge, so the
     // verdict has to be on disk rather than in process memory — ADR-0055 Amendment 1).
     let ota_state = store.clone();
+    // …and the durable lease authority (ADR-0108). The generation this box holds must survive the
+    // same restart for the same reason: a held generation rebuilt from config on every boot would be
+    // re-adopted on every boot, and a machine a replacement superseded would promote itself back.
+    let lease_state = store.clone();
     let edge = Arc::new(
         Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
             .map_err(EdgeError::Entropy)?,
@@ -120,7 +124,7 @@ where
     // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
     edge.rebuild().await.map_err(EdgeError::Rebuild)?;
 
-    serve_until(config, edge, queue, ota_state, stop).await
+    serve_until(config, edge, queue, ota_state, lease_state, stop).await
 }
 
 /// The pre-commit smoke test the OTA installer runs against a *staged* binary: can these bytes run

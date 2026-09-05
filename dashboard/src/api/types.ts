@@ -787,6 +787,31 @@ export interface FleetStore {
   readonly outbox_depth: number | null;
   /** Unix ms of the heartbeat that reported `outbox_depth`, or `null`. */
   readonly outbox_reported_at_ms: number | null;
+  /**
+   * The lease generation the box last reported holding (ADR-0108), or `null` if it never said.
+   * Read together with `lease_generation_authoritative`: the pair is what tells a **replaced** box
+   * from a merely quiet one.
+   */
+  readonly lease_generation_held: number | null;
+  /** Unix ms of the heartbeat that reported it, or `null`. */
+  readonly lease_reported_at_ms: number | null;
+  /** The store's authoritative lease generation, or `null` if the cloud never issued it one. */
+  readonly lease_generation_authoritative: number | null;
+  /**
+   * Whether this box has been superseded — it holds a generation the store has moved past, so it
+   * refuses over-the-air updates and is no longer the machine the store runs on. The server derives
+   * it, so the console does not re-implement `lease_standing`.
+   */
+  readonly lease_superseded: boolean;
+}
+
+/**
+ * A store's authoritative lease generation from `GET /admin/config/lease` (ADR-0108), or `null`
+ * inside when the cloud has never issued this store a lease — which is "no lease in force", not
+ * generation zero.
+ */
+export interface StoreLease {
+  readonly generation: number | null;
 }
 
 /**

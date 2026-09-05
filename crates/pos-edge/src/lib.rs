@@ -49,6 +49,7 @@ pub mod heartbeat_client;
 pub mod http;
 pub mod idgen;
 pub mod installer;
+pub mod lease_state;
 pub mod order_in;
 pub mod ota;
 pub mod ota_client;
@@ -80,6 +81,7 @@ pub use event_publish::EventPublisher;
 pub use fanout::{Fanout, ServerMessage};
 pub use idgen::EdgeIdGenerator;
 pub use installer::{SystemdInstaller, binary_directory};
+pub use lease_state::{InMemoryLease, LeaseAuthority};
 pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};
 pub use ota_client::{

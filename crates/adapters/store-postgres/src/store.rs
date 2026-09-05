@@ -176,6 +176,11 @@ const MIGRATION_0049: &str = include_str!("../migrations/0049_store_outbox_depth
 /// a default and the console could not edit it.
 const MIGRATION_0050: &str = include_str!("../migrations/0050_tax_rate_components.sql");
 
+/// The store's authoritative lease generation, and the one each box reports holding (ADR-0108,
+/// production-readiness **R4**): `lease_standing` had no arguments anywhere in the tree, so a box a
+/// replacement had taken over went on installing updates as though it were still the store.
+const MIGRATION_0051: &str = include_str!("../migrations/0051_store_lease.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -434,6 +439,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0050)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0051)
             .await
             .map_err(unavailable)
     }

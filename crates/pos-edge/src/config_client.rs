@@ -37,6 +37,7 @@ use pos_core::campaign::campaigns_from_published;
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::channels::{accepted_tender, enabled_channels};
 use pos_core::inventory::from_published as inventory_from_published;
+use pos_core::lease::LeaseConfig;
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::config_store::{ConfigDocument, ConfigSnapshot, ConfigStore, ConfigUpdate};
@@ -130,7 +131,7 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
     clippy::too_many_lines,
     reason = "a flat series of independent, self-contained node branches (menu, permissions, \
               capabilities, floor, stations, tax, campaigns, inventory, channels, tender, qr, \
-              locale, fleet_update, device_ota); each is a few lines and reads better inline than \
+              locale, fleet_update, device_ota, lease); each is a few lines and reads better inline \
               behind a helper indirection"
 )]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
@@ -417,6 +418,26 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 "the published device_ota node did not validate; keeping the previous placement"
             ),
         }
+    }
+    // The `lease` node (ADR-0108): the store's *authoritative* lease generation — the number this
+    // box's own held generation is weighed against to decide whether it is still the store. Derived
+    // by the cloud from its `store_lease` row, never authored by anybody.
+    //
+    // Same never-blank rule, and it is load-bearing in a way the others are not: a malformed or
+    // absent node must not un-supersede a machine, so an unparseable value keeps the last good
+    // generation rather than clearing it back to "no lease issued". A store the cloud has never
+    // issued a lease to stays `None`, which reads as active — the fleet's behaviour before this node
+    // existed, preserved on purpose.
+    if let Some(config) = document
+        .get("lease")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<LeaseConfig>(&text).ok())
+    {
+        session.lease_generation = Some(config.generation());
+    } else if document.get("lease").is_some() {
+        tracing::warn!(
+            "the published lease node did not parse; keeping the previous lease generation"
+        );
     }
     session
 }

@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use pos_edge::{
-    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryOtaState, InMemoryQueueNumbers,
-    InMemoryReceipts, StoreIdentity, serve, telemetry,
+    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryLease, InMemoryOtaState,
+    InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity, serve, telemetry,
 };
 use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;
@@ -51,6 +51,11 @@ async fn main() -> Result<(), EdgeError> {
         edge,
         InMemoryQueueNumbers::default(),
         InMemoryOtaState::new(),
+        // The lease authority (ADR-0108), in memory like the rest — behind an `Arc` because two
+        // loops share one authority (the OTA tick weighs the standing, the heartbeat reports the
+        // generation held), and `SqliteStore` is `Clone` where this is not. Never consulted here:
+        // with no updater composed there is no tick, and no cloud to publish a `lease` node.
+        std::sync::Arc::new(InMemoryLease::new()),
     )
     .await
     .map(|_outcome| ())

@@ -172,6 +172,7 @@ use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::images::{self, ImagePipelineError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
+use crate::lease::{LeaseStore, LeaseStoreError, lease_node};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
@@ -6470,6 +6471,24 @@ struct FleetStoreView {
     outbox_depth: Option<u64>,
     /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
     outbox_reported_at_ms: Option<i64>,
+    /// The lease generation the box last reported holding
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
+    /// has never said.
+    lease_generation_held: Option<u64>,
+    /// Unix ms of the heartbeat that reported it, or `null`.
+    lease_reported_at_ms: Option<i64>,
+    /// The store's authoritative lease generation, or `null` if the cloud has never issued it one.
+    lease_generation_authoritative: Option<u64>,
+    /// Whether this box has been **superseded**: it holds a generation the store has moved past, so
+    /// it refuses over-the-air updates and is no longer the machine the store runs on.
+    ///
+    /// Derived here rather than stored, exactly as `online` and `config_current` are: it is a
+    /// comparison of two numbers the row already carries, and deriving it in one place keeps the
+    /// console from re-implementing `lease_standing` in TypeScript. `false` when either number is
+    /// absent — a store with no lease in force, or a box that has not reported one, is not
+    /// *superseded*; it is simply not under the lease yet, and saying otherwise would put a red
+    /// badge on every store the day this shipped.
+    lease_superseded: bool,
 }
 
 impl FleetStoreView {
@@ -6486,6 +6505,14 @@ impl FleetStoreView {
             (Some(held), Some(published)) => held == published,
             _ => false,
         };
+        // `lease_standing` is the domain's, and this is the console's read of it: a box behind its
+        // store's authority has been replaced. A box *ahead* of it (`Invalid`) also refuses, and is
+        // deliberately not shown as superseded — that is corruption or a restored backup, which a
+        // "replaced" badge would mislabel; it surfaces as the two numbers disagreeing.
+        let lease_superseded = matches!(
+            (row.lease_generation_held, row.lease_generation_authoritative),
+            (Some(held), Some(authoritative)) if held < authoritative
+        );
         Self {
             store_id: row.store_id.to_string(),
             name: row.name,
@@ -6511,6 +6538,12 @@ impl FleetStoreView {
             outbox_reported_at_ms: row
                 .outbox_reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            lease_generation_held: row.lease_generation_held,
+            lease_reported_at_ms: row
+                .lease_reported_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            lease_generation_authoritative: row.lease_generation_authoritative,
+            lease_superseded,
         }
     }
 }
@@ -10828,7 +10861,7 @@ pub fn ota_config_router<Cfg, A, C, L>(
     releases: L,
 ) -> Router
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -10845,6 +10878,15 @@ where
         .route(
             "/admin/config/ota/placement",
             get(admin_get_placement::<Cfg, A, C, L>).put(admin_publish_placement::<Cfg, A, C, L>),
+        )
+        // The lease (ADR-0108) is not an OTA lever, and it sits here anyway: this router already owns
+        // the load→set-node→publish→audit machinery a store-scoped config node needs, and the lease's
+        // whole delivery mechanism is that node. It is deliberately not a `PUT` beside the two above
+        // — there is nothing to author, only a counter to advance.
+        .route("/admin/config/lease", get(admin_get_lease::<Cfg, A, C, L>))
+        .route(
+            "/admin/config/lease/bump",
+            post(admin_bump_lease::<Cfg, A, C, L>),
         )
         .with_state(OtaConfigState {
             config_trees,
@@ -10910,7 +10952,7 @@ async fn admin_publish_rollout<Cfg, A, C, L>(
     Json(request): Json<PublishRolloutRequest>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -10975,7 +11017,7 @@ async fn admin_halt_rollout<Cfg, A, C, L>(
     Json(request): Json<HaltRolloutRequest>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -11058,7 +11100,7 @@ async fn publish_ota_node<Cfg, A, C, L>(
     write: OtaNodeWrite<'_>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -11106,7 +11148,7 @@ async fn admin_get_rollout<Cfg, A, C, L>(
     Query(query): Query<OtaRolloutQuery>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -11165,7 +11207,7 @@ async fn admin_publish_placement<Cfg, A, C, L>(
     Json(request): Json<PublishPlacementRequest>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -11216,7 +11258,7 @@ async fn admin_get_placement<Cfg, A, C, L>(
     Query(query): Query<OtaRolloutQuery>,
 ) -> Response
 where
-    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ReleaseStore + Clone + Send + Sync + 'static,
@@ -11255,6 +11297,137 @@ where
         }
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// `POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it
+/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+///
+/// This is the act of saying **"a different machine is the store now"**. One request does two things
+/// that must not drift apart: it advances the authoritative counter in `store_lease`, and it
+/// publishes the resulting number as the Store-layer `lease` node — the only rail that reaches a
+/// till. The node is *derived* here, never authored: no route accepts a `lease` body, because a
+/// generation a person could type would not be an authority.
+///
+/// A store's **first** bump lands on generation `0` and supersedes nobody — ADR-0049's "the first
+/// lease a store ever issues is generation `0`" — so it is the act of putting a store under the
+/// lease at all. Every bump after that supersedes whatever box holds the previous number: it stops
+/// installing updates on its next config pull, and stays stopped across reboots, because the edge
+/// takes its generation once and thereafter only compares.
+///
+/// Behind [`ConsolePermission::ManageStores`] rather than `PublishOta`: replacing the machine that
+/// *is* a store is store management, and the person who does it is the person who provisions
+/// hardware, not the person who runs an upgrade campaign. The audit entry names the generation
+/// issued, so "who replaced this box, and when" has an answer.
+async fn admin_bump_lease<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
+    headers: HeaderMap,
+    Json(request): Json<OtaRolloutQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    // The counter moves first. If the publish then fails the store is on a generation no till has
+    // been told about, which is the safe half of the split: every box keeps the generation it holds
+    // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
+    // publish a generation the authority never issued.
+    let generation = match state
+        .config_trees
+        .bump(tenant_id, store_id, state.clock.now())
+        .await
+    {
+        Ok(generation) => generation,
+        Err(error) => return lease_store_error_response(&error),
+    };
+    let node = lease_node(generation);
+    publish_ota_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        OtaNodeWrite {
+            level: ConfigLevel::Store,
+            key: "lease",
+            node,
+            action: "config.lease.bump",
+            detail: serde_json::json!({ "generation": generation.value() }),
+        },
+    )
+    .await
+}
+
+/// `GET /admin/config/lease` — the store's authoritative lease generation, or `null` if it has never
+/// been issued one. Behind [`ConsolePermission::Read`].
+///
+/// Read from the `store_lease` row, not from the published node: the row is the authority and the
+/// node is its delivery, and a console that read the node would be reporting what the *tills* were
+/// told rather than what is true.
+async fn admin_get_lease<Cfg, A, C, L>(
+    State(state): State<OtaConfigState<Cfg, A, C, L>>,
+    headers: HeaderMap,
+    Query(query): Query<OtaRolloutQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    L: ReleaseStore + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    match state.config_trees.current(tenant_id, store_id).await {
+        Ok(current) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "generation": current.map(pos_core::lease::LeaseGeneration::value),
+            })),
+        )
+            .into_response(),
+        Err(error) => lease_store_error_response(&error),
+    }
+}
+
+/// Turns a lease-store fault into the same `503` every other store outage returns. There is no
+/// caller-fixable case: a bump takes no value and a read takes no filter, so anything that fails
+/// here is the database, not the request.
+fn lease_store_error_response(error: &LeaseStoreError) -> Response {
+    tracing::error!(%error, "the lease store failed");
+    service_unavailable("the lease store is unavailable")
 }
 
 // --- Vouchers (ADR-0077, Track M3): mint and list the codes a voucher-kind campaign redeems --------
@@ -16060,22 +16233,31 @@ where
     if let Err(forbidden) = require_store(&grant, store_id) {
         return forbidden.into_response();
     }
-    let outbox_depth = match heartbeat_body(&body) {
-        Ok(report) => report.outbox_depth,
+    let report = match heartbeat_body(&body) {
+        Ok(report) => report,
         // A body that is present and will not parse is the caller's mistake; swallowing it would let
         // a store report nothing forever while believing it reported.
         Err(error) => {
             return api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 format!("the heartbeat body is not a heartbeat report: {error}"),
-                &[("outbox_depth", "INVALID_VALUE")],
+                &[
+                    ("outbox_depth", "INVALID_VALUE"),
+                    ("lease_generation", "INVALID_VALUE"),
+                ],
             );
         }
     };
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app
         .config_trees
-        .record_store_heartbeat(grant.tenant(), store_id, app.clock.now(), outbox_depth)
+        .record_store_heartbeat(
+            grant.tenant(),
+            store_id,
+            app.clock.now(),
+            report.outbox_depth,
+            report.lease_generation,
+        )
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -16095,6 +16277,13 @@ struct HeartbeatBody {
     /// did not say, which is a different answer from zero and leaves the recorded depth alone.
     #[serde(default)]
     outbox_depth: Option<u64>,
+    /// The lease generation the box holds
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), so the console can
+    /// tell a store that has been *replaced* from one that is merely quiet. `None` when the store did
+    /// not say — an older edge, or one whose lease row could not be read — and that must not be
+    /// recorded as `0`, because `0` is a store's real first generation.
+    #[serde(default)]
+    lease_generation: Option<u64>,
 }
 
 /// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —

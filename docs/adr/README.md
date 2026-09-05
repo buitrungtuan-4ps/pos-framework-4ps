@@ -113,5 +113,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0105](0105-a-country-pack-is-values.md) | A country pack is a list of values, and none of them are in the framework | Accepted |
 | [0106](0106-the-store-is-a-legal-person.md) | A receipt names who sold, and the store's identity is data | Accepted |
 | [0107](0107-the-buyer-is-a-subject.md) | The buyer on a tax invoice is a subject, not a string — and a store gets the twentieth port to keep them in | Accepted |
+| [0108](0108-the-lease-generation-is-authority.md) | The lease generation is authority, not configuration, and a box takes it once | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

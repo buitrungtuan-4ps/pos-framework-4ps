@@ -209,6 +209,11 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/capabilities",
     "/admin/config/channels",
     "/admin/config/inventory",
+    // The store's lease (ADR-0108). `GET` reads the authoritative generation; `POST …/bump` issues
+    // the next one, which is the act of making a different machine the store. There is no `PUT`,
+    // deliberately: the node is derived from the counter, never authored.
+    "/admin/config/lease",
+    "/admin/config/lease/bump",
     "/admin/config/locale",
     "/admin/config/ota",
     "/admin/config/ota/halt",

@@ -4,7 +4,8 @@
 //! The fleet read model over PostgreSQL ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 3).
 //!
 //! The console's one-glance answer to "is the fleet there, and is it in sync?" is a join, not a
-//! table: a store's identity (`stores`), its liveness (`store_liveness`), its config drift
+//! table: a store's identity (`stores`), its liveness (`store_liveness`), its lease
+//! (`store_lease`), its config drift
 //! (`config_trees`), and its relay backlog (`order_queue`) each live in their own table, written by
 //! their own path. This adapter reads them together, per tenant, and hands back a flat row; `pos-cloud`
 //! implements its `FleetStore` seam over this type and derives online/offline at read time. Nothing is
@@ -60,6 +61,17 @@ pub struct FleetStoreRow {
     /// Unix ms of the heartbeat that reported `outbox_depth`, or `None`. Carried so a stale depth
     /// reads as stale rather than as current.
     pub outbox_reported_at_ms: Option<i64>,
+    /// The lease generation the box last reported holding (ADR-0108), or `None` if it has never
+    /// said. Read beside `lease_generation_authoritative`: the pair is what makes a **split**
+    /// legible — a box that has been replaced looks nothing like one that is merely quiet, but only
+    /// if both numbers are in front of the operator.
+    pub lease_generation_held: Option<i64>,
+    /// Unix ms of the heartbeat that reported it, or `None`.
+    pub lease_reported_at_ms: Option<i64>,
+    /// The store's authoritative lease generation (ADR-0108), or `None` if the cloud has never
+    /// issued this store one — which is every store until an operator does, and reads as "no lease
+    /// in force" rather than as generation `0`.
+    pub lease_generation_authoritative: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -81,9 +93,14 @@ const FLEET_SELECT: &str = "SELECT \
      l.self_test_ok, \
      l.reported_at, \
      l.outbox_depth, \
-     l.outbox_reported_at \
+     l.outbox_reported_at, \
+     l.lease_generation, \
+     l.lease_reported_at, \
+     lease.generation AS lease_generation_authoritative \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
+     LEFT JOIN store_lease lease \
+         ON lease.tenant_id = s.tenant_id AND lease.store_id = s.store_id \
      LEFT JOIN config_trees ct ON ct.tenant_id = s.tenant_id AND ct.store_id = s.store_id \
      LEFT JOIN ( \
          SELECT store_id, \
@@ -157,5 +174,8 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         reported_at_ms: row.get(11),
         outbox_depth: row.get(12),
         outbox_reported_at_ms: row.get(13),
+        lease_generation_held: row.get(14),
+        lease_reported_at_ms: row.get(15),
+        lease_generation_authoritative: row.get(16),
     }
 }

@@ -214,6 +214,66 @@ impl PostgresConfigTrees {
         Ok(())
     }
 
+    /// Issues this store's next lease generation and returns it — a **bump**, and the only write
+    /// this adapter offers ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+    ///
+    /// A store with no row starts at generation `0`, which ADR-0049 names as "the first lease a
+    /// store ever issues"; an existing row moves to `generation + 1`. There is deliberately no
+    /// set-to-a-value and no decrement: an authority that takes a number from its caller is not one,
+    /// and a generation that can move backwards is not monotonic, which is the entire mechanism.
+    ///
+    /// One statement, so two admins bumping at once serialise on the row rather than racing to the
+    /// same number.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn bump_store_lease(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        issued_at_ms: i64,
+    ) -> Result<i64, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_one(
+                "INSERT INTO store_lease (tenant_id, store_id, generation, issued_at) \
+                 VALUES ($1, $2, 0, $3) \
+                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
+                 generation = store_lease.generation + 1, \
+                 issued_at = EXCLUDED.issued_at \
+                 RETURNING generation",
+                &[&tenant.to_string(), &store_id.to_string(), &issued_at_ms],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.get(0))
+    }
+
+    /// The store's authoritative lease generation, or `None` if it has never been issued one.
+    ///
+    /// `None` is not `0`: a store that has never been issued a lease is one no box can be superseded
+    /// against, and a store on generation `0` has exactly one machine that may be.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn store_lease(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Option<i64>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT generation FROM store_lease WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant.to_string(), &store_id.to_string()],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
     /// Advances a store's `last_seen_at` from a heartbeat ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)),
     /// leaving `config_version_held` and `last_config_pull_at` untouched on an existing row (a fresh
     /// row gets them `NULL`, since a heartbeat carries no config-pull facts). `seen_at_ms` is Unix
@@ -224,6 +284,11 @@ impl PostgresConfigTrees {
     /// log — leaves both columns exactly as they were: "did not say" is not "zero", and overwriting a
     /// real backlog with a fabricated zero would read as a store that had caught up.
     ///
+    /// `lease_generation` is the generation the box says it holds
+    /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)), under the same
+    /// rule and for a sharper reason: generation `0` is a store's *first* real lease, so writing a
+    /// zero for a box that said nothing would report a replaced machine as current.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
@@ -233,23 +298,31 @@ impl PostgresConfigTrees {
         store_id: StoreId,
         seen_at_ms: i64,
         outbox_depth: Option<i64>,
+        lease_generation: Option<i64>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
                 "INSERT INTO store_liveness \
-                 (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at) \
-                 VALUES ($1, $2, $3, $4, CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3 END) \
+                 (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at, \
+                  lease_generation, lease_reported_at) \
+                 VALUES ($1, $2, $3, $4, CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3 END, \
+                         $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3 END) \
                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                  last_seen_at = EXCLUDED.last_seen_at, \
                  outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
                  outbox_reported_at = \
-                     COALESCE(EXCLUDED.outbox_reported_at, store_liveness.outbox_reported_at)",
+                     COALESCE(EXCLUDED.outbox_reported_at, store_liveness.outbox_reported_at), \
+                 lease_generation = \
+                     COALESCE(EXCLUDED.lease_generation, store_liveness.lease_generation), \
+                 lease_reported_at = \
+                     COALESCE(EXCLUDED.lease_reported_at, store_liveness.lease_reported_at)",
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),
                     &seen_at_ms,
                     &outbox_depth,
+                    &lease_generation,
                 ],
             )
             .await

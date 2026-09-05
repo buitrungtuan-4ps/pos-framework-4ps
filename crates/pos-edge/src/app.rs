@@ -31,6 +31,7 @@ use pos_core::decision::{
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
+use pos_core::lease::LeaseGeneration;
 use pos_core::menu::PricedLine;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
@@ -371,6 +372,19 @@ pub struct EdgeSession {
     /// `Ring::Fleet` with bucket 0 is barely better — it is the first fleet device in, at any ramp
     /// above zero. There is no safe placement to invent, so none is invented.
     pub device_ota: Option<DeviceOtaAssignment>,
+    /// The store's **authoritative** lease generation, from the `lease` config node
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)) — the number this
+    /// box's own held generation is compared against to decide whether it is still the store.
+    ///
+    /// `None` means the cloud has never issued this store a lease, which is every store until an
+    /// operator deliberately does. A box then weighs itself as active, exactly as the whole fleet
+    /// did before this node existed — the refusal begins the day a store is first given a lease,
+    /// not the day this field shipped.
+    ///
+    /// Deliberately *not* the generation the box holds: that one is durable edge-local state
+    /// ([`crate::lease_state`]), because a value rebuilt from config on every boot would be
+    /// re-adopted on every boot, and a superseded machine would promote itself back.
+    pub lease_generation: Option<LeaseGeneration>,
 }
 
 impl EdgeSession {
@@ -453,6 +467,9 @@ impl EdgeSession {
             // the only safe answer before the cloud has said anything about updates.
             fleet_update: None,
             device_ota: None,
+            // No lease issued: a bootstrap store is the only machine that has ever claimed it, so
+            // there is nothing that could have superseded it.
+            lease_generation: None,
         }
     }
 

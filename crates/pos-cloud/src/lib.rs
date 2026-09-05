@@ -76,6 +76,7 @@ pub mod http;
 pub mod images;
 pub mod import;
 pub mod inventory;
+pub mod lease;
 pub mod media;
 pub mod metrics;
 mod openapi;

@@ -24,6 +24,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, include_str!("../migrations/0005_device_registry.sql")),
     (6, include_str!("../migrations/0006_ota_state.sql")),
     (7, include_str!("../migrations/0007_subjects.sql")),
+    (8, include_str!("../migrations/0008_lease.sql")),
 ];
 
 /// Applies every migration the database has not yet seen.

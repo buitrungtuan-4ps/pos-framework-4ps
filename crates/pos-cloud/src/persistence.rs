@@ -87,6 +87,8 @@ use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal,
 };
+use pos_core::lease::LeaseGeneration;
+
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
@@ -95,6 +97,7 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
+use crate::lease::{LeaseStore, LeaseStoreError};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -446,14 +449,68 @@ impl ConfigTreeStore for PostgresConfigTrees {
         store: StoreId,
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
+        lease_generation: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         // A depth past `i64::MAX` is not reachable from a store's log, but saturating beats a panic
         // and beats dropping the heartbeat: the column is `bigint`, so this is the widest it holds.
         let depth = outbox_depth.map(|depth| i64::try_from(depth).unwrap_or(i64::MAX));
-        self.record_heartbeat(tenant, store, seen_at.as_milliseconds_since_epoch(), depth)
-            .await
-            .map_err(|error| ConfigStoreError::new(error.to_string()))
+        // Same rule for the generation, and just as unreachable: a store issues a handful of leases
+        // in its life, and `LeaseGeneration::next` saturates rather than wrapping (ADR-0049).
+        let generation = lease_generation.map(|value| i64::try_from(value).unwrap_or(i64::MAX));
+        self.record_heartbeat(
+            tenant,
+            store,
+            seen_at.as_milliseconds_since_epoch(),
+            depth,
+            generation,
+        )
+        .await
+        .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
+}
+
+impl LeaseStore for PostgresConfigTrees {
+    /// Forwards to the adapter's single-statement bump, so two admins replacing a machine at once
+    /// serialise on the row rather than racing to the same generation.
+    async fn bump(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        issued_at: Timestamp,
+    ) -> Result<LeaseGeneration, LeaseStoreError> {
+        let generation = self
+            .bump_store_lease(tenant, store, issued_at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        stored_lease_generation(generation)
+    }
+
+    async fn current(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<LeaseGeneration>, LeaseStoreError> {
+        let stored = self
+            .store_lease(tenant, store)
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        stored.map(stored_lease_generation).transpose()
+    }
+}
+
+/// Reads a stored generation back into the domain's `u64`.
+///
+/// `bigint` is signed and this cloud is the only writer, so a negative value cannot have been issued
+/// — it is a tampered or corrupt row. Refusing it beats clamping: generation `0` is a store's real
+/// *first* lease, so a silent clamp would tell every box in the store it had been superseded.
+fn stored_lease_generation(value: i64) -> Result<LeaseGeneration, LeaseStoreError> {
+    u64::try_from(value)
+        .map(LeaseGeneration::new)
+        .map_err(|error| {
+            LeaseStoreError::new(format!(
+                "the stored lease generation is negative, which this cloud never writes: {error}"
+            ))
+        })
 }
 
 impl OtaReportStore for PostgresConfigTrees {
@@ -1607,6 +1664,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let outbox_reported_at = row
         .outbox_reported_at_ms
         .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let lease_reported_at = row
+        .lease_reported_at_ms
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
@@ -1625,6 +1685,16 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // not say" is a truer answer for the console than a wrapped-around count.
         outbox_depth: row.outbox_depth.and_then(|depth| u64::try_from(depth).ok()),
         outbox_reported_at,
+        // Same rule as the depth: a negative generation cannot have been written by this cloud, and
+        // "did not say" is a truer answer for the console than a wrapped-around number that would
+        // read as a store on an ancient lease.
+        lease_generation_held: row
+            .lease_generation_held
+            .and_then(|value| u64::try_from(value).ok()),
+        lease_reported_at,
+        lease_generation_authoritative: row
+            .lease_generation_authoritative
+            .and_then(|value| u64::try_from(value).ok()),
     })
 }
 

@@ -475,10 +475,22 @@ impl HeartbeatHttpTransport {
 impl HeartbeatTransport for HeartbeatHttpTransport {
     async fn beat(&self, report: HeartbeatReport) -> Result<(), HeartbeatError> {
         let path = format!("/sync/stores/{}/heartbeat", self.store_id);
-        let body = match report.outbox_depth {
-            Some(depth) => serde_json::to_vec(&serde_json::json!({ "outbox_depth": depth }))
-                .map_err(|error| HeartbeatError::new(error.to_string()))?,
-            None => Vec::new(),
+        // Only the fields the store actually has an answer for. An empty body is the older edge,
+        // and the cloud's route reads it as "nothing to report" rather than as zeros — so omitting a
+        // key the box could not answer leaves whatever the cloud last recorded alone (ADR-0068,
+        // ADR-0108), which is the difference between "did not say" and "nothing pending".
+        let mut fields = serde_json::Map::new();
+        if let Some(depth) = report.outbox_depth {
+            fields.insert("outbox_depth".to_owned(), depth.into());
+        }
+        if let Some(generation) = report.lease_generation {
+            fields.insert("lease_generation".to_owned(), generation.into());
+        }
+        let body = if fields.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::to_vec(&serde_json::Value::Object(fields))
+                .map_err(|error| HeartbeatError::new(error.to_string()))?
         };
         let (status, _body) = self
             .client

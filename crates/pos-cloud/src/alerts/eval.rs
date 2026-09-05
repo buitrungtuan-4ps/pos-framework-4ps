@@ -289,6 +289,9 @@ mod tests {
             reported_at: None,
             outbox_depth: None,
             outbox_reported_at: None,
+            lease_generation_held: None,
+            lease_reported_at: None,
+            lease_generation_authoritative: None,
         }
     }
 

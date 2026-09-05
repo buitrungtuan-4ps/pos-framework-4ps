@@ -21,6 +21,8 @@
 
 use core::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 /// A lease generation — the store's monotonic counter of how many leases it has issued. The authority
 /// increments it for each replacement; a device compares the generation it holds against it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -102,6 +104,36 @@ pub enum LeaseStanding {
     /// The device claims a generation ahead of the authority — impossible without corruption or a
     /// forged token, so it is refused rather than trusted.
     Invalid,
+}
+
+/// The `lease` config node as the cloud publishes it, and the store reads it
+/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+///
+/// One number, because that is all the mechanism needs: the store's **authoritative** generation. The
+/// grant's invoice range is deliberately not here — allocating a legal range is a `Fiscalization` call
+/// that ADR-0049 left to P10, and it is gated on a country's tax registration rather than on this
+/// repository. Splitting the two is what lets supersession work before that lands.
+///
+/// The node is **derived, never authored**: the cloud publishes it from the `store_lease` row a bump
+/// wrote, and no admin route accepts one in a request body. A generation a person could type, or that
+/// a config rollback could move backwards, would not be an authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseConfig {
+    /// The store's authoritative lease generation.
+    pub generation: u64,
+}
+
+impl LeaseConfig {
+    /// The typed generation this node names.
+    ///
+    /// There is nothing to reject: every `u64` is a generation, and a node that is *not* a `u64`
+    /// never reaches here because it fails to deserialize. That is why this is an accessor and not a
+    /// `validate` returning errors, unlike the OTA nodes beside it in the config tree — inventing a
+    /// fallible check to match their shape would be a lie about what can go wrong.
+    #[must_use]
+    pub const fn generation(self) -> LeaseGeneration {
+        LeaseGeneration::new(self.generation)
+    }
 }
 
 /// Decides a device's standing from the generation it holds and the store's authoritative generation.

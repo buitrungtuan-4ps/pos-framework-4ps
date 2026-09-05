@@ -756,11 +756,46 @@ struct FakeConfigTrees {
     /// The publish backlog a heartbeat last reported, mirroring `store_liveness.outbox_depth`. A
     /// heartbeat that reported none leaves the entry alone, as the adapter's `COALESCE` does.
     outbox: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
+    /// The authoritative lease generation per store, mirroring `store_lease` (ADR-0108). Absent
+    /// until the first bump, which is what "no lease in force" means.
+    leases: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
     /// would set it.
     interpose: Arc<Mutex<Option<(String, serde_json::Value)>>>,
+}
+
+impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
+    /// Bumps in memory exactly as the adapter's one statement does: absent starts at generation 0,
+    /// present moves to `generation + 1`, and there is no way to set an arbitrary value.
+    async fn bump(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _issued_at: Timestamp,
+    ) -> Result<pos_core::lease::LeaseGeneration, pos_cloud::lease::LeaseStoreError> {
+        let mut leases = self.leases.lock().expect("lock");
+        let next = leases
+            .get(&(tenant, store))
+            .map_or(0, |held: &u64| held.saturating_add(1));
+        leases.insert((tenant, store), next);
+        Ok(pos_core::lease::LeaseGeneration::new(next))
+    }
+
+    async fn current(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<pos_core::lease::LeaseGeneration>, pos_cloud::lease::LeaseStoreError> {
+        Ok(self
+            .leases
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .copied()
+            .map(pos_core::lease::LeaseGeneration::new))
+    }
 }
 
 impl FakeConfigTrees {
@@ -883,6 +918,7 @@ impl ConfigTreeStore for FakeConfigTrees {
         store: StoreId,
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
+        _lease_generation: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
         self.seen
@@ -5380,6 +5416,7 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _store: StoreId,
         _seen_at: Timestamp,
         _outbox_depth: Option<u64>,
+        _lease_generation: Option<u64>,
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }
@@ -5986,6 +6023,9 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             reported_at: None,
             outbox_depth: None,
             outbox_reported_at: None,
+            lease_generation_held: None,
+            lease_reported_at: None,
+            lease_generation_authoritative: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -6051,6 +6091,9 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             reported_at: None,
             outbox_depth: None,
             outbox_reported_at: None,
+            lease_generation_held: None,
+            lease_reported_at: None,
+            lease_generation_authoritative: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -6081,13 +6124,10 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
     );
 }
 
-#[tokio::test]
-async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
-    let online_store = StoreId::new(Ulid::from_u128(0x00F1_EE7A));
-    let offline_store = StoreId::new(Ulid::from_u128(0x00F1_EE7B));
-    // One store seen a second ago, holding the published version — online and in sync. One seen ten
-    // minutes ago, holding an old version, with a relay backlog — offline and drifted.
-    let fleet = FakeFleet::default()
+/// The two fleet rows the listing test reads: one healthy, one that is offline, drifted, backed up
+/// **and** replaced. Lifted out of the test so the assertions stay the readable part.
+fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
+    FakeFleet::default()
         .with_row(
             tenant(),
             FleetRow {
@@ -6105,6 +6145,10 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 reported_at: Some(seen_ago(1_000)),
                 outbox_depth: Some(0),
                 outbox_reported_at: Some(seen_ago(1_000)),
+                // Under a lease and holding the current generation: active, and not "superseded".
+                lease_generation_held: Some(3),
+                lease_reported_at: Some(seen_ago(1_000)),
+                lease_generation_authoritative: Some(3),
             },
         )
         .with_row(
@@ -6124,8 +6168,23 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
                 reported_at: None,
                 outbox_depth: Some(41),
                 outbox_reported_at: Some(seen_ago(600_000)),
+                // Holds generation 2 while the store's authority is on 3: this box has been
+                // replaced, and the console must say so rather than only "offline" (ADR-0108).
+                lease_generation_held: Some(2),
+                lease_reported_at: Some(seen_ago(600_000)),
+                lease_generation_authoritative: Some(3),
             },
-        );
+        )
+}
+
+#[tokio::test]
+async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
+    let online_store = StoreId::new(Ulid::from_u128(0x00F1_EE7A));
+    let offline_store = StoreId::new(Ulid::from_u128(0x00F1_EE7B));
+    // One store seen a second ago, holding the published version and the current lease — online, in
+    // sync, and still the machine the shop runs on. One seen ten minutes ago, holding an old config
+    // version and an old lease generation, with a relay backlog — offline, drifted, and replaced.
+    let fleet = drifted_fleet(online_store, offline_store);
     let router = fleet_app(provisioned_admin(), fleet);
     let cookie = admin_cookie(&router).await;
     let tenant_ulid = tenant().as_ulid().to_string();
@@ -6160,6 +6219,10 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
         online["outbox_depth"], 0,
         "a store that reported an empty outbox has nothing waiting to publish"
     );
+    assert_eq!(
+        online["lease_superseded"], false,
+        "a box holding its store's current generation is still the machine the shop runs on"
+    );
 
     let offline = &rows[1];
     assert_eq!(
@@ -6176,6 +6239,14 @@ async fn fleet_lists_stores_with_online_and_config_drift_derived_at_read() {
     assert_eq!(
         offline["outbox_depth"], 41,
         "and its own publish backlog — the opposite direction, and the one that was invisible"
+    );
+    // The split, which is the whole point of reporting the held generation (ADR-0108): without both
+    // numbers this box is indistinguishable from one that is merely quiet.
+    assert_eq!(offline["lease_generation_held"], 2);
+    assert_eq!(offline["lease_generation_authoritative"], 3);
+    assert_eq!(
+        offline["lease_superseded"], true,
+        "behind its store's authority: replaced, and refusing updates because of it"
     );
     assert_eq!(
         offline["outbox_reported_at_ms"],
@@ -6205,6 +6276,9 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             reported_at: None,
             outbox_depth: None,
             outbox_reported_at: None,
+            lease_generation_held: None,
+            lease_reported_at: None,
+            lease_generation_authoritative: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -6254,6 +6328,9 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             reported_at: None,
             outbox_depth: None,
             outbox_reported_at: None,
+            lease_generation_held: None,
+            lease_reported_at: None,
+            lease_generation_authoritative: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -10060,6 +10137,103 @@ async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
         .expect("route the placement read");
     assert_eq!(placement.status(), StatusCode::OK);
     assert_eq!(json_body(placement).await["canary_bucket"], 10);
+}
+
+#[tokio::test]
+async fn a_lease_bump_advances_the_authority_and_publishes_the_node_the_store_reads() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // A store nobody has issued a lease to reads `null` — "no lease in force", which the edge treats
+    // as `Active` so the fleet behaves exactly as it did before the mechanism existed. It is
+    // deliberately not generation `0`, which is a real first lease (ADR-0108, ADR-0049).
+    let unissued = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert_eq!(unissued.status(), StatusCode::OK);
+    assert!(json_body(unissued).await["generation"].is_null());
+
+    // The first bump establishes the counter at generation 0 and supersedes nobody.
+    let first = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/bump",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route the first bump");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert!(
+        !json_body(first).await["config_version_id"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "a bump publishes a config version, because the node is how the store learns"
+    );
+
+    // The second bump is the act of replacing the machine: the counter moves, and the Store layer
+    // now carries a `lease` node the edge will weigh its held generation against.
+    let second = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/bump",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route the second bump");
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert_eq!(
+        json_body(read).await["generation"],
+        1,
+        "the only write is a bump: 0, then 1, and there is no way to set a value"
+    );
+
+    // The published node is what the edge parses, on the **Store** layer — not the Device layer the
+    // placement uses. `device_ota` decides which release a store takes; `lease` decides whether this
+    // box is the store, and merging them would let a placement edit touch the lease.
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(
+        state.record.layers[2]["lease"],
+        serde_json::json!({ "generation": 1 }),
+        "the node is derived from the counter, so the two cannot drift"
+    );
+    // And it reaches the *effective* document, which is what a store actually pulls: a node authored
+    // onto a layer nothing merges would be invisible to the edge that has to weigh it.
+    let effective = &state
+        .record
+        .history
+        .last()
+        .expect("a published version")
+        .effective;
+    let parsed: pos_core::lease::LeaseConfig = serde_json::from_value(effective["lease"].clone())
+        .expect("the edge's own type reads the effective node back");
+    assert_eq!(
+        parsed.generation(),
+        pos_core::lease::LeaseGeneration::new(1)
+    );
 }
 
 #[tokio::test]
