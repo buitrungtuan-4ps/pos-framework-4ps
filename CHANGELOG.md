@@ -14,6 +14,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A tax rate can be a list of named parts, and a price may already contain its tax**
+  ([ADR-0104](docs/adr/0104-multi-component-and-inclusive-tax.md)). The two country facts that could
+  not have arrived later as configuration, because both would need a migration across every order
+  line ever written.
+
+  `TaxRateRow` keeps `rate` and gains `components`: named parts that must sum to it. India's 18 % GST
+  now prints as **CGST 9 % + SGST 9 %**, which is what makes the document a valid tax invoice rather
+  than a receipt. The money never depends on the parts — tax is computed from `rate` and then
+  *allocated* across them, so a mis-authored list can misprint an invoice and can never mischarge a
+  guest, and `TaxRateTable::unbalanced_rows` reports a table whose parts miss their total.
+
+  `locale.prices_include_tax` selects the posture. `false` — Vietnam, and the default — adds tax on
+  top of the price. `true` is Japan's 税込 and India's MRP: the tax is *extracted* from the quoted
+  price, the guest's total does not move, and the subtotal reports net. This finally reaches
+  `Money::tax_included`, which has been implemented and unreachable since P3.
+
+  **Upgrade note:** none. Both are `#[serde(default)]` additions on nodes that are already published,
+  so an older edge reading a newer publish still charges the correct total and a newer edge reading
+  an older publish behaves exactly as before. No `PROTOCOL_VERSION` bump and no migration. Vietnam's
+  arithmetic is unchanged byte for byte.
+
 ### Fixed
 
 - **Every list screen in the back-office console threw before it could show a row.**

@@ -219,6 +219,13 @@ pub struct EdgeSession {
     /// a special case of this table, not a different model; carrying both dimensions from day one is
     /// what avoids a migration across every line ever written.
     pub tax_rates: TaxRateTable,
+    /// Whether this store's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// `false` — the bootstrap default and Vietnam's posture — adds tax on top of the price. `true`
+    /// is Japan's 税込 and India's MRP: the price is what the guest pays and the tax is extracted
+    /// from inside it. Published on the `locale` node, so a store changes posture without a release.
+    pub prices_include_tax: bool,
     /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
     /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
@@ -377,6 +384,8 @@ impl EdgeSession {
             connectivity: Connectivity::Offline,
             recipes: RecipeBook::default(),
             tax_rates: Self::bootstrap_tax_rates(),
+            // Exclusive until a locale publish says otherwise — the posture Vietnam trades on.
+            prices_include_tax: false,
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
@@ -2408,6 +2417,7 @@ impl<S: EventStore> Edge<S> {
             sales_channel,
             cash_rounding_increment: None,
             rounding_mode: Rounding::HalfUp,
+            prices_include_tax: session.prices_include_tax,
         }
     }
 

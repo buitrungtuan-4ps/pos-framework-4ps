@@ -90,6 +90,10 @@ struct PublishedLocale {
     currency_code: String,
     timezone: String,
     cutoff_hour: u8,
+    /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
+    /// node published before this field existed still applies, as the exclusive posture it meant.
+    #[serde(default)]
+    prices_include_tax: bool,
 }
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
@@ -318,6 +322,9 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         if let Ok(cutoff) = CutoffHour::new(locale.cutoff_hour) {
             session.cutoff = cutoff;
         }
+        // A bool cannot fail to parse, so unlike its siblings this one applies unconditionally —
+        // which is also what makes turning the posture back off a publish rather than a release.
+        session.prices_include_tax = locale.prices_include_tax;
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
     // itself against, and the signing keys revocation has retired. The cloud has published this node
