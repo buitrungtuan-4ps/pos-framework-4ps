@@ -12,7 +12,8 @@
     "contrast": "node scripts/wcag-contrast.mjs",
     "preview": "vite preview",
     "i18n:parity": "node scripts/i18n-parity.mjs",
-    "steps": "node scripts/step-budget.mjs"
+    "steps": "node scripts/step-budget.mjs",
+    "replay": "playwright test"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -20,6 +21,7 @@
     "solid-js": "^1.9.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.0.9",
     "tailwindcss": "^4.0.9",
     "typescript": "^5.9.3",

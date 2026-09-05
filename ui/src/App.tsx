@@ -16,7 +16,7 @@ import { Shift } from "./screens/Shift";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { fold, loadFloor, loadLayout, loadLocale, loadMenu, setLink } from "./state/store";
+import { fold, loadStore, setLink } from "./state/store";
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
@@ -65,18 +65,11 @@ export function App() {
           sendTo("/signin");
           return;
         }
-        // Signed in: draw the store's real floor and resolve fires to its default station (ADR-0072),
-        // and load the store's own price book so the till sells what the console published (E5).
-        // A failure or an empty plan leaves the never-blank fallback in place.
-        void loadFloor();
-        void loadMenu();
-        // And how the console arranged those items into buttons (ADR-0066, C4). Separate from the
-        // price book because the nodes are separate; an empty plan leaves the flat list in place.
-        void loadLayout();
-        // And the store's money settings — which notes its guests carry, what the total rounds to in
-        // cash (ADR-0105). A country's coinage, published rather than compiled in; the pay pad keeps
-        // the compiled-in keys for that currency until this lands.
-        void loadLocale();
+        // Signed in: draw the store's real floor, its own price book, the console's button plan and
+        // its money settings (ADR-0072, ADR-0066, ADR-0105, E5). A failure or an empty node leaves
+        // the never-blank fallback in place. The sign-in screen loads the same set on success,
+        // because a device that signs in navigates client-side and never reaches this again.
+        void loadStore();
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {

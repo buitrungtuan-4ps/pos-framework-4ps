@@ -4,6 +4,7 @@ import { useNavigate } from "@solidjs/router";
 import { ApiError, api } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { loadStore } from "../state/store";
 
 // Staff sign-in on a paired device (S0b, ADR-0084). A paired device commands nothing until a real
 // employee signs in with their badge code and PIN; the edge verifies the PIN offline against the
@@ -40,6 +41,11 @@ export function SignIn() {
     try {
       const result = await api.signIn(code().trim(), pin());
       if (result.ok) {
+        // The device can sell now, so read what it sells: the floor, the price book, the button plan
+        // and the money settings. `App`'s boot gate loads the same set, but it runs once on page
+        // load and this navigation is client-side — without this a freshly signed-in till drew the
+        // fallback floor and an empty menu until somebody reloaded it.
+        await loadStore();
         navigate("/", { replace: true });
         return;
       }

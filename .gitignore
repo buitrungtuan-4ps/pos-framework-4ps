@@ -23,5 +23,9 @@ config.toml
 
 /ui/node_modules/
 /ui/dist/
+# What the browser step gate leaves behind: traces and reports for a failed
+# replay (ADR-0109). Diagnostic output, regenerated on every run.
+/ui/test-results/
+/ui/playwright-report/
 /dashboard/node_modules/
 /dashboard/dist/

@@ -21,7 +21,14 @@ export function Kds() {
     <section class="p-4">
       <PageHeader title={t("kds.title")} size="xl" />
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <For each={visible()} fallback={<p class="text-ink-muted">{t("kds.empty")}</p>}>
+        <For
+          each={visible()}
+          fallback={
+            <p class="text-ink-muted" data-outcome="board-clear">
+              {t("kds.empty")}
+            </p>
+          }
+        >
           {(line) => (
             <button
               type="button"

@@ -47,6 +47,7 @@ export function Pairing() {
       >
         <p class="text-ink-muted">{t("pair.hint")}</p>
         <input
+          id="pair-code"
           inputmode="numeric"
           maxLength={6}
           autocomplete="one-time-code"
@@ -61,7 +62,12 @@ export function Pairing() {
             </p>
           )}
         </Show>
+        {/* Ids, not a `data-step`: pairing is not one of the selling flows the step budget measures
+            (`ui/scripts/step-tasks.mjs`), and giving it a step attribute would put it in a
+            vocabulary it is not part of. The browser harness reaches this screen by id, the way any
+            other tool would. */}
         <button
+          id="pair-submit"
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink disabled:opacity-50"
           disabled={code().length !== 6}

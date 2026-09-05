@@ -25,7 +25,7 @@ import {
 // (pay -> note -> take). A tip pad behind a button would be a fourth *required* tap and the step
 // budget would fail the build, correctly. So the tip row sits in the flow already visible: a
 // cashier who takes no tip taps nothing extra, and the tip's own taps are declared as their own
-// task in `ui/scripts/step-budget.mjs`.
+// task in `ui/scripts/step-tasks.mjs`.
 /**
  * What the till says about the receipt (ADR-0100). An edge built before C2 sends no
  * `receipt_print`, so the old "Printing receipt…" wording is the fallback — the one case where the
@@ -310,7 +310,9 @@ export function Pay() {
         }
       >
         {(bill) => (
-          <div class="mt-6 rounded-token border border-line bg-surface p-4">
+          // The settled block: what a pay flow has to reach, and what an undeclared extra tap would
+          // stop it reaching (ADR-0109).
+          <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="settled">
             <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
             <p class="mt-2 tabular-nums">
               {t("pay.receipt", { number: bill().receipt_number ?? 0 })}

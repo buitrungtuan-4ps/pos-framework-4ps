@@ -44,7 +44,14 @@ export function Expo() {
     <section class="p-4">
       <PageHeader title={t("expo.title")} size="xl" />
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <For each={groups()} fallback={<p class="text-ink-muted">{t("expo.empty")}</p>}>
+        <For
+          each={groups()}
+          fallback={
+            <p class="text-ink-muted" data-outcome="pass-clear">
+              {t("expo.empty")}
+            </p>
+          }
+        >
           {(group) => (
             <div class="rounded-token border border-line bg-surface-raised p-4">
               <p class="text-lg font-semibold">{t("common.table", { label: group.label })}</p>

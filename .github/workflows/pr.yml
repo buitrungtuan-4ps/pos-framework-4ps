@@ -174,6 +174,52 @@ jobs:
         run: pnpm build
 
   # ---------------------------------------------------------------------------
+  # The browser half of the step gate (ADR-0109). `ui` above resolves the
+  # declared taps against the source; this one clicks them in a real browser,
+  # against a real `examples/minimal-edge`, and asserts each flow still reaches
+  # its outcome. That is the half that catches a tap nobody declared — a
+  # confirmation added to the pay flow leaves the static gate green and turns
+  # this one red with the declaration untouched.
+  #
+  # The step order is load-bearing: the edge embeds `ui/dist` at compile time
+  # (rust-embed, ADR-0018), so the UI is built first and the binary second, or
+  # the browser drives a placeholder page.
+  # ---------------------------------------------------------------------------
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+      - name: install pnpm
+        run: npm install --global pnpm@10
+      - name: install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: build the operator UI
+        working-directory: ui
+        run: pnpm build
+      - name: build the example store
+        run: cargo build -p minimal-edge --locked
+      # Chromium only, and only the browser this project drives. `--with-deps`
+      # installs the shared libraries a headless Chromium needs on a bare runner.
+      - name: install the browser
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: replay every declared flow
+        working-directory: ui
+        run: pnpm replay
+      # The trace of a failed replay is the difference between "a tap did not
+      # land" and knowing which one. Only on failure, and only for a fortnight.
+      - name: keep the traces of whatever failed
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: replay-traces
+          path: ui/test-results/
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # The back-office dashboard (ADR-0060). Like `ui`, the Rust build embeds a
   # placeholder on a fresh checkout (dashboard/dist is gitignored), so this is
   # the only job that compiles the SolidJS app: it type-checks, runs the

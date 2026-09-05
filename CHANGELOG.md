@@ -14,7 +14,49 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A browser now walks every selling flow the step budget declares, so a tap nobody declared fails a
+  pull request** ([ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md), gate register
+  **A4**).
+
+  `ui/scripts/step-budget.mjs` has always resolved every *declared* tap against the source, and has
+  always said in its own header what it could not do: *"It cannot see a tap nobody declared. Add a
+  required confirm dialog to the pay flow and leave this file alone, and the gate stays green while
+  the flow is one tap worse."* That is not a small hole — it is the only realistic way the two-and-
+  three-tap rule in `docs/ui-ux.md` §6 gets breached, because nobody edits the script to raise a
+  number; a dialog gets added for a good local reason and the declaration is never touched.
+
+  The declaration now lives in `ui/scripts/step-tasks.mjs` and two gates read it. The analyser
+  resolves each tap and requires its element to carry `data-step="<action>"`. `ui/tests/replay.spec.mjs`
+  then clicks those same taps in a real browser, in order, against a real `examples/minimal-edge` —
+  no stub — and asserts the flow reaches the `data-outcome` the task declares. Insert a confirmation
+  into the pay flow and the third declared tap lands on the dialog instead of on the money:
+  `data-outcome="settled"` never appears and the build goes red **with the declaration untouched**,
+  which is the case the analyser is blind to.
+
+  Twelve of the fifteen declared flows are replayed. The three counter flows are not, because a
+  counter order arrives from the cloud over the relay and the on-fakes example has no cloud; each
+  says so in the declaration, and a test asserts the skipped set is exactly those three, so coverage
+  cannot quietly shrink one flow at a time.
+
+  `pnpm replay` runs it locally, and a new `replay` CI job runs it on every pull request. `ui/` gains
+  `@playwright/test` as a dev dependency (authorised by ADR-0109) and CI gains a browser download;
+  neither reaches a shipped bundle.
+
 ### Fixed
+
+- **A till that paired and signed in for the first time drew an empty menu until somebody reloaded
+  it** (found by the browser step gate above).
+
+  The boot gate in `App.tsx` loads the floor, the price book, the console's button plan and the money
+  settings **once, on page load**. Signing in navigates client-side, so that gate never ran again: a
+  device that paired and signed in landed on the floor with the fallback table grid, no items to sell
+  and no quick-cash keys. It survived because any later reload hides it — and a browser is the only
+  thing that could have found it, which is exactly the argument ADR-0109 makes.
+
+  Both moments a device becomes able to sell now call the same `loadStore()`.
+
 
 - **`just run-edge` can now seat a table** ([ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)
   Amendment 1).

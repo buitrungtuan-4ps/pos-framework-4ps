@@ -164,3 +164,52 @@ Three things this deliberately is not:
 The consequence for this record is that §4's list is now three items, and the third was the one
 actually blocking: the replay can pair, sign in, seat a table, sell one of three priced items, and
 settle — which is the flow set the declaration names.
+
+**Amendment 2 (2026-09-05) — the harness is built, and building it found the flaw it was commissioned
+to look for.**
+
+`ui/tests/replay.spec.mjs` and the `replay` CI job implement §1–§4. Four things about the finished
+shape were not obvious when this was decided.
+
+**1. The declaration moved out, so there is exactly one of it.** §3 said the two gates lock together;
+that only holds if they read the same list. `ui/scripts/step-tasks.mjs` now holds the tasks, and both
+`step-budget.mjs` and the replay import it. A flow that grows a step says so in one place.
+
+**2. A tap that lands is not a flow that worked, so each task declares an outcome.** §2 says the
+harness "asserts the flow reaches its stated outcome" — but a click that does nothing looks exactly
+like a click that worked, so the assertion needs something in the page to name. Each task carries
+`outcome: { route, mark }`, and the element that proves the flow succeeded carries
+`data-outcome="<mark>"`: the settled block on the pay screen, the fired badge on a line, the variance
+panel on a closed shift. The static gate resolves the mark the same way it resolves a `data-step`, so
+neither attribute can name something that does not exist.
+
+This is the half that catches the case this record exists for. Insert a confirmation into the pay
+flow and the third declared tap lands on the dialog: the URL is still the pay screen, the taps all
+"worked", and `data-outcome="settled"` never appears. Red, with the declaration untouched.
+
+**3. Three flows cannot be replayed against the fake, and they say so.** A counter order arrives from
+the cloud over the relay ([ADR-0093](0093-bill-keyed-on-order.md),
+[ADR-0061](0061-order-relay.md)); `examples/minimal-edge` has no `cloud_url`, so no relay runs and
+the counter list is always empty. The three `/counter` money flows therefore carry `unreplayable`
+with that reason in the declaration, and a test asserts the skipped set is **exactly** those three.
+Coverage cannot quietly shrink one flow at a time, which is the failure mode a silently-skipped test
+has. Closing it needs a cloud in the harness — a second definition of the cloud's behaviour, which
+§4 already declined for the edge and declines here for the same reason.
+
+**4. What it found on its first run.** Before it had guarded a single regression, the replay could not
+add an item to an order: the price book was empty. `App`'s boot gate loads the floor, the price book,
+the button plan and the money settings **once, on page load** — and a device that pairs and signs in
+navigates client-side, so that gate never ran again. Every till that paired and signed in for the
+first time drew the fallback floor and an empty menu until somebody reloaded the page. It survived
+because a reload eventually happens and hides it. `loadStore()` is now called from both moments a
+device becomes able to sell.
+
+That is the argument for the cost in the Consequences above, made concretely: the harness's first
+act was to find a real defect in the first-run path, of exactly the kind — "the rendered page, not
+the syntax tree" — that §The problem said no analyser could reach.
+
+**A note for anyone running it by hand.** The edge embeds `ui/dist` at compile time
+([ADR-0018](0018-http-websocket-stack.md)), so the order is `pnpm build`, then
+`cargo build -p minimal-edge`, then `pnpm replay`. Reversed, the browser drives whichever UI was
+compiled in last time, and a green run means nothing. The CI job builds in that order from a clean
+checkout, where the trap cannot arise.
