@@ -14,6 +14,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Security
+
+- **The console's security headers reach the console** (production-readiness **S3**). The
+  `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` layer
+  was applied inside one router while a comment beside it claimed the composed service carried the
+  same layer — which it did not. The console's own document is served by the SPA fallback, added
+  outside that router, so the page a browser actually renders had no CSP at all, and neither did any
+  of the merged `/admin` sub-routers. The layer now sits outermost on the composed service.
+
+- **Ten wrong pairing codes shut the door** (production-readiness **S4**). A store's pairing code is
+  six digits and nothing counted a wrong one, so anything that could reach the box's HTTP port could
+  walk a million values at request speed while the five-minute expiry looked on. `POST /api/pair` now
+  answers `429` with `Retry-After` for a minute after ten consecutive failures — checked before the
+  code table is touched, so a shut box never consumes the live code an operator is standing there
+  reading, and cleared by a successful pairing so the next device does not inherit a stranger's
+  guesses. The sibling PIN path has had a lockout since ADR-0030; this is the same rule for the other
+  door.
+
+- **A menu's prices need the revenue permission** (production-readiness **S5**).
+  `console.reports.revenue` was carved out of `console.data.read` because prices are commercially
+  sensitive, and `GET /admin/catalog/menus/{id}/placements` — which returns every item's price on
+  every channel of the menu — sat behind the wider one. The console refused a Viewer the revenue
+  report and handed them the price book. Ops and Viewer keep the menus, their sections and the item
+  master; what things cost is now Owner and Admin only.
+
+- **A staff PIN hash never reaches the console** (production-readiness **S7**, found while verifying
+  S5). `GET /admin/stores/{id}/config` returns a store's whole effective configuration under
+  `console.data.read`, and the `permissions` node carries each member of staff's Argon2id PIN hash —
+  the credential the edge verifies an offline sign-in against. A read-only console account could lift
+  the hash of every member of staff in the fleet, one store at a time. The field is now removed from
+  both console reads (current and the version-diff), unconditionally: no screen reads one, and a
+  value nobody needs is not worth a role check that could later be widened by mistake. Removed rather
+  than blanked, because an empty string reads as "this member has no PIN set" — a different and real
+  state. The hash still reaches the store over `/sync`, which is scoped to that store's own key.
+
 ### Added
 
 - **The till draws the buttons the console arranged**

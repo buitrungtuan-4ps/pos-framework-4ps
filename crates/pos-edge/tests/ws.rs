@@ -43,6 +43,7 @@ async fn state_with_paired_device(store: u128) -> (AppState, String) {
         .redeem(&code, now)
         .await
         .expect("redeem does not fail")
+        .token()
         .expect("a live code yields a token");
     (state, token.as_str().to_owned())
 }

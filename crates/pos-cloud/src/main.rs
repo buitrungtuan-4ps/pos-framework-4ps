@@ -713,6 +713,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         sync_throttle,
         http::throttle_sync,
     ));
+    // The console security headers over the **fully-composed** service (ADR-0067 slice 5,
+    // production-readiness **S3**). `http::router` layers the same middleware over its own routes, and
+    // a comment there claimed this line already existed — it did not, so the console's own document,
+    // its assets, and every `/admin` sub-router merged in above (devices, registry, people, floor,
+    // catalog, audit, fleet, alerts, …) were served with no `Content-Security-Policy`, no
+    // `X-Frame-Options` and no `Referrer-Policy`. The SPA fallback is the one that matters most: it is
+    // the document a browser renders, and the inner layer never reached it because `.fallback` is
+    // added out here.
+    //
+    // Outermost on purpose, so it also covers the throttle's own `429` and any rejection a layer
+    // produces before a route is matched. The headers are `insert`ed, so the two layers agree rather
+    // than stacking.
+    let service = service.layer(axum::middleware::from_fn(http::security_headers));
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

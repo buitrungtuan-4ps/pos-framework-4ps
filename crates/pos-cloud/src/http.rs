@@ -686,9 +686,11 @@ where
         )
         .with_state(app)
         // The admin-console security headers ([ADR-0067] slice 5) on every response this router
-        // serves. `main.rs` applies the same layer to the fully-composed service so the SPA fallback
-        // and the other merged routers are covered too; re-inserting the same header values there is
-        // idempotent.
+        // serves — which is *only* this router. `main.rs` applies the same layer to the
+        // fully-composed service, which is what actually reaches the SPA fallback and the merged
+        // `/admin` sub-routers; this line covered neither, and until production-readiness **S3** the
+        // comment here claimed otherwise while `main.rs` carried no such layer. Both are kept: the
+        // headers are `insert`ed, so applying the middleware twice sets the same values once.
         .layer(axum::middleware::from_fn(security_headers))
 }
 
@@ -13998,6 +14000,15 @@ where
 }
 
 /// A super-admin lists a menu's placements (tenant named on the query).
+///
+/// Behind [`ConsolePermission::ReadRevenue`], not plain `Read` (production-readiness **S5**): a
+/// [`MenuPlacement`] carries `prices` — the item's price on every channel of this menu — which is
+/// exactly the commercially sensitive (**T2**) data `ReadRevenue` was carved out of `Read` to hold
+/// back. Until this row was verified the console handed a store's full per-channel price book to any
+/// Viewer, while refusing the same figures on a revenue report.
+///
+/// The consequence is deliberate and worth stating: Ops and Viewer can still list the menus, their
+/// sections and the item master, and can no longer read what anything costs.
 async fn admin_list_placements<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
@@ -14013,7 +14024,7 @@ where
         &state.admin,
         &state.clock,
         &headers,
-        ConsolePermission::Read,
+        ConsolePermission::ReadRevenue,
     )
     .await
     {
@@ -17837,7 +17848,10 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
-                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                // Never the staff PIN hashes (S7) — see `without_staff_credentials`.
+                Some(effective) => {
+                    (StatusCode::OK, Json(without_staff_credentials(effective))).into_response()
+                }
                 None => no_published_configuration(),
             }
         }
@@ -17918,6 +17932,36 @@ where
     }
 }
 
+/// Removes the credentials a console read must never carry (production-readiness **S7**).
+///
+/// The `permissions` node the People publish writes contains each staff member's Argon2id PIN hash —
+/// **T1**, the credential the edge verifies a sign-in against. It belongs on the `/sync` route a store
+/// reads with its own scoped key, and nowhere else. Until this existed, `GET /admin/stores/{id}/config`
+/// handed the whole effective document to anyone holding `console.data.read` — which every role down
+/// to Viewer holds — so a read-only console account could lift the PIN hash of every member of staff
+/// in the fleet, one store at a time.
+///
+/// Stripped unconditionally rather than gated on a permission: no console screen reads a PIN hash, no
+/// console screen could sensibly do anything with one, and a value nobody needs is not worth a role
+/// check that could later be widened by mistake. The field is *removed*, not blanked, so a reader
+/// cannot mistake an empty string for "this member has no PIN set" — which is a real and different
+/// state (they cannot sign in).
+fn without_staff_credentials(document: &serde_json::Value) -> serde_json::Value {
+    let mut document = document.clone();
+    if let Some(staff) = document
+        .get_mut("permissions")
+        .and_then(|node| node.get_mut("staff"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for member in staff {
+            if let Some(member) = member.as_object_mut() {
+                member.remove("pin_phc");
+            }
+        }
+    }
+    document
+}
+
 /// The effective (composed, validated) document of one past config version (super-admin only), for
 /// the console's diff view. `404` if the store or the named version is unknown.
 async fn admin_config_version_effective<S, R, K, C, A, T, W>(
@@ -17961,7 +18005,10 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
-                Some(effective) => (StatusCode::OK, Json(effective.clone())).into_response(),
+                // The diff view reads a past version, and a past version holds past PIN hashes (S7).
+                Some(effective) => {
+                    (StatusCode::OK, Json(without_staff_credentials(effective))).into_response()
+                }
                 None => not_found("config version"),
             }
         }

@@ -94,6 +94,7 @@ async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Route
         .redeem(&code, now)
         .await
         .expect("redeem")
+        .token()
         .expect("a fresh code pairs a device")
         .as_str()
         .to_owned();

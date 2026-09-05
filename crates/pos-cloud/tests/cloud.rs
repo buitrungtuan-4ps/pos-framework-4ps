@@ -16276,3 +16276,146 @@ async fn a_store_report_with_a_blank_version_is_refused() {
     let body = json_body(refused).await;
     assert_eq!(body["error"]["details"][0]["field"], "installed");
 }
+
+#[tokio::test]
+async fn a_menus_prices_need_the_revenue_permission_not_plain_read() {
+    // production-readiness S5. `ReadRevenue` was carved out of `Read` because prices are T2, and the
+    // placements read — which carries every item's price on every channel of the menu — sat behind
+    // plain `Read`, which Ops and Viewer both hold. The console refused a Viewer the revenue report
+    // and handed them the price book.
+    let admin = provisioned_admin();
+    let router = catalog_app(admin.clone(), FakeCatalog::default());
+    let tenant = ulid_text(1);
+    let menu = ulid_text(10);
+    let list = format!("/admin/catalog/menus/{menu}/placements?tenant_id={tenant}");
+
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-prices"),
+        (AdminRole::Ops, "ops-prices"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&list, &cookie))
+            .await
+            .expect("route list placements");
+        assert_eq!(
+            refused.status(),
+            StatusCode::FORBIDDEN,
+            "{role:?} holds console.data.read but not console.reports.revenue"
+        );
+    }
+
+    // An Admin holds `ReadRevenue` and still reads the menu.
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-prices").await;
+    let allowed = router
+        .oneshot(get_with_cookie(&list, &cookie))
+        .await
+        .expect("route list placements");
+    assert_eq!(allowed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_console_config_read_never_carries_a_staff_pin_hash() {
+    // production-readiness S7, found while verifying S5. `GET /admin/stores/{id}/config` returns the
+    // whole effective document under plain `Read`, and the document's `permissions` node carries each
+    // member of staff's Argon2id PIN hash — T1, the credential the edge verifies a sign-in against.
+    // A read-only console account could lift the PIN hash of every member of staff in the fleet.
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let mine = tenant();
+    let store = StoreId::new(Ulid::from_u128(77));
+    let alice = EmployeeId::new(Ulid::from_u128(1));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(1));
+
+    EmployeeStore::create(
+        &people,
+        &NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "C01".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
+        .await
+        .expect("set pin");
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec!["billing.discount.apply".to_owned()],
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: store,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign");
+
+    let router = people_publish_app(
+        admin,
+        people,
+        config,
+        Arc::new(NoopAuditRecorder) as Arc<dyn AuditRecorder>,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = mine.as_ulid().to_string();
+    let store_ulid = store.as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+
+    let staff = doc["permissions"]["staff"]
+        .as_array()
+        .expect("the staff array is still there");
+    assert_eq!(staff.len(), 1);
+    assert_eq!(
+        staff[0]["code"],
+        serde_json::json!("C01"),
+        "the roster is still readable — only the credential is withheld"
+    );
+    assert!(
+        staff[0].get("pin_phc").is_none(),
+        "the field is removed, not blanked: an empty string would read as 'no PIN set', which is a \
+         different and real state"
+    );
+    assert!(
+        !serde_json::to_string(&doc)
+            .expect("serialize")
+            .contains("argon2id"),
+        "no hash anywhere in the document"
+    );
+}

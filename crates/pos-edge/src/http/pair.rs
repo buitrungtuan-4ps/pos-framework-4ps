@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use pos_proto::ClockSource;
 
-use crate::pairing::Code;
+use crate::pairing::{Code, Redeemed};
 use crate::state::AppState;
 
 /// A device presenting a pairing code.
@@ -42,7 +42,7 @@ pub(crate) async fn pair(
     };
     let now = state.clock.now();
     match state.pairing.redeem(&code, now).await {
-        Ok(Some(token)) => (
+        Ok(Redeemed::Paired(token)) => (
             StatusCode::OK,
             Json(PairAccepted {
                 device_token: token.as_str().to_owned(),
@@ -50,7 +50,25 @@ pub(crate) async fn pair(
         )
             .into_response(),
         // Unknown or expired: the same answer either way, so a probe learns nothing about which.
-        Ok(None) => (StatusCode::FORBIDDEN, "unknown or expired pairing code").into_response(),
+        Ok(Redeemed::Rejected) => {
+            (StatusCode::FORBIDDEN, "unknown or expired pairing code").into_response()
+        }
+        // Too many wrong codes (production-readiness S4). `429` with `Retry-After`, so an operator
+        // who mistyped a few times is told to wait rather than left guessing why a correct code
+        // stopped working — and a script walking the space is told nothing about any code at all.
+        Ok(Redeemed::TooManyAttempts { until_ms }) => {
+            let seconds = until_ms
+                .saturating_sub(now.as_milliseconds_since_epoch())
+                .max(0)
+                .div_euclid(1_000)
+                .saturating_add(1);
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, seconds.to_string())],
+                "too many pairing attempts; wait and try again",
+            )
+                .into_response()
+        }
         // No entropy, or a registry that could not record the device (ADR-0091). Both refuse rather
         // than hand out a token that might not survive the next restart, and both are logged with
         // the cause — the operator needs to know whether the machine or the disk is the problem.

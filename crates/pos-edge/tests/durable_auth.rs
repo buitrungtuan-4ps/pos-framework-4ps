@@ -47,6 +47,7 @@ async fn pair(pairing: &Pairing, now: Timestamp) -> DeviceToken {
         .redeem(&code, now)
         .await
         .expect("redeem succeeds")
+        .token()
         .expect("a live code yields a token")
 }
 
