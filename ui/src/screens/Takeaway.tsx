@@ -155,6 +155,7 @@ export function Takeaway() {
                       <button
                         type="button"
                         class="min-h-touch w-full rounded-token border border-line bg-surface p-3 text-left"
+                        data-step="charge"
                         onClick={() => void charge(order)}
                       >
                         <span class="flex items-baseline justify-between gap-3">
@@ -229,6 +230,7 @@ export function Takeaway() {
                             type="button"
                             class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
                             classList={{ "border-accent": tip() === amount && amount > 0 }}
+                            data-step="setTip"
                             onClick={() => setTip(amount)}
                           >
                             {formatMoney(money(currency(), amount))}
@@ -247,6 +249,7 @@ export function Takeaway() {
                           type="button"
                           class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
                           classList={{ "border-accent": tender() === amount }}
+                          data-step="setTender"
                           onClick={() => setTender(amount)}
                         >
                           {amount === total()
@@ -267,6 +270,7 @@ export function Takeaway() {
                       <button
                         type="button"
                         class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
+                        data-step="payCash"
                         onClick={() => payCash()}
                       >
                         {t("pay.take_cash")}
@@ -276,6 +280,7 @@ export function Takeaway() {
                       <button
                         type="button"
                         class="min-h-touch rounded-token border border-line bg-surface"
+                        data-step="payCard"
                         onClick={() => payCard()}
                       >
                         {t("pay.card")}

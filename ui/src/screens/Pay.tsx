@@ -218,6 +218,7 @@ export function Pay() {
                       type="button"
                       class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
                       classList={{ "border-accent": tip() === amount && amount > 0 }}
+                      data-step="setTip"
                       onClick={() => setTip(amount)}
                     >
                       {formatMoney(money(currency(), amount))}
@@ -270,6 +271,7 @@ export function Pay() {
                     type="button"
                     class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
                     classList={{ "border-accent": tender() === amount }}
+                    data-step="setTender"
                     onClick={() => setTender(amount)}
                   >
                     {amount === total() ? t("pay.exact") : formatMoney(money(currency(), amount))}
@@ -287,6 +289,7 @@ export function Pay() {
               <button
                 type="button"
                 class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
+                data-step="payCash"
                 onClick={() => payCash()}
               >
                 {t("pay.take_cash")}
@@ -296,6 +299,7 @@ export function Pay() {
                 <button
                   type="button"
                   class="min-h-touch rounded-token border border-line bg-surface"
+                  data-step="payCard"
                   onClick={() => payCard()}
                 >
                   {t("pay.card")}

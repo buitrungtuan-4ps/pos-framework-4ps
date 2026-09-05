@@ -118,6 +118,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   **Upgrade note.** None. No route, header, scope, `PROTOCOL_VERSION`, migration, config key or
   dependency changes; `store.order_relay.{enabled,wait_ms}` behave exactly as before.
 
+### Added
+
+- **The step budget's declaration is now joined to the rendered page, and the join is enforced from
+  both sides** ([ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md), gate register
+  **A4**, task #308 — the first of two slices).
+
+  `ui/scripts/step-budget.mjs` resolves every *declared* tap against the source, so a renamed or
+  deleted handler fails a pull request. Its own header states the hole: it cannot see a tap **nobody
+  declared**. Add a required confirm dialog to the pay flow, leave the declaration alone, and the
+  gate stays green while the flow is a tap worse — and that is the only way the budget is
+  realistically breached, because nobody edits the script to raise a number.
+
+  Closing it needs a browser, and a browser cannot know that a button is "the one that calls
+  `fire`". So each declared tap's element now carries `data-step="<action>"`, and the analyser is
+  extended to require it **on the element that actually calls the action** — not merely somewhere on
+  the screen. Nineteen elements across the eight selling screens. The attribute is load-bearing
+  rather than scaffolding: delete one and the gate goes red, and move one onto a neighbouring button
+  and it goes red too, because the element it sits on no longer calls what it names.
+
+  `examples/minimal-edge` gains a **`POS_EDGE_BIND`** override. It hardcoded `127.0.0.1:8787`, so a
+  second instance died with `AddrInUse` — which is what a contributor hits the moment anything wants
+  to start an edge alongside the one they are already running. A concrete `address:port`, not `:0`:
+  the pairing URL is composed before the listener binds, so port zero would advertise a QR pointing
+  at nothing.
+
+  **The browser half is not in this change.** What ships here is its precondition, and the ADR is
+  what commits to the rest. Naming what is still unverified rather than implying otherwise: the
+  replay needs a paired device, a signed-in employee and — for the money flows — an open cash shift,
+  and none of those sequences has been driven end to end yet.
+
+  **Upgrade note.** None. `POS_EDGE_BIND` is read only by the example, and defaults to the address it
+  always used.
+
 ### Fixed
 
 - **A store's heartbeat and every tax-rate save were broken against a real database, and the gate

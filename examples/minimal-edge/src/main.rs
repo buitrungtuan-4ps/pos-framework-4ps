@@ -36,7 +36,24 @@ async fn main() -> Result<(), EdgeError> {
         .expect("seed the id generator"),
     );
 
-    let bind = "127.0.0.1:8787".parse().expect("a valid loopback address");
+    // Where to listen. `POS_EDGE_BIND` overrides the default so two of these can run at once —
+    // a second instance on the same port dies with `AddrInUse`, which is what a contributor hits
+    // when the step-budget harness starts one while their own is up
+    // ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md)).
+    //
+    // A concrete port, not `:0`: the pairing URL is composed before the listener binds, so port
+    // zero would advertise `:0` and the QR would point nowhere. A caller that wants a free port
+    // picks one and names it.
+    let bind = match std::env::var("POS_EDGE_BIND") {
+        Ok(named) => match named.parse() {
+            Ok(bind) => bind,
+            Err(_) => {
+                tracing::error!(%named, "POS_EDGE_BIND is not an address:port — refusing to start");
+                return Ok(());
+            }
+        },
+        Err(_) => "127.0.0.1:8787".parse().expect("a valid loopback address"),
+    };
     tracing::info!("minimal-edge is coming up — open http://{bind}/ (Ctrl-C to stop)");
     // The queue-number authority the relay's intake would use; the example has no `cloud_url`, so no
     // relay runs and it is never allocated from — a real store passes its SQLite writer (ADR-0064).
