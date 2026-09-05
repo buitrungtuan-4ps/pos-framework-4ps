@@ -47,7 +47,7 @@ use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
 use pos_proto::store_profile::StoreProfile;
 
-use crate::app::{EdgeSession, FiredLine};
+use crate::app::{BuyerDetails, EdgeSession, FiredLine};
 
 /// The store's receipt printer: the printer bound to no station.
 ///
@@ -157,6 +157,15 @@ fn percent(basis_points: u32) -> String {
 /// printed before ADR-0106 — a number and a total — rather than a page of blank labels, because an
 /// empty label on a legal document reads as a value somebody forgot to type.
 ///
+/// # The buyer block, when there is one
+///
+/// A Japanese qualified invoice issued to a company must carry that company's name and 登録番号, and
+/// an Indian tax invoice under Rule 46 must carry the buyer's name, address and GSTIN — without them
+/// the buyer cannot claim input tax, which is the reason a business asks for the document at all.
+/// The block is printed only when a buyer was captured
+/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)); an ordinary retail sale is the
+/// receipt it always was.
+///
 /// # The tax section is per rate, not per line
 ///
 /// Which is what a Japanese qualified invoice (8 % and 10 % separately) and an Indian tax invoice
@@ -167,6 +176,7 @@ pub fn receipt_document(
     profile: &StoreProfile,
     receipt_number: u64,
     totals: &BillTotals,
+    buyer: Option<&BuyerDetails>,
 ) -> PrintDocument {
     let mut blocks = Vec::new();
 
@@ -187,6 +197,25 @@ pub fn receipt_document(
     }
 
     blocks.push(centred(format!("#{receipt_number}"), false));
+
+    // Who bought, on a B2B invoice. Left-aligned rather than centred: this is a party to the
+    // document, not a letterhead, and the two must not read as one block.
+    if let Some(buyer) = buyer {
+        blocks.push(PrintBlock::Text {
+            line: format!("Bill to: {}", buyer.name),
+            style: TextStyle::default(),
+        });
+        for line in [buyer.tax_code.as_ref(), buyer.address.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|line| !line.trim().is_empty())
+        {
+            blocks.push(PrintBlock::Text {
+                line: line.clone(),
+                style: TextStyle::default(),
+            });
+        }
+    }
 
     // What was charged. `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the
     // column adds up on paper in both postures — which is what makes the document check out when
@@ -558,6 +587,7 @@ impl Printers {
         job_id: EventId,
         receipt_number: u64,
         totals: &BillTotals,
+        buyer: Option<&BuyerDetails>,
     ) -> PrintOutcome {
         let Some(device) = receipt_printer(&session.devices) else {
             tracing::info!("no receipt printer is published for this store; nothing to print");
@@ -565,7 +595,7 @@ impl Printers {
         };
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
-        let document = receipt_document(&session.profile, receipt_number, totals);
+        let document = receipt_document(&session.profile, receipt_number, totals, buyer);
         self.dispatch(
             device,
             PrintJob {
@@ -743,7 +773,7 @@ mod tests {
         assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
         station_printer, ticket_document, ticket_line,
     };
-    use crate::app::{EdgeSession, FiredLine};
+    use crate::app::{BuyerDetails, EdgeSession, FiredLine};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrinterConnection};
@@ -888,6 +918,7 @@ mod tests {
                 event_id(1),
                 42,
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+                None,
             )
             .await;
 
@@ -919,6 +950,7 @@ mod tests {
                 event_id(1),
                 42,
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+                None,
             )
             .await;
 
@@ -945,6 +977,7 @@ mod tests {
                 event_id(1),
                 42,
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+                None,
             )
             .await;
 
@@ -966,7 +999,14 @@ mod tests {
 
         for _ in 0..2 {
             let outcome = printers
-                .print_receipt(&session, store_id(), event_id(1), 42, &totals_of(total))
+                .print_receipt(
+                    &session,
+                    store_id(),
+                    event_id(1),
+                    42,
+                    &totals_of(total),
+                    None,
+                )
                 .await;
             assert_eq!(outcome, PrintOutcome::Printed);
         }
@@ -1195,6 +1235,7 @@ mod tests {
             &StoreProfile::default(),
             7,
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
+            None,
         );
         assert_eq!(
             lines_of(&document),
@@ -1217,6 +1258,7 @@ mod tests {
             &profile,
             42,
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+            None,
         );
         assert_eq!(
             lines_of(&document),
@@ -1235,6 +1277,61 @@ mod tests {
             document.blocks.last(),
             Some(&PrintBlock::Cut),
             "the paper is cut, or the next receipt starts on this one"
+        );
+    }
+
+    #[test]
+    fn a_b2b_invoice_names_its_buyer_between_the_seller_and_the_figures() {
+        // Without the buyer's name and registration number a Japanese qualified invoice does not
+        // let the buyer claim input tax, which is the whole reason a business asks for one
+        // (ADR-0107). The block sits after the seller's and before the money, which is the order
+        // both Japan's qualified invoice and India's Rule 46 read in.
+        let profile = StoreProfile {
+            legal_name: "Pizza 4P's Japan".to_owned(),
+            tax_registration_number: Some("T9876543210987".to_owned()),
+            tax_registration_label: Some("登録番号".to_owned()),
+            ..StoreProfile::default()
+        };
+        let buyer = BuyerDetails {
+            name: "Kabushiki Kaisha Reiwa".to_owned(),
+            tax_code: Some("T1234567890123".to_owned()),
+            address: Some("1-1 Marunouchi, Chiyoda".to_owned()),
+            email: Some("accounts@example.co.jp".to_owned()),
+        };
+        let document = receipt_document(
+            &profile,
+            11,
+            &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
+            Some(&buyer),
+        );
+        let lines = lines_of(&document);
+        assert!(
+            lines.contains(&"Bill to: Kabushiki Kaisha Reiwa"),
+            "the buyer is named: {lines:?}"
+        );
+        assert!(lines.contains(&"T1234567890123"));
+        assert!(lines.contains(&"1-1 Marunouchi, Chiyoda"));
+        assert!(
+            !lines.iter().any(|line| line.contains("example.co.jp")),
+            "an email is where to send the copy, not part of the document"
+        );
+    }
+
+    #[test]
+    fn a_retail_receipt_has_no_buyer_block_at_all() {
+        // The overwhelming majority of bills. A blank "Bill to:" on a receipt reads as a value
+        // somebody forgot to type, so the block is absent rather than empty.
+        let document = receipt_document(
+            &StoreProfile::default(),
+            12,
+            &totals_of(Money::new(CurrencyCode::VND, 50_000)),
+            None,
+        );
+        assert!(
+            !lines_of(&document)
+                .iter()
+                .any(|line| line.starts_with("Bill to")),
+            "an ordinary sale prints the receipt it always did"
         );
     }
 
@@ -1280,7 +1377,7 @@ mod tests {
             tax_registration_label: Some("GSTIN".to_owned()),
             ..StoreProfile::default()
         };
-        let document = receipt_document(&profile, 9, &totals);
+        let document = receipt_document(&profile, 9, &totals, None);
         assert_eq!(
             lines_of(&document),
             vec![
@@ -1310,6 +1407,7 @@ mod tests {
             &profile,
             3,
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
+            None,
         );
         assert!(
             !lines_of(&document)
@@ -1424,6 +1522,7 @@ mod tests {
                 event_id(1),
                 42,
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+                None,
             )
             .await;
 

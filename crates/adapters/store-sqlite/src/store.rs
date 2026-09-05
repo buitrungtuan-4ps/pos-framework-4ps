@@ -14,9 +14,10 @@ use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
+use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{BillId, ConfigVersionId, DeviceId, EventId, OrderId, StoreId};
+use pos_proto::ids::{BillId, ConfigVersionId, DeviceId, EventId, OrderId, StoreId, SubjectId};
 use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::ulid::Ulid;
 
@@ -24,6 +25,7 @@ use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
     self, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, RegistryCommand, SelfTestRow,
+    SubjectWrite,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -265,6 +267,7 @@ impl Transactional for SqliteStore {
             events: Vec::new(),
             config: None,
             intake: None,
+            subjects: Vec::new(),
         })
     }
 }
@@ -568,6 +571,88 @@ impl DeviceRegistry for SqliteStore {
         })
         .await
     }
+}
+
+impl SubjectStore for SqliteStore {
+    async fn record(
+        &self,
+        tx: &mut SqliteTx,
+        store_id: StoreId,
+        subject_id: SubjectId,
+        record: &SubjectRecord,
+    ) -> Result<(), PortError> {
+        // Serialised here so the writer thread stays free of `pos_ports` types — and so the file
+        // that moves the bytes never has to know they are somebody's name. Flushed in the settle's
+        // own transaction at commit (ADR-0107).
+        let fields_json = serde_json::to_string(&record.fields).map_err(|error| {
+            PortError::internal(
+                PortName::SubjectStore,
+                "could not encode the subject record",
+            )
+            .with_source(error)
+        })?;
+        tx.subjects.push(SubjectWrite {
+            store_id,
+            subject_id: subject_id.to_string(),
+            collected_at_ms: record.collected_at.as_milliseconds_since_epoch(),
+            fields_json,
+            masked_at_ms: record.masked_at.map(Timestamp::as_milliseconds_since_epoch),
+        });
+        Ok(())
+    }
+
+    async fn fetch(
+        &self,
+        store_id: StoreId,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, PortError> {
+        let key = subject_id.to_string();
+        let stored = self
+            .ask(PortName::SubjectStore, move |reply| Command::FetchSubject {
+                store_id,
+                subject_id: key,
+                reply,
+            })
+            .await?;
+        stored.as_ref().map(into_record).transpose()
+    }
+
+    async fn mask_before(
+        &self,
+        store_id: StoreId,
+        cutoff: Timestamp,
+        now: Timestamp,
+    ) -> Result<u64, PortError> {
+        self.ask(PortName::SubjectStore, move |reply| Command::MaskSubjects {
+            store_id,
+            cutoff_ms: cutoff.as_milliseconds_since_epoch(),
+            now_ms: now.as_milliseconds_since_epoch(),
+            reply,
+        })
+        .await
+    }
+}
+
+/// Turns a stored subject row back into the port's record.
+///
+/// A stamp the database cannot represent as a `Timestamp` is a corrupt row rather than a missing
+/// value, so it is reported as such instead of being silently read as the epoch — which would put a
+/// record decades outside its retention window and have the next sweep scrub it early.
+fn into_record(row: &SubjectWrite) -> Result<SubjectRecord, PortError> {
+    let port = PortName::SubjectStore;
+    let bad_stamp = || PortError::internal(port, "a stored subject has an unrepresentable stamp");
+    Ok(SubjectRecord {
+        collected_at: Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
+            .map_err(|_ignored| bad_stamp())?,
+        fields: serde_json::from_str(&row.fields_json).map_err(|error| {
+            PortError::internal(port, "could not decode a stored subject record").with_source(error)
+        })?,
+        masked_at: row
+            .masked_at_ms
+            .map(Timestamp::from_milliseconds_since_epoch)
+            .transpose()
+            .map_err(|_ignored| bad_stamp())?,
+    })
 }
 
 impl IntakeLedger for SqliteStore {

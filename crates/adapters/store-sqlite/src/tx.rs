@@ -16,7 +16,7 @@ use pos_ports::config_store::ConfigUpdate;
 use pos_ports::{PortError, PortName, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 
-use crate::writer::{Command, IntakeWrite};
+use crate::writer::{Command, IntakeWrite, SubjectWrite};
 
 /// A store transaction: a buffer of pending writes and the handle that flushes them.
 ///
@@ -30,13 +30,23 @@ pub struct SqliteTx {
     /// The inbound-order idempotency row to write with the order (ADR-0064), if any. Buffered by
     /// `IntakeLedger::record` and flushed in the same SQLite transaction as `events`.
     pub(crate) intake: Option<IntakeWrite>,
+    /// The subject rows to write with the events that reference them
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). Buffered by
+    /// `SubjectStore::record` and flushed in the same SQLite transaction as `events`, so a settle
+    /// and the buyer it was issued to land together or not at all. A `Vec` because one transaction
+    /// may record more than one person.
+    pub(crate) subjects: Vec<SubjectWrite>,
 }
 
 impl TxContext for SqliteTx {
     async fn commit(self) -> Result<(), PortError> {
         // Nothing to do if the transaction touched nothing — a begin with no append, apply, or
         // intake record.
-        if self.events.is_empty() && self.config.is_none() && self.intake.is_none() {
+        if self.events.is_empty()
+            && self.config.is_none()
+            && self.intake.is_none()
+            && self.subjects.is_empty()
+        {
             return Ok(());
         }
         let (reply, outcome) = oneshot::channel();
@@ -45,6 +55,7 @@ impl TxContext for SqliteTx {
                 events: self.events,
                 config: self.config,
                 intake: self.intake,
+                subjects: self.subjects,
                 reply,
             })
             .await

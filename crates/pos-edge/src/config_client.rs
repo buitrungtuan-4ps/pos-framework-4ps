@@ -103,6 +103,11 @@ struct PublishedLocale {
     /// only, which is the front end's own fallback, so an older publish changes nothing.
     #[serde(default)]
     cash_denominations: Vec<i64>,
+    /// How many days the store keeps a personal record before its own sweep scrubs it (ADR-0107).
+    /// Absent leaves the session's current figure — the country pack's default — rather than zero,
+    /// which would scrub a buyer the moment the invoice was printed.
+    #[serde(default)]
+    default_retention_days: Option<u16>,
 }
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
@@ -356,6 +361,12 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         session
             .cash_denominations
             .clone_from(&locale.cash_denominations);
+        // Absent, or zero, leaves what the store already had: a published zero would mean "scrub a
+        // buyer's record the instant the invoice is printed", which is never what an operator means
+        // and would destroy the document's own evidence (ADR-0107).
+        if let Some(days) = locale.default_retention_days.filter(|days| *days > 0) {
+            session.retention_days = days;
+        }
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
     // itself against, and the signing keys revocation has retired. The cloud has published this node

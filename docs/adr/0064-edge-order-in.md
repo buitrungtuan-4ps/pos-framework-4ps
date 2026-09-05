@@ -110,7 +110,7 @@ This record called `IntakeLedger` a port when it landed, and it was built like o
 - The `every_port_has_a_suite` guard **could not see it at all**, because that guard iterates
   `PortName::ALL`. A trait added to `pos-ports` without a variant is invisible to it.
 
-**What changed.** `PortName::IntakeLedger` exists (the nineteenth), with the `ALL` entry and the
+**What changed.** `PortName::IntakeLedger` exists (the nineteenth of what is now twenty), with the `ALL` entry and the
 `intake_ledger` label. There is a six-case suite in `pos_contract_tests::intake_ledger`, and both
 `pos-fakes` and `store-sqlite` run it and pass — so "the ledger's two implementations agree" is now
 checked rather than assumed. `docs/architecture.md` §5 has the row and reads nineteen. The ledger's

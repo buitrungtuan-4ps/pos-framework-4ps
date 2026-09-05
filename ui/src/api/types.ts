@@ -161,8 +161,28 @@ export interface PaymentRequest {
   tip?: Money;
 }
 
+/**
+ * The corporate customer a tax invoice is issued to
+ * ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+ *
+ * Personal data, all of it. The edge files it in the store's subject store and the settled event
+ * carries only a subject id, so erasing a buyer is scrubbing one row and the day's takings are
+ * unchanged. Never logged by this app and never held after the settle returns.
+ */
+export interface BuyerRequest {
+  name: string;
+  // Format-checked by the compiled-in country module (a 登録番号, a GSTIN, an MST) and never checked
+  // for existence — that is a call to the tax authority, and a cashier has to be able to take a
+  // corporate customer's number with the line down.
+  tax_code?: string;
+  address?: string;
+  email?: string;
+}
+
 export interface SettleRequest {
   payments: PaymentRequest[];
+  // Absent on every ordinary retail sale, which is nearly every bill.
+  buyer?: BuyerRequest;
 }
 
 export interface BillResponse {

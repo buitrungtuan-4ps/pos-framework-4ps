@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pos_contract_tests::harness::{
     ConfigStoreHarness, DeviceRegistryHarness, EventStoreHarness, HarnessError,
-    IntakeLedgerHarness, Setup,
+    IntakeLedgerHarness, Setup, SubjectStoreHarness,
 };
 use pos_proto::{StoreId, Ulid};
 use store_sqlite::SqliteStore;
@@ -120,6 +120,20 @@ impl IntakeLedgerHarness for StoreHarness {
     }
 }
 
+impl SubjectStoreHarness for StoreHarness {
+    type Store = SqliteStore;
+
+    async fn fresh(&self) -> Setup<SqliteStore> {
+        // A fresh file, so the store holds nobody — and so one case's sweep can never reach another
+        // case's rows, which is the whole point of a per-store retention clock.
+        Self::open(self.next_path())
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(0x0ADA))
+    }
+}
+
 impl DeviceRegistryHarness for StoreHarness {
     type Registry = SqliteStore;
 
@@ -148,4 +162,9 @@ mod config_store {
 mod intake_ledger {
     use super::{StoreHarness, block_on};
     pos_contract_tests::intake_ledger_suite!(StoreHarness::new(), block_on);
+}
+
+mod subject_store {
+    use super::{StoreHarness, block_on};
+    pos_contract_tests::subject_store_suite!(StoreHarness::new(), block_on);
 }
