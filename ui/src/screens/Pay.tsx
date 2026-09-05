@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
 import type { BillResponse, CheckResponse, PaymentRequest } from "../api/types";
-import { t } from "../i18n";
+import { t, type MessageKey } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
 import {
   loadCheck,
@@ -25,6 +25,26 @@ import {
 // budget would fail the build, correctly. So the tip row sits in the flow already visible: a
 // cashier who takes no tip taps nothing extra, and the tip's own taps are declared as their own
 // task in `ui/scripts/step-budget.mjs`.
+/**
+ * What the till says about the receipt (ADR-0100). An edge built before C2 sends no
+ * `receipt_print`, so the old "Printing receipt…" wording is the fallback — the one case where the
+ * till genuinely does not know whether paper came out.
+ */
+function receiptPrintKey(outcome: string | undefined): MessageKey {
+  switch (outcome) {
+    case "PRINTED":
+      return "pay.printed";
+    case "NO_PRINTER":
+      return "pay.print_no_printer";
+    case "PRINTER_UNAVAILABLE":
+      return "pay.print_unavailable";
+    case "UNPRINTABLE_TEXT":
+      return "pay.print_unprintable";
+    default:
+      return "pay.printing";
+  }
+}
+
 export function Pay() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -236,7 +256,17 @@ export function Pay() {
               {t("pay.change")}: <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
             </p>
             <Show when={bill().print_receipt}>
-              <p class="mt-1 text-sm text-ink-muted">{t("pay.printing")}</p>
+              <p
+                class="mt-1 text-sm"
+                classList={{
+                  "text-ink-muted":
+                    bill().receipt_print === undefined || bill().receipt_print === "PRINTED",
+                  "text-danger":
+                    bill().receipt_print !== undefined && bill().receipt_print !== "PRINTED",
+                }}
+              >
+                {t(receiptPrintKey(bill().receipt_print))}
+              </p>
             </Show>
             <button
               type="button"

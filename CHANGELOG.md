@@ -16,6 +16,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Receipts and kitchen tickets actually print**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2**, the last
+  slice). `BillView::print_receipt` has been true on every settle since P5 and the till has rendered
+  "Printing receipt…" over it, while nothing in the tree ever constructed a `PrintJob` and no binary
+  depended on `printer-escpos`. It does now: a settle builds the guest's receipt and a fire builds the
+  station's ticket, both dispatched to the printer the cloud published on the `devices` node, over a
+  new raw-TCP transport (port 9100) in the ESC/POS adapter.
+
+  What the till says is now what happened. The settle response carries `receipt_print` — `PRINTED`,
+  `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT` — and the fire response carries
+  `ticket_print` beside the station it routed to; the Pay screen reads the outcome instead of
+  asserting one. A store with no printer published is an ordinary state and says so; a printer that
+  does not answer is news for the cashier, never a reason to unwind a bill the guest has already
+  paid, so printing runs strictly after the commit and its failure never rolls one back.
+
+  A kitchen ticket falls back to the station plan's own `backup_station_id`, one hop, never a guess —
+  a ticket printed in a kitchen nobody expected is worse than one not printed, because nobody goes
+  looking for it. A retried settle or fire reuses the bill's or line's own identifier as the job's
+  idempotency key, so the guest gets one receipt and the kitchen makes one dish. No cash drawer is
+  opened from here at all: port 9100 has no authentication, and that stays true whatever a published
+  node claims.
+
+  **Known limit, deliberately visible.** A line the printer cannot spell is refused rather than sent —
+  `UNPRINTABLE_TEXT`. This build has no CP1258 table and no rasteriser, so a Vietnamese item name
+  cannot yet go on paper; sending it anyway would print a line of question marks in front of a
+  customer, which `docs/pos-spec.md` §13 forbids. Receipts are unaffected (their lines are the number
+  and the total) and the kitchen display shows every order as before. USB and serial printers are
+  likewise refused with a clear reason: the TCP transport is the one that needs no hardware to
+  validate, and the other two stay in `docs/gate-register.md` §6.
+
 - **The store applies the `devices` node** ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md),
   production-readiness **C2** slice 3). `EdgeSession` gains the printers and kitchen displays this
   store may address, rebuilt from the config document beside `menu`, `permissions`, `floor` and

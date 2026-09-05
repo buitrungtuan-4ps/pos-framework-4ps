@@ -172,6 +172,11 @@ export interface BillResponse {
   total_due?: Money;
   table_state?: string;
   print_receipt: boolean;
+  /**
+   * What came of the receipt: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT`
+   * (ADR-0100). Absent when the settle asked for no receipt, or from an edge built before C2.
+   */
+  receipt_print?: string;
 }
 
 export interface OpenShiftRequest {

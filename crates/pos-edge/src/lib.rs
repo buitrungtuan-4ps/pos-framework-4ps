@@ -54,6 +54,7 @@ pub mod ota;
 pub mod ota_client;
 pub mod ota_state;
 pub mod pairing;
+pub mod printing;
 pub mod queue;
 pub mod receipt;
 pub mod relay_client;
@@ -67,8 +68,8 @@ pub mod version;
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
-    AppError, BillView, Edge, EdgeSession, LineDraft, LineView, ShiftView, StaffAuth, StaffRoster,
-    StoreIdentity, TableView,
+    AppError, BillView, Edge, EdgeSession, FiredLine, LineDraft, LineView, ShiftView, StaffAuth,
+    StaffRoster, StoreIdentity, TableView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
 pub use clock::SystemClock;

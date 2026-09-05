@@ -558,7 +558,7 @@ pub struct LineDraft {
 }
 
 /// What a line looks like to a caller after a command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineView {
     /// The order the line belongs to.
     pub order_id: OrderId,
@@ -566,6 +566,27 @@ pub struct LineView {
     pub order_line_id: OrderLineId,
     /// Its state after the command.
     pub state: OrderLineState,
+    /// Present only on a fire: what the kitchen was told to make, for the caller to print
+    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    pub fired: Option<FiredLine>,
+}
+
+/// What a fire tells the kitchen, for the caller to turn into a ticket.
+///
+/// The ids, not the names: resolving an item's name is the *session's* job (its published menu
+/// carries the store's spelling and its locale), and the application loop deliberately does not hold
+/// presentation. The edge still holds no printer — this is the caller's material, exactly as
+/// [`BillView::print_receipt`] is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiredLine {
+    /// The station the published routing sent this to (ADR-0072).
+    pub station_id: StationId,
+    /// The item being made.
+    pub menu_item_id: MenuItemId,
+    /// How many — a [`Quantity`], because a split item is half of one.
+    pub quantity: Quantity,
+    /// The modifiers chosen, in the order they were added.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// What a KDS bump looks like to a caller: the order and station, and the lines now marked prepared.
@@ -1483,6 +1504,8 @@ impl<S: EventStore> Edge<S> {
             order_id,
             order_line_id,
             state: OrderLineState::Added,
+            // Nothing is made until a line fires, so an added line has no ticket.
+            fired: None,
         })
     }
 
@@ -1555,6 +1578,12 @@ impl<S: EventStore> Edge<S> {
             order_id: record.order_id,
             order_line_id,
             state: decision.next_state,
+            fired: Some(FiredLine {
+                station_id,
+                menu_item_id: record.menu_item_id,
+                quantity: record.quantity,
+                modifier_menu_item_ids: record.modifier_menu_item_ids,
+            }),
         })
     }
 

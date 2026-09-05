@@ -399,12 +399,20 @@ where
     // same value be held in two places — the trait returns `impl Future`, so it cannot be erased
     // behind `dyn`.
     let queue = Arc::new(queue);
-    let mut app = crate::http::router(state).merge(crate::http::domain_router(
-        edge,
-        Arc::clone(&queue),
-        Arc::clone(&pairing),
-        Arc::clone(&sessions),
-    ));
+    // The printers the settle and fire paths dispatch to (ADR-0100, production-readiness C2). Layered
+    // rather than threaded through `domain_router`'s signature because a printer is an *effect* the
+    // routes run after a commit, not state a route reads: the application loop deliberately holds no
+    // printer, and every composition that omits this — the fakes-backed example, a route test —
+    // reports `NO_PRINTER`, which is the truth for it rather than a silent no-op.
+    let printers = Arc::new(crate::printing::Printers::tcp());
+    let mut app = crate::http::router(state)
+        .merge(crate::http::domain_router(
+            edge,
+            Arc::clone(&queue),
+            Arc::clone(&pairing),
+            Arc::clone(&sessions),
+        ))
+        .layer(axum::Extension(printers));
 
     // Compose the cloud surface when the store is provisioned for a cloud (ADR-0086). A `cloud_url`
     // means: mount the activation routes so a fresh box can be set up at `/setup`, and — once the box

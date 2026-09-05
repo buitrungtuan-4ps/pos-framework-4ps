@@ -15,8 +15,10 @@
 //!
 //! Turning bytes into pulses over USB, a serial line, or raw TCP on port 9100 is the one part that
 //! needs real hardware to validate (roadmap A5), so it is behind the [`Transport`] trait. The
-//! contract suite runs against an in-memory transport that records what was sent; the real
-//! transports land with hardware bring-up.
+//! contract suite runs against an in-memory transport that records what was sent. [`tcp`] is the
+//! network case and needs no hardware to exercise — a `TcpListener` in a test is indistinguishable
+//! from a printer to everything above the socket ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+//! USB and serial stay with hardware bring-up.
 //!
 //! # The queue lives at the caller
 //!
@@ -26,6 +28,7 @@
 //! adapter buffers nothing — its `status().queue_depth` is zero — and the queue is `pos_edge`'s (P5).
 
 pub mod escpos;
+pub mod tcp;
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -34,8 +37,8 @@ use pos_ports::printer::{PrintBlock, PrintJob, PrinterCapabilities, PrinterDrive
 use pos_ports::{PortError, PortName};
 use pos_proto::ids::EventId;
 
-/// A byte channel to one printer. The real implementations (USB, serial, TCP:9100) land with
-/// hardware; the contract suite uses an in-memory recorder.
+/// A byte channel to one printer. [`tcp::TcpTransport`] is the network implementation; USB and
+/// serial land with hardware bring-up, and the contract suite uses an in-memory recorder.
 pub trait Transport: Send + Sync {
     /// Sends raw bytes to the printer.
     ///
@@ -51,6 +54,16 @@ pub trait Transport: Send + Sync {
     ///
     /// [`Unreachable`] if the printer cannot be reached.
     fn probe(&self) -> Result<TransportStatus, Unreachable>;
+}
+
+impl Transport for Box<dyn Transport> {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        (**self).write(bytes)
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        (**self).probe()
+    }
 }
 
 /// The printer could not be reached. A deliberately information-free marker: the adapter maps it to
@@ -93,7 +106,18 @@ impl<T: Transport> EscPosPrinter<T> {
         &self.transport
     }
 
-    fn print_now(&self, job: &PrintJob) -> Result<(), PortError> {
+    /// Prints `job`, blocking the calling thread.
+    ///
+    /// The port's [`print`](PrinterDriver::print) is this method behind an always-ready future: this
+    /// adapter encodes bytes and hands them to a synchronous [`Transport`], so there is nothing to
+    /// await. A caller that already owns a blocking thread — `pos_edge`'s dispatcher runs printing
+    /// under `spawn_blocking`, because a printer that has been unplugged must not stall an async
+    /// worker — calls this directly rather than driving a future that never yields.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`PrinterDriver::print`].
+    pub fn print_blocking(&self, job: &PrintJob) -> Result<(), PortError> {
         {
             let printed = self.printed.lock().map_err(|_| lock_poisoned())?;
             if printed.contains(&job.job_id) {
@@ -134,7 +158,12 @@ impl<T: Transport> EscPosPrinter<T> {
         Ok(())
     }
 
-    fn status_now(&self) -> Result<PrinterStatus, PortError> {
+    /// Asks the printer how it is, blocking the calling thread. See [`Self::print_blocking`].
+    ///
+    /// # Errors
+    ///
+    /// The same as [`PrinterDriver::status`].
+    pub fn status_blocking(&self) -> Result<PrinterStatus, PortError> {
         let status = self.transport.probe().map_err(|_| unreachable_error())?;
         Ok(PrinterStatus {
             online: true,
@@ -145,7 +174,12 @@ impl<T: Transport> EscPosPrinter<T> {
         })
     }
 
-    fn open_drawer_now(&self) -> Result<(), PortError> {
+    /// Opens the attached cash drawer, blocking the calling thread. See [`Self::print_blocking`].
+    ///
+    /// # Errors
+    ///
+    /// The same as [`PrinterDriver::open_drawer`].
+    pub fn open_drawer_blocking(&self) -> Result<(), PortError> {
         // Both conditions, and the connection is the one that is not negotiable: port 9100 has no
         // authentication, so a drawer never opens over the network (ADR-0026, architecture.md §5).
         if !self.capabilities.may_open_a_drawer() {
@@ -167,15 +201,15 @@ impl<T: Transport> PrinterDriver for EscPosPrinter<T> {
     }
 
     async fn print(&self, job: &PrintJob) -> Result<(), PortError> {
-        self.print_now(job)
+        self.print_blocking(job)
     }
 
     async fn status(&self) -> Result<PrinterStatus, PortError> {
-        self.status_now()
+        self.status_blocking()
     }
 
     async fn open_drawer(&self) -> Result<(), PortError> {
-        self.open_drawer_now()
+        self.open_drawer_blocking()
     }
 }
 

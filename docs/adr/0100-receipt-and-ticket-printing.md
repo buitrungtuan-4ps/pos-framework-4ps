@@ -90,6 +90,30 @@ Sequenced that way: (2a) approval captures connection and station; (2b) the clou
 publishes the `devices` node; (3) the edge applies it; (4) the dispatcher prints. A receipt printer
 needs 2a–4; a kitchen ticket needs the station from 2a as well.
 
+## Delivered
+
+All five slices are in the tree. (1) the `devices` node in `pos-proto`; (2a) approval captures a
+device's connection and the station it serves; (2b) `POST /admin/devices/publish` compiles the
+approved proposals onto the node; (3) `session_from_config` applies it, and C1 persists it; (4) the
+dispatcher — `crates/pos-edge/src/printing.rs` — selects the printer, builds the document, and sends
+it over `printer-escpos`'s new raw-TCP transport, after the commit and never before. The settle and
+fire responses report `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT`, and the
+till renders the outcome instead of asserting one.
+
+Two things this ADR assumed were only a hardware gate turned out to be **two** gates, and both are
+now written down as such (`docs/gate-register.md` §6, P8 and P9):
+
+- **USB and serial have no transport.** The `Transport` seam is the right shape and the TCP case
+  needed no hardware to prove; the other two need a device on a desk. They are refused with a named
+  reason rather than dialled at port 9100, because "the network printer did not answer" is the wrong
+  thing to hand an operator holding a USB cable. A cash drawer therefore stays unreachable in this
+  build — which changes nothing about the rule, only about when it first bites.
+- **A Vietnamese item name cannot go on paper yet.** §5 of ADR-0026 puts the text-or-bitmap decision
+  in the framework, and the framework has no CP1258 table and no rasteriser, so the dispatcher refuses
+  the line. This was foreseeable from `CodePage::covers` — which answers `line.is_ascii()` for every
+  page — and was not foreseen here. Receipts are unaffected; kitchen *tickets* in Vietnamese wait on
+  P9. The KDS is unaffected throughout: it is a screen, and it has always had the order.
+
 ## Consequences
 
 - No new port: `pos-ports`'s `Printer` is the seam, and `printer-escpos` implements it over its own

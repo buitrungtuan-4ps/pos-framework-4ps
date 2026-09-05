@@ -5,8 +5,10 @@
 //!
 //! Settling proves the payments sum **exactly** to what the bill assembles to (ADR-0028) and
 //! allocates the gapless per-store receipt number (ADR-0025). The response carries the receipt
-//! number and a `print_receipt` flag; the printing itself is the binary's to run after the commit,
-//! so the HTTP layer holds no printer either.
+//! number and a `print_receipt` flag; the printing itself runs after the commit, over the
+//! [`Printers`](crate::printing::Printers) dispatcher the composition layers in
+//! ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)) — so a printer that is down
+//! never unwinds a bill the guest has already paid, and the response says what actually came out.
 
 use std::sync::Arc;
 
@@ -23,8 +25,11 @@ use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
+use pos_proto::ids::EventId;
+
 use crate::app::{BillView, Edge};
 use crate::http::{bad_request, error_response, parse_ulid};
+use crate::printing::{PrintOutcome, Printers};
 
 /// One payment a device applies to a bill: how it was paid, what the guest handed over, what was put
 /// against the total, and what they left. Change is what is left of `tendered` once
@@ -85,6 +90,11 @@ pub(crate) struct BillResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     table_state: Option<String>,
     print_receipt: bool,
+    /// What came of that print: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE`, `UNPRINTABLE_TEXT`,
+    /// or absent when the settle asked for no receipt (ADR-0100). Until this field existed the till
+    /// rendered "Printing receipt…" over a store with no printer wired at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt_print: Option<String>,
 }
 
 impl From<BillView> for BillResponse {
@@ -96,6 +106,7 @@ impl From<BillView> for BillResponse {
             total_due: view.total_due,
             table_state: view.table_state.map(|state| state.as_wire().to_owned()),
             print_receipt: view.print_receipt,
+            receipt_print: None,
         }
     }
 }
@@ -140,6 +151,7 @@ where
 pub(crate) async fn settle<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
     Path(id): Path<String>,
     Json(request): Json<SettleRequest>,
 ) -> Response
@@ -167,7 +179,50 @@ where
     {
         return bad_request("this store does not accept one of those payment methods as tender");
     }
-    respond(edge.settle_bill(actor, bill_id, payments).await)
+    let outcome = edge.settle_bill(actor, bill_id, payments).await;
+    let Ok(view) = outcome else {
+        return respond(outcome);
+    };
+
+    // After the commit, never before: a printer that is down must not unwind a settled bill, and a
+    // rolled-back settle must never have printed (ADR-0100, `Edge::settle_bill`).
+    let mut response = BillResponse::from(view);
+    if view.print_receipt {
+        let printed = print_receipt_for(printers.as_deref(), &edge, &view).await;
+        response.receipt_print = Some(printed.as_wire().to_owned());
+    }
+    Json(response).into_response()
+}
+
+/// Runs the receipt effect and says what came of it.
+///
+/// A composition with no dispatcher layered in — the fakes-backed example, a route test that does not
+/// care — reports `NO_PRINTER`, which is the truth for it: there is nothing to print on.
+async fn print_receipt_for<S>(
+    printers: Option<&Arc<Printers>>,
+    edge: &Arc<Edge<S>>,
+    view: &BillView,
+) -> PrintOutcome
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let (Some(printers), Some(receipt_number), Some(total)) =
+        (printers, view.receipt_number, view.total_due)
+    else {
+        return PrintOutcome::NoPrinter;
+    };
+    printers
+        .print_receipt(
+            &edge.session(),
+            edge.store_id(),
+            // The bill's own id as the idempotency key: a settle retried after an ambiguous failure
+            // reuses it and the adapter prints once, which is the same promise the receipt number
+            // itself makes (ADR-0025).
+            EventId::new(view.bill_id.as_ulid()),
+            receipt_number,
+            total,
+        )
+        .await
 }
 
 /// Maps a bill command outcome to a response.

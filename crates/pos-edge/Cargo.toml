@@ -52,6 +52,12 @@ store-sqlite = { path = "../adapters/store-sqlite" }
 cloud-sync-http  = { path = "../adapters/cloud-sync-http" }
 key-vault-keyring = { path = "../adapters/key-vault-keyring" }
 
+# The printer the settle path hands a receipt to and a fire hands a kitchen ticket to (ADR-0100,
+# production-readiness C2). Until this line the adapter was a workspace member no binary depended on,
+# which is precisely why nothing printed. Its TCP transport is the network case; USB and serial land
+# with hardware bring-up (`docs/gate-register.md` §6).
+printer-escpos = { path = "../adapters/printer-escpos" }
+
 # The `Signer` the OTA loop verifies an artifact with (ADR-0047, roadmap R5-d). A workspace path
 # crate whose own subtree (ed25519-dalek, blake2) is already in the lock through the adapter's own
 # test lane, so this adds no new third-party crate — and the adapter is verify-only: it cannot hold
