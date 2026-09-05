@@ -118,7 +118,7 @@ a wrong conclusion with nothing in CI to stop it.
 | W10 | `pos-ports`' header says eighteen ports against nineteen — and a fourth number, "the seventeen-port list", further down. **Verified against `PortName::ALL`** (nineteen variants). **Fixed**, naming `IntakeLedger` as the nineteenth and the ADR that registered it | **done** |
 | W11 | The port table credits `ConfigStore` to an adapter that does not exist: the row read "SQLite / PostgreSQL" and the only `impl ConfigStore` outside the fakes is `store-sqlite`. **Fixed, with the reason:** what the cloud has is a different thing that also stores configuration — `pos-cloud`'s authoring-side config tree — and naming both in one cell implied a swappable adapter a fork could pick | **done** |
 | W12 | Both step-budget documents say thirteen tasks against fifteen; `roadmap-v3`'s A·P3 said "~12", a third number. **Fixed** in all three places | **done** |
-| W13 | [ADR-0061](adr/0061-order-relay.md) is "Extended by ADR-0062", an ADR that was never written, leaving a hole at 0062 in an otherwise dense sequence — **found while writing this page, by the `links` gate**. **Fixed:** the header says the extension was never written, that `MessageLink` stays one-directional until it is, and that the number is reserved; the body's forward reference says the same. The work itself is Wave 8 (issue #97) | **done** |
+| W13 | [ADR-0061](adr/0061-order-relay.md) is "Extended by ADR-0062", an ADR that was never written, leaving a hole at 0062 in an otherwise dense sequence — **found while writing this page, by the `links` gate**. **Closed for real:** [ADR-0062](adr/0062-the-relay-wake.md) is written and Accepted. It does not do what this row expected — having measured the relay, it *declines* the live mode and removes the two 100 ms poll loops instead, which were costing an idle store about ten queue queries a second. `MessageLink` stays one-directional permanently and there is no `store.order_relay.mode` | **done** |
 
 ## Wave 7 — Dead and unreachable code
 
@@ -131,10 +131,11 @@ a wrong conclusion with nothing in CI to stop it.
 ## Wave 8 — The roadmap's remaining feature work
 
 `B·W2` · `B·W3` · `B·W7` · `B·W8` · `A·P4` (printer transport, store-side WAL shipping, JetStream
-capacity probe) · `A·PF` (all four) · relay live mode, which needs **ADR-0062 written first** — it
-does not exist. [ADR-0061](adr/0061-order-relay.md) forward-references it as "forthcoming, in the
-follow-up PR", so the accepted record points at a decision nobody made and the ADR sequence has a
-hole at 0062. `roadmap-v3.md` estimates this wave at 8–10 weeks of code on its own.
+capacity probe) · `A·PF` (all four). **The relay live mode has left this list**:
+[ADR-0062](adr/0062-the-relay-wake.md) is written, and it refuses the live cloud→store channel on
+merit rather than scheduling it — the relay's cost was an idle database load, not wire latency, and
+that is removed by waking the two waiters instead of polling for them. The sequence has no hole at
+0062. `roadmap-v3.md` estimates the rest of this wave at 8–10 weeks of code on its own.
 
 **Out of scope for the Vietnam pilot:** v1.2 (international, retail) and v1.3 (Japan qualified
 invoice, India IRP/UPI). Both are gated on legal registration that no pull request closes.

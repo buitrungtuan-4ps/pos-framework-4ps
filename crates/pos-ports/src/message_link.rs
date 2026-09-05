@@ -19,6 +19,15 @@
 //! `docs/architecture.md` §3 makes the link one-directional by design: the store never
 //! waits on the cloud, so the cloud needs no automatic failover. Configuration arrives by
 //! the store *pulling*, not by the cloud pushing down this channel.
+//!
+//! **This is now settled rather than provisional.** [ADR-0061](../../../docs/adr/0061-order-relay.md)
+//! deferred a cloud→store `live` mode that would have added a receive side here, and
+//! [ADR-0062](../../../docs/adr/0062-the-relay-wake.md) declined it: the cloud cannot dial a store, a
+//! second delivery path can disagree with the durable order queue about whether an order was handed
+//! over, and the broker token every box holds is fleet-wide with no per-subject permissions, so a
+//! per-store order subject would let any store read *or publish onto* another's inbox. So the port
+//! keeps its four methods — no `subscribe`, no `receive`, no callback — and nothing is pending
+//! against that shape.
 
 use core::num::NonZeroU32;
 

@@ -236,7 +236,38 @@ pub trait RelayTransport: Send + Sync {
 
 /// How long the loop waits after a transport error before trying again — a store offline from the
 /// cloud's view still trades locally, so this is a background reconnect, not a hot spin.
+///
+/// The **jitter** either side of it is not decoration
+/// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)). The cloud deploys with `Recreate`, so
+/// every store in the fleet loses its long-poll at the same instant; a fixed backoff then has all of
+/// them return together, and keep returning together, for as long as the cloud takes to come back.
+/// Spreading the retries over a window turns a synchronised stampede into arrivals the cloud can
+/// absorb while it is still warming up.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
+
+/// The jitter window is `RETRY_BACKOFF ± RETRY_BACKOFF / RETRY_JITTER_DIVISOR`.
+const RETRY_JITTER_DIVISOR: u32 = 2;
+
+/// A backoff with jitter: uniform over `[backoff/2, backoff * 3/2]`.
+///
+/// Whole nanoseconds throughout, because this tree has no floating point in it
+/// ([ADR-0004](../../../docs/adr/0004-money-and-rounding.md)) and a retry delay is the last place
+/// worth making an exception for. The modulo's bias is a u64 folded onto a ten-second window — about
+/// one part in two billion, which is nothing next to the scheduler's own granularity.
+///
+/// Entropy comes from the OS. A failure to read it falls back to the un-jittered backoff, because a
+/// reconnect that is merely synchronised is far better than one that does not happen.
+fn jittered(backoff: Duration) -> Duration {
+    let mut bytes = [0u8; 8];
+    if getrandom::fill(&mut bytes).is_err() {
+        return backoff;
+    }
+    let half = backoff.as_nanos() / u128::from(RETRY_JITTER_DIVISOR);
+    let width = half.saturating_mul(2).saturating_add(1);
+    let low = backoff.as_nanos().saturating_sub(half);
+    let offset = u128::from(u64::from_le_bytes(bytes)) % width;
+    Duration::from_nanos(u64::try_from(low.saturating_add(offset)).unwrap_or(u64::MAX))
+}
 
 /// The relay client: a transport to the cloud queue and the local [`OrderIn`] each pulled order is
 /// made through. Static dispatch, no `dyn` ([ADR-0013](../../../docs/adr/0013-async-strategy.md)).
@@ -302,7 +333,7 @@ where
                             tracing::warn!(%error, "relay pull/ack failed; backing off");
                             tokio::select! {
                                 () = &mut shutdown => break,
-                                () = tokio::time::sleep(RETRY_BACKOFF) => {}
+                                () = tokio::time::sleep(jittered(RETRY_BACKOFF)) => {}
                             }
                         }
                     }
@@ -381,4 +412,33 @@ fn to_inbound_line(line: &QueuedOrderLine) -> Result<InboundOrderLine, &'static 
         quoted_unit_price,
         note: line.note.clone().map(GuestNote::new),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RETRY_BACKOFF, RETRY_JITTER_DIVISOR, jittered};
+    use core::time::Duration;
+
+    /// The window is what does the work: a jitter that could return the backoff unchanged, or that
+    /// could spread the fleet over hours, would each be a different bug.
+    #[test]
+    fn the_backoff_lands_inside_its_window_and_moves_around_inside_it() {
+        let samples: Vec<Duration> = (0..64).map(|_| jittered(RETRY_BACKOFF)).collect();
+        for sample in &samples {
+            assert!(
+                *sample >= RETRY_BACKOFF / 2 && *sample <= RETRY_BACKOFF * 3 / 2,
+                "{sample:?} is outside [2.5s, 7.5s]"
+            );
+        }
+        assert_eq!(
+            RETRY_JITTER_DIVISOR, 2,
+            "the window above assumes a half-backoff either side"
+        );
+        let distinct = samples.iter().collect::<std::collections::HashSet<_>>();
+        assert!(
+            distinct.len() > 32,
+            "64 draws produced only {} distinct backoffs — the fleet would still retry in lockstep",
+            distinct.len()
+        );
+    }
 }

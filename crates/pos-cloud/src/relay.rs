@@ -52,11 +52,29 @@ use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::{api_error, parse_ulid_fields};
 use crate::orders::StoreDirectory;
+use crate::wake::RelayWake;
 
 /// The default the relay parks for when a store publishes no `store.order_relay.wait_ms`.
 const DEFAULT_WAIT_MS: u64 = 3000;
-/// How often `submit`'s park re-reads the queue while waiting for the store's ack.
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How often a waiter re-reads the queue **when no wake arrives**
+/// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+///
+/// This is the fallback, not the mechanism: both loops are woken by [`RelayWake`] the moment their
+/// row is written, and this timer is what makes a lost or never-sent signal slow rather than wrong.
+/// It is deliberately far longer than the 100 ms ADR-0061 shipped — that constant was the *only* way
+/// a waiter learned anything, and it cost about ten queries a second per store, forever.
+const FALLBACK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The park's fallback re-read interval for a given deadline.
+///
+/// The park's re-read count is `wait / interval`, so an interval at or above the deadline computes to
+/// **zero re-reads** and silently removes the safety net the fallback exists to be. Clamping to half
+/// the deadline guarantees at least two.
+fn fallback_for(wait: Duration) -> Duration {
+    FALLBACK_INTERVAL
+        .min(wait / 2)
+        .max(Duration::from_millis(1))
+}
 /// How long the store-facing long-poll holds an empty pull open before answering `[]`.
 const LONGPOLL_CAP: Duration = Duration::from_secs(20);
 /// How many pending orders a single pull returns.
@@ -68,7 +86,7 @@ const PULL_BATCH: u32 = 32;
 
 /// The internal id of a queued order — the handle the store's ack path names. Distinct from the
 /// caller's `(channel, reference)`, which stays the idempotency and look-up key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderQueueId(Ulid);
 
 impl OrderQueueId {
@@ -349,14 +367,17 @@ pub trait OrderQueueStore: Send + Sync {
 /// `look_up` reads the recorded acceptance. Resolves the owning tenant and the per-store config from
 /// the config tree itself, so it satisfies the tenant-agnostic port signature.
 #[derive(Clone)]
-pub struct OrderRelay<D, T, Q, C> {
+pub struct OrderRelay<D, T, Q, C, W> {
     directory: D,
     config_trees: T,
     queue: Q,
     clock: C,
+    /// The signal a parked `submit` waits on, shared with the store-facing router that raises it
+    /// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+    wake: W,
 }
 
-impl<D, T, Q, C> core::fmt::Debug for OrderRelay<D, T, Q, C> {
+impl<D, T, Q, C, W> core::fmt::Debug for OrderRelay<D, T, Q, C, W> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.debug_struct("OrderRelay").finish_non_exhaustive()
     }
@@ -377,21 +398,26 @@ impl Default for RelayConfig {
     }
 }
 
-impl<D, T, Q, C> OrderRelay<D, T, Q, C>
+impl<D, T, Q, C, W> OrderRelay<D, T, Q, C, W>
 where
     D: StoreDirectory + Clone,
     T: ConfigTreeStore + Clone,
     Q: OrderQueueStore + Clone,
     C: ClockSource + Clone,
+    W: RelayWake,
 {
-    /// Builds a relay over the store→tenant directory, the config tree, the order queue, and a clock
-    /// (which stamps the time half of a queued order's id).
-    pub const fn new(directory: D, config_trees: T, queue: Q, clock: C) -> Self {
+    /// Builds a relay over the store→tenant directory, the config tree, the order queue, a clock
+    /// (which stamps the time half of a queued order's id), and the wake a parked `submit` waits on.
+    ///
+    /// The wake must be the **same instance** the store-facing router holds, or a park will only ever
+    /// resolve on its fallback timer.
+    pub const fn new(directory: D, config_trees: T, queue: Q, clock: C, wake: W) -> Self {
         Self {
             directory,
             config_trees,
             queue,
             clock,
+            wake,
         }
     }
 
@@ -438,12 +464,13 @@ where
     }
 }
 
-impl<D, T, Q, C> OrderIn for OrderRelay<D, T, Q, C>
+impl<D, T, Q, C, W> OrderIn for OrderRelay<D, T, Q, C, W>
 where
     D: StoreDirectory + Clone + Send + Sync,
     T: ConfigTreeStore + Clone + Send + Sync,
     Q: OrderQueueStore + Clone + Send + Sync,
     C: ClockSource + Clone + Send + Sync,
+    W: RelayWake,
 {
     async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
         let tenant = self.tenant_of(order.store_id).await?;
@@ -468,11 +495,39 @@ where
             return result;
         }
 
-        // Park: re-read until the store reports or the deadline passes. The order stays queued either
-        // way, so a timeout is `Unavailable` (a 503) and the caller resolves via `look_up`.
-        let deadline_polls = config.wait.as_millis() / POLL_INTERVAL.as_millis().max(1);
-        for _ in 0..deadline_polls {
-            tokio::time::sleep(POLL_INTERVAL).await;
+        // Subscribe on the row's real id — `enqueue` is idempotent, so a repeat submit gets back the
+        // id of the row that already exists rather than the one minted above, and parking on the
+        // wrong id would wait out the whole deadline. Taken *before* the first read, so an outcome
+        // landing in between is buffered rather than missed (ADR-0062).
+        let parked = self.wake.subscribe_reported(tenant, record.queued_id);
+
+        // The store is told there is something to collect, so its long-poll returns now rather than
+        // on its own timer.
+        self.wake.queued(tenant, order.store_id);
+
+        // Park until the store reports or the deadline passes. The order stays queued either way, so
+        // a timeout is `Unavailable` (a 503) and the caller resolves via `look_up`.
+        //
+        // The wake resolves this the instant the ack commits; the fallback interval is what a lost
+        // signal costs, and `fallback_for` guarantees at least two re-reads inside any deadline.
+        let fallback = fallback_for(config.wait);
+        // The deadline is a point in time, not a count of slices. Adding each slice's *nominal*
+        // length to a running total would charge a wake that landed after 2 ms for the whole
+        // interval, so one early wake would eat most of the caller's deadline.
+        let deadline = tokio::time::Instant::now() + config.wait;
+        let mut parked = parked;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let _woke = self
+                .wake
+                .wait_reported(parked, fallback.min(remaining))
+                .await;
+            // Re-subscribe for the next slice *before* re-reading, never after: an outcome that
+            // commits between this read and the next wait has to be buffered rather than missed.
+            parked = self.wake.subscribe_reported(tenant, record.queued_id);
             if let Some(found) = self
                 .queue
                 .outcome(tenant, order.store_id, channel, reference)
@@ -565,21 +620,25 @@ fn mint_ulid(now_ms: i64) -> Result<Ulid, PortError> {
 // ---------------------------------------------------------------------------------------------
 
 /// The collaborators the store-facing order routes compose.
-struct SyncState<Q, K, C> {
+struct SyncState<Q, K, C, W> {
     queue: Q,
     keys: K,
     clock: C,
     /// The long-poll hold cap — a field so tests can drive it to zero.
     longpoll_cap: Duration,
+    /// The signal this router waits on for an enqueue, and raises on an ack
+    /// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+    wake: W,
 }
 
-impl<Q: Clone, K: Clone, C: Clone> Clone for SyncState<Q, K, C> {
+impl<Q: Clone, K: Clone, C: Clone, W: Clone> Clone for SyncState<Q, K, C, W> {
     fn clone(&self) -> Self {
         Self {
             queue: self.queue.clone(),
             keys: self.keys.clone(),
             clock: self.clock.clone(),
             longpoll_cap: self.longpoll_cap,
+            wake: self.wake.clone(),
         }
     }
 }
@@ -587,41 +646,45 @@ impl<Q: Clone, K: Clone, C: Clone> Clone for SyncState<Q, K, C> {
 /// Builds the store-facing order sync router: pull pending orders, ack an outcome. Store-initiated
 /// and scoped by [`Scope::RelayOrders`]; merged into the app router, so the `CloudApp` generics do not
 /// grow.
-pub fn orders_sync_router<Q, K, C>(queue: Q, keys: K, clock: C) -> Router
+pub fn orders_sync_router<Q, K, C, W>(queue: Q, keys: K, clock: C, wake: W) -> Router
 where
     Q: OrderQueueStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    W: RelayWake + Clone + 'static,
 {
-    orders_sync_router_with_cap(queue, keys, clock, LONGPOLL_CAP)
+    orders_sync_router_with_cap(queue, keys, clock, wake, LONGPOLL_CAP)
 }
 
 /// [`orders_sync_router`] with an explicit long-poll cap (tests pass zero for an immediate answer).
-pub fn orders_sync_router_with_cap<Q, K, C>(
+pub fn orders_sync_router_with_cap<Q, K, C, W>(
     queue: Q,
     keys: K,
     clock: C,
+    wake: W,
     longpoll_cap: Duration,
 ) -> Router
 where
     Q: OrderQueueStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    W: RelayWake + Clone + 'static,
 {
     Router::new()
         .route(
             "/sync/stores/{store_id}/orders",
-            get(pull_orders::<Q, K, C>),
+            get(pull_orders::<Q, K, C, W>),
         )
         .route(
             "/sync/stores/{store_id}/orders/{queued_id}/ack",
-            post(ack_order::<Q, K, C>),
+            post(ack_order::<Q, K, C, W>),
         )
         .with_state(SyncState {
             queue,
             keys,
             clock,
             longpoll_cap,
+            wake,
         })
 }
 
@@ -633,8 +696,8 @@ struct PendingOrderDto {
 }
 
 /// `GET /sync/stores/{store_id}/orders` — the store pulls its pending batch (bounded long-poll).
-async fn pull_orders<Q, K, C>(
-    State(state): State<SyncState<Q, K, C>>,
+async fn pull_orders<Q, K, C, W>(
+    State(state): State<SyncState<Q, K, C, W>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
 ) -> Response
@@ -642,6 +705,7 @@ where
     Q: OrderQueueStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    W: RelayWake + Clone + 'static,
 {
     let grant = match authenticate(&state.keys, &state.clock, &headers).await {
         Ok(grant) => grant,
@@ -660,14 +724,18 @@ where
 
     // Answer immediately if anything is pending; otherwise hold the request open, re-checking, until
     // the cap. The store still initiated the connection — this is its own outbound wait, not a push.
-    let mut waited = Duration::ZERO;
+    let deadline = tokio::time::Instant::now() + state.longpoll_cap;
+    // Subscribe before the first read: an order enqueued between the read and the wait would
+    // otherwise be missed and cost this store a whole fallback interval (ADR-0062).
+    let mut parked = state.wake.subscribe_queued(grant.tenant(), store_id);
     loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         match state
             .queue
             .pull_pending(grant.tenant(), store_id, PULL_BATCH)
             .await
         {
-            Ok(pending) if !pending.is_empty() || waited >= state.longpoll_cap => {
+            Ok(pending) if !pending.is_empty() || remaining.is_zero() => {
                 let body: Vec<PendingOrderDto> = pending
                     .into_iter()
                     .map(|order| PendingOrderDto {
@@ -678,8 +746,15 @@ where
                 return (StatusCode::OK, Json(body)).into_response();
             }
             Ok(_) => {
-                tokio::time::sleep(POLL_INTERVAL).await;
-                waited += POLL_INTERVAL;
+                // Wait for the wake or the fallback, whichever lands first, without ever sleeping
+                // past the hold cap this request promised the store.
+                let _woke = state
+                    .wake
+                    .wait_queued(parked, FALLBACK_INTERVAL.min(remaining))
+                    .await;
+                // Re-subscribe before looping back to the read, never after: an order enqueued
+                // between that read and the next wait has to be buffered rather than missed.
+                parked = state.wake.subscribe_queued(grant.tenant(), store_id);
             }
             Err(error) => return relay_error(&error),
         }
@@ -687,8 +762,8 @@ where
 }
 
 /// `POST /sync/stores/{store_id}/orders/{queued_id}/ack` — the store reports an outcome.
-async fn ack_order<Q, K, C>(
-    State(state): State<SyncState<Q, K, C>>,
+async fn ack_order<Q, K, C, W>(
+    State(state): State<SyncState<Q, K, C, W>>,
     headers: HeaderMap,
     Path((store_id, queued_id)): Path<(String, String)>,
     Json(outcome): Json<StoreOutcome>,
@@ -697,6 +772,7 @@ where
     Q: OrderQueueStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    W: RelayWake + Clone + 'static,
 {
     let grant = match authenticate(&state.keys, &state.clock, &headers).await {
         Ok(grant) => grant,
@@ -721,7 +797,13 @@ where
     {
         // `204` whether or not it updated a pending row: acking an unknown or already-acked id is an
         // idempotent no-op, and telling the store which it was is a needless signal.
-        Ok(_updated) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_updated) => {
+            // The write has committed, so the parked `submit` can resolve now rather than on its
+            // fallback timer (ADR-0062). Signalled unconditionally: an ack that updated nothing is
+            // one whose waiter has already gone, and waking nobody costs nothing.
+            state.wake.reported(grant.tenant(), queued_id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => relay_error(&error),
     }
 }

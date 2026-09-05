@@ -67,6 +67,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0059](0059-erp-adapter.md) | ERP adapter: the `ErpSink` port over a REST posting API, behind a transport seam | Accepted |
 | [0060](0060-cloud-back-office-dashboard.md) | Cloud back-office: an embedded SolidJS SPA served by `pos_cloud` over the existing admin API | Accepted |
 | [0061](0061-order-relay.md) | Order relay: a durable per-store queue the store pulls; the cloud implements `OrderIn` over it | Accepted |
+| [0062](0062-the-relay-wake.md) | The relay wakes its waiters instead of polling: no live cloud→store channel, `MessageLink` stays one-directional, and an idle store stops costing ten queue queries a second | Accepted |
 | [0063](0063-store-menu-catalog.md) | Store menu catalog: the store's authoritative price book, synced as config; `pos-core` reprices inbound lines from it | Accepted |
 | [0064](0064-edge-order-in.md) | Edge `OrderIn`: the store reprices from its menu, opens a tableless order in its local log, and dedupes on the caller's reference | Accepted |
 | [0065](0065-cloud-org-registry.md) | The cloud org registry: named Tenant/Brand/Store/Device, RLS by tenant, backfilled from config_trees; identity and naming distinct from configuration | Accepted |

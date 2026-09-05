@@ -1,8 +1,8 @@
 # ADR-0061 — The cloud→store order relay is a durable per-store queue the store pulls, and the cloud implements `OrderIn` over it
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-24
+**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-05
 **Relates to** [ADR-0056](0056-public-order-intake.md) · [ADR-0026](0026-port-shapes.md) · [ADR-0001](0001-offline-first-store-autonomy.md) · [ADR-0033](0033-config-tree.md) · [ADR-0037](0037-api-keys.md) · [ADR-0039](0039-config-delivery.md)
-**Extension not written** — the optional low-latency `live` mode was to be ADR-0062. That ADR does not exist: the follow-up PR was never opened, so `0062` is a hole in an otherwise dense sequence and this line pointed at a decision nobody made. Until it is written, `MessageLink` stays one-directional and the relay stays long-poll, which [`production-readiness.md`](../production-readiness.md) Wave 8 records as the remaining work (issue #97). The number is reserved for it.
+**Amended by** [ADR-0062](0062-the-relay-wake.md) — the reserved number is written, and it declines the live mode rather than adding it. `MessageLink` stays one-directional permanently; the two 100 ms poll loops this ADR shipped are replaced by a wake, and `store.order_relay.mode` is not added because there is no mode to select. See Amendment 1 below.
 
 **Context.** [ADR-0056](0056-public-order-intake.md) built the public intake *library* — `POST /v1/orders`
 mapping a request to an [`InboundOrder`], binding the store to the caller's tenant, and calling the
@@ -77,11 +77,13 @@ Two fixed facts shape it:
 - **A cloud-minted relay id as the caller's handle** — rejected as redundant: the caller already owns
   `(sales_channel, external_reference)`, which is the idempotency key and the `look_up` key. The
   internal `queued_id` exists only for the store's ack path.
-- **A synchronous request/reply over a store-held live connection (Mức 2)** — *deferred*, not rejected:
-  it lowers latency below what long-poll gives but requires the store to hold a live channel and reply,
-  which amends `MessageLink`'s one-directional rule. It is a conscious, separate decision — ADR-0062,
-  **still unwritten** (see the header) — to be layered behind a `store.order_relay.mode` config flag,
-  over this same queue as the durable fallback.
+- **A synchronous request/reply over a store-held live connection (Mức 2)** — deferred here as
+  ADR-0062, and **rejected there**. The premise of this entry — that the remaining latency is on the
+  wire — did not survive measurement: the cost of the poll loops is a database load, not a delay a
+  guest feels. [ADR-0062](0062-the-relay-wake.md) refuses the live channel on three independent
+  grounds (the cloud cannot dial a store; a second delivery path can disagree with the durable queue;
+  the fleet-wide broker token would let any box read *or publish onto* another store's order inbox)
+  and removes the poll loops instead. There is therefore no `store.order_relay.mode`.
 
 **Consequences.**
 
@@ -98,3 +100,27 @@ Two fixed facts shape it:
 - The cloud now holds unconfirmed order contents transiently (until acked and then per retention). A
   guest `note` rides as a [`GuestNote`], which still cannot enter the event log; the queue is order
   delivery, not the log, and is masked/aged under the same retention posture ([ADR-0035](0035-retention-and-pii-masking.md)).
+
+**Amendment 1 (2026-09-05) — the reserved 0062 is written, and it declines the live mode; the poll
+loops become a wake.**
+
+This ADR shipped both legs of the relay on a fixed 100 ms re-read, and deferred a low-latency `live`
+mode to an ADR-0062 that nobody wrote. [ADR-0062](0062-the-relay-wake.md) now exists and takes the
+opposite turn, for a reason the deferral did not have: the measurable defect is not latency.
+
+* **The store-facing long-poll cost about ten queue queries a second per store, forever** — a store
+  that sells nothing all night cost the same as one at peak, and at the 500-store fleet
+  `capacity-and-reliability.md` sizes for that is thousands of queries a second of pure idle load
+  through a 16-connection pool. That, not the 100 ms granularity, is what the poll loops were doing.
+* **So the live channel is refused rather than deferred again.** The three grounds are in ADR-0062;
+  the short version is that the cloud cannot dial a store, a second delivery path can disagree with
+  the durable queue about whether an order was handed over, and the fleet-wide broker token would let
+  any box read *or publish onto* another store's order inbox.
+* **`MessageLink` stays one-directional permanently.** The port keeps its four methods; the entry in
+  *Rejected* above is amended from "deferred" to "declined".
+* **Both loops now wake instead of polling.** A `RelayWake` seam signals the parked `submit` when the
+  ack commits and the store's long-poll when an order is enqueued, each waiter subscribing before it
+  reads. The re-read on a timer stays as the fallback — the queue row is still the only source of
+  truth — so a lost signal is slow, never wrong.
+* **There is no `store.order_relay.mode`.** The flag this ADR promised would select the live mode has
+  nothing to select. `store.order_relay.{enabled,wait_ms}` are unchanged.

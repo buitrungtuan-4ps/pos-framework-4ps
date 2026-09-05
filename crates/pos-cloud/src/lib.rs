@@ -98,6 +98,7 @@ pub mod tax;
 pub mod translations;
 pub mod version;
 pub mod vouchers;
+pub mod wake;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome, StoreOwner, StoreOwners};

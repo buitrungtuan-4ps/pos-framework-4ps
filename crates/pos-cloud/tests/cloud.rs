@@ -85,6 +85,7 @@ use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
+use pos_cloud::wake::SharedWake;
 use pos_cloud::webhook::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
@@ -5556,6 +5557,10 @@ async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
     let relay_token = issue_store_key(&keys, tenant(), order_store(), &[Scope::RelayOrders]);
     let (known, _price) = known_menu_item();
     let queue = FakeOrderQueue::new();
+    // One wake for both halves, as `main` wires it: the submit park listens on the same instance
+    // the ack leg signals. Two would each signal an audience the other is not listening to, and
+    // the park would only ever resolve on its fallback timer.
+    let relay_wake = SharedWake::new();
     let app = || {
         orders_router(
             OrderRelay::new(
@@ -5565,6 +5570,7 @@ async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
                 EmptyConfigTrees,
                 queue.clone(),
                 clock(),
+                relay_wake.clone(),
             ),
             keys.clone(),
             clock(),
@@ -5577,6 +5583,7 @@ async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
             queue.clone(),
             keys.clone(),
             clock(),
+            relay_wake.clone(),
             std::time::Duration::ZERO,
         ))
     };
@@ -5655,6 +5662,274 @@ async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
     assert_eq!(again_body.as_array().map(Vec::len), Some(0));
 }
 
+/// The outcome a store reports for an order it accepted, as its relay client posts it.
+fn accepted_ack() -> serde_json::Value {
+    serde_json::json!({
+        "outcome": "accepted",
+        "order_id": order_store().as_ulid().to_string(),
+        "created": true,
+        "total": { "currency_code": "VND", "amount_minor": 150_000 },
+        "repriced": false,
+        "awaiting_staff_confirmation": false,
+    })
+}
+
+/// The ack is what resolves a parked `submit`, not the fallback timer
+/// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+///
+/// Time is paused, so the figures are exact rather than flaky. The park runs to the default 3000 ms
+/// deadline and its fallback interval is `min(5s, wait / 2)` = **1500 ms**, so a submit that returns
+/// far inside 1500 ms can only have been woken. Delete the `wake.reported(..)` call in `ack_order`
+/// and this test measures 1500 ms instead — which is the whole point of asserting on the clock
+/// rather than only on the status code.
+#[tokio::test(start_paused = true)]
+async fn an_ack_wakes_the_parked_submit_rather_than_its_fallback_timer() {
+    let keys = FakeKeys::default();
+    let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let relay_token = issue_store_key(&keys, tenant(), order_store(), &[Scope::RelayOrders]);
+    let (known, _price) = known_menu_item();
+    let queue = FakeOrderQueue::new();
+    // One wake, shared by both halves exactly as `main` wires it.
+    let relay_wake = SharedWake::new();
+    let app = || {
+        orders_router(
+            OrderRelay::new(
+                FakeDirectory {
+                    owner: Some(tenant()),
+                },
+                EmptyConfigTrees,
+                queue.clone(),
+                clock(),
+                relay_wake.clone(),
+            ),
+            keys.clone(),
+            clock(),
+            FakeDirectory {
+                owner: Some(tenant()),
+            },
+            generous_intake_limit(),
+        )
+        .merge(orders_sync_router_with_cap(
+            queue.clone(),
+            keys.clone(),
+            clock(),
+            relay_wake.clone(),
+            std::time::Duration::ZERO,
+        ))
+    };
+
+    let store = order_store().to_string();
+    let started = tokio::time::Instant::now();
+
+    // The caller submits and parks. Concurrently the store collects the order and reports the
+    // acceptance it decided locally — through the ack route, which signals the wake once the write
+    // has committed.
+    let submitting = app().oneshot(post_json_bearer(
+        "/v1/orders",
+        &order_body("wake-1", known, None),
+        &place,
+    ));
+    let store_side = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let pulled = app()
+                .oneshot(get(
+                    &format!("/sync/stores/{store}/orders"),
+                    Some(&relay_token),
+                ))
+                .await
+                .expect("route pull");
+            let body = json_body(pulled).await;
+            let Some(queued_id) = body[0]["queued_id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let acked = app()
+                .oneshot(post_json_bearer(
+                    &format!("/sync/stores/{store}/orders/{queued_id}/ack"),
+                    &accepted_ack(),
+                    &relay_token,
+                ))
+                .await
+                .expect("route ack");
+            assert_eq!(acked.status(), StatusCode::NO_CONTENT);
+            return;
+        }
+    };
+    let (submitted, ()) = tokio::join!(submitting, store_side);
+    let elapsed = started.elapsed();
+
+    let submitted = submitted.expect("route submit");
+    assert_eq!(
+        submitted.status(),
+        StatusCode::CREATED,
+        "the park resolved with the store's acceptance rather than timing out"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(1500),
+        "the ack woke the park; on the fallback timer alone this would be 1500 ms, not {elapsed:?}"
+    );
+}
+
+/// A signal that never arrives makes the park **slow, not wrong**
+/// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+///
+/// The row in the queue stays the only source of truth, so this writes the outcome straight into the
+/// store without going through the ack route — which is what a lost, dropped or cross-process signal
+/// looks like from the park's side. The submit still resolves, on the fallback interval, which is
+/// the safety net `fallback_for` exists to guarantee cannot be arithmetic'd away.
+#[tokio::test(start_paused = true)]
+async fn a_lost_signal_still_resolves_the_park_on_the_fallback_timer() {
+    let keys = FakeKeys::default();
+    let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let (known, _price) = known_menu_item();
+    let queue = FakeOrderQueue::new();
+    let app = orders_router(
+        OrderRelay::new(
+            FakeDirectory {
+                owner: Some(tenant()),
+            },
+            EmptyConfigTrees,
+            queue.clone(),
+            clock(),
+            SharedWake::new(),
+        ),
+        keys.clone(),
+        clock(),
+        FakeDirectory {
+            owner: Some(tenant()),
+        },
+        generous_intake_limit(),
+    );
+
+    let started = tokio::time::Instant::now();
+    let submitting = app.oneshot(post_json_bearer(
+        "/v1/orders",
+        &order_body("wake-2", known, None),
+        &place,
+    ));
+    let silent_store = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let pending = queue
+                .pull_pending(tenant(), order_store(), 8)
+                .await
+                .expect("pull pending");
+            if let Some(order) = pending.first() {
+                let outcome: StoreOutcome =
+                    serde_json::from_value(accepted_ack()).expect("an ack body");
+                queue
+                    .record_outcome(tenant(), order_store(), order.queued_id, &outcome)
+                    .await
+                    .expect("record the outcome");
+                // Deliberately no `wake.reported(..)`: this is the lost-signal case.
+                return;
+            }
+        }
+    };
+    let (submitted, ()) = tokio::join!(submitting, silent_store);
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        submitted.expect("route submit").status(),
+        StatusCode::CREATED,
+        "the fallback re-read found the outcome the wake never announced"
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_millis(1500),
+        "this resolved on the 1500 ms fallback slice, not a wake — got {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(3000),
+        "and well inside the 3000 ms deadline, so the caller never saw a 503 — got {elapsed:?}"
+    );
+}
+
+/// An enqueue wakes the store's long-poll, so an idle store is not re-reading the queue on a timer
+/// ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)).
+///
+/// This is the finding the ADR was written for. Under ADR-0061 this leg re-read PostgreSQL every
+/// 100 ms for the whole 20-second hold — about ten queries a second per store, whether it sold
+/// anything or not. The hold is now the real 20-second cap and the fallback interval is 5 s, so a
+/// pull that answers far inside 5 s was woken; on the fallback alone it would answer at 5 s, and on
+/// nothing at all at 20.
+#[tokio::test(start_paused = true)]
+async fn a_queued_order_wakes_the_stores_long_poll_rather_than_holding_to_the_cap() {
+    let keys = FakeKeys::default();
+    let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
+    let relay_token = issue_store_key(&keys, tenant(), order_store(), &[Scope::RelayOrders]);
+    let (known, _price) = known_menu_item();
+    let queue = FakeOrderQueue::new();
+    let relay_wake = SharedWake::new();
+    let app = || {
+        orders_router(
+            OrderRelay::new(
+                FakeDirectory {
+                    owner: Some(tenant()),
+                },
+                EmptyConfigTrees,
+                queue.clone(),
+                clock(),
+                relay_wake.clone(),
+            ),
+            keys.clone(),
+            clock(),
+            FakeDirectory {
+                owner: Some(tenant()),
+            },
+            generous_intake_limit(),
+        )
+        .merge(orders_sync_router_with_cap(
+            queue.clone(),
+            keys.clone(),
+            clock(),
+            relay_wake.clone(),
+            // The shipped hold, not the zero the other relay tests use — the point here is that the
+            // pull answers long before it.
+            std::time::Duration::from_secs(20),
+        ))
+    };
+
+    let store = order_store().to_string();
+    // The store is already holding its pull open with nothing to collect.
+    let pulling = async {
+        let started = tokio::time::Instant::now();
+        let pulled = app()
+            .oneshot(get(
+                &format!("/sync/stores/{store}/orders"),
+                Some(&relay_token),
+            ))
+            .await
+            .expect("route pull");
+        (pulled, started.elapsed())
+    };
+    // A caller submits ten milliseconds later. Nobody acks, so the submit itself parks out and 503s
+    // — which is the ADR-0061 contract and not what this test is about.
+    let submitting = async {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        app()
+            .oneshot(post_json_bearer(
+                "/v1/orders",
+                &order_body("wake-3", known, None),
+                &place,
+            ))
+            .await
+            .expect("route submit")
+    };
+    let ((pulled, elapsed), submitted) = tokio::join!(pulling, submitting);
+
+    assert_eq!(pulled.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(pulled).await.as_array().map(Vec::len),
+        Some(1),
+        "the hold ended with the order, not with an empty answer at the cap"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the enqueue woke the hold; on the fallback interval this would be 5 s, not {elapsed:?}"
+    );
+    assert_eq!(submitted.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
 #[tokio::test]
 async fn pulling_orders_requires_the_relay_orders_scope() {
     let keys = FakeKeys::default();
@@ -5664,6 +5939,7 @@ async fn pulling_orders_requires_the_relay_orders_scope() {
         FakeOrderQueue::new(),
         keys.clone(),
         clock(),
+        SharedWake::new(),
         std::time::Duration::ZERO,
     );
     let store = order_store().to_string();

@@ -24,6 +24,7 @@ use pos_cloud::qr::TableTokenSecret;
 use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
 use pos_cloud::retention::{self, RetentionPolicy};
+use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
     Cloud, CloudConfig, NatsIngestConfig, alerts, assets, countries, cursor, dashboard, http,
@@ -371,6 +372,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // every route throttles against the same counter (roadmap **Q5**).
     let orders_limiter = app.orders_rate_limiter();
     let sync_throttle = app.sync_throttle();
+    // One wake shared by both halves of the relay: `OrderRelay`'s parked `submit` waits on it and the
+    // store-facing router raises it, so an order reaches a long-polling store, and the store's ack
+    // reaches the parked caller, without either side re-reading PostgreSQL on a timer
+    // ([ADR-0062](../../../docs/adr/0062-the-relay-wake.md)). It must be ONE instance — two would
+    // each signal an audience the other is not listening to, and every wait would fall back to its
+    // timer.
+    let relay_wake = wake::SharedWake::new();
+
     let service = http::router(app)
         .merge(http::reconcile_router(
             store.reconcile(),
@@ -697,6 +706,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.config_trees(),
                 store.order_queue(),
                 SystemClock,
+                relay_wake.clone(),
             ),
             store.api_keys(),
             SystemClock,
@@ -707,6 +717,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.order_queue(),
             store.api_keys(),
             SystemClock,
+            relay_wake.clone(),
         ));
 
     // Guest QR ordering (ADR-0057), only when a signing secret is configured: the guest carries no
@@ -723,6 +734,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     store.config_trees(),
                     store.order_queue(),
                     SystemClock,
+                    relay_wake.clone(),
                 ),
                 store.config_trees(),
                 SystemClock,
