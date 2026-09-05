@@ -67,6 +67,29 @@ only.
   not happen is the current silence — the till claiming "Printing receipt…" while nothing is wired.
   The bill view reports whether a printer was actually reached.
 
+## What approval has to start capturing
+
+Scoping the publish turned up a constraint worth stating, because it decides the shape of the slice
+that follows and would otherwise be rediscovered as a surprise: **a device proposal carries neither a
+connection nor a station.** `PersistedDeviceProposal` is `{id, tenant, store, kind, name, address}` —
+the facts a box can *discover* on its LAN. It cannot discover that the printer at the counter is on
+USB with a drawer under it, or that the one at `192.168.1.50` is the oven's.
+
+Compiling the node from what exists today would therefore publish every device as `Network` with no
+station. That is safe — a network device never opens a drawer — and it is also wrong twice over: a
+store with a USB receipt printer and a cash drawer could not use it, and no kitchen ticket could
+route anywhere.
+
+So **approval is where those two facts are added**, which is what ADR-0041 already made approval for:
+the moment a human looks at a discovered device and says what it is. The proposal record gains
+`connection` and an optional `station_id`, the approve route accepts them, and the console's Devices
+screen asks for them at the point of approval. Only then does the compile have something honest to
+publish.
+
+Sequenced that way: (2a) approval captures connection and station; (2b) the cloud compiles and
+publishes the `devices` node; (3) the edge applies it; (4) the dispatcher prints. A receipt printer
+needs 2a–4; a kitchen ticket needs the station from 2a as well.
+
 ## Consequences
 
 - No new port: `pos-ports`'s `Printer` is the seam, and `printer-escpos` implements it over its own
