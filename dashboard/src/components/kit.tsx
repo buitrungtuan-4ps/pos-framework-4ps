@@ -196,6 +196,20 @@ export function DataTable<T>(props: {
     return props.rows.filter((row) => text(row).toLowerCase().includes(needle));
   });
 
+  /**
+   * Whether a header click is answered by the server rather than by re-sorting `rows` here.
+   *
+   * Keyed on `onSort` alone: a caller that paged server-side but has no server sort to offer gets
+   * inert headers, which is the honest rendering of "this table cannot sort the set".
+   *
+   * **Declared before `sorted`, and it has to stay there.** `createMemo` runs its body once at
+   * creation, so a `const` the body calls must already be initialised by then. This lived below
+   * `sorted` and every table in the console threw `Cannot access 'serverSorted' before
+   * initialization` on its first render — no list loaded a row, and `tsc` cannot see it because
+   * the reference is legal TypeScript and only the runtime order is wrong.
+   */
+  const serverSorted = () => props.onSort !== undefined;
+
   const sorted = createMemo(() => {
     const key = sortKey();
     const base = filtered();
@@ -249,14 +263,6 @@ export function DataTable<T>(props: {
       props.onPage?.(next * perPage());
     }
   };
-
-  /**
-   * Whether a header click is answered by the server rather than by re-sorting `rows` here.
-   *
-   * Keyed on `onSort` alone: a caller that paged server-side but has no server sort to offer gets
-   * inert headers, which is the honest rendering of "this table cannot sort the set".
-   */
-  const serverSorted = () => props.onSort !== undefined;
 
   /** Whether this column's header is a control at all, in the mode the table is in. */
   const sortable = (column: Column<T>) =>

@@ -14,6 +14,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **Every list screen in the back-office console threw before it could show a row.**
+  `DataTable`'s `sorted` memo called `serverSorted`, a `const` arrow declared sixty lines below it.
+  Solid runs a memo body once at creation, so the read landed in the temporal dead zone and the
+  console answered `ReferenceError: Cannot access 'serverSorted' before initialization` on 13 of its
+  27 screens — Stores, Menu, Campaigns, Inventory, People, Fleet, Layout, Floor, Kitchen stations,
+  API keys, Activation, OTA and Reconciliation all rendered their chrome and no data. The
+  declaration now sits above the memo, with a comment saying why it has to stay there.
+
+  **Found by driving the built console in a browser against a seeded cloud**, which is the only
+  thing that could have found it: the reference is valid TypeScript, so `tsc --noEmit` passes, and
+  it reproduces identically on Vite 6 and Vite 8, so it is the application's bug and not the
+  bundler's. It is also the argument for gate-register **A4** — the browser harness neither step
+  budget can do without.
+
+### Added
+
+- **`cargo run -p pos-render --example print-preview`** — what a box would send to a printer, drawn
+  on a terminal instead of on paper, with whatever fonts *that* box has. Run before a pilot it
+  answers "will this store print a Japanese ticket" without hardware:
+  it names the scripts the loaded faces cover, draws one sample per script family (or any line
+  given as an argument), reports any character no face covers, and optionally writes a `.pbm`.
+  [ADR-0102](docs/adr/0102-printing-any-script.md) made the framework able to draw any script; this
+  is how a deployment checks that it actually can.
+
+### Changed
+
+- **Gate register §6 P8 and P9 narrowed to what is still hardware.** Both rows still said no USB or
+  serial transport existed and that `printer-escpos` could render neither Vietnamese nor a bitmap;
+  [ADR-0103](docs/adr/0103-directly-attached-printers.md) and
+  [ADR-0102](docs/adr/0102-printing-any-script.md) closed both in code, and
+  `production-readiness.md` was updated while the register was not. What remains is genuinely
+  physical: whether the pilot's own printers render what is sent, whether a drawer on a kick port
+  opens, and the **paper width** — 576 dots is assumed and a 58 mm printer needs 384, which a raster
+  wraps and shears rather than clipping.
+
 ### Changed
 
 - **Dependency review: twelve of the fifteen open Dependabot updates taken, three declined**
