@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use pos_edge::{
-    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryLease, InMemoryOtaState, InMemoryQueueNumbers,
-    InMemoryReceipts, StoreIdentity, serve, telemetry,
+    Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryLease, InMemoryOtaState,
+    InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity, serve, telemetry,
 };
 use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;

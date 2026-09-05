@@ -45,8 +45,8 @@ use pos_proto::ids::StoreId;
 use pos_proto::text::ReleaseTag;
 
 use crate::app::Edge;
-use crate::ota::{InstallError, OtaUpdater, UpdateInstaller, UpdateOutcome, UpdatePlan};
 use crate::lease_state::{LeaseAuthority, standing as lease_standing_for};
+use crate::ota::{InstallError, OtaUpdater, UpdateInstaller, UpdateOutcome, UpdatePlan};
 use crate::ota_state::{OtaStateAuthority, device_state};
 
 /// How often the loop weighs the published rollout.
@@ -255,6 +255,13 @@ where
     /// Composes the loop. The `cloud` is held twice — once by the updater for the artifact fetch and
     /// once here for the report — because [`OtaUpdater`] owns its channel and a report is not part
     /// of an update cycle; both halves are the same client, so there is no second connection.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one loop over six independent seams (cloud, signer, installer, trusted keys, the \
+                  self-test authority, the lease authority), plus the session and the restart. \
+                  Grouping them into a struct would only move the same nine names one indirection \
+                  away, and they are named once here at composition"
+    )]
     pub fn new(
         cloud: C,
         signer: S,

@@ -12,6 +12,7 @@
 use serde_json::Value;
 
 use pos_core::capability::{CapabilityContext, conflicts};
+use pos_core::lease::LeaseConfig;
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_proto::display::LayoutBook;
 use pos_proto::menu::MenuBook;
@@ -63,6 +64,7 @@ impl ConfigValidator for CapabilityValidator {
             .map(|rule| rule.description.to_owned())
             .collect();
         violations.extend(ota_violations(document));
+        violations.extend(lease_violations(document));
         violations.extend(delivery_node_violations(document));
         if violations.is_empty() {
             Ok(())
@@ -99,6 +101,28 @@ fn ota_violations(document: &Value) -> Vec<String> {
         }
     }
     violations
+}
+
+/// Validates the `lease` node when the document sets it
+/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), so a node the store
+/// could not parse is rejected here rather than published and silently dropped.
+///
+/// There is nothing to check beyond the shape: every `u64` is a generation, so this arm has no
+/// `validate()` to call the way the OTA arms do. Inventing a fallible rule to match their shape
+/// would be a lie about what can go wrong with a counter.
+///
+/// The node itself is never *authored* — the bump route derives it from the store's `store_lease`
+/// row, and no admin route accepts one in a body. This arm guards the generic config-publish route
+/// (`PUT /admin/stores/{id}/config/{level}`), which accepts an arbitrary document and would
+/// otherwise let somebody hand-write a `lease` node the edge cannot read.
+fn lease_violations(document: &Value) -> Vec<String> {
+    let Some(value) = document.get("lease") else {
+        return Vec::new();
+    };
+    match serde_json::from_value::<LeaseConfig>(value.clone()) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![format!("lease is malformed: {error}")],
+    }
 }
 
 /// Validates the compiled delivery nodes — `menu` and `layout` — the way the *edge* reads them, so a
@@ -254,6 +278,24 @@ mod tests {
                 .any(|v| v.contains("fleet_update is malformed")),
             "{violations:?}"
         );
+    }
+
+    #[test]
+    fn a_lease_node_that_is_not_a_generation_is_rejected() {
+        // The bump route derives this node, so it is always well-formed on that path. This guards
+        // the generic config-publish route, where somebody could hand-write one the edge would then
+        // silently drop — a "successful" publish that never takes effect.
+        let violations = CapabilityValidator
+            .validate(&json!({ "lease": { "generation": "four" } }))
+            .expect_err("a generation that is not a number is a violation");
+        assert!(violations.iter().any(|v| v.contains("lease is malformed")));
+
+        CapabilityValidator
+            .validate(&json!({ "lease": { "generation": 4 } }))
+            .expect("a well-formed generation publishes");
+        CapabilityValidator
+            .validate(&json!({ "menu_version": 1 }))
+            .expect("an absent lease node is not a violation");
     }
 
     #[test]

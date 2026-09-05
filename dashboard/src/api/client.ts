@@ -45,6 +45,7 @@ import type {
   ETag,
   Enrolment,
   FleetStore,
+  StoreLease,
   Ingredient,
   IngredientInput,
   InviteAdminResponse,
@@ -1764,6 +1765,22 @@ export const api = {
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
     ),
   taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
+
+  // --- the store's lease (ADR-0108) ---
+  // Reading the authoritative generation is behind console.data.read. Bumping it is behind
+  // console.stores.manage and audited: it is the act of saying a different machine is the store now,
+  // which supersedes whatever box holds the previous generation and stops it taking updates. There is
+  // deliberately no setter — the only write advances the counter by one.
+  getStoreLease: (tenantId: string, storeId: string) =>
+    requestJson<StoreLease>(
+      "GET",
+      `/admin/config/lease?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  bumpStoreLease: (tenantId: string, storeId: string) =>
+    requestJson<PublishedConfig>("POST", "/admin/config/lease/bump", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
 
   // --- OTA rollout levers (ADR-0078, Track O3) ---
   // The published rollout is a store's `fleet_update` config node. Reading it is behind

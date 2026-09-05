@@ -31,8 +31,8 @@ use pos_core::decision::{
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
-use pos_core::menu::PricedLine;
 use pos_core::lease::LeaseGeneration;
+use pos_core::menu::PricedLine;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::{EventQuery, EventStore};

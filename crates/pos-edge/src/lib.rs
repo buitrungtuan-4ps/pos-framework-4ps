@@ -81,13 +81,13 @@ pub use event_publish::EventPublisher;
 pub use fanout::{Fanout, ServerMessage};
 pub use idgen::EdgeIdGenerator;
 pub use installer::{SystemdInstaller, binary_directory};
+pub use lease_state::{InMemoryLease, LeaseAuthority};
 pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};
 pub use ota_client::{
     BootConfirmation, BootStanding, NoUpdateLayout, OTA_POLL_INTERVAL, OtaClient, RestartRequest,
     TickOutcome, confirm_boot,
 };
-pub use lease_state::{InMemoryLease, LeaseAuthority};
 pub use ota_state::{InMemoryOtaState, OtaStateAuthority, device_state};
 pub use pairing::{Code, DeviceToken, Pairing};
 pub use queue::{InMemoryQueueNumbers, QueueNumberAuthority};

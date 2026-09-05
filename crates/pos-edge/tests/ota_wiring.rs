@@ -34,9 +34,8 @@ use pos_core::ota::{ReleaseVersion, SelfTest};
 use pos_edge::config_client::session_from_config;
 use pos_edge::{
     BootStanding, Edge, EdgeSession, InMemoryLease, InMemoryOtaState, InMemoryReceipts,
-    NoUpdateLayout, OtaClient,
-    OtaStateAuthority, RestartRequest, StoreIdentity, SystemdInstaller, TickOutcome,
-    UpdateInstaller, UpdateOutcome, confirm_boot,
+    NoUpdateLayout, OtaClient, OtaStateAuthority, RestartRequest, StoreIdentity, SystemdInstaller,
+    TickOutcome, UpdateInstaller, UpdateOutcome, confirm_boot,
 };
 use pos_fakes::{FakeCloudSync, FakeSigner, FakeStore};
 use pos_proto::ids::StoreId;

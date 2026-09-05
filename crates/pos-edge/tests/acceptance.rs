@@ -209,8 +209,8 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         Arc::new(pos_edge::InMemoryLease::new()),
         &shutdown_rx,
     )
-        .await
-        .expect("the edge composes");
+    .await
+    .expect("the edge composes");
 
     // Pair a device the way a device does: mint a code on the box, then redeem it over the route the
     // operator UI posts to. Nothing here reaches inside `Pairing` to fabricate a token.

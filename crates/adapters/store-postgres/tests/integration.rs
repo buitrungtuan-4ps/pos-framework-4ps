@@ -1402,7 +1402,7 @@ mod config_tree_store {
                 .await
                 .expect("record seen");
             trees
-                .record_heartbeat(tenant, store_id, 5000, None)
+                .record_heartbeat(tenant, store_id, 5000, None, None)
                 .await
                 .expect("record heartbeat");
             let row = admin
@@ -1432,7 +1432,7 @@ mod config_tree_store {
             // A heartbeat for a store that has never pulled creates the row with those two NULL.
             let fresh = StoreId::new(Ulid::from_u128(0x59));
             trees
-                .record_heartbeat(tenant, fresh, 2000, None)
+                .record_heartbeat(tenant, fresh, 2000, None, None)
                 .await
                 .expect("record heartbeat for a fresh store");
             let row = admin
@@ -1466,7 +1466,8 @@ mod config_tree_store {
             async fn read(admin: &Client, tenant: TenantId, store: StoreId) -> tokio_postgres::Row {
                 admin
                     .query_one(
-                        "SELECT outbox_depth, outbox_reported_at FROM store_liveness \
+                        "SELECT outbox_depth, outbox_reported_at, lease_generation \
+                         FROM store_liveness \
                          WHERE tenant_id = $1 AND store_id = $2",
                         &[&tenant.to_string(), &store.to_string()],
                     )
@@ -1479,7 +1480,7 @@ mod config_tree_store {
             let store_id = StoreId::new(Ulid::from_u128(0x5A));
 
             trees
-                .record_heartbeat(tenant, store_id, 1000, Some(17))
+                .record_heartbeat(tenant, store_id, 1000, Some(17), Some(4))
                 .await
                 .expect("record a heartbeat that reports a backlog");
             let row = read(&admin, tenant, store_id).await;
@@ -1493,11 +1494,16 @@ mod config_tree_store {
                 Some(1000),
                 "the depth is stamped with the heartbeat that carried it"
             );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(4),
+                "and the lease generation the box says it holds (ADR-0108)"
+            );
 
             // An older edge, or one whose log could not be read, reports nothing. Overwriting a real
             // backlog with a fabricated zero would read as a store that had caught up.
             trees
-                .record_heartbeat(tenant, store_id, 9000, None)
+                .record_heartbeat(tenant, store_id, 9000, None, None)
                 .await
                 .expect("record a heartbeat that reports nothing");
             let row = read(&admin, tenant, store_id).await;
@@ -1511,11 +1517,17 @@ mod config_tree_store {
                 Some(1000),
                 "and leaves the instant that reported it, so the console can see it is stale"
             );
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                Some(4),
+                "the same rule guards the lease, and more sharply: generation 0 is a real first \
+                 lease, so a fabricated zero would report a replaced box as current"
+            );
 
             // A store that has only ever been silent has no depth at all — NULL, not zero.
             let silent = StoreId::new(Ulid::from_u128(0x5B));
             trees
-                .record_heartbeat(tenant, silent, 1000, None)
+                .record_heartbeat(tenant, silent, 1000, None, None)
                 .await
                 .expect("record heartbeat for a silent store");
             let row = read(&admin, tenant, silent).await;
@@ -1525,6 +1537,11 @@ mod config_tree_store {
                 "a store that never reported has no depth, which is not a depth of zero"
             );
             assert_eq!(row.get::<_, Option<i64>>(1), None);
+            assert_eq!(
+                row.get::<_, Option<i64>>(2),
+                None,
+                "nor a lease generation — 'did not say' is not 'holds generation 0'"
+            );
         });
     }
 }

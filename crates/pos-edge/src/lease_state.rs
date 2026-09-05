@@ -225,7 +225,10 @@ mod tests {
                 .expect("standing"),
             LeaseStanding::Active
         );
-        assert_eq!(authority.held(store()).await.expect("read"), Some(generation(4)));
+        assert_eq!(
+            authority.held(store()).await.expect("read"),
+            Some(generation(4))
+        );
     }
 
     #[tokio::test]
@@ -250,7 +253,10 @@ mod tests {
 
         // The load-bearing assertion: it did **not** adopt 5. Re-adopting is the bug that makes the
         // whole mechanism decorative, so pull again and again — the verdict must not drift back.
-        assert_eq!(authority.held(store()).await.expect("read"), Some(generation(4)));
+        assert_eq!(
+            authority.held(store()).await.expect("read"),
+            Some(generation(4))
+        );
         for _ in 0..3_u8 {
             assert_eq!(
                 standing(&authority, store(), Some(generation(5)))

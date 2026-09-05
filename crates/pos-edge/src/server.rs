@@ -39,9 +39,9 @@ use crate::error::EdgeError;
 use crate::event_publish::EventPublisher;
 use crate::heartbeat_client::{HeartbeatClient, StoreReport};
 use crate::installer::SystemdInstaller;
+use crate::lease_state::LeaseAuthority;
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
-use crate::lease_state::LeaseAuthority;
 use crate::ota_state::OtaStateAuthority;
 use crate::pairing::{Pairing, pairing_url};
 use crate::queue::QueueNumberAuthority;
@@ -511,6 +511,13 @@ where
 /// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
 /// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
 /// box still binds, pairs, and serves the LAN, and the operator UI routes it to `/setup`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the cloud surface needs everything the cloud loops need: the router to merge onto, \
+              where the cloud is, which store this is, the live session, the queue and lease \
+              authorities, the optional stream, the held config version, and the shutdown. Every \
+              one is passed straight through to a loop that needs exactly it"
+)]
 async fn compose_cloud_surface<S, Q, L>(
     app: axum::Router,
     cloud_url: &url::Url,

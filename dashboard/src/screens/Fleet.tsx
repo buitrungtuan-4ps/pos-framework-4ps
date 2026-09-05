@@ -15,6 +15,7 @@ import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import {
   type Column,
+  ConfirmDialog,
   DataTable,
   Drawer,
   EmptyState,
@@ -51,6 +52,11 @@ export function Fleet() {
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [selected, setSelected] = createSignal<FleetStore | null>(null);
+  // The lease bump (ADR-0108) is the one destructive act on this screen: it supersedes whatever box
+  // holds the store's current generation, which stops it taking updates. It therefore asks for the
+  // store's name typed out, the same guard the other irreversible actions use.
+  const [bumping, setBumping] = createSignal<FleetStore | null>(null);
+  const [bumpBusy, setBumpBusy] = createSignal(false);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -102,6 +108,29 @@ export function Fleet() {
       label={row.config_current ? t("fleet.inSync") : t("fleet.drifted")}
     />
   );
+
+  // Shown only when the store is actually under a lease *and* this box is behind it. A store the
+  // cloud has never issued a lease to has no standing to display, and putting a badge on it would
+  // mark the whole fleet the day this shipped.
+  const leaseBadge = (row: FleetStore) => (
+    <Show when={row.lease_superseded}>
+      <StatusBadge tone="danger" label={t("fleet.leaseSuperseded")} />
+    </Show>
+  );
+
+  const bumpLease = async (row: FleetStore) => {
+    setBumpBusy(true);
+    try {
+      await api.bumpStoreLease(tenantId(), row.store_id);
+      toast.ok(t("fleet.leaseBumped"));
+      setBumping(null);
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBumpBusy(false);
+    }
+  };
 
   const lastSeen = (row: FleetStore) =>
     row.last_seen_at_ms === null ? t("fleet.never") : formatRelativeAge(ageSeconds(row.last_seen_at_ms));
@@ -289,6 +318,7 @@ export function Fleet() {
                 <div class="flex flex-wrap gap-2">
                   {onlineBadge(store().online)}
                   {configBadge(store())}
+                  {leaseBadge(store())}
                 </div>
                 <div>
                   {detailRow(t("fleet.lastSeen"), lastSeen(store()))}
@@ -324,6 +354,27 @@ export function Fleet() {
                       ? t("fleet.never")
                       : formatRelativeAge(ageSeconds(store().outbox_reported_at_ms ?? Date.now())),
                   )}
+                  {/* Both generations, side by side, because either alone is unreadable: the
+                      authority says which machine *should* be the store, the held one says which
+                      machine this is. They differ exactly when a box has been replaced. */}
+                  {detailRow(
+                    t("fleet.leaseAuthoritative"),
+                    store().lease_generation_authoritative === null
+                      ? t("fleet.leaseNone")
+                      : formatCount(store().lease_generation_authoritative ?? 0),
+                  )}
+                  {detailRow(
+                    t("fleet.leaseHeld"),
+                    store().lease_generation_held === null
+                      ? t("fleet.notReported")
+                      : formatCount(store().lease_generation_held ?? 0),
+                  )}
+                </div>
+                <div class="flex flex-col gap-2">
+                  <Button variant="danger" onClick={() => setBumping(store())}>
+                    {t("fleet.leaseBump")}
+                  </Button>
+                  <p class="text-xs text-ink-muted">{t("fleet.leaseBumpHint")}</p>
                 </div>
                 <TechnicalDetails label={t("common.technicalDetails")}>
                   {store().store_id}
@@ -336,6 +387,26 @@ export function Fleet() {
             )}
           </Show>
         </Drawer>
+
+        <ConfirmDialog
+          open={bumping() !== null}
+          danger
+          busy={bumpBusy()}
+          title={t("fleet.leaseBump")}
+          message={t("fleet.leaseBumpConfirm")}
+          confirmLabel={t("fleet.leaseBump")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          typeToConfirm={bumping()?.name ?? ""}
+          typePrompt={t("fleet.leaseBumpTypePrompt")}
+          onConfirm={() => {
+            const target = bumping();
+            if (target) {
+              void bumpLease(target);
+            }
+          }}
+          onCancel={() => setBumping(null)}
+        />
       </RequireContext>
     </div>
   );

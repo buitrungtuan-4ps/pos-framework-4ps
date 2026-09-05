@@ -74,6 +74,21 @@ pub struct FleetRow {
     /// When the store reported [`outbox_depth`](Self::outbox_depth), or `None`. A depth is only as
     /// current as the heartbeat that carried it, so the instant travels with it.
     pub outbox_reported_at: Option<Timestamp>,
+    /// The lease generation the box last reported holding
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `None` if it
+    /// has never said — an older edge, or one whose lease row could not be read.
+    ///
+    /// Read together with [`lease_generation_authoritative`](Self::lease_generation_authoritative):
+    /// the *pair* is what makes a **split** legible. Either number alone leaves a replaced machine
+    /// looking exactly like a quiet one.
+    pub lease_generation_held: Option<u64>,
+    /// When the store reported it, or `None`. Travels with the generation for the same reason the
+    /// outbox instant does.
+    pub lease_reported_at: Option<Timestamp>,
+    /// The store's **authoritative** lease generation, or `None` if the cloud has never issued this
+    /// store one — every store until an operator deliberately does, which reads as "no lease in
+    /// force" and never as generation `0`.
+    pub lease_generation_authoritative: Option<u64>,
 }
 
 /// Reads the fleet read model, per tenant.
