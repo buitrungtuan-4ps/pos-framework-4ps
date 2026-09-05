@@ -644,6 +644,7 @@
   "floor.tablesEmpty": "No tables yet.",
   "floor.title": "Floor plan",
   "floor.unplaced": "Unplaced",
+  "hub.stock.notReported": "Stores do not report sold-out items to the cloud yet, so this is not a zero — it is not measured. The kitchen's own screen is the live list.",
   "inventory.bom": "Bill of materials",
   "inventory.bomHint": "Each line is one ingredient and how much of it one unit of the item consumes, in that ingredient's unit.",
   "inventory.bomNeedsIngredients": "Add an ingredient first, then build the recipe from it.",

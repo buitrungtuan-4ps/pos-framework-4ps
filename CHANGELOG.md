@@ -16,6 +16,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The store hub stops reporting a zero nobody measured** (production-readiness **O5**). The
+  "Out of stock" card subtracts `inventory.item.restored` from `inventory.item.sold_out`, and
+  **nothing in the tree emits either event** — the auto-86 rule is in `pos-core` §8, but the live
+  stock projection that would fire it is still a follow-up. So the card has always shown `0` beside
+  "items marked out", which reads as *nothing is 86'd today*: a measurement, where there is none. It
+  now shows an em dash and says the store does not report this yet, and points at the kitchen's own
+  screen for the live list. ADR-0099 claimed the number was "exact"; that paragraph is corrected. The
+  arithmetic stays, so the day a producer lands the card starts counting with no further change.
+
 - **The device-approval screen shows what it is approving** (production-readiness **O3**). A
   proposal's `name` and `address` — the two facts that say which printer this is — have been served
   since the flow was built and were dropped by the dashboard's own type, so the screen asked an

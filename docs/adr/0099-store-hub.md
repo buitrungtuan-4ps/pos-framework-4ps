@@ -54,11 +54,21 @@ recording, because the tempting alternative is a card that looks precise and is 
   without inventing a roster the cloud does not have. A roster would also be **T1**: staff identity
   per shift is employee personal data, and it needs a lawful-basis and retention decision, not a
   card. Flagged below.
-- **"Out of stock" is today's net count, not the current 86 list.** `inventory.item.sold_out` and
-  `inventory.item.restored` are events, and the difference over the trading day is how many items
-  are out — but *which* items needs a projection that folds those two event types into a live set,
-  and none exists. Under a replay-from-zero the difference is exact; within a day it is exact too,
-  because both events are counted. What it cannot do is name the dish, and it does not pretend to.
+- **"Out of stock" is today's net count, not the current 86 list** — and, as of
+  production-readiness **O5**, it is not a count at all yet. `inventory.item.sold_out` and
+  `inventory.item.restored` are declared in the event catalogue and **emitted by nothing**: the
+  auto-86 rule exists in `pos-core` §8, but the live stock projection that would fire it is itself a
+  flagged follow-up. So the difference is always zero.
+
+  This paragraph used to say the number was "exact". It was wrong in the way that matters: a number
+  nobody produces is exactly zero, and a confident `0` beside "items marked out" reads as *nothing is
+  86'd today* — a measurement, where there is none. The card now shows an em dash and says the store
+  does not report this yet; the kitchen's own screen remains the live list. The arithmetic and the
+  wording are both left in place, so the day a producer lands the card starts counting with no
+  further change.
+
+  What it will never do is name the dish: that needs a projection folding both event types into a
+  live set, and it does not pretend otherwise.
 
 **"Today" is the only card behind a permission.** Revenue is T2, so the card renders for Owner/Admin
 and shows a "you cannot see money here" line otherwise — the same rule Reports already applies, and

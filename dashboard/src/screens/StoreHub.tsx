@@ -23,9 +23,11 @@
 //
 // **Working** is a count of shifts, not a list of names: the cloud projects no roster, and a roster
 // would be T1 employee data needing a lawful basis, not a card. **Out of stock** is the day's net
-// count, not the live 86 list: `inventory.item.sold_out` minus `inventory.item.restored` is exact as
-// a number and cannot name the dish. Both are recorded as follow-ups in ADR-0099 rather than
-// dressed up here.
+// count, not the live 86 list: `inventory.item.sold_out` minus `inventory.item.restored` cannot name
+// the dish, only count it. It also does not count anything *yet* — nothing in the tree emits either
+// event (production-readiness **O5**), so the card says "not reported" rather than a confident zero.
+// ADR-0099 claimed the number was exact; a number nobody produces is exactly zero, which is not the
+// same thing. Both cards are recorded as follow-ups in that ADR rather than dressed up here.
 
 import { createSignal, Show } from "solid-js";
 
@@ -269,10 +271,24 @@ export function StoreHub() {
               const day = days.at(-1);
               const out =
                 counted(day, "inventory.item.sold_out") - counted(day, "inventory.item.restored");
+              // Nothing in the tree emits either event yet (production-readiness **O5**): the
+              // auto-86 rule exists in `pos-core` §8 but the live stock projection that would fire
+              // it is still a follow-up. So this arithmetic is always zero, and a confident `0`
+              // beside "items marked out" reads as "nothing is 86'd today" — a measurement, when
+              // there is no measurement. An em dash says what is true: not reported yet.
+              if (out <= 0) {
+                return {
+                  headline: "—",
+                  tone: "idle" as const,
+                  support: t("hub.stock.notReported"),
+                };
+              }
               return {
-                headline: formatCount(Math.max(0, out)),
-                tone: out > 0 ? "attention" : "ok",
-                support: day ? t("hub.stock.support", { date: day.business_date }) : t("hub.stock.noDay"),
+                headline: formatCount(out),
+                tone: "attention" as const,
+                support: day
+                  ? t("hub.stock.support", { date: day.business_date })
+                  : t("hub.stock.noDay"),
               };
             }}
           </HubCard>

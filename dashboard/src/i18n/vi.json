@@ -644,6 +644,7 @@
   "floor.tablesEmpty": "Chưa có bàn nào.",
   "floor.title": "Sơ đồ bàn",
   "floor.unplaced": "Chưa đặt",
+  "hub.stock.notReported": "Cửa hàng chưa báo món hết lên cloud, nên đây không phải số 0 mà là chưa đo được. Danh sách thật nằm ở màn hình bếp.",
   "inventory.bom": "Định mức nguyên liệu",
   "inventory.bomHint": "Mỗi dòng là một nguyên liệu và lượng tiêu hao cho mỗi đơn vị món, tính theo đơn vị của nguyên liệu đó.",
   "inventory.bomNeedsIngredients": "Hãy thêm nguyên liệu trước, rồi dựng công thức từ đó.",
