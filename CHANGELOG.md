@@ -14,6 +14,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Security
+
+- **A console role without `console.reports.revenue` no longer reads a store's prices through the
+  configuration screen** (production-readiness **S8**). Closing
+  `GET /admin/catalog/menus/{id}/placements` under **S5** left the same compiled price book readable
+  one route over: `GET /admin/stores/{id}/config` returns the whole effective document, and the
+  `menu` node in it is the per-channel price book. Every role down to Viewer holds plain `Read`, so
+  every console account could read what everything costs — the exact **T2** boundary `ReadRevenue`
+  was carved out of `Read` to hold.
+
+  The read now **redacts the priced nodes** for a caller without `ReadRevenue`, rather than being
+  gated on it outright. Gating the route is one line and costs Ops the screen they use for a store's
+  capabilities, floor, stations and printers; prices are narrower than data, so the narrow thing is
+  what is withheld.
+
+  Fixing it found a second priced node: **`campaigns`** carries combo prices, discount amounts and
+  minimum-bill thresholds. A redaction that closed the menu and left promotions open would not have
+  been a fix, so both go — on the current read and on the version-diff read, because a price is not
+  less sensitive for being last month's. The node is **removed, not blanked**, for the same reason
+  the staff PIN hash is: an empty object would read as "this store has no menu published", which is
+  a real and different state. The Config screen now says that a role is hiding something, so an
+  operator does not have to infer it from an absence.
+
+  **Upgrade note:** no migration and no configuration. An Owner or Admin sees exactly what they saw
+  before. An Ops or Viewer account keeps the config screen and no longer sees the `menu` or
+  `campaigns` nodes in it.
+
 ### Fixed
 
 - **Thirteen documents that contradicted the tree** (production-readiness **Wave 6**). Each was

@@ -502,6 +502,7 @@
   "config.loadHint": "Bấm tải để xem cấu hình hiệu lực hiện tại của cửa hàng này.",
   "config.noVersions": "Chưa có phiên bản",
   "config.noVersionsHint": "Các phiên bản cấu hình đã xuất bản của cửa hàng này sẽ hiện ở đây.",
+  "config.pricesHidden": "Giá bị ẩn theo vai trò của bạn: không hiển thị nhánh thực đơn và chương trình khuyến mãi. Cần xem thì hỏi chủ sở hữu hoặc quản trị viên.",
   "config.publish": "Xuất bản một tầng",
   "config.published": "Đã xuất bản phiên bản {version}.",
   "config.rollback": "Khôi phục",

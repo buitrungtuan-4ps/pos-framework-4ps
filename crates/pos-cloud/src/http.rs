@@ -17977,11 +17977,12 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
+    let context =
+        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
+            Ok(context) => context,
+            Err(denied) => return denied,
+        };
+    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id) =
         match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
@@ -17996,9 +17997,16 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
-                // Never the staff PIN hashes (S7) — see `without_staff_credentials`.
+                // Never the staff PIN hashes (S7), and never a price to a role without
+                // `ReadRevenue` (S8) — see `without_staff_credentials` and `without_prices`.
                 Some(effective) => {
-                    (StatusCode::OK, Json(without_staff_credentials(effective))).into_response()
+                    let document = without_staff_credentials(effective);
+                    let document = if prices {
+                        document
+                    } else {
+                        without_prices(&document)
+                    };
+                    (StatusCode::OK, Json(document)).into_response()
                 }
                 None => no_published_configuration(),
             }
@@ -18110,6 +18118,47 @@ fn without_staff_credentials(document: &serde_json::Value) -> serde_json::Value 
     document
 }
 
+/// The config nodes whose published shape carries money, and which a console caller therefore reads
+/// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
+///
+/// A node earns a place here by carrying a **price a competitor would want** — `Money` in the wire
+/// type the publish path writes — not merely by being commercially interesting. Today that is two:
+///
+/// - **`menu`** — the compiled per-channel price book. This is the node S8 was raised for: closing
+///   `GET /admin/catalog/menus/{id}/placements` under **S5** left the same price book readable one
+///   route over, through the config screen.
+/// - **`campaigns`** — combo prices, discount amounts and minimum-bill thresholds
+///   ([ADR-0077](../../../docs/adr/0077-campaigns.md)). Found while fixing S8, and included because a
+///   redaction that closes one price surface and leaves its sibling open is not a fix; a promotion's
+///   economics are the same **T2** class as a menu price.
+///
+/// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`
+/// (published rates, which a receipt shows the guest anyway) and `permissions` (whose credential is
+/// removed unconditionally by [`without_staff_credentials`]).
+const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns"];
+
+/// Removes the priced nodes from a console read for a caller without `ReadRevenue`
+/// (production-readiness **S8**).
+///
+/// **Why redact rather than refuse the whole read.** The alternative was to gate
+/// `GET /admin/stores/{id}/config` on `ReadRevenue` outright, which is one line and costs Ops the
+/// config screen — the screen they use to see a store's capabilities, floor, stations and printers.
+/// The point of carving `ReadRevenue` out of `Read` was that prices are narrower than data, so the
+/// narrow thing is what should be withheld.
+///
+/// The node is **removed, not blanked**, for the reason S7 gives: an empty object would read as
+/// "this store has no menu published", which is a real and different state. The console tells the
+/// operator that something is hidden by their role rather than letting them infer it from an absence.
+fn without_prices(document: &serde_json::Value) -> serde_json::Value {
+    let mut document = document.clone();
+    if let Some(nodes) = document.as_object_mut() {
+        for node in PRICED_CONFIG_NODES {
+            nodes.remove(*node);
+        }
+    }
+    document
+}
+
 /// The effective (composed, validated) document of one past config version (super-admin only), for
 /// the console's diff view. `404` if the store or the named version is unknown.
 async fn admin_config_version_effective<S, R, K, C, A, T, W>(
@@ -18127,11 +18176,12 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
+    let context =
+        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
+            Ok(context) => context,
+            Err(denied) => return denied,
+        };
+    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -18153,9 +18203,16 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
-                // The diff view reads a past version, and a past version holds past PIN hashes (S7).
+                // The diff view reads a past version, and a past version holds past PIN hashes (S7)
+                // and past prices (S8) — a price is not less sensitive for being last month's.
                 Some(effective) => {
-                    (StatusCode::OK, Json(without_staff_credentials(effective))).into_response()
+                    let document = without_staff_credentials(effective);
+                    let document = if prices {
+                        document
+                    } else {
+                        without_prices(&document)
+                    };
+                    (StatusCode::OK, Json(document)).into_response()
                 }
                 None => not_found("config version"),
             }
@@ -20580,5 +20637,85 @@ mod error_envelope_tests {
             refusal_details(refusal).await,
             vec![("name".to_owned(), "REQUIRED".to_owned())]
         );
+    }
+}
+
+#[cfg(test)]
+mod console_config_redaction_tests {
+    //! What a console read of a store's configuration must never carry.
+    //!
+    //! Two independent redactions run on the same document and the tests keep them independent: the
+    //! staff credential goes unconditionally (**S7**), the priced nodes go by role (**S8**). A change
+    //! that merged them would be a change in behaviour for one of the two.
+
+    use super::{PRICED_CONFIG_NODES, without_prices, without_staff_credentials};
+    use serde_json::json;
+
+    /// A document shaped like a real effective config: a priced node, a free one, and the staff node.
+    fn document() -> serde_json::Value {
+        json!({
+            "menu": { "channels": { "dine_in": { "items": [{ "price_amount_minor": 95_000 }] } } },
+            "campaigns": { "rules": [{ "amount": { "currency": "VND", "minor": 20_000 } }] },
+            "layout": { "buttons": ["margherita"] },
+            "capabilities": { "tips_enabled": true },
+            "permissions": { "staff": [{ "employee_id": "01J", "pin_phc": "$argon2id$v=19$..." }] },
+        })
+    }
+
+    #[test]
+    fn a_role_without_read_revenue_gets_no_priced_node() {
+        let redacted = without_prices(&document());
+        for node in PRICED_CONFIG_NODES {
+            assert!(
+                redacted.get(*node).is_none(),
+                "`{node}` carries money and must not reach a caller without ReadRevenue (S8)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_document_survives_the_price_redaction() {
+        // The whole reason S8 redacts rather than gating the route: Ops keeps the config screen.
+        let redacted = without_prices(&document());
+        assert!(
+            redacted.get("layout").is_some(),
+            "buttons carry no money, so Ops still sees the till's layout"
+        );
+        assert!(
+            redacted.get("capabilities").is_some(),
+            "capabilities are what the config screen is *for*"
+        );
+        assert!(
+            redacted.get("permissions").is_some(),
+            "the staff node stays; its credential is removed separately (S7)"
+        );
+    }
+
+    #[test]
+    fn the_two_redactions_are_independent() {
+        // A priced read still loses the PIN hash, and a redacted read still loses the prices —
+        // neither is a side effect of the other.
+        let priced = without_staff_credentials(&document());
+        assert!(
+            priced.get("menu").is_some(),
+            "a caller with ReadRevenue keeps the price book"
+        );
+        let staff = priced["permissions"]["staff"][0]
+            .as_object()
+            .expect("a staff member");
+        assert!(
+            !staff.contains_key("pin_phc"),
+            "the credential goes unconditionally (S7), whatever the role"
+        );
+
+        let both = without_prices(&priced);
+        assert!(both.get("menu").is_none(), "and the prices go by role (S8)");
+    }
+
+    #[test]
+    fn redacting_a_document_that_has_no_priced_node_changes_nothing() {
+        // A store that has published capabilities and nothing else is the common case on day one.
+        let plain = json!({ "capabilities": { "tips_enabled": false } });
+        assert_eq!(without_prices(&plain), plain);
     }
 }

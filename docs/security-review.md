@@ -157,11 +157,11 @@ tenant exists** — but each is a decision or a task before the first store trad
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
-| **S8** | The console config read returns the compiled `menu` node, so a Viewer can read prices (T2) through the config screen even now that the placements route is closed. Two answers: gate the whole read on `ReadRevenue` (Ops loses the config screen), or redact the node for a caller without it | Medium — a role boundary that does not hold | **Owner's call**, recommended: redact the node |
+| **S8** | The console config read returned the compiled `menu` node, so a Viewer could read prices (**T2**) through the config screen even after the placements route was closed | Medium — a role boundary that did not hold | **Closed** by the recommended answer: the priced nodes are redacted for a role without `ReadRevenue`, so Ops keeps the config screen and loses only the prices. Fixing it found a second priced node — `campaigns`, whose combo prices and discount amounts are the same class — and both are redacted |
 | **P2** | On a headless Linux box the kernel keyring is not durable across a reboot, so the store's sync key may need re-supplying. The production answer is a TPM-sealed credential | Medium — availability, not disclosure | Tracked hardware gate |
 | **H12** | Publishing NATS `4222` makes the broker reachable wherever the store addresses are knowable. Restrict at the host firewall | Medium | Human gate, documented |
 | **#312** | The JetStream caps are a fleet ceiling, not a per-store one, so one noisy store can consume the fleet's headroom | Low — availability | Flagged |
-| **#307** | A webhook delivery has no per-attempt id, so a receiver cannot cheaply dedupe retries | Low | Flagged |
+| **#307** | A webhook delivery had no per-attempt id, so a receiver could not cheaply dedupe a retry | Low | **Closed** — deliveries carry `pos-delivery-id`, the page's identity, stable across every retry of that page |
 | **#303** | The edge never learns its lease standing, so a superseded box still updates | Low | Flagged |
 | **A4/#308** | The click-budget check cannot see an undeclared tap — it needs a browser e2e harness. Not a security control, but it is the reason no automated test drives a real browser today | Low | Flagged |
 

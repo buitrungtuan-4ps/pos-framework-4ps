@@ -502,6 +502,7 @@
   "config.loadHint": "Load to see the current effective configuration for this store.",
   "config.noVersions": "No versions yet",
   "config.noVersionsHint": "Published versions of this store's configuration appear here.",
+  "config.pricesHidden": "Prices are hidden by your role: the menu and campaign nodes are not shown. Ask an owner or admin if you need them.",
   "config.publish": "Publish a level",
   "config.published": "Published version {version}.",
   "config.rollback": "Roll back",
