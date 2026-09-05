@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A store that restarts with its broadband down can now sell** (production-readiness **C1**,
+  [ADR-0001](docs/adr/0001-offline-first-store-autonomy.md),
+  [ADR-0004](docs/adr/0004-cloud-owned-configuration.md)). The edge pulled its configuration from the
+  cloud and rebuilt the live session from it — in memory only. `ConfigStore`, the local copy that
+  `store-sqlite` has implemented and been contract-tested against since P4, was constructed by no
+  binary. So every restart came up on the bootstrap session: an empty menu, an empty staff roster, an
+  empty floor. No line could be added and nobody could sign in until the cloud answered, which for a
+  broadband outage — or for the OTA installer, which restarts the edge deliberately — is exactly when
+  it cannot.
+
+  The pull loop now writes each applied document to the store's own `ConfigStore`, and the boot
+  restores it into the live session before the socket binds, preferring the current version and
+  falling back to the last one that validated. The restored version is what the pull loop starts out
+  holding, so a restart asks the cloud for a *change* rather than re-fetching a document the counter
+  is already selling on.
+
+  Two deliberate asymmetries. A **read** failure at boot is fatal (new `EdgeError::ConfigRestore`),
+  for the same reason a failed device-registry read is: a box quietly trading on defaults while its
+  own database holds the real menu is worse than a box that will not start. A **write** failure after
+  a pull is not — it is logged and swallowed, because the document is already live on the counter and
+  all that is lost is the next offline restart.
+
 ### Added
 
 - **The console's own flows are measured, and the price-change flow costs eight clicks** (roadmap v3
