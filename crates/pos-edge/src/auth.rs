@@ -73,6 +73,30 @@ pub fn verify_pin(phc_hash: &str, pin: &str) -> bool {
     }
 }
 
+/// Hashes a PIN into an Argon2id PHC string, for a fixture that needs a roster it can sign into.
+///
+/// Behind the `demo-fixtures` feature, and enabled by no shipped binary: a real store's PIN hashes
+/// are computed in the cloud and synced down as configuration (ADR-0004, ADR-0030), so the edge has
+/// only ever needed [`verify_pin`]. `examples/minimal-edge` enables the feature because a demo store
+/// has no cloud to publish a roster from, and without one no sign-in can succeed.
+///
+/// `None` if the OS entropy source needed for the salt is unavailable — a salt is never faked, for
+/// the same reason a pairing code is not ([`crate::pairing::Pairing::mint`]).
+#[cfg(feature = "demo-fixtures")]
+#[must_use]
+pub fn hash_pin(pin: &str) -> Option<String> {
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+
+    let salt = SaltString::generate(&mut OsRng);
+    Some(
+        Argon2::default()
+            .hash_password(pin.as_bytes(), &salt)
+            .ok()?
+            .to_string(),
+    )
+}
+
 /// Per-employee failure tracking for the offline PIN lockout.
 ///
 /// One instance lives in the edge's application state. It holds counts only — never a PIN or a hash.
