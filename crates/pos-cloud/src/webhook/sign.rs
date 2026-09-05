@@ -21,6 +21,7 @@ use hmac::digest::KeyInit as _;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+use pos_proto::ids::{EventId, StoreId};
 use pos_proto::time::Timestamp;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -37,6 +38,21 @@ pub const TIMESTAMP_HEADER: &str = "pos-signature-time";
 /// The header carrying the `v1=<hex>` signature. `pos-signature`, as published — see
 /// [`TIMESTAMP_HEADER`] for why it was renamed.
 pub const SIGNATURE_HEADER: &str = "pos-signature";
+
+/// The header carrying the delivery's **idempotency key** — `pos-delivery-id`
+/// (production-readiness **R6**).
+///
+/// A failed delivery does not advance the cursor, so the next attempt re-sends the *same page* with
+/// a fresh timestamp and therefore a fresh signature. Without this header the two are
+/// indistinguishable to a receiver except by hashing the body, so a receiver that had already
+/// processed the page and then failed to answer `2xx` in time would process it twice.
+///
+/// The value is [`delivery_id`]: the store and the page's **first event id**, which is stable across
+/// every retry of that page and changes the moment the cursor moves. It is **derived from the signed
+/// body**, so it needs no signature of its own — a receiver that does not trust the header can
+/// recompute it from the first event in the batch it just verified, and a forged value disagrees
+/// with the body.
+pub const DELIVERY_ID_HEADER: &str = "pos-delivery-id";
 
 /// How far a delivery's timestamp may sit from the receiver's clock, in seconds, before it is
 /// rejected as a replay (`docs/roadmap.md` P7: a ±5-minute window).
@@ -90,6 +106,17 @@ pub struct Signature {
     pub timestamp: i64,
     /// The value of [`SIGNATURE_HEADER`] — `v1=<hex>`.
     pub signature: String,
+}
+
+/// The idempotency key for one page of a store's log — the value of [`DELIVERY_ID_HEADER`].
+///
+/// `{store}.{first event in the page}`. Stable across every retry, because a failed delivery leaves
+/// the cursor where it was and re-reads the same page; different for the next page, because the
+/// cursor has moved. Readable rather than hashed, so an operator comparing a receiver's log to the
+/// cloud's can see which page a line is about.
+#[must_use]
+pub fn delivery_id(store: StoreId, first_event: EventId) -> String {
+    format!("{store}.{first_event}")
 }
 
 /// Signs `body` for delivery at `timestamp`, returning the header values to send.

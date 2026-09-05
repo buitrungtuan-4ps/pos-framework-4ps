@@ -31,6 +31,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A webhook delivery carries an idempotency key, so a receiver can dedupe a retry cheaply**
+  (production-readiness **R6**). Every `POST` now rides a third header beside the signature and its
+  timestamp:
+
+  ```
+  pos-delivery-id: 01J8Z…STORE.01J8Z…FIRSTEVENT
+  ```
+
+  The reason it was missing is the dispatch rule itself. A failed delivery does **not** advance the
+  endpoint's cursor ([ADR-0032](docs/adr/0032-webhooks.md)), so the retry re-reads the *identical*
+  page — and signs it under a fresh timestamp, which is bound into the signed bytes. Identical bytes
+  therefore arrived under a different signature on every attempt, and a receiver that had processed
+  the page and merely answered late could only recognise the second copy by hashing the body or by
+  unpacking every `event_id` inside it.
+
+  The key is the page's identity — the store plus the first event on it. It is stable for as long as
+  the page is (every retry of the same page repeats it) and different the moment the cursor advances,
+  which is exactly the boundary a receiver needs. It is **absent rather than empty** on a body that
+  is not a cursor page: an alert notification ([ADR-0073](docs/adr/0073-alerting.md)) goes out over
+  the same signed transport and has no page to key on, and minting a per-attempt id for it would be
+  worse than sending none — a receiver would dedupe on a value that never repeats.
+
+  Roadmap **Q5** had struck this header's name from the `naming-and-api.md` table because what it
+  described (one event per delivery) was not what the webhook does, and said a per-attempt id would
+  have to arrive as a real addition rather than a documentation fix. It now has, with the semantics
+  the transport actually supports: it names the **page**, not one event. The header table and
+  ADR-0032 both record it.
+
+  No configuration and no migration: a receiver that ignores the header behaves exactly as before.
+
 - **A store can reconcile its event log over a route it can actually reach**
   (production-readiness **R3**). [ADR-0040](docs/adr/0040-reconciliation.md) called reconciliation
   *edge-initiated* and put it on `/internal/*`. Both statements cannot hold on the shipped

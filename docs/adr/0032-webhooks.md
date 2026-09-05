@@ -132,3 +132,17 @@ get it dangerously wrong:
   endpoints — bounded per endpoint per tick so one far-behind subscriber cannot starve the fleet. The
   sweep logic is unit-tested over the fakes (deliver + persist cursor + idle; a now-unsafe URL is
   skipped, not delivered to). **The webhook feature is now complete end to end.**
+- **Landed since:** a third header, `pos-delivery-id`, carrying the page's **idempotency key**
+  (production-readiness **R6**). The cursor rule above is exactly what makes one necessary: a failed
+  delivery leaves the cursor untouched, so the retry re-reads the identical page and re-signs it
+  under a fresh timestamp — a fresh signature for identical bytes. A receiver that processed the page
+  and merely answered late therefore had no cheap way to recognise the second copy, short of hashing
+  the body or unpacking every `event_id` inside it. The key is `{store_id}.{first_event_id}`: stable
+  for as long as the page is, and different the moment the cursor advances. It is **absent rather
+  than empty** on a body that is not a cursor page — an alert notification ([ADR-0073](0073-alerting.md))
+  goes out over the same signed transport and has no page to key on, and inventing an id per attempt
+  for it would be worse than sending none, since a receiver would dedupe on a value that never
+  repeats. `naming-and-api.md` records the header alongside its two siblings; roadmap **Q5** had
+  removed the name from that table because the thing it described did not exist, and said a
+  per-attempt id would have to arrive as a real addition rather than a documentation fix. This is
+  that addition.
