@@ -24,6 +24,7 @@ pub mod health;
 pub mod kds;
 pub mod layout;
 pub mod lines;
+pub mod locale;
 pub mod menu;
 pub mod pair;
 pub mod shifts;
@@ -148,6 +149,9 @@ where
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
         .route("/api/layout", get(layout::plan::<S>))
+        // The money facts the pay pad needs — currency, the notes a guest carries, what the total
+        // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
+        .route("/api/locale", get(locale::settings::<S>))
         // The floor: seat, clean, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))

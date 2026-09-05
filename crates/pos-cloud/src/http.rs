@@ -3837,6 +3837,21 @@ struct PublishLocaleRequest {
     /// item's default name, exactly as before.
     #[serde(default)]
     display_language: Option<String>,
+    /// Whether this store's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)): Japan's 税込 and
+    /// India's MRP are `true`, Vietnam's `++` is `false`. Defaults to `false`, which is what every
+    /// store did before the field existed.
+    #[serde(default)]
+    prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units — `1000` for Vietnam's thousand
+    /// đồng, `100` for India's rupee, absent for Japan
+    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    #[serde(default)]
+    cash_rounding_increment: Option<i64>,
+    /// The notes the till offers as quick-cash keys, in minor units. Absent or empty means the exact
+    /// amount only, which is the honest answer rather than a guess.
+    #[serde(default)]
+    cash_denominations: Vec<i64>,
 }
 
 /// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -3868,6 +3883,49 @@ where
             clock,
             audit,
         })
+}
+
+/// Checks the till-money half of a locale publish and returns the denominations to store
+/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+///
+/// Both refusals are about a number that cannot mean what it says. A rounding increment of zero or
+/// less is a typo rather than a posture — `round_to_increment` needs a non-zero step, and "round to
+/// nothing" is expressed by omitting the field — and a note worth nothing is not a note. Refused
+/// here rather than dropped at the edge, so the person who typed it finds out.
+///
+/// The denominations come back sorted and de-duplicated rather than as given: the till lays its keys
+/// out in this order, and a repeated note would be a repeated button.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_denominations(request: &PublishLocaleRequest) -> Result<Vec<i64>, Response> {
+    if request
+        .cash_rounding_increment
+        .is_some_and(|increment| increment <= 0)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cash_rounding_increment must be a positive number of minor units, or absent for no \
+             rounding",
+            &[("cash_rounding_increment", "OUT_OF_RANGE")],
+        ));
+    }
+    if request
+        .cash_denominations
+        .iter()
+        .any(|denomination| *denomination <= 0)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cash_denominations are note values in minor units and must all be positive",
+            &[("cash_denominations", "OUT_OF_RANGE")],
+        ));
+    }
+    let mut denominations = request.cash_denominations.clone();
+    denominations.sort_unstable();
+    denominations.dedup();
+    Ok(denominations)
 }
 
 /// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
@@ -3923,10 +3981,18 @@ where
             &[("cutoff_hour", "OUT_OF_RANGE")],
         );
     }
+    let denominations = match checked_denominations(&request) {
+        Ok(denominations) => denominations,
+        Err(refusal) => return refusal,
+    };
+
     let mut locale_value = serde_json::json!({
         "currency_code": request.currency_code,
         "timezone": request.timezone,
         "cutoff_hour": request.cutoff_hour,
+        "prices_include_tax": request.prices_include_tax,
+        "cash_rounding_increment": request.cash_rounding_increment,
+        "cash_denominations": denominations,
     });
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
@@ -12061,8 +12127,13 @@ fn subject_error_response(error: &RetentionError) -> Response {
 // --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
 
 /// One compiled country module as the console reads it: the code, human name, currency, preferred
-/// language, number format, and the default retention period. What the platform can serve — not a
-/// per-store setting, and not fiscalization.
+/// language, number format, the default retention period, and the till facts its coinage and its
+/// quoting habit fix. What the platform can serve — not a per-store setting, and not fiscalization.
+///
+/// The last three are what make a country **choosable** rather than merely listed
+/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)): a store-settings form reads them
+/// to fill its own fields in, so provisioning a Japanese shop does not depend on somebody remembering
+/// that Japanese prices are tax-inclusive.
 #[derive(Debug, Clone, serde::Serialize)]
 struct CountryView {
     code: String,
@@ -12073,6 +12144,9 @@ struct CountryView {
     group_separator: String,
     digits_per_group: u8,
     default_retention_days: u16,
+    prices_include_tax: bool,
+    cash_rounding_increment: Option<i64>,
+    cash_denominations: Vec<i64>,
 }
 
 /// The state the country/locale reads share: the views computed once at start-up from the compiled
@@ -12113,6 +12187,9 @@ where
             group_separator: pack.number_format.group_separator.to_string(),
             digits_per_group: pack.number_format.digits_per_group,
             default_retention_days: pack.default_retention_days,
+            prices_include_tax: pack.prices_include_tax,
+            cash_rounding_increment: pack.cash_rounding_increment,
+            cash_denominations: pack.cash_denominations.clone(),
         });
     }
     Router::new()

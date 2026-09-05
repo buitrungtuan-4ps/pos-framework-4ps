@@ -226,6 +226,19 @@ pub struct EdgeSession {
     /// is Japan's 税込 and India's MRP: the price is what the guest pays and the tax is extracted
     /// from inside it. Published on the `locale` node, so a store changes posture without a release.
     pub prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units, or `None` for no rounding
+    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    ///
+    /// A fact about the country's coinage: India rounds to the rupee because no smaller coin settles
+    /// the difference, Vietnam to the thousand đồng because that is the smallest note, Japan not at
+    /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
+    /// unconditionally until the `locale` node could say otherwise.
+    pub cash_rounding_increment: Option<i64>,
+    /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
+    ///
+    /// Empty means "offer the exact amount only", which is the honest answer for a store whose
+    /// country nobody has filled in: an unhelpful key on a till is worse than no key.
+    pub cash_denominations: Vec<i64>,
     /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
     /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
@@ -386,6 +399,11 @@ impl EdgeSession {
             tax_rates: Self::bootstrap_tax_rates(),
             // Exclusive until a locale publish says otherwise — the posture Vietnam trades on.
             prices_include_tax: false,
+            // No cash rounding and no quick-cash keys until a locale publish supplies them: both are
+            // country facts, and inventing either would put a wrong total or a wrong button on a
+            // till that has not synced yet (ADR-0105).
+            cash_rounding_increment: None,
+            cash_denominations: Vec::new(),
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
@@ -2415,7 +2433,7 @@ impl<S: EventStore> Edge<S> {
             // The order's channel, passed in — not `session.sales_channel`, which is a store-wide
             // constant and therefore the wrong rate for every order that did not come in on it.
             sales_channel,
-            cash_rounding_increment: None,
+            cash_rounding_increment: session.cash_rounding_increment,
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: session.prices_include_tax,
         }

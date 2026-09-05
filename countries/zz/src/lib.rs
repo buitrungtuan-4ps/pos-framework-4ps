@@ -19,24 +19,27 @@
 //! `fiscal-vn` fills in is already proven, and a forker starting a new country finds out immediately
 //! whether their provider fits it.
 //!
-//! What a real module changes: the body of [`ZzFiscalization`], the constants in
+//! The obligations that suite checks are the same in every country, so they live in
+//! [`pos_country::offline`] and this module supplies the one thing only it knows: how a `ZZ` invoice
+//! number is written. `countries/vn`, `countries/jp` and `countries/in` do the same.
+//!
+//! What a real module changes: the number format and prefix passed to
+//! [`OfflineFiscalization`](pos_country::offline::OfflineFiscalization), the constants in
 //! [`Zz::locale_pack`], and [`Zz::is_valid_tax_code`]. What it keeps: the suite.
 
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
-
 use pos_country::CountryModule;
+use pos_country::offline::OfflineFiscalization;
+use pos_ports::PortError;
 use pos_ports::fiscalization::{
     Fiscalization, InvoiceNumber, InvoiceRange, InvoiceRequest, IssuedInvoice, ReconciliationReport,
 };
-use pos_ports::{PortError, PortName};
 use pos_proto::locale::{CountryCode, LocalePack, NumberFormat, TaxRate, TaxRateTable};
 use pos_proto::money::CurrencyCode;
 use pos_proto::text::TranslationKey;
-use pos_proto::{BillId, CalendarDate, StoreId, TaxClassId, Timestamp, Ulid};
+use pos_proto::{CalendarDate, StoreId, TaxClassId, Ulid};
 
 /// The tax class every reference item falls into.
 ///
@@ -98,6 +101,13 @@ impl CountryModule for Zz {
             // operator as data controller, and a real country module's value here still needs
             // confirming against local law before a deployment relies on it.
             default_retention_days: 365,
+            // The reference country quotes tax-exclusive, rounds nothing, and offers no quick-cash
+            // keys — the three most conservative answers ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+            // A copied module states its own; an empty denomination list is "the exact amount only"
+            // rather than a hole, so the reference till is usable as it stands.
+            prices_include_tax: false,
+            cash_rounding_increment: None,
+            cash_denominations: Vec::new(),
         }
     }
 
@@ -114,54 +124,42 @@ impl CountryModule for Zz {
     }
 }
 
-/// Everything the reference fiscalization has issued.
-#[derive(Debug, Default)]
-struct FiscalState {
-    /// Numbers allocated and not yet consumed, in issue order.
-    available: Vec<InvoiceNumber>,
-    /// Issued invoices by bill. One bill, one number.
-    issued: BTreeMap<BillId, IssuedInvoice>,
-    /// Every number ever consumed, so reuse is impossible even across range allocations.
-    consumed: Vec<InvoiceNumber>,
-    /// Which range to allocate next, so two ranges never overlap.
-    next_series: u32,
-}
-
 /// `Fiscalization` for the reference country.
 ///
-/// # What makes this a reference and not a stub
+/// A thin wrapper over [`OfflineFiscalization`], which is where the port's contract is actually
+/// satisfied: pre-allocated ranges so a store issues with no internet
+/// ([ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)), never-reuse tracked apart
+/// from availability, one number per bill however often a submission is retried, and a refusal
+/// rather than an invented number when a range runs out.
 ///
-/// It satisfies every obligation in the port's contract, and the ones that matter are the ones a real
-/// provider is most likely to get wrong:
+/// # What a real country changes here
 ///
-/// - **Issuing works with no network**, because numbers come from a pre-allocated range. That is the
-///   whole reason ranges exist: without them, "the store sells with no internet"
-///   ([ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)) stops being true the moment
-///   a customer asks for an invoice.
-/// - **A number is never reused**, tracked separately from what is available so a second range
-///   allocation cannot resurrect a consumed number.
-/// - **One bill has one number**, so a retried submission is not a compliance incident.
-/// - **Exhaustion refuses** rather than inventing a number. This is the only failure in the framework
-///   with no path that keeps selling, which is why the alert exists.
-#[derive(Debug, Clone, Default)]
-pub struct ZzFiscalization {
-    state: Arc<Mutex<FiscalState>>,
+/// The two arguments. `"zz"` names the range in the ledger, and the closure writes the number.
+/// Everything else — the part that is easy to get subtly and expensively wrong — is framework code
+/// shared with every other pack ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+///
+/// A country whose authority issues numbers online keeps this for the offline path, because the
+/// alternative is a till that stops selling when the line drops, and flushes to the authority on
+/// reconnect.
+#[derive(Debug, Clone)]
+pub struct ZzFiscalization(OfflineFiscalization);
+
+impl Default for ZzFiscalization {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ZzFiscalization {
     /// A country module with no ranges allocated.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Locks the state, recovering from poisoning rather than panicking.
-    ///
-    /// A poisoned mutex means another thread panicked while holding it. Propagating that as a panic
-    /// here would turn one failure into a cascade, and the backbone lints forbid the `unwrap` that
-    /// would do it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, FiscalState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        // `ZZ0000/000001`: series then index, so two ranges cannot collide. A real country writes
+        // whatever its authority prescribes — Vietnam a form/serial/number triple, Japan nothing at
+        // all — and the series argument is the part it must not drop.
+        Self(OfflineFiscalization::new("zz", |series, index| {
+            format!("ZZ{series:04}/{index:06}")
+        }))
     }
 }
 
@@ -171,90 +169,26 @@ impl Fiscalization for ZzFiscalization {
         store_id: StoreId,
         count: core::num::NonZeroU32,
     ) -> Result<InvoiceRange, PortError> {
-        let mut state = self.lock();
-        let series = state.next_series;
-        state.next_series = state.next_series.saturating_add(1);
-
-        // The series prefix is what keeps two ranges from overlapping. A real provider is told its
-        // prefix by the authority; the important property is the same either way — a number is
-        // globally unique for the deployment, not merely unique within one range.
-        let numbers: Vec<InvoiceNumber> = (0..count.get())
-            .map(|index| InvoiceNumber::new(format!("ZZ{series:04}/{index:06}")))
-            .collect();
-        state.available.clone_from(&numbers);
-
-        Ok(InvoiceRange {
-            store_id,
-            range_id: format!("zz-range-{series}").into(),
-            numbers,
-            issued: 0,
-        })
+        self.0.allocate_range(store_id, count).await
     }
 
     async fn issue(&self, request: &InvoiceRequest) -> Result<IssuedInvoice, PortError> {
-        let mut state = self.lock();
-
-        if let Some(existing) = state.issued.get(&request.bill_id) {
-            // One bill, one number, however many times a submission is retried. Two numbers for one
-            // bill is a compliance incident rather than a duplicate row.
-            return Ok(existing.clone());
-        }
-        if state.available.is_empty() {
-            return Err(PortError::resource_exhausted(
-                PortName::Fiscalization,
-                "no invoice numbers remain in the allocated range",
-            ));
-        }
-
-        let invoice_number = state.available.remove(0);
-        state.consumed.push(invoice_number.clone());
-        let invoice = IssuedInvoice {
-            bill_id: request.bill_id,
-            invoice_number,
-            // A real module stamps the instant it issued. Taken from the request's calendar date here
-            // rather than from a clock, because a country module has no `ClockSource` and reading the
-            // system clock is what `AGENTS.md` §2 forbids.
-            issued_at: Timestamp::EPOCH,
-            // Never submitted, because there is no `ZZ` authority. A real module reports whether the
-            // authority acknowledged it — and `false` is legal, which is what the flush-on-reconnect
-            // path exists to clear.
-            submitted: false,
-            authority_reference: None,
-        };
-        state.issued.insert(request.bill_id, invoice.clone());
-        Ok(invoice)
+        self.0.issue(request).await
     }
 
     async fn look_up(
         &self,
         invoice_number: &InvoiceNumber,
     ) -> Result<Option<IssuedInvoice>, PortError> {
-        let state = self.lock();
-        Ok(state
-            .issued
-            .values()
-            .find(|invoice| &invoice.invoice_number == invoice_number)
-            .cloned())
+        self.0.look_up(invoice_number).await
     }
 
     async fn reconcile(
         &self,
-        _store_id: StoreId,
-        _on: CalendarDate,
+        store_id: StoreId,
+        on: CalendarDate,
     ) -> Result<ReconciliationReport, PortError> {
-        let state = self.lock();
-        Ok(ReconciliationReport {
-            unsubmitted: state
-                .issued
-                .values()
-                .filter(|invoice| !invoice.submitted)
-                .map(|invoice| invoice.invoice_number.clone())
-                .collect(),
-            // Always empty here: there is no authority holding numbers this store does not know about.
-            // A real module fills this from the authority's own records, and it is the direction that
-            // matters most — a number consumed with no local record is a gap nobody can explain later.
-            unknown_locally: Vec::new(),
-        })
+        self.0.reconcile(store_id, on).await
     }
 }
 

@@ -15,7 +15,7 @@ import type {
   MenuItemResponse,
   PaymentRequest,
 } from "../api/types";
-import { type Money } from "../lib/money";
+import { fallbackQuickCash, type Money } from "../lib/money";
 
 export interface OrderLine {
   orderLineId: string;
@@ -73,6 +73,10 @@ interface StoreShape {
   // `null` means the store restricts nothing, which is why the accessor below distinguishes them.
   tipsEnabled: boolean;
   acceptedTender: string[] | null;
+  // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
+  // read has not landed; an empty array is a real answer and means "the exact amount only". The
+  // difference matters, because the fallback below applies to the first and not the second.
+  cashDenominations: number[] | null;
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
@@ -108,6 +112,7 @@ const [state, setState] = createStore<StoreShape>({
   // than one that waits a moment for the price book.
   tipsEnabled: false,
   acceptedTender: null,
+  cashDenominations: null,
   bumped: {},
   shift: null,
 });
@@ -469,6 +474,29 @@ export async function loadMenu(): Promise<void> {
     setState("acceptedTender", response.accepted_tender);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.
+  }
+}
+
+// The quick-cash keys the pay pad offers, in minor units, ascending (ADR-0105).
+//
+// The published list once `loadLocale` lands, and the compiled-in table for that currency until it
+// does. The fallback is the same never-blank contract as `DEFAULT_FLOOR` and `DEFAULT_CURRENCY`: a
+// till whose locale has not synced keeps the keys it had, and the published list replaces them
+// wholesale — including with an empty list, which is a store saying "exact amount only" rather than
+// a read that has not happened.
+export function cashDenominations(): readonly number[] {
+  return state.cashDenominations ?? fallbackQuickCash(storeCurrency());
+}
+
+// Reads the store's money settings from the edge (ADR-0105). Forgiving in the same way `loadMenu`
+// is: a failed read leaves the previous keys in place, so a blip does not strand a cashier with one
+// button mid-service.
+export async function loadLocale(): Promise<void> {
+  try {
+    const response = await api.locale();
+    setState("cashDenominations", response.cash_denominations);
+  } catch {
+    // Keep whatever is loaded; the next boot or reload tries again.
   }
 }
 

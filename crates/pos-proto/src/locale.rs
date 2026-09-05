@@ -72,6 +72,9 @@ impl CountryCode {
     pub const VN: Self = Self([b'V', b'N']);
     /// Japan, the worked example for channel-keyed tax in `docs/pos-spec.md` §5.
     pub const JP: Self = Self([b'J', b'P']);
+    /// India, the worked example for multi-component tax in
+    /// [ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md).
+    pub const IN: Self = Self([b'I', b'N']);
     /// CLDR's unknown region, used by the reference country module.
     pub const ZZ: Self = Self([b'Z', b'Z']);
 
@@ -469,6 +472,30 @@ pub struct LocalePack {
     /// (Decree 13/2023) and the GDPR both put that duty on the operator, so this is a starting value
     /// somebody must confirm — not a compliance claim the framework is making on their behalf.
     pub default_retention_days: u16,
+    /// Whether this country's menu prices already contain their tax
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    ///
+    /// Japan quotes 税込 and India quotes MRP; Vietnam quotes exclusive. The store's `locale` node
+    /// still overrides it — this is what a fresh store in the country is correct with, so nobody
+    /// provisioning the fortieth Japanese shop has to remember the box.
+    #[serde(default)]
+    pub prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units, or `None` for no rounding.
+    ///
+    /// A fact about the country's **coinage**, not about its tax: India rounds to the rupee because
+    /// no smaller coin settles the difference, Vietnam to the thousand đồng because that is the
+    /// smallest note, and Japan not at all because the 1-yen coin circulates. Applied once to the
+    /// grand total and materialised as [`crate::Money`] on an explicit receipt line, so the bill
+    /// still reconciles.
+    #[serde(default)]
+    pub cash_rounding_increment: Option<i64>,
+    /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
+    ///
+    /// Empty is a legitimate answer and means "offer the exact amount only": an unhelpful key on a
+    /// till is worse than no key, and a country nobody has filled in should not have amounts guessed
+    /// for it. Notes rather than coins, because a coin is not a key a cashier presses.
+    #[serde(default)]
+    pub cash_denominations: Vec<i64>,
 }
 
 impl LocalePack {
@@ -724,6 +751,9 @@ mod tests {
             },
             default_language: TranslationKey::new("vi"),
             default_retention_days: 365,
+            prices_include_tax: false,
+            cash_rounding_increment: Some(1_000),
+            cash_denominations: vec![50_000, 100_000, 200_000],
         };
         let json = serde_json::to_string(&pack).expect("serialise");
         let back: LocalePack = serde_json::from_str(&json).expect("deserialise");

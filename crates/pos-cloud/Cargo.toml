@@ -11,10 +11,14 @@ repository.workspace   = true
 [features]
 # The cloud carries the country modules it surfaces as master data (ADR-0074): the CountryRegistry
 # it builds from these feeds the console's currency picker and locale catalogue. Unlike a single-cell
-# edge (ADR-0027), the cloud serves a fleet across countries, so it enables the reference module by
-# default; a fork adds `country-vn = ["dep:pos-country-vn"]` and enables it here.
-default = ["country-zz"]
+# edge (ADR-0027), the cloud serves a fleet across countries, so it enables every module the tree
+# ships — the reference one and the three real markets (ADR-0105) — and a fork that serves fewer
+# trims this list.
+default = ["country-zz", "country-vn", "country-jp", "country-in"]
 country-zz = ["dep:pos-country-zz"]
+country-vn = ["dep:pos-country-vn"]
+country-jp = ["dep:pos-country-jp"]
+country-in = ["dep:pos-country-in"]
 
 # The end-to-end cursor test needs a live NATS server with JetStream, so it is gated off the PR
 # `test` job. The merge-to-`main` integration job and a developer with NATS_URL set enable it:
@@ -66,6 +70,9 @@ pos-core = { path = "../pos-core" }
 # edge; `pos-country-zz` is the reference module (optional, so only the enabled ones compile).
 pos-country = { path = "../pos-country" }
 pos-country-zz = { path = "../../countries/zz", optional = true }
+pos-country-vn = { path = "../../countries/vn", optional = true }
+pos-country-jp = { path = "../../countries/jp", optional = true }
+pos-country-in = { path = "../../countries/in", optional = true }
 
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
 # test proves they never reach pos-core.

@@ -1,7 +1,7 @@
 # ADR-0104 — A tax rate is a list, and a price may already contain it
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-05
-· Extends [ADR-0074](0074-tax-rate-storage.md) · Relates to [ADR-0027](0027-country-modules.md),
+· Extends [ADR-0074](0074-localization-and-tax.md) · Relates to [ADR-0027](0027-country-modules.md),
 [`pos-spec.md`](../pos-spec.md) §5, [`roadmap-v3.md`](../roadmap-v3.md) B·W4
 
 ## The problem

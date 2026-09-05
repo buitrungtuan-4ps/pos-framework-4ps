@@ -16,7 +16,7 @@ import { Shift } from "./screens/Shift";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { fold, loadFloor, loadLayout, loadMenu, setLink } from "./state/store";
+import { fold, loadFloor, loadLayout, loadLocale, loadMenu, setLink } from "./state/store";
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
@@ -73,6 +73,10 @@ export function App() {
         // And how the console arranged those items into buttons (ADR-0066, C4). Separate from the
         // price book because the nodes are separate; an empty plan leaves the flat list in place.
         void loadLayout();
+        // And the store's money settings — which notes its guests carry, what the total rounds to in
+        // cash (ADR-0105). A country's coinage, published rather than compiled in; the pay pad keeps
+        // the compiled-in keys for that currency until this lands.
+        void loadLocale();
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {

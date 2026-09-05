@@ -16,6 +16,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Vietnam, Japan and India are country packs, not plans** — `countries/vn`, `countries/jp` and
+  `countries/in`, each a directory of constants on the `CountryModule` trait
+  ([ADR-0105](docs/adr/0105-a-country-pack-is-values.md)). Opening a market is now a
+  `--features country-jp` build plus the store's own values; the remaining work is a registration
+  number and a filled-in form, not a pull request.
+
+  | | Vietnam | Japan | India |
+  |---|---|---|---|
+  | Currency | VND | JPY | INR |
+  | Prices quoted | exclusive (`++`) | inclusive (税込) | inclusive (MRP) |
+  | Cash rounding | 1,000 ₫ | none | ₹1 |
+  | Rate | 10 % VAT | 10 %, **8 %** takeaway food | 5 %, printed CGST 2.5 % + SGST 2.5 % |
+  | Tax code | mã số thuế | 登録番号 `T`+13 | GSTIN |
+
+  Alcohol is a separate class in all three, because Japan excludes it from the reduced rate and India
+  does not tax it under GST at all — `countries/in` publishes **no** alcohol row, so a store that
+  sells liquor is refused at the till until it publishes its own state's rate, rather than trading
+  untaxed until an assessment finds it.
+
+- **A country pack now carries the till's money, not just its tax** — `LocalePack` gains
+  `prices_include_tax`, `cash_rounding_increment` and `cash_denominations` (ADR-0105). Each closed a
+  place where a country fact was held in code: `pos_edge` passed a literal `None` for cash rounding
+  so no store could round; `ui/src/lib/money.ts` held the quick-cash notes in a three-row table, so a
+  till in an unlisted currency had one button; and nothing let a *country* state that its prices are
+  tax-inclusive, so provisioning a Japanese store depended on somebody remembering to tick the box.
+
+  The store's `locale` node publishes all three, `GET /api/locale` serves them to the till, and the
+  front-end table survives only as the fallback for a box that has not synced yet.
+
+- **The offline half of `Fiscalization` is written once** — `pos_country::offline::OfflineFiscalization`
+  holds the obligations that are identical in every country (pre-allocated ranges so a store issues
+  with no internet, never-reuse across ranges, one number per bill, a refusal rather than an invented
+  number on exhaustion) and takes the country's invoice-number format. All four packs run the full
+  contract suite against it. A provider with a real authority wraps it and keeps the offline path.
+
+  **Upgrade note:** none. The three `LocalePack` fields are `#[serde(default)]` and each default *is*
+  the previous behaviour; no `PROTOCOL_VERSION` bump and no migration. `pos_cloud` enables all four
+  country features by default and `pos_edge` still enables none, because a default country would
+  silently pick a tax regime.
+
 - **A tax rate can be a list of named parts, and a price may already contain its tax**
   ([ADR-0104](docs/adr/0104-multi-component-and-inclusive-tax.md)). The two country facts that could
   not have arrived later as configuration, because both would need a migration across every order

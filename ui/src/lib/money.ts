@@ -54,28 +54,37 @@ export function formatMoney(m: Money): string {
   return `${sign}${m.currency_code} ${body}`;
 }
 
-// The banknotes a cashier is most often handed, in minor units, per currency — the quick-cash keys
-// on the pay pad.
+// The banknotes a cashier is most often handed, in minor units, per currency — the pay pad's
+// quick-cash keys **until the store's locale syncs**.
 //
-// Note values are a property of a currency, not of the app, which is why they live beside
-// `MINOR_DIGITS` rather than in the Pay screen. The screen hardcoded VND's three notes until roadmap
-// **E5**, so a store on any other currency was offered buttons for amounts its guests cannot hand
-// over.
+// This table used to be the authority, and that was the bug ADR-0105 closes: which notes a guest
+// carries is a fact about a country's cash, not about this app, so it now arrives on the `locale`
+// config node with everything else the cloud publishes. A store trading in a currency nobody had
+// typed in here got a till with one button, and the fix was a front-end edit and a release.
 //
-// A currency with no entry gets **no** quick-cash keys, only the exact-amount one. That is the
-// honest answer rather than a guess: the exact amount is always tenderable, and inventing
-// denominations for a currency nobody has entered here would put wrong buttons on a real till. A
-// fork adds its own row.
+// It survives as the **fallback** for the window before `loadLocale` lands, which is the same
+// never-blank contract as `DEFAULT_FLOOR` and `DEFAULT_CURRENCY`. A currency with no row still gets
+// no keys, only the exact amount: the exact amount is always tenderable, and guessing denominations
+// would put wrong buttons on a real till.
 const QUICK_CASH: Record<string, readonly number[]> = {
   VND: [50_000, 100_000, 200_000],
   JPY: [1_000, 5_000, 10_000],
+  INR: [10_000, 20_000, 50_000],
   USD: [2_000, 5_000, 10_000],
 };
 
-// The quick-cash denominations for a currency, largest-last, excluding anything below `atLeast`
-// (a note that cannot cover the bill is not a tender the cashier can take).
-export function quickCashFor(currencyCode: string, atLeast: number): readonly number[] {
-  return (QUICK_CASH[currencyCode] ?? []).filter((note) => note >= atLeast);
+// The compiled-in keys for a currency, for the window before the store's own list has synced.
+export function fallbackQuickCash(currencyCode: string): readonly number[] {
+  return QUICK_CASH[currencyCode] ?? [];
+}
+
+// The quick-cash keys to draw: the store's denominations, largest-last, excluding anything below
+// `atLeast` (a note that cannot cover the bill is not a tender the cashier can take).
+export function quickCashFor(
+  denominations: readonly number[],
+  atLeast: number,
+): readonly number[] {
+  return denominations.filter((note) => note >= atLeast);
 }
 
 // Parse a whole-đồng figure a cashier typed into minor units. Digits only; anything else is `null`

@@ -17,6 +17,7 @@ import type {
   LineRequest,
   LineResponse,
   LayoutResponse,
+  LocaleResponse,
   MenuResponse,
   OpenShiftRequest,
   PairAccepted,
@@ -152,6 +153,10 @@ export const api = {
   // book (ADR-0066, production-readiness C4). A separate node, so a separate read: a price change
   // relays no buttons and a button moving reprices nothing.
   layout: () => request<LayoutResponse>("GET", "/api/layout"),
+
+  // The money facts the pay pad needs: which notes a guest can hand over, and what the total rounds
+  // to in cash (ADR-0105). A country's coinage, published rather than compiled into this app.
+  locale: () => request<LocaleResponse>("GET", "/api/locale"),
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),

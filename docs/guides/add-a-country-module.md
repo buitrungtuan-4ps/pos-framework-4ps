@@ -7,7 +7,12 @@ its locale pack (currency, timezone, date/number formats, receipt templates, cha
 and any local vendors. The core never changes when you add one, and a fork that serves two of five
 countries compiles only those two ([ADR-0027](../adr/0027-country-modules.md)).
 
-The reference module is [`countries/zz`](../../countries/zz) — copy it.
+The reference module is [`countries/zz`](../../countries/zz) — copy it. Three real ones are
+written against the same shape and are the better model for a market you actually intend to open:
+[`countries/vn`](../../countries/vn), [`countries/jp`](../../countries/jp) and
+[`countries/in`](../../countries/in) ([ADR-0105](../adr/0105-a-country-pack-is-values.md)). Read the
+one closest to yours: Japan if your tax varies by channel, India if your invoice must print the
+rate's components, Vietnam if neither.
 
 ## Adding a country is exactly three edits
 
@@ -37,9 +42,19 @@ half-finished country fails CI rather than looking finished.
 - **Locale pack** — currency, timezone, formats, receipt templates, and the **channel-keyed tax
   rates** (`tax_class` × sales channel; the schema carries this from day one even where v1 uses one
   rate). Types are in `pos-proto`'s locale module.
+  Also fill in the three **till** facts ADR-0105 added, because each is wrong by default in some
+  market: `prices_include_tax` (Japan and India quote inclusive, Vietnam exclusive),
+  `cash_rounding_increment` (India ₹1, Vietnam 1,000 ₫, Japan none), and `cash_denominations` (the
+  notes a guest hands over, in minor units — empty means "the exact amount only").
 - **`Fiscalization`** — if the country has electronic tax invoices, implement the port
   (allocate-range / issue / look-up / reconcile). Its contract suite in `pos-contract-tests` is the
   spec. Invoices key on the **calendar** date, never the business date.
+
+  Most of that port is the same everywhere, so start from
+  [`pos_country::offline::OfflineFiscalization`](../../crates/pos-country/src/offline.rs): it holds
+  pre-allocated ranges, never-reuse, one-number-per-bill and refusal-on-exhaustion, and takes your
+  country's number format. A provider with a real authority **wraps** it — keeping the offline path,
+  which is the one that matters when the line drops — rather than replacing it.
 
 ## Select it in a build
 
