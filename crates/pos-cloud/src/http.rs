@@ -695,10 +695,10 @@ where
 }
 
 /// The collaborators the reconciliation routes share: the diff-and-history store, the admin store the
-/// admin read authenticates against, and the clock that stamps each recorded run and drives the
-/// session guard.
+/// admin read authenticates against, the clock that stamps each recorded run and drives the session
+/// guard, and the scoped keys the store-facing route authenticates a box with.
 #[derive(Clone)]
-struct ReconcileState<Rec, A, C> {
+struct ReconcileState<Rec, A, C, K> {
     store: Rec,
     admin: A,
     clock: C,
@@ -706,37 +706,63 @@ struct ReconcileState<Rec, A, C> {
     /// same router serves `/admin/reconcile`, which is behind a console permission and must not
     /// start demanding an internal header.
     internal_shared_secret: Option<InternalSecret>,
+    /// The scoped keys the **store-facing** route authenticates with, so a box that is off the
+    /// cloud's own network can reconcile at all (production-readiness **R3**).
+    keys: K,
 }
 
 /// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
 ///
-/// `POST /internal/reconcile` is the cloud's half of reconciliation ([ADR-0040](../../../docs/adr/0040-reconciliation.md)):
-/// an edge sends the ids it holds for a store, and the cloud answers with the subset it is missing —
-/// the ids to re-push through `/internal/ingest`. Every diff now also records a run into the history
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), so `GET /admin/reconcile` can show the
-/// console that reconciliation happened and what it caught. The internal route is private-network and
-/// unauthenticated (absent from the public OpenAPI, exactly like `/internal/ingest`); the admin read is
-/// behind [`ConsolePermission::Read`]. Stated independently and merged in `main`, rather than threading
-/// an extra collaborator through every `CloudApp` handler.
-pub fn reconcile_router<Rec, A, C>(
+/// Reconciliation is the cloud's half of ADR-0040's missing-id diff: a store sends the ids it holds
+/// over some window, and the cloud answers with the subset it lacks — the ids to re-push. Every diff
+/// also records a run into the history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// so `GET /admin/reconcile` can show the console that reconciliation happened and what it caught.
+///
+/// # Two doors, because a store is not on the cloud's network
+///
+/// `POST /sync/stores/{store_id}/reconcile` is the **store's** door, authenticated by its own scoped
+/// key and bound to its own store, exactly like the config pull, the heartbeat and the OTA report
+/// beside it. It exists because ADR-0040 called reconciliation *edge-initiated* and put it on
+/// `/internal/*` — and the shipped proxy denies `/internal/*` to every off-box caller, which a store
+/// is by definition. The deferred edge poller would have been written against a route it could never
+/// reach (production-readiness **R3**); this is the third route to make that same move.
+///
+/// `POST /internal/reconcile` stays for a caller that genuinely is on the cloud's own network — an
+/// operator's one-off, or a future cloud-side sweep. It names its tenant and store in the body and is
+/// guarded by the `/internal` shared secret (ADR-0097); the store's door takes neither, because its
+/// identity comes from the key it presents.
+///
+/// The admin read is behind [`ConsolePermission::Read`]. Stated independently and merged in `main`,
+/// rather than threading an extra collaborator through every `CloudApp` handler.
+pub fn reconcile_router<Rec, A, C, K>(
     store: Rec,
     admin: A,
     clock: C,
     internal_shared_secret: Option<InternalSecret>,
+    keys: K,
 ) -> Router
 where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/internal/reconcile", post(reconcile::<Rec, A, C>))
-        .route("/admin/reconcile", get(admin_reconcile_runs::<Rec, A, C>))
+        .route(
+            "/sync/stores/{store_id}/reconcile",
+            post(store_reconcile::<Rec, A, C, K>),
+        )
+        .route("/internal/reconcile", post(reconcile::<Rec, A, C, K>))
+        .route(
+            "/admin/reconcile",
+            get(admin_reconcile_runs::<Rec, A, C, K>),
+        )
         .with_state(ReconcileState {
             store,
             admin,
             clock,
             internal_shared_secret,
+            keys,
         })
 }
 
@@ -756,6 +782,17 @@ struct ReconcileRequest {
     event_ids: Vec<String>,
 }
 
+/// A store's own reconciliation manifest: just the ids, because the tenant and the store come from
+/// the key it presented and the path it called (production-readiness **R3**).
+///
+/// Deliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a
+/// `tenant_id` the server discards is a body a caller will eventually believe is honoured.
+#[derive(Debug, Clone, Deserialize)]
+struct StoreReconcileRequest {
+    /// The event ids this store holds over the window it is reconciling.
+    event_ids: Vec<String>,
+}
+
 /// The ids the cloud is missing from the manifest — what the edge should re-push.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ReconcileResponse {
@@ -769,8 +806,8 @@ struct ReconcileResponse {
 /// `/internal/ingest`), so it is absent from the public OpenAPI and requires the `X-Pos-Internal-Key`
 /// shared secret ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the
 /// proxy denies both deploy lanes apply.
-async fn reconcile<Rec, A, C>(
-    State(state): State<ReconcileState<Rec, A, C>>,
+async fn reconcile<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
     headers: HeaderMap,
     Json(request): Json<ReconcileRequest>,
 ) -> Response
@@ -778,6 +815,7 @@ where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     if let Err(refusal) = internal_guard(state.internal_shared_secret.as_ref(), &headers) {
         return refusal;
@@ -789,8 +827,66 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let mut candidates = Vec::with_capacity(request.event_ids.len());
-    for raw in &request.event_ids {
+    run_reconcile(&state, tenant_id, store_id, &request.event_ids).await
+}
+
+/// `POST /sync/stores/{store_id}/reconcile` — the **store's** door onto the same diff.
+///
+/// Identity comes from the scoped key the box presents, not from a body it writes: the tenant is the
+/// grant's and the store is the path's, checked against the key's binding. That is the same shape the
+/// config pull, the heartbeat and the OTA report have, and it is why this route needs no shared
+/// secret — a store cannot reach the cloud's private network, and never could
+/// (production-readiness **R3**).
+async fn store_reconcile<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<StoreReconcileRequest>,
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+        Ok(grant) => grant,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
+        return forbidden.into_response();
+    }
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
+    };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
+    run_reconcile(&state, grant.tenant(), store_id, &request.event_ids).await
+}
+
+/// The half both reconcile routes share: parse the manifest, run the diff, record the run.
+///
+/// Extracted for the reason the OTA report's shared body was — the whole difference between the two
+/// routes is meant to be *where identity comes from*, and one body makes that true rather than
+/// merely intended. A drift here would be a store and an operator getting different answers to the
+/// same question.
+async fn run_reconcile<Rec, A, C, K>(
+    state: &ReconcileState<Rec, A, C, K>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    event_ids: &[String],
+) -> Response
+where
+    Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+{
+    let request_event_ids = event_ids;
+    let mut candidates = Vec::with_capacity(request_event_ids.len());
+    for raw in request_event_ids {
         match raw.parse::<EventId>() {
             Ok(id) => candidates.push(id),
             Err(_) => {
@@ -889,8 +985,8 @@ impl ReconcileRunView {
 /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
 /// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind
 /// [`ConsolePermission::Read`].
-async fn admin_reconcile_runs<Rec, A, C>(
-    State(state): State<ReconcileState<Rec, A, C>>,
+async fn admin_reconcile_runs<Rec, A, C, K>(
+    State(state): State<ReconcileState<Rec, A, C, K>>,
     headers: HeaderMap,
     Query(query): Query<ReconcileHistoryQuery>,
 ) -> Response
@@ -898,6 +994,7 @@ where
     Rec: ReconcileStore + ReconcileRunStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,

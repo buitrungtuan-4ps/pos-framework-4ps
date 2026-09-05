@@ -29,6 +29,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   and removing a member from a wire type would be a `PROTOCOL_VERSION` change for no gain. No wire
   change here, only two documents that were describing a different link than the one that ships.
 
+### Added
+
+- **A store can reconcile its event log over a route it can actually reach**
+  (production-readiness **R3**). [ADR-0040](docs/adr/0040-reconciliation.md) called reconciliation
+  *edge-initiated* and put it on `/internal/*`. Both statements cannot hold on the shipped
+  deployment: the proxy denies `/internal/*` to every off-box caller, and a store is one by
+  definition — so the deferred edge poller would have been written against a route it could never
+  reach, and would have found out on the first real box.
+
+  `POST /sync/stores/{store_id}/reconcile` is the store's door, authenticated by its own scoped key
+  and bound to its own store, exactly like the config pull, the heartbeat and the OTA report beside
+  it — the third route to make this move. Its manifest carries **only** `event_ids`: the tenant is
+  the grant's and the store is the path's, because a body whose `tenant_id` the server discards is a
+  body a caller will eventually believe is honoured. `POST /internal/reconcile` is unchanged, for a
+  caller that genuinely is on the cloud's network.
+
+  One shared body runs the diff and records the run for both doors, so they cannot drift on
+  validation, on the diff, or on the history — the whole difference between them is meant to be
+  *where identity comes from*. The ADR carries the amendment, including why its own rejection of
+  "authenticating `/internal/reconcile`" was right about `/internal` and wrong about which surface a
+  store belongs on. **The edge poller itself is still deferred**; what changes is that it now has a
+  reachable endpoint.
+
 ### Fixed
 
 - **A store that cannot update itself still says which binary it is running**

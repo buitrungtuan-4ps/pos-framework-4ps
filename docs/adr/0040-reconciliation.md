@@ -68,3 +68,32 @@ set it emitted. So reconciliation must start from an edge-supplied manifest.
 - **Proven without the network.** The diff is set arithmetic tested over a fake (missing = candidates
   − present), and the SQL membership query is exercised against a real database in `store-postgres`'s
   gated integration suite.
+
+## Amendment 1 — a store reconciles over `/sync`, not `/internal` (production-readiness R3)
+
+This ADR said reconciliation is **edge-initiated** and put it on `/internal/*`. Those two statements
+cannot both hold on the shipped deployment: `deploy/Caddyfile.d/site.caddy` denies `/internal/*` to
+every off-box caller, and a store is one by definition. The deferred edge poller would have been
+written against a route it could never reach, and would have found out on the first real box.
+
+The rejection above — *"authenticating `/internal/reconcile`… is scope the network boundary already
+covers"* — was right about `/internal`. It was wrong about **which surface a store belongs on**. A
+store is not inside the network boundary; it is a remote client that authenticates with a scoped key,
+the same as it does for the config pull, the heartbeat, the order relay and the OTA report.
+
+So reconciliation gains a **second door**, the third route to make this move:
+
+- `POST /sync/stores/{store_id}/reconcile` — the store's, authenticated by its own scoped key
+  (`read_config`) and bound to its own store. The manifest carries **only** `event_ids`: the tenant is
+  the grant's and the store is the path's, so there is no field a caller could write and have the
+  server discard.
+- `POST /internal/reconcile` — unchanged, for a caller that genuinely is on the cloud's network (an
+  operator's one-off, or a future cloud-side sweep). It still names its tenant and store in the body
+  and is guarded by the `/internal` shared secret ([ADR-0097](0097-internal-route-authentication.md)).
+
+One shared body runs the diff and records the run for both, so the two doors cannot drift on
+validation, on the diff, or on what lands in the history — the whole difference between them is meant
+to be *where identity comes from*.
+
+The edge poller itself is still deferred ([ADR-0078](0078-sync-and-ota-closure.md)); what changes is
+that it now has a reachable endpoint to be written against.

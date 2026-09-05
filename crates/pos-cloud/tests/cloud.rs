@@ -3063,6 +3063,7 @@ async fn the_internal_routes_refuse_a_request_without_the_shared_secret() {
                 provisioned_admin(),
                 clock(),
                 Some(internal_secret()),
+                FakeKeys::default(),
             ),
         ),
         (
@@ -3105,6 +3106,7 @@ async fn the_admin_reconcile_read_does_not_want_the_internal_key() {
         admin,
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let tenant_ulid = tenant().as_ulid().to_string();
     let response = router
@@ -3224,6 +3226,7 @@ fn reconcile_app(admin: FakeAdmin, store: FakeReconcile) -> axum::Router {
         admin,
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     ))
 }
 
@@ -3262,6 +3265,7 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
         provisioned_admin(),
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),
@@ -3295,6 +3299,90 @@ async fn reconcile_returns_only_the_ids_the_cloud_is_missing() {
 }
 
 #[tokio::test]
+async fn a_store_reconciles_over_sync_with_its_own_key() {
+    // Production-readiness R3. ADR-0040 called reconciliation edge-initiated and put it on
+    // `/internal/*` — which the shipped proxy denies to every off-box caller, and a store is one by
+    // definition. The store's own door takes no shared secret: its tenant is the grant's and its
+    // store is the path's, checked against the key's binding.
+    let present: HashSet<EventId> = [1_u128, 3]
+        .into_iter()
+        .map(|n| EventId::new(Ulid::from_u128(n)))
+        .collect();
+    let store = FakeReconcile::with_present(present);
+    let keys = FakeKeys::default();
+    let router = http::reconcile_router(
+        store.clone(),
+        provisioned_admin(),
+        clock(),
+        Some(internal_secret()),
+        keys.clone(),
+    );
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/reconcile");
+    let manifest = serde_json::json!({
+        "event_ids": [event_ulid(1), event_ulid(2), event_ulid(3), event_ulid(4)],
+    });
+
+    // No bearer at all, and a key scoped to another store, are both closed.
+    let anon = router
+        .clone()
+        .oneshot(post_json(&uri, &manifest))
+        .await
+        .expect("route");
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let elsewhere = issue_store_key(
+        &keys,
+        tenant(),
+        StoreId::new(Ulid::from_u128(0x0000_E15E)),
+        &[Scope::ReadConfig],
+    );
+    let wrong_store = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &manifest, &elsewhere))
+        .await
+        .expect("route");
+    assert_eq!(
+        wrong_store.status(),
+        StatusCode::FORBIDDEN,
+        "a key bound to another store cannot reconcile this one's log"
+    );
+
+    // This store's own key gets the same diff `/internal/reconcile` gives.
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let response = router
+        .oneshot(post_json_bearer(&uri, &manifest, &token))
+        .await
+        .expect("route the reconcile");
+    assert_eq!(response.status(), StatusCode::OK);
+    let missing = json_body(response).await["missing"]
+        .as_array()
+        .expect("a missing array")
+        .iter()
+        .map(|value| value.as_str().expect("a string").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        missing,
+        vec![event_ulid(2), event_ulid(4)],
+        "the same diff, through the door a store can actually reach"
+    );
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "and it records a run like the other door"
+    );
+    let (recorded_tenant, run) = &recorded[0];
+    assert_eq!(
+        *recorded_tenant,
+        tenant(),
+        "the tenant is the grant's, never a body's"
+    );
+    assert_eq!(run.store, store_id());
+    assert_eq!(run.candidates_offered, 4);
+    assert_eq!(run.missing_found, 2);
+}
+
+#[tokio::test]
 async fn reconcile_rejects_a_malformed_id() {
     let store = FakeReconcile::default();
     let router = http::reconcile_router(
@@ -3302,6 +3390,7 @@ async fn reconcile_rejects_a_malformed_id() {
         provisioned_admin(),
         clock(),
         Some(internal_secret()),
+        FakeKeys::default(),
     );
     let body = serde_json::json!({
         "tenant_id": tenant().as_ulid().to_string(),

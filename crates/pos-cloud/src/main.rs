@@ -356,6 +356,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             config.internal_shared_secret.clone(),
+            // The store-facing reconcile route authenticates the box by its scoped key, exactly as
+            // the config pull and the OTA report beside it do — a store is off the cloud's private
+            // network, so `/internal` was never reachable from one (production-readiness R3).
+            store.api_keys(),
         ))
         .merge(http::ota_report_router(
             store.config_trees(),
