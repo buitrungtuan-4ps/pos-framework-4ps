@@ -14,6 +14,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A store prints Vietnamese, Japanese, Chinese, Korean, Devanagari, Thai and Arabic**
+  ([ADR-0102](docs/adr/0102-printing-any-script.md), production-readiness **P9**). A thermal
+  printer renders text from a few hundred glyphs in its own firmware, selected by a single-byte code
+  page. That does not reach Vietnamese, only Japanese-market printers carry a kanji ROM, and no code
+  page can express an Indic script at all — the vowel sign of a syllable is written before the
+  consonant it follows, which is shaping rather than encoding. So the edge now **draws** any line the
+  printer's own character set cannot carry and sends it as a raster; a line the code page does cover
+  is still sent as text, which is a fraction of the bytes and faster out of the head.
+
+  Before this, such a line made the whole job `UNPRINTABLE_TEXT` and no paper came out — for a
+  Vietnamese menu, on every ticket and every receipt.
+
+  A new crate, `pos-render`, does the shaping and rasterising. Everything after the font parser's own
+  coordinates is fixed-point integer arithmetic, so two stores render the same receipt to the same
+  bytes.
+
+- **A printer can be on a USB or serial cable** ([ADR-0103](docs/adr/0103-directly-attached-printers.md),
+  production-readiness **P8**). `printer-escpos` previously refused everything but raw TCP on port
+  9100, so a single-till shop with a USB printer could not print at all. A directly-attached printer
+  is now reached by opening its OS device path — `/dev/usb/lp0`, `/dev/ttyUSB0`, `\.\COM3` — which
+  needs no USB library and therefore no C toolchain in the edge build.
+
+  This also gives the **cash drawer** a channel for the first time: a drawer may only ever open over
+  USB (`docs/architecture.md` §5), which was the one connection with no transport. It does not open
+  yet — no published device says a drawer is *wired* to a given printer — and ADR-0103 names the
+  console field that closes it.
+
+**Upgrade note.** Printing non-ASCII needs a font installed on the store's machine; fonts are a
+deployment asset rather than framework code, because embedding one would ship every store megabytes
+it will never print and still not cover the next country. On Debian/Ubuntu,
+`sudo apt-get install -y fonts-dejavu-core` covers Latin and Vietnamese;
+[`deploy/edge/README.md`](deploy/edge/README.md) lists the rest. The edge scans the platform's font
+directories by default and logs one line at start-up naming the scripts it can and cannot print — a
+box with no font installed still trades and still prints ASCII, exactly as before. For a USB or
+serial printer, set the device's **connection** in the console and put the device path in its address
+field; the service user needs the `lp` group, and a serial printer needs its baud rate set by the
+unit (`ExecStartPre=/bin/stty …`).
+
 ### Security
 
 - **A console role without `console.reports.revenue` no longer reads a store's prices through the

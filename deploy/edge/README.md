@@ -172,3 +172,86 @@ outcome. A key issued with `read_config` alone leaves the relay dark — the sym
 `the cloud refused the order pull with status 403` in the edge log, every five seconds. Nothing else
 is affected: the counter trades, config syncs, and the orders stay parked in the cloud until the
 scope is granted.
+
+## Printing: fonts, and the cable
+
+Two deployment facts the store needs and the binary cannot supply.
+
+### Install a font package, or the store prints ASCII only
+
+A thermal printer renders text from a few hundred glyphs in its own firmware, which does not reach
+Vietnamese and is nowhere near Japanese or Devanagari. So anything outside plain ASCII is **drawn by
+the edge** and sent as an image ([ADR-0102](../../docs/adr/0102-printing-any-script.md)). That needs
+fonts, and fonts are a deployment asset rather than framework code — embedding one would ship every
+store megabytes it will never print and still not cover the next country.
+
+| Script | Debian/Ubuntu package |
+|---|---|
+| Latin **and Vietnamese** | `fonts-dejavu-core` |
+| Japanese, Chinese, Korean | `fonts-noto-cjk` |
+| Devanagari (Hindi, Marathi, Nepali) | `fonts-noto-devanagari` |
+| Thai | `fonts-noto-thai` |
+| Arabic | `fonts-noto-arabic` |
+
+```sh
+sudo apt-get install -y fonts-dejavu-core        # the minimum for a Vietnamese store
+```
+
+On Windows the shipped fonts in `C:\Windows\Fonts` already cover Latin and Vietnamese; add a Noto
+face to that directory for anything else.
+
+The edge scans the platform's font directories by default and needs no configuration. Point it
+somewhere else — a font kept with the application, say — with:
+
+```toml
+font_directories = ["/opt/pos-edge/fonts"]
+font_size_dots   = 24   # printer dots per em; 24 is a comfortable receipt body at 203 dpi
+```
+
+Directories are scanned recursively, in order, and that order is the fallback order: the face for
+ordinary Latin text goes first.
+
+**Check it worked.** The edge logs one line at start-up naming what it can print:
+
+```
+INFO printing fonts loaded faces=1 can_print=["Latin", "Vietnamese"] cannot_print=["Japanese", ...]
+```
+
+If the line says `no printing fonts found`, the store trades and prints only ASCII — every
+Vietnamese ticket will be refused. That log line is the whole early warning; without it a missing
+package first shows up as a kitchen ticket that never arrives during service.
+
+### A USB or serial printer is a device path
+
+Approve the printer in the console with its **connection** set to USB or Serial, and put the OS
+device path in the address field rather than a host
+([ADR-0103](../../docs/adr/0103-directly-attached-printers.md)):
+
+| Connection | Address |
+|---|---|
+| Network | `192.168.1.50:9100` (bare host gets port 9100) |
+| USB, Linux | `/dev/usb/lp0` |
+| Serial, Linux | `/dev/ttyUSB0`, `/dev/ttyS0` |
+| Serial, Windows | `\\.\COM3` |
+
+Two Linux details:
+
+- **The service user needs permission.** USB and serial nodes are owned by group `lp` (or `dialout`
+  for some serial adapters). Without it every print is `Unavailable` and the log says the printer
+  could not be reached, which reads like an unplugged cable.
+  ```sh
+  sudo usermod -aG lp pos-edge
+  ```
+- **A serial printer needs its baud rate set outside the process.** USB printer-class devices have
+  no baud rate and need nothing; serial ones do, and the edge does not set it (that would mean
+  `termios` FFI for a legacy connection). Add it to the unit:
+  ```ini
+  ExecStartPre=/bin/stty -F /dev/ttyUSB0 19200 raw -echo
+  ```
+  Match the printer's own setting — 9600 and 19200 are the common ones, and it is usually printed on
+  a self-test page the printer produces when you hold the feed button while powering it on.
+
+**A cash drawer does not open yet.** The USB channel it needs now exists — and a drawer may only ever
+open over USB, because port 9100 has no authentication (`docs/architecture.md` §5) — but nothing in
+the published device says a drawer is *wired* to a given printer, so none is kicked. ADR-0103 names
+the console field that closes it.

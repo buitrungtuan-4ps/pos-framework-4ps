@@ -27,6 +27,7 @@
 //! [`PortError::unavailable`] and the caller re-queues, rather than the adapter blocking. So this
 //! adapter buffers nothing — its `status().queue_depth` is zero — and the queue is `pos_edge`'s (P5).
 
+pub mod device;
 pub mod escpos;
 pub mod tcp;
 
@@ -37,8 +38,9 @@ use pos_ports::printer::{PrintBlock, PrintJob, PrinterCapabilities, PrinterDrive
 use pos_ports::{PortError, PortName};
 use pos_proto::ids::EventId;
 
-/// A byte channel to one printer. [`tcp::TcpTransport`] is the network implementation; USB and
-/// serial land with hardware bring-up, and the contract suite uses an in-memory recorder.
+/// A byte channel to one printer. [`tcp::TcpTransport`] carries it over the LAN and
+/// [`device::DeviceTransport`] over a USB or serial cable; the contract suite uses an in-memory
+/// recorder.
 pub trait Transport: Send + Sync {
     /// Sends raw bytes to the printer.
     ///

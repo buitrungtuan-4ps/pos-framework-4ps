@@ -29,6 +29,7 @@ use std::fmt;
 use std::num::NonZeroU16;
 use std::sync::{Arc, Mutex};
 
+use printer_escpos::device::DeviceTransport;
 use printer_escpos::tcp::TcpTransport;
 use printer_escpos::{EscPosPrinter, Transport};
 use pos_render::TextRenderer;
@@ -335,14 +336,13 @@ impl TransportFactory for TcpTransports {
     fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
         match connection_of(device) {
             PrinterConnection::Network => Ok(Box::new(TcpTransport::new(&device.address))),
-            // Named, not silently treated as a network printer: dialling port 9100 at a USB
-            // printer's "address" would fail with a message about the network, which is the wrong
-            // thing to hand an operator holding a USB cable.
+            // A directly-attached printer's address is a device path — `/dev/usb/lp0`,
+            // `/dev/ttyUSB0`, `\\.\COM3` — rather than a host
+            // ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)). Dialling port 9100
+            // at one would fail with a message about the network, which is the wrong thing to hand
+            // an operator holding a USB cable, so the two are kept apart here.
             PrinterConnection::Usb | PrinterConnection::Serial => {
-                Err(PortError::failed_precondition(
-                    PortName::PrinterDriver,
-                    "this build talks to network printers only; USB and serial need hardware bring-up",
-                ))
+                Ok(Box::new(DeviceTransport::new(&device.address)))
             }
             // `PrinterConnection` is `#[non_exhaustive]`.
             _ => Err(PortError::failed_precondition(
@@ -658,6 +658,7 @@ mod tests {
         assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
         station_printer, ticket_document, ticket_line,
     };
+    use super::TcpTransports;
     use std::num::NonZeroU16;
     use crate::app::{EdgeSession, FiredLine};
     use pos_ports::PortError;
@@ -1232,5 +1233,33 @@ mod tests {
             assumed_capabilities(&printer, true).dots_per_line.get(),
             ASSUMED_DOTS_PER_LINE
         );
+    }
+
+    #[test]
+    fn a_directly_attached_printer_gets_a_channel_rather_than_a_refusal() {
+        // Before ADR-0103 this arm returned "this build talks to network printers only". A store
+        // with a USB printer had no way to print at all, and a cash drawer — which may only ever
+        // open over USB (architecture.md §5) — had no transport to open over.
+        let usb = PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            address: "/dev/usb/lp0".to_owned(),
+            ..device(1, DeviceKind::Printer, None)
+        };
+        assert!(
+            TcpTransports.open(&usb).is_ok(),
+            "a USB printer should get a device channel"
+        );
+
+        let serial = PublishedDevice {
+            connection: DeviceConnection::Serial.into(),
+            address: "/dev/ttyUSB0".to_owned(),
+            ..device(2, DeviceKind::Printer, None)
+        };
+        assert!(TcpTransports.open(&serial).is_ok(), "and so should serial");
+
+        // Opening the channel is not reaching the printer: nothing is touched until the first write,
+        // so a device path that does not exist fails where every other unreachable printer does.
+        let network = device(3, DeviceKind::Printer, None);
+        assert!(TcpTransports.open(&network).is_ok(), "and the LAN still works");
     }
 }
