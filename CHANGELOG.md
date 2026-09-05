@@ -14,6 +14,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Changed
+
+- **`Hello.product_version` stops claiming a path it does not have** (production-readiness **R2**).
+  The field was documented as "the edge's product release, for the fleet view", and ADR-0024
+  described a `hello` round trip. Neither is what the shipped transport does: the only production
+  `MessageLink` is `link-nats`, which is **outbound-only** by design — the store publishes into a
+  JetStream stream and there is no cloud responder — so its `handshake` runs `negotiate` against its
+  own compiled version range and nothing in the frame is transmitted.
+
+  Both places now say so, and name the rail that actually carries the version: `CloudSync::report`
+  over `/sync`, which **R1** above just made unconditional. The field itself is kept — the frame
+  belongs to the protocol rather than to one transport, the deferred bidirectional link reads it,
+  and removing a member from a wire type would be a `PROTOCOL_VERSION` change for no gain. No wire
+  change here, only two documents that were describing a different link than the one that ships.
+
 ### Fixed
 
 - **A store that cannot update itself still says which binary it is running**

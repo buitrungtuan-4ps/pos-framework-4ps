@@ -28,6 +28,22 @@ current lease token. The cloud answers with the single `protocol_version` it wil
 the session — the highest version both sides support — or a typed refusal. Both sides then
 hold that number for the life of the connection; nothing renegotiates mid-session.
 
+> **What the shipped transport actually does** (production-readiness **R2**). The only production
+> `MessageLink` is `link-nats`, and it is **outbound-only** by design
+> ([ADR-0089](0089-edge-event-bus-transport.md)): the store publishes into a JetStream stream and
+> there is no cloud responder to answer a `hello`. Its `handshake` therefore runs `negotiate` against
+> its **own** compiled `[MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION]` — a real check that this
+> build's range is self-consistent and that the stream exists, and **not** a round trip. Nothing in
+> the frame is transmitted on that path, `product_version` included.
+>
+> The paragraph above describes the request/response handshake a **bidirectional** link performs; it
+> is correct for that link and is the reason the frame carries what it carries. It is not what one
+> store's event publishing does today, and reading it as such is how `product_version` came to be
+> documented as reaching the fleet view when nothing carried it there. The console learns which
+> binary a store runs from `CloudSync::report` over `/sync`
+> ([ADR-0078](0078-sync-and-ota-closure.md)) — a different rail, and one that reports on **every**
+> box with a cloud since production-readiness **R1**.
+
 *The floor.* The cloud accepts `[CLOUD_MAX − 1, CLOUD_MAX]` at minimum. A CI test asserts
 it, so dropping support for a version that is still in the fleet fails the build rather than
 the rollout.
