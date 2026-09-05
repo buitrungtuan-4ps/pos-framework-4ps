@@ -799,10 +799,12 @@ fn admin_invite_from_row(row: AdminInviteRow) -> Result<AdminInvite, AdminStoreE
 
 impl ApiKeyAdminStore for PostgresApiKeys {
     async fn insert(&self, key: &StoredApiKey) -> Result<(), ApiKeyStoreError> {
+        let store_id = key.store_id.map(|id| id.to_string());
         PostgresApiKeys::insert(
             self,
             &key.id.to_string(),
             &key.tenant_id.to_string(),
+            store_id.as_deref(),
             &key.secret_hash(),
             &key.scope_wire_names(),
             key.expires_at_ms(),
@@ -822,6 +824,7 @@ impl ApiKeyAdminStore for PostgresApiKeys {
             .into_iter()
             .map(|row| ApiKeySummary {
                 id: row.id,
+                store_id: row.store_id,
                 scopes: row.scopes,
                 revoked: row.revoked,
                 expires_at_ms: row.expires_at_ms,
@@ -847,6 +850,7 @@ impl ApiKeyStore for PostgresApiKeys {
                 let stored = StoredApiKey::from_parts(
                     id,
                     &row.tenant_id,
+                    row.store_id.as_deref(),
                     &row.secret_hash,
                     &row.scopes,
                     row.revoked,

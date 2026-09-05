@@ -33,6 +33,8 @@ export interface Enrolment {
 /** A summary row from `GET /admin/api-keys` (the secret is never listed). */
 export interface ApiKeySummary {
   readonly id: string;
+  /** The one store this key acts for, or `null` for a tenant-wide key (S1). */
+  readonly store_id: string | null;
   readonly scopes: string[];
   readonly revoked: boolean;
 }

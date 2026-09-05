@@ -24,6 +24,8 @@ use crate::store::{pool_unavailable, unavailable};
 pub struct ApiKeyRow {
     /// The tenant the key acts for.
     pub tenant_id: String,
+    /// The one store the key acts for, or `None` for a tenant-wide key.
+    pub store_id: Option<String>,
     /// `SHA-256(secret)` — 32 bytes.
     pub secret_hash: Vec<u8>,
     /// The granted scopes, as their wire names.
@@ -41,6 +43,8 @@ pub struct ApiKeyRow {
 pub struct ApiKeySummaryRow {
     /// The public id (the ULID half of the token).
     pub id: String,
+    /// The one store the key acts for, or `None` for a tenant-wide key.
+    pub store_id: Option<String>,
     /// The granted scopes, as their wire names.
     pub scopes: Vec<String>,
     /// Whether the key has been revoked.
@@ -72,7 +76,7 @@ impl PostgresApiKeys {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_opt(
-                "SELECT tenant_id, secret_hash, scopes, revoked, expires_at \
+                "SELECT tenant_id, store_id, secret_hash, scopes, revoked, expires_at \
                  FROM api_keys WHERE id = $1",
                 &[&id],
             )
@@ -80,10 +84,11 @@ impl PostgresApiKeys {
             .map_err(unavailable)?;
         Ok(row.map(|row| ApiKeyRow {
             tenant_id: row.get(0),
-            secret_hash: row.get(1),
-            scopes: row.get(2),
-            revoked: row.get(3),
-            expires_at_ms: row.get(4),
+            store_id: row.get(1),
+            secret_hash: row.get(2),
+            scopes: row.get(3),
+            revoked: row.get(4),
+            expires_at_ms: row.get(5),
         }))
     }
 
@@ -100,6 +105,7 @@ impl PostgresApiKeys {
         &self,
         id: &str,
         tenant_id: &str,
+        store_id: Option<&str>,
         secret_hash: &[u8],
         scopes: &[String],
         expires_at_ms: Option<i64>,
@@ -107,9 +113,16 @@ impl PostgresApiKeys {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO api_keys (id, tenant_id, secret_hash, scopes, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[&id, &tenant_id, &secret_hash, &scopes, &expires_at_ms],
+                "INSERT INTO api_keys (id, tenant_id, store_id, secret_hash, scopes, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &id,
+                    &tenant_id,
+                    &store_id,
+                    &secret_hash,
+                    &scopes,
+                    &expires_at_ms,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -128,7 +141,7 @@ impl PostgresApiKeys {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT id, scopes, revoked, expires_at FROM api_keys \
+                "SELECT id, store_id, scopes, revoked, expires_at FROM api_keys \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -138,9 +151,10 @@ impl PostgresApiKeys {
             .iter()
             .map(|row| ApiKeySummaryRow {
                 id: row.get(0),
-                scopes: row.get(1),
-                revoked: row.get(2),
-                expires_at_ms: row.get(3),
+                store_id: row.get(1),
+                scopes: row.get(2),
+                revoked: row.get(3),
+                expires_at_ms: row.get(4),
             })
             .collect())
     }

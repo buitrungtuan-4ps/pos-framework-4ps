@@ -217,6 +217,7 @@ impl ApiKeyAdminStore for FakeKeys {
             .filter(|key| key.tenant_id == tenant_id)
             .map(|key| ApiKeySummary {
                 id: key.id.to_string(),
+                store_id: key.store_id.map(|id| id.to_string()),
                 scopes: key.scope_wire_names(),
                 revoked: key.revoked,
                 expires_at_ms: key.expires_at_ms(),
@@ -241,6 +242,28 @@ impl ApiKeyAdminStore for FakeKeys {
 /// Each call mints a distinct id, so a test issuing more than one key does not have the second
 /// silently overwrite the first in the fake's map.
 fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
+    issue_key_for(keys, tenant_id, None, scopes)
+}
+
+/// As [`issue_key`], but bound to one store — a *store's* own credential (S1).
+///
+/// The `/sync/stores/{store_id}/…` routes require this: a key that names no store, or names another
+/// one, is refused there however good its scopes.
+fn issue_store_key(
+    keys: &FakeKeys,
+    tenant_id: TenantId,
+    store: StoreId,
+    scopes: &[Scope],
+) -> String {
+    issue_key_for(keys, tenant_id, Some(store), scopes)
+}
+
+fn issue_key_for(
+    keys: &FakeKeys,
+    tenant_id: TenantId,
+    store: Option<StoreId>,
+    scopes: &[Scope],
+) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(0x00A1_1CE0);
     let id = ApiKeyId::new(Ulid::from_u128(u128::from(
@@ -249,6 +272,7 @@ fn issue_key(keys: &FakeKeys, tenant_id: TenantId, scopes: &[Scope]) -> String {
     let (stored, token) = issue(
         id,
         tenant_id,
+        store,
         scopes.iter().copied().collect(),
         FAKE_SECRET,
         None,
@@ -2408,8 +2432,71 @@ async fn published_config(keys: &FakeKeys) -> (axum::Router, String, String, Str
         .as_str()
         .expect("a version id")
         .to_owned();
-    let token = issue_key(keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(keys, tenant(), store_id(), &[Scope::ReadConfig]);
     (router, token, store_ulid, version)
+}
+
+/// A sibling store's key does not read this store's configuration (production-readiness **S1**).
+///
+/// The `/sync` routes took the tenant from the verified grant and the store from the *path*, which
+/// within one tenant is no check at all: every store in a chain shares a tenant, so any store's key
+/// served any sibling's `permissions` node — employee names and PIN hashes. Both halves are asserted
+/// here, because the second is what the first one's fix is worth: a key bound to store B is refused,
+/// and the key bound to store A still works on store A.
+#[tokio::test]
+async fn one_stores_key_does_not_read_another_stores_config() {
+    let keys = FakeKeys::default();
+    let (router, own_token, store_ulid, _version) = published_config(&keys).await;
+    let sibling = StoreId::new(Ulid::from_u128(0x0051_5111)); // a second store in the *same* tenant
+    let sibling_token = issue_store_key(&keys, tenant(), sibling, &[Scope::ReadConfig]);
+
+    let stolen = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&sibling_token),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(
+        stolen.status(),
+        StatusCode::FORBIDDEN,
+        "a sibling store's key must not read this store's config"
+    );
+
+    let own = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&own_token),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(
+        own.status(),
+        StatusCode::OK,
+        "the store's own key still reads its own config"
+    );
+}
+
+/// A tenant-wide key is not a store's credential, however good its scopes (**S1**).
+///
+/// `read_config` on an unbound key was the shape every key had before per-store scoping, and
+/// treating "names no store" as "may act for any store in the tenant" would leave the finding open
+/// under a different name. So `/sync` refuses it and the operator re-issues a store-scoped key.
+#[tokio::test]
+async fn a_tenant_wide_key_is_refused_on_the_store_facing_surface() {
+    let keys = FakeKeys::default();
+    let (router, _own_token, store_ulid, _version) = published_config(&keys).await;
+    let tenant_wide = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+
+    let response = router
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/config"),
+            Some(&tenant_wide),
+        ))
+        .await
+        .expect("route");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 /// A refusal on the **store-facing** surface is enveloped too, and names the field that was wrong
@@ -2450,7 +2537,7 @@ async fn a_store_facing_refusal_names_the_field_that_was_actually_wrong() {
 async fn a_refusal_about_two_fields_names_only_the_ones_missing() {
     let keys = FakeKeys::default();
     let router = device_app(provisioned_admin(), keys.clone(), FakeDevices::default());
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let devices_uri = format!("/sync/stores/{store_ulid}/devices");
 
@@ -2565,7 +2652,7 @@ async fn config_sync_records_store_liveness() {
         .as_str()
         .expect("a version id")
         .to_owned();
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     // Nothing is recorded until the store actually pulls.
     assert!(
@@ -2651,7 +2738,7 @@ async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
     assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
 
     // A read_config key records the contact and answers 204.
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let beat = router
         .oneshot(post_json_bearer(&uri, &serde_json::json!({}), &token))
         .await
@@ -2694,7 +2781,10 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
         "read_rollups does not authorise config pull"
     );
 
-    // The right scope, but a store with no published config, is a 404 — not a leak of another's tree.
+    // The right scope, aimed at a *different* store, is forbidden — and the refusal happens before
+    // the tree is read, so nothing about whether that store exists or has published leaks either
+    // (S1). This used to be a `404`, which was the honest answer only because the sibling happened
+    // to have nothing published; a sibling that *had* published was served.
     let other_store = Ulid::from_u128(0xBEEF).to_string();
     let unknown = router
         .oneshot(get(
@@ -2703,7 +2793,7 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
         ))
         .await
         .expect("route");
-    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }
 
 // --- Rollup reset-cursor-and-replay (`POST /admin/stores/{id}/rollups/reset`) -------------------
@@ -3219,7 +3309,7 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
     let devices = FakeDevices::default();
     let router = device_app(provisioned_admin(), keys.clone(), devices);
     let cookie = admin_cookie(&router).await;
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let tenant_ulid = tenant().as_ulid().to_string();
     let devices_uri = format!("/sync/stores/{store_ulid}/devices");
@@ -3306,7 +3396,7 @@ async fn approving_a_device_proposal_records_to_the_audit_trail() {
         sink,
     ));
     let cookie = admin_cookie(&router).await;
-    let token = issue_key(&keys, tenant(), &[Scope::ManageDevices]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
     let store_ulid = store_id().as_ulid().to_string();
     let tenant_ulid = tenant().as_ulid().to_string();
 
@@ -4339,7 +4429,7 @@ async fn orders_submit_accepts_and_creates() {
 #[tokio::test]
 async fn the_sync_surface_is_refused_once_the_connection_is_over_its_budget() {
     let keys = FakeKeys::default();
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let state =
         app(Cloud::new(FakeStore::new()), FakeRollups::default(), keys).with_sync_rate_limit(1, 60);
     let throttle = state.sync_throttle();
@@ -4928,7 +5018,7 @@ impl OrderQueueStore for FakeOrderQueue {
 async fn an_unconfirmed_order_queues_then_pull_ack_lookup_resolves() {
     let keys = FakeKeys::default();
     let place = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
-    let relay_token = issue_key(&keys, tenant(), &[Scope::RelayOrders]);
+    let relay_token = issue_store_key(&keys, tenant(), order_store(), &[Scope::RelayOrders]);
     let (known, _price) = known_menu_item();
     let queue = FakeOrderQueue::new();
     let app = || {
@@ -15384,7 +15474,7 @@ fn artifact_fixture(
 ) -> (axum::Router, String, FakeBlobs) {
     use sha2::Digest as _;
     let keys = FakeKeys::default();
-    let token = issue_key(&keys, tenant(), scopes);
+    let token = issue_store_key(&keys, tenant(), store_id(), scopes);
     let target = pos_cloud::ota::TargetTriple::parse(TEST_TARGET).expect("a valid triple");
     let blobs = FakeBlobs::default();
     blobs.put_now(
@@ -15680,7 +15770,7 @@ async fn an_uploaded_release_is_what_a_store_downloads() {
         .expect("route the upload");
     assert_eq!(uploaded.status(), StatusCode::CREATED);
 
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
     let served = router
         .oneshot(post_json_bearer(
             &format!("/sync/stores/{}/artifact", store_id()),
@@ -15876,7 +15966,7 @@ async fn promoting_a_version_the_cloud_does_not_host_is_refused() {
 async fn a_store_report_takes_its_tenant_from_the_key_not_the_body() {
     let reports = FakeOtaReports::default();
     let (router, keys) = store_report_app(reports.clone());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let accepted = router
         .oneshot(post_json_bearer(
@@ -15904,7 +15994,7 @@ async fn a_store_report_takes_its_tenant_from_the_key_not_the_body() {
 async fn a_store_report_can_say_it_has_never_self_tested() {
     let reports = FakeOtaReports::default();
     let (router, keys) = store_report_app(reports.clone());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let accepted = router
         .oneshot(post_json_bearer(
@@ -15949,7 +16039,7 @@ async fn a_store_report_needs_a_scoped_key() {
 #[tokio::test]
 async fn a_store_report_with_a_blank_version_is_refused() {
     let (router, keys) = store_report_app(FakeOtaReports::default());
-    let token = issue_key(&keys, tenant(), &[Scope::ReadConfig]);
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let refused = router
         .oneshot(post_json_bearer(

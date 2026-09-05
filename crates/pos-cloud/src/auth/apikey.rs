@@ -12,9 +12,14 @@
 //!    leak yields no usable key. SHA-256 (not Argon2) is right here: the secret is a long random
 //!    token, not a low-entropy human password, so there is nothing to slow a dictionary attack
 //!    against, and a fast hash keeps per-request verification cheap. The compare is constant-time.
-//!  * **Every key is bound to one tenant.** [`Grant::tenant`] is the tenant the key may act for, and a
-//!    handler must check the resource's tenant against it — this is the isolation that stops one
-//!    tenant's key reaching another's data.
+//!  * **Every key is bound to one tenant, and a store's key to one store.** [`Grant::tenant`] is the
+//!    tenant the key may act for, and a handler must check the resource's tenant against it — this is
+//!    the isolation that stops one tenant's key reaching another's data. [`Grant::store`] narrows it
+//!    one level further: a key issued to a store carries that store, and the `/sync/stores/{id}`
+//!    routes require it to match the store in the path. Without that a *sibling* store's key read a
+//!    store's `permissions` node — employee names and PIN hashes (**T1**) — because being in the
+//!    right tenant was the whole check (S1). A tenant-wide key (`None`) is still correct for an
+//!    integration reading a tenant's rollups; it simply cannot be a store's own credential.
 //!  * **Deny by default, by scope.** A key authorises only the [`Scope`]s it was granted
 //!    ([`Grant::authorizes`]); anything else is refused.
 //!
@@ -28,7 +33,7 @@ use std::collections::BTreeSet;
 
 use sha2::{Digest as _, Sha256};
 
-use pos_proto::ids::TenantId;
+use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
@@ -186,6 +191,13 @@ pub struct StoredApiKey {
     pub id: ApiKeyId,
     /// The tenant this key acts for. The one field isolation rests on.
     pub tenant_id: TenantId,
+    /// The single store this key acts for, when it is a store's own key (S1).
+    ///
+    /// `None` is a tenant-wide key — the shape every key had before per-store scoping, and the right
+    /// shape for an integration that reads a whole tenant's rollups. It is *not* enough for the
+    /// `/sync/stores/{store_id}` routes, which serve a store its own configuration: those carry a
+    /// store's employee roster and PIN hashes (**T1**), so they require a key bound to that store.
+    pub store_id: Option<StoreId>,
     secret_hash: [u8; 32],
     /// The scopes granted. Deny-by-default: anything absent is refused.
     pub scopes: BTreeSet<Scope>,
@@ -201,6 +213,7 @@ impl fmt::Debug for StoredApiKey {
             .debug_struct("StoredApiKey")
             .field("id", &self.id)
             .field("tenant_id", &self.tenant_id)
+            .field("store_id", &self.store_id)
             .field("secret_hash", &"<redacted>")
             .field("scopes", &self.scopes)
             .field("revoked", &self.revoked)
@@ -223,6 +236,7 @@ impl StoredApiKey {
     pub fn from_parts(
         id: ApiKeyId,
         tenant_id: &str,
+        store_id: Option<&str>,
         secret_hash: &[u8],
         scopes: &[String],
         revoked: bool,
@@ -231,6 +245,16 @@ impl StoredApiKey {
         let tenant_id: TenantId = tenant_id
             .parse()
             .map_err(|_| format!("api key {id}: tenant id is not a ULID"))?;
+        // A stored store id that will not parse is refused rather than dropped to `None`: dropping it
+        // would silently widen a store-scoped key into a tenant-wide one, which is the exact failure
+        // the column exists to prevent.
+        let store_id: Option<StoreId> = match store_id {
+            Some(raw) => Some(
+                raw.parse()
+                    .map_err(|_| format!("api key {id}: store id is not a ULID"))?,
+            ),
+            None => None,
+        };
         let secret_hash: [u8; 32] = secret_hash
             .try_into()
             .map_err(|_| format!("api key {id}: secret hash is not 32 bytes"))?;
@@ -248,6 +272,7 @@ impl StoredApiKey {
         Ok(Self {
             id,
             tenant_id,
+            store_id,
             secret_hash,
             scopes,
             revoked,
@@ -289,6 +314,7 @@ impl StoredApiKey {
 pub fn issue(
     id: ApiKeyId,
     tenant_id: TenantId,
+    store_id: Option<StoreId>,
     scopes: BTreeSet<Scope>,
     secret: &str,
     expires_at: Option<Timestamp>,
@@ -297,6 +323,7 @@ pub fn issue(
     let stored = StoredApiKey {
         id,
         tenant_id,
+        store_id,
         secret_hash: hash_secret(secret),
         scopes,
         revoked: false,
@@ -309,6 +336,7 @@ pub fn issue(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
     tenant_id: TenantId,
+    store_id: Option<StoreId>,
     scopes: BTreeSet<Scope>,
 }
 
@@ -317,6 +345,15 @@ impl Grant {
     #[must_use]
     pub fn tenant(&self) -> TenantId {
         self.tenant_id
+    }
+
+    /// The one store the key may act for, or `None` for a tenant-wide key (S1).
+    ///
+    /// A handler serving a single store's own data must require this to be `Some` and to equal the
+    /// store it is about to serve — `None` authorises the tenant, not any store within it.
+    #[must_use]
+    pub fn store(&self) -> Option<StoreId> {
+        self.store_id
     }
 
     /// Whether the key was granted `scope`. Deny by default.
@@ -374,6 +411,7 @@ pub fn verify(
     }
     Ok(Grant {
         tenant_id: stored.tenant_id,
+        store_id: stored.store_id,
         scopes: stored.scopes.clone(),
     })
 }
@@ -442,6 +480,8 @@ pub trait ApiKeyAdminStore {
 pub struct ApiKeySummary {
     /// The public id (the ULID half of the token).
     pub id: String,
+    /// The store this key is bound to, or `None` for a tenant-wide key (S1).
+    pub store_id: Option<String>,
     /// The granted scopes, as their wire names, sorted.
     pub scopes: Vec<String>,
     /// Whether the key has been revoked.
@@ -511,6 +551,7 @@ mod tests {
         issue(
             key_id(),
             tenant(),
+            None,
             scopes(scopes_granted),
             FAKE_SECRET,
             expires_at,
@@ -577,6 +618,7 @@ mod tests {
         let restored = StoredApiKey::from_parts(
             ApiKeyId::new(Ulid::from_u128(9)),
             &TenantId::new(Ulid::from_u128(1)).as_ulid().to_string(),
+            None,
             &[7_u8; 32],
             &["read_rollups".to_owned(), "read_events".to_owned()],
             false,

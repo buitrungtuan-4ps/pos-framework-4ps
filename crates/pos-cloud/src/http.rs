@@ -127,7 +127,7 @@ use crate::auth::admin::{
     hash_recovery_code, hash_session_token, login, logout,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
-use crate::auth::bearer::{authenticate, require_scope};
+use crate::auth::bearer::{authenticate, confine_to_store, require_scope, require_store};
 use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
@@ -1545,11 +1545,16 @@ where
     if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
         return forbidden.into_response();
     }
-    // Parsed for its shape, and to keep the path meaningful in a log. Authority is the grant's
-    // tenant, exactly as on the config pull beside it — a release is fleet-wide, so there is no
-    // per-store row to isolate, and the store id must still be a store id.
-    if let Err(refusal) = parse_ulid_fields([("store_id", &store_id)]) {
-        return refusal;
+    // A release is fleet-wide, so there is no per-store row to isolate here — but the key presenting
+    // itself is still a *store's* credential, and one store must not fetch a release under another
+    // store's name (it is how the OTA progress read model attributes an install). So the id is parsed
+    // and then held to the grant, exactly as the config pull beside it does (S1).
+    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return refusal,
+    };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
     }
     if let Err(error) = validate_release_tag(&request.release) {
         return api_error(ErrorStatus::InvalidArgument, format!("release: {error}"));
@@ -1679,6 +1684,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     record_ota_report(
         &state,
         grant.tenant(),
@@ -1876,6 +1884,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let Some(kind) = DeviceKind::from_wire(&request.kind) else {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -1951,6 +1962,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     match state
         .devices
         .list(
@@ -15133,6 +15147,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = confine_to_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let window = match window.into_window() {
         Ok(window) => window,
         Err(error) => return window_refusal(error),
@@ -15220,6 +15237,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     let held = match query.held_version {
         None => None,
         Some(ref raw) => match parse_ulid_fields([("held_version", raw)]) {
@@ -15289,6 +15309,9 @@ where
         Ok([store_id]) => StoreId::new(store_id),
         Err(refusal) => return refusal,
     };
+    if let Err(forbidden) = require_store(&grant, store_id) {
+        return forbidden.into_response();
+    }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     match app
         .config_trees
@@ -16191,6 +16214,14 @@ async fn audit_action<C>(
 struct CreateApiKeyRequest {
     /// The tenant the key will act for (a 26-character ULID).
     tenant_id: String,
+    /// The one store the key will act for (a ULID), or absent for a tenant-wide key.
+    ///
+    /// A store's own credential — the key its edge presents on `/sync/stores/{store_id}/…` — must
+    /// name its store here: those routes serve one store's configuration, including its employee
+    /// roster and PIN hashes, and refuse a key that is not bound to the store in the path (S1). A
+    /// tenant-wide key stays right for an integration reading a whole tenant's rollups.
+    #[serde(default)]
+    store_id: Option<String>,
     /// The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these.
     scopes: Vec<String>,
     /// An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires.
@@ -16249,6 +16280,13 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
+    let store_id = match request.store_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("store_id", raw)]) {
+            Ok([store_id]) => Some(StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        },
+    };
     // Strict: an unknown scope name is a `400`, not a silent drop — the admin is granting explicitly,
     // so a typo must not quietly issue a key that authorises nothing.
     let scopes = match parse_scopes(&request.scopes) {
@@ -16279,7 +16317,7 @@ where
         },
         None => None,
     };
-    let (stored, token) = issue(id, tenant_id, scopes, &secret, expires_at);
+    let (stored, token) = issue(id, tenant_id, store_id, scopes, &secret, expires_at);
     if let Err(error) = app.keys.insert(&stored).await {
         tracing::error!(%error, "persisting a new API key failed");
         return service_unavailable("provisioning");

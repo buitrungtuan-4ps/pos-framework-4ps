@@ -16,6 +16,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **A store's API key now names its store, and the store-facing routes require it**
+  (production-readiness **S1**, [ADR-0037](docs/adr/0037-api-keys.md) Amendment 1). "Every key is
+  bound to one tenant" was the whole isolation story, and the `/sync/stores/{store_id}/…` routes took
+  the tenant from the verified grant and the store from the **path**. Within one tenant that is not a
+  check: every shop in a chain shares a tenant, so any store's key served a sibling's configuration —
+  including the `permissions` node, which carries employee names and PIN hashes. No production tenant
+  existed when this was found, so it was a vulnerability and not an incident.
+
+  `api_keys` gains a nullable `store_id` (migration `0047`), and two guards read it. `require_store`
+  holds the store-facing routes — config pull, heartbeat, OTA report, artifact fetch, device propose
+  and list, order-relay pull and ack — to the grant's own store; a key naming another store, or
+  naming none, is a `403`. `confine_to_store` holds `/v1/stores/{id}/rollups/daily` more loosely: a
+  tenant-wide integration key is the documented credential there and still passes, but a store's key
+  cannot use its rollup scope to read a sibling's takings.
+
+  A key that names no store is refused on `/sync` rather than waved through, because treating
+  "unbound" as "any store in the tenant" would restore the finding under a different name.
+
+  **Upgrade note.** Existing keys keep working everywhere except `/sync`. Re-issue each store's key
+  with its store named — the guided new-store wizard does this automatically, and the **API keys**
+  screen has a *Which store is this key for?* picker — then put the new token in the box's
+  environment file. A box presenting an old tenant-wide key authenticates and is then refused on
+  every sync call.
+
 ### Fixed
 
 - **A store that restarts with its broadband down can now sell** (production-readiness **C1**,

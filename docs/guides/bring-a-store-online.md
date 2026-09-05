@@ -41,10 +41,18 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
-2. **API key** — issue the store's scoped key. `read_config` and `relay_orders` are pre-selected
-   together and you should keep both: with only `read_config` the box syncs its configuration and
-   looks healthy while the order relay answers `403` on every poll, so orders placed in the cloud
-   never reach the kitchen. The key is shown **once** — the next step embeds it in a file for you.
+2. **API key** — issue the store's scoped key. It is issued **bound to the store you just created**,
+   which is what the `/sync/stores/{id}/…` routes require: those serve one store its own
+   configuration, employee roster included, so a key naming another store — or naming none — is
+   refused there. `read_config` and `relay_orders` are pre-selected together and you should keep
+   both: with only `read_config` the box syncs its configuration and looks healthy while the order
+   relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The key
+   is shown **once** — the next step embeds it in a file for you.
+
+   Issuing a store key by hand instead (**API keys** screen) works the same way, but you must pick
+   the store in *Which store is this key for?*. A tenant-wide key is right for an integration that
+   reads a whole tenant's rollups and wrong for a box: the box will authenticate and then be refused
+   on every sync call.
 3. **Handoff** — the wizard produces the two files the box needs, and an installer that contains
    both. Set the listen port here if this machine cannot use the default `8787`, then download what
    the next step calls for:

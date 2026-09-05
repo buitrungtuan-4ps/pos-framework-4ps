@@ -5,7 +5,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { ApiKeySummary } from "../api/types";
+import type { ApiKeySummary, Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
@@ -38,6 +38,10 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 
 export function ApiKeys() {
   const [rows, setRows] = createSignal<ApiKeySummary[] | null>(null);
+  const [stores, setStores] = createSignal<Store[]>([]);
+  // Which store this key belongs to; "" is a tenant-wide integration key. A store's own credential
+  // must name its store, because `/sync/stores/{id}/…` refuses a key that does not (S1).
+  const [forStore, setForStore] = createSignal("");
   const [chosen, setChosen] = createSignal<Set<string>>(new Set());
   const [token, setToken] = createSignal("");
   const [error, setError] = createSignal("");
@@ -48,7 +52,12 @@ export function ApiKeys() {
     setError("");
     setBusy(true);
     try {
-      setRows(await api.listApiKeys(tenantId()));
+      const [keys, registered] = await Promise.all([
+        api.listApiKeys(tenantId()),
+        api.listStores(tenantId()),
+      ]);
+      setStores(registered);
+      setRows(keys);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : String(caught));
     } finally {
@@ -74,9 +83,10 @@ export function ApiKeys() {
     setToken("");
     setBusy(true);
     try {
-      const created = await api.createApiKey(tenantId(), [...chosen()]);
+      const created = await api.createApiKey(tenantId(), [...chosen()], forStore() || undefined);
       setToken(created.token);
       setChosen(new Set<string>());
+      setForStore("");
       toast.ok(t("apiKeys.created"));
       await load();
     } catch (caught) {
@@ -108,7 +118,22 @@ export function ApiKeys() {
     }
   };
 
+  // A key's registered store name, the raw ULID if the registry has no row for it, or the
+  // tenant-wide label when it is bound to no store at all.
+  const storeLabel = (row: ApiKeySummary) => {
+    if (row.store_id === null) {
+      return t("apiKeys.tenantWide");
+    }
+    return stores().find((store) => store.store_id === row.store_id)?.name ?? row.store_id;
+  };
+
   const columns = (): Column<ApiKeySummary>[] => [
+    {
+      key: "store",
+      header: t("apiKeys.store"),
+      cell: (row) => <span class="text-ink">{storeLabel(row)}</span>,
+      sortValue: (row) => storeLabel(row),
+    },
     {
       key: "scopes",
       header: t("apiKeys.scopes"),
@@ -151,7 +176,7 @@ export function ApiKeys() {
                 <DataTable
                   columns={columns()}
                   rows={loaded()}
-                  searchText={(row) => `${row.id} ${row.scopes.join(" ")}`}
+                  searchText={(row) => `${row.id} ${storeLabel(row)} ${row.scopes.join(" ")}`}
                   pageSize={12}
                   empty={<EmptyState title={t("apiKeys.empty")} />}
                   actionsHeader={t("common.actions")}
@@ -172,6 +197,20 @@ export function ApiKeys() {
           </Card>
 
           <Card title={t("apiKeys.create")}>
+            <label class="mb-4 block">
+              <span class="mb-1 block text-sm font-medium text-ink">{t("apiKeys.storeLabel")}</span>
+              <select
+                class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+                value={forStore()}
+                onChange={(event) => setForStore(event.currentTarget.value)}
+              >
+                <option value="">{t("apiKeys.tenantWide")}</option>
+                <For each={stores()}>
+                  {(store) => <option value={store.store_id}>{store.name}</option>}
+                </For>
+              </select>
+              <span class="mt-1 block text-xs text-ink-muted">{t("apiKeys.storeHint")}</span>
+            </label>
             <fieldset class="mb-4 flex flex-col gap-2">
               <legend class="mb-1 text-sm font-medium text-ink">{t("apiKeys.scopesLabel")}</legend>
               <For each={SCOPES}>

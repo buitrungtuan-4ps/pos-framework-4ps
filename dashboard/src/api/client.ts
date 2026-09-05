@@ -520,10 +520,15 @@ export const api = {
   // --- API keys (ADR-0037) ---
   listApiKeys: (tenantId: string) =>
     requestJson<ApiKeySummary[]>("GET", `/admin/api-keys?${tenantQuery(tenantId)}`),
-  createApiKey: (tenantId: string, scopes: string[], expiresAtMs?: number) =>
+  // `storeId` binds the key to one store (S1). A store's own credential — the key its edge presents
+  // on `/sync/stores/{id}/…` — must carry it: those routes serve one store's configuration, employee
+  // roster included, and refuse a key that names another store or none. Omit it for an integration
+  // key that reads a whole tenant.
+  createApiKey: (tenantId: string, scopes: string[], storeId?: string, expiresAtMs?: number) =>
     requestJson<CreateApiKeyResponse>("POST", "/admin/api-keys", {
       tenant_id: tenantId,
       scopes,
+      ...(storeId === undefined || storeId === "" ? {} : { store_id: storeId }),
       ...(expiresAtMs === undefined ? {} : { expires_at_ms: expiresAtMs }),
     }),
   revokeApiKey: (id: string) => requestVoid("DELETE", `/admin/api-keys/${encodeURIComponent(id)}`),
