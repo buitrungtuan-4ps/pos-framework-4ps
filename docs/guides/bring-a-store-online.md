@@ -164,6 +164,32 @@ Each till, printer, and kitchen display becomes a named device that trades on it
 > `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential is accepted on
 > `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
 
+## Retiring a till that was lost or replaced
+
+A tablet pairs once and stays paired: pairings are durable by design
+([ADR-0091](../adr/0091-durable-edge-auth-state.md)), so nothing expires them and a restart no longer
+unpairs the store. That is the right default for a shop that reboots mid-service, and it means a
+tablet that walks out of the building keeps working until somebody retires it.
+
+On any **paired** device in the store, open **Devices** in the top bar:
+
+1. Every device the store has admitted is listed, newest first, with the moment it paired. The
+   tablet you are holding is marked **This device** — that is the one row not to retire by accident.
+2. **Retire** the row that is gone, then confirm. Its token stops resolving at once and does not come
+   back after a restart. Everyone else keeps trading.
+3. If you cannot tell which row is the missing tablet, **Retire every device** is the break-glass:
+   type `ALL` to confirm, then re-pair each till you still have (Step 3's six-digit code, one per
+   device). Every till stops working at the same instant, so do it between services if you can.
+
+The edge does not know a device's *name* — device names live in the cloud's approved-device registry,
+and a store that has never synced has none — so the pairing moment and the **This device** mark are
+what tell the tills apart. Retiring is behind the paired-device gate, not an operator login: the
+store server has no operator identity offline (the console is a browser on the LAN), so it is as
+strong as pairing and no stronger, and every retirement is written to the store's log.
+
+If a retirement answers an error, the store server could not write its durable device table — the
+tablet may still be paired after a restart. Try again rather than assuming it is locked out.
+
 ## Step 5 — Publish the store's configuration
 
 From **Configuration** (store in context), publish a config level — menu, tax, layout, capability flags.

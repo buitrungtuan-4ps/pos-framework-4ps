@@ -4,6 +4,7 @@ import { Route, Router } from "@solidjs/router";
 import { ApiError, api, deviceToken } from "./api/client";
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
+import { Devices } from "./screens/Devices";
 import { Expo } from "./screens/Expo";
 import { Floor } from "./screens/Floor";
 import { Kds } from "./screens/Kds";
@@ -111,6 +112,7 @@ export function App() {
       <Route path="/today" component={Today} />
       <Route path="/shift" component={Shift} />
       <Route path="/pair" component={Pairing} />
+      <Route path="/devices" component={Devices} />
       <Route path="/setup" component={Setup} />
       <Route path="/signin" component={SignIn} />
     </Router>

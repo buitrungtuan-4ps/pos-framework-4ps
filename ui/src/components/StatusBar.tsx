@@ -13,6 +13,9 @@ const NAV: { href: string; key: MessageKey }[] = [
   { href: "/today", key: "nav.today" },
   { href: "/shift", key: "nav.shift" },
   { href: "/pair", key: "nav.pair" },
+  // Retiring a lost till (ADR-0091, production-readiness O1). Beside pairing, because it is the same
+  // job from the other end: this is where a device stops being admitted.
+  { href: "/devices", key: "nav.devices" },
 ];
 
 // The persistent status bar. It names the store link (to the edge on the LAN, not the cloud — a

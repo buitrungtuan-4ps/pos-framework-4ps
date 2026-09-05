@@ -141,6 +141,16 @@ pub fn pairing_url(host: IpAddr, port: u16, code: &Code) -> String {
     format!("http://{host}:{port}/pair?code={}", code.as_str())
 }
 
+/// One paired device as the in-memory table holds it: which device a token digest authenticates as,
+/// and when it paired. The instant is carried so the console can list devices without a second read
+/// of the durable registry — and so an in-memory-only box (`Pairing::new`, the examples and tests)
+/// can answer the same question the durable one does.
+#[derive(Clone, Copy, Debug)]
+struct Issued {
+    device_id: DeviceId,
+    paired_at: Timestamp,
+}
+
 /// The edge's live pairing codes and the devices it has admitted.
 ///
 /// # Reads are in memory; writes go through to the registry
@@ -174,8 +184,9 @@ pub struct Pairing {
     /// same reason the PIN lockout is not — a restart forgetting failures is the safe direction, and
     /// a restart is not something an attacker on the LAN can cause.
     attempts: Mutex<RedeemBudget>,
-    /// Digests of the tokens issued to paired devices, each bound to the device it authenticates as.
-    issued: Mutex<HashMap<TokenDigest, DeviceId>>,
+    /// Digests of the tokens issued to paired devices, each bound to the device it authenticates as
+    /// and when it paired.
+    issued: Mutex<HashMap<TokenDigest, Issued>>,
     /// Where issued tokens are recorded so they survive a restart. `None` keeps the pre-S0d
     /// behaviour.
     registry: Option<Arc<dyn DurableAuth>>,
@@ -273,7 +284,13 @@ impl Pairing {
         let mut issued = self.issued.lock().unwrap_or_else(PoisonError::into_inner);
         issued.clear();
         for device in &devices {
-            issued.insert(device.token_digest, device.device_id);
+            issued.insert(
+                device.token_digest,
+                Issued {
+                    device_id: device.device_id,
+                    paired_at: device.paired_at,
+                },
+            );
         }
         Ok(devices.len())
     }
@@ -361,7 +378,13 @@ impl Pairing {
         self.issued
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(digest, device_id);
+            .insert(
+                digest,
+                Issued {
+                    device_id,
+                    paired_at: now,
+                },
+            );
         // A successful pairing clears the budget: the operator is at the box, and the next device
         // they pair must not inherit a stranger's failed guesses.
         *self.attempts.lock().unwrap_or_else(PoisonError::into_inner) = RedeemBudget::default();
@@ -409,7 +432,37 @@ impl Pairing {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&token.digest())
-            .copied()
+            .map(|issued| issued.device_id)
+    }
+
+    /// Every paired device and when it paired, newest first — what the operator picks from to retire
+    /// a lost till (production-readiness **O1**).
+    ///
+    /// The instant is the only handle the edge has on *which tablet this is*: it does not know the
+    /// device's name (that lives in the cloud's approved-device registry, and a store that has never
+    /// synced has none), so the console shows when each one paired and lets the operator recognise
+    /// the odd one out. The token digest is deliberately not returned — it correlates a device across
+    /// restarts and buys the caller nothing the id does not.
+    #[must_use]
+    pub fn paired_devices(&self) -> Vec<(DeviceId, Timestamp)> {
+        let mut devices: Vec<(DeviceId, Timestamp)> = self
+            .issued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|issued| (issued.device_id, issued.paired_at))
+            .collect();
+        // Newest first, and the id breaks a tie so the order is stable across reads — a list that
+        // reshuffles between the render and the tap is a list an operator can revoke the wrong row
+        // from.
+        devices.sort_by(|left, right| {
+            right
+                .1
+                .as_milliseconds_since_epoch()
+                .cmp(&left.1.as_milliseconds_since_epoch())
+                .then_with(|| left.0.as_ulid().cmp(&right.0.as_ulid()))
+        });
+        devices
     }
 
     /// Retires one device: its token stops resolving here and in the registry. Idempotent.
@@ -429,7 +482,7 @@ impl Pairing {
         self.issued
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|_, held| *held != device_id);
+            .retain(|_, held| held.device_id != device_id);
         Ok(())
     }
 
@@ -705,6 +758,37 @@ mod tests {
         assert!(pairing.device_for(&one).is_none());
         assert!(pairing.device_for(&two).is_none());
         assert_eq!(pairing.issued_count(), 0);
+    }
+
+    #[test]
+    fn paired_devices_lists_every_device_newest_first() {
+        // Production-readiness O1: `revoke` takes a device id and, until this, no surface handed one
+        // out — so an operator with a lost till had nothing to act on but the break-glass.
+        let pairing = Pairing::new();
+        let first = pairing.mint(at(0)).expect("mint");
+        let second = pairing.mint(at(0)).expect("mint");
+        block_on(redeem(&pairing, &first, at(1_000)))
+            .expect("redeem")
+            .expect("token");
+        block_on(redeem(&pairing, &second, at(9_000)))
+            .expect("redeem")
+            .expect("token");
+
+        let listed = pairing.paired_devices();
+        assert_eq!(listed.len(), 2, "both paired devices are listed");
+        assert_eq!(
+            listed[0].1.as_milliseconds_since_epoch(),
+            9_000,
+            "newest first — the tablet paired most recently is the one an operator just set up"
+        );
+        assert_eq!(listed[1].1.as_milliseconds_since_epoch(), 1_000);
+
+        // Retiring one leaves the other listed and usable, which is the whole point of naming a
+        // device rather than reaching for the break-glass.
+        block_on(pairing.revoke(listed[0].0)).expect("no registry, so no failure");
+        let listed = pairing.paired_devices();
+        assert_eq!(listed.len(), 1, "only the retired device left the list");
+        assert_eq!(listed[0].1.as_milliseconds_since_epoch(), 1_000);
     }
 
     #[test]

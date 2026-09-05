@@ -20,6 +20,7 @@ import type {
   MenuResponse,
   OpenShiftRequest,
   PairAccepted,
+  PairingState,
   SettleRequest,
   ShiftResponse,
   TableResponse,
@@ -191,6 +192,17 @@ export const api = {
     setDeviceToken(accepted.device_token);
     return accepted;
   },
+
+  // Which devices this store has admitted (ADR-0091, production-readiness O1). Behind the paired
+  // gate: a device that is itself paired may list and retire the others, which is as strong as
+  // pairing and no stronger — the edge has no operator identity offline.
+  pairedDevices: () => request<PairingState>("GET", "/api/pair/devices"),
+
+  // Retire a device, or every device when `deviceId` is null — the break-glass that re-pairs the
+  // whole store. Answers `204`; a `503` means the durable registry could not be written, so the
+  // device may still be paired after a restart and the screen must not claim otherwise.
+  revokeDevice: (deviceId: string | null) =>
+    request<void>("POST", "/api/pair/revoke", deviceId === null ? {} : { device_id: deviceId }),
 
   // Whether this store server holds its device credential yet (ADR-0050, ADR-0086). A store that is
   // not provisioned for a cloud does not mount the route at all, so a rejection here means "there is

@@ -8,7 +8,7 @@
 //! side-effecting, so it is a POST, never the GET a browser makes when opening the QR link.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -91,17 +91,56 @@ pub(crate) struct PairingState {
     /// Whether those survive a restart (ADR-0091). Reported because an operator planning a reboot
     /// mid-service needs to know whether it will cost them the fleet.
     durable: bool,
+    /// Each paired device, newest first — what the operator picks from to retire a lost till.
+    paired: Vec<PairedDeviceView>,
 }
 
-/// `GET /api/pair/devices` — how many devices are paired, and whether that survives a restart.
+/// One paired device as the console sees it.
+#[derive(Debug, Serialize)]
+pub(crate) struct PairedDeviceView {
+    /// The device id — what `POST /api/pair/revoke` takes back.
+    device_id: String,
+    /// When it paired, Unix ms.
+    paired_at_ms: i64,
+    /// Whether this is the device making the request. The one fact that lets an operator tell their
+    /// own tablet from the others, and the row they must **not** retire by accident: doing so signs
+    /// this browser out mid-service.
+    this_device: bool,
+}
+
+/// `GET /api/pair/devices` — which devices are paired, when each paired, and whether that survives a
+/// restart.
 ///
-/// Counts only. Listing device ids would be a reasonable console feature and is not this slice:
-/// naming them is only useful alongside *which* tablet each one is, and the edge does not know —
-/// the cloud's approved-device registry does.
-pub(crate) async fn devices(State(state): State<AppState>) -> Response {
+/// The list used to be a bare count, which left an operator with a lost tablet nothing to act on:
+/// `POST /api/pair/revoke` takes a device id, and no surface anywhere handed one out
+/// (production-readiness **O1**). The pairing instant is the only handle the edge has on *which*
+/// tablet a row is — the device's name lives in the cloud's approved-device registry, and a store
+/// that has never synced has none — so the console shows when each paired and marks the caller's own
+/// row, which together are enough to recognise the odd one out.
+///
+/// The token digest is never returned: it correlates a device across restarts and buys the console
+/// nothing the id does not.
+pub(crate) async fn devices(
+    State(state): State<AppState>,
+    caller: Option<Extension<pos_proto::ids::DeviceId>>,
+) -> Response {
+    // The gate puts the calling device in the extensions; its absence would be a router-wiring
+    // mistake, and marking no row beats marking the wrong one.
+    let caller = caller.map(|Extension(device_id)| device_id);
+    let paired = state
+        .pairing
+        .paired_devices()
+        .into_iter()
+        .map(|(device_id, paired_at)| PairedDeviceView {
+            device_id: device_id.to_string(),
+            paired_at_ms: paired_at.as_milliseconds_since_epoch(),
+            this_device: caller == Some(device_id),
+        })
+        .collect();
     Json(PairingState {
         devices: state.pairing.issued_count(),
         durable: state.pairing.is_durable(),
+        paired,
     })
     .into_response()
 }

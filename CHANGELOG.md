@@ -16,6 +16,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store can retire a lost till** (production-readiness **O1**). Pairings are durable by design
+  ([ADR-0091](docs/adr/0091-durable-edge-auth-state.md)) — a restart no longer unpairs the shop —
+  which also means a tablet that walks out of the building keeps working until somebody retires it.
+  `POST /api/pair/revoke` has been mounted since that slice with **no caller anywhere**, and its
+  companion read was a dead end of its own: `GET /api/pair/devices` answered a *count*, while revoke
+  takes a device id, so no surface handed one out.
+
+  The read now lists each paired device with the moment it paired and marks the row belonging to the
+  tablet making the request, and a new **Devices** screen in the till UI retires one (with a
+  confirm) or every one (the break-glass, behind a typed `ALL`). The pairing moment and the *This
+  device* mark are the identification: the edge does not know a device's *name* — that lives in the
+  cloud's approved-device registry, and a store that has never synced has none. Retiring stays
+  behind the paired-device gate rather than an operator login, because the store server has no
+  operator identity offline; it is as strong as pairing and no stronger, and every retirement is
+  written to the store's log. The procedure is now a step in
+  [Bring a store online](docs/guides/bring-a-store-online.md).
+
 - **The fleet console can see a store's own publish backlog** (production-readiness **O6**).
   `EventStore::outbox_depth` was implemented in every adapter and contract-tested, and **no
   production code had ever called it** — so the cloud could say how many orders it was holding *for*
