@@ -46,6 +46,7 @@ use pos_ports::tx::TxContext;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
 use pos_proto::devices::PublishedDevices;
+use pos_proto::display::LayoutBook;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::inventory::PublishedInventory;
@@ -202,6 +203,18 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<StationPlan>(&text).ok())
     {
         session.stations = stations;
+    }
+    // The `layout` node the catalog publish writes beside `menu` (ADR-0066): how the till groups and
+    // orders its buttons, resolved here for the store's channel exactly as the price book is. Until
+    // this branch the node was authored, validated, published — and read by nobody (C4). Absent or
+    // unparseable leaves the plan as the base has it: a bad publish never blanks a trading till's
+    // buttons, and an empty plan means the till draws the flat price book instead.
+    if let Some(book) = document
+        .get("layout")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<LayoutBook>(&text).ok())
+    {
+        session.layout = book.plan_for(channel).clone();
     }
     // The `devices` node the device publish writes (ADR-0100): the printers and kitchen displays this
     // store may address. Absent leaves the session's set as the base has it — which for a box that
@@ -610,6 +623,63 @@ mod tests {
         ));
         let book = MenuBook::new().with(channel, catalog);
         serde_json::json!({ "menu": serde_json::to_value(&book).expect("serialize") })
+    }
+
+    #[test]
+    fn a_synced_layout_node_becomes_the_tills_button_plan() {
+        // C4: the node was authored, validated, published — and read by nobody, so every till in the
+        // fleet drew the flat price book whatever an operator arranged.
+        use pos_proto::display::{DisplayButton, DisplayCategory, DisplayPlan, LayoutBook};
+        use pos_proto::ids::DisplayCategoryId;
+
+        let base = EdgeSession::bootstrap();
+        assert!(base.layout.is_empty(), "the bootstrap lays nothing out");
+
+        let plan = DisplayPlan::new().with(DisplayCategory {
+            display_category_id: DisplayCategoryId::new(Ulid::from_u128(3)),
+            name: DisplayName::new("Pizza"),
+            buttons: vec![DisplayButton {
+                menu_item_id: item(),
+                label: DisplayName::new("Margherita"),
+                position: None,
+            }],
+            subcategories: Vec::new(),
+        });
+        let book = LayoutBook::new().with(base.sales_channel, plan);
+        let document =
+            serde_json::json!({ "layout": serde_json::to_value(&book).expect("serialize") });
+
+        let rebuilt = session_from_config(&base, &document);
+        let category = rebuilt.layout.categories().first().expect("one category");
+        assert_eq!(category.name.as_str(), "Pizza");
+        assert_eq!(
+            category.buttons.first().map(|button| button.menu_item_id),
+            Some(item())
+        );
+    }
+
+    #[test]
+    fn a_layout_published_for_another_channel_does_not_lay_out_this_one() {
+        // The same guard the price book keeps: a Grab layout must not arrange the till.
+        use pos_proto::display::{DisplayCategory, DisplayPlan, LayoutBook};
+        use pos_proto::ids::DisplayCategoryId;
+
+        let base = EdgeSession::bootstrap(); // DineIn
+        let plan = DisplayPlan::new().with(DisplayCategory {
+            display_category_id: DisplayCategoryId::new(Ulid::from_u128(3)),
+            name: DisplayName::new("Grab"),
+            buttons: Vec::new(),
+            subcategories: Vec::new(),
+        });
+        let book = LayoutBook::new().with(SalesChannel::Delivery, plan);
+        let document =
+            serde_json::json!({ "layout": serde_json::to_value(&book).expect("serialize") });
+
+        let rebuilt = session_from_config(&base, &document);
+        assert!(
+            rebuilt.layout.is_empty(),
+            "the till falls back to the flat price book, not another channel's arrangement"
+        );
     }
 
     #[test]

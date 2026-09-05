@@ -179,6 +179,41 @@ export interface BillResponse {
   receipt_print?: string;
 }
 
+/** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
+export interface LayoutButton {
+  /** The item this orders — the id the price book from `GET /api/menu` carries. */
+  menu_item_id: string;
+  /** The caption the console wrote, which may be shorter than the item's catalog name. */
+  label: string;
+  /** Zero-based grid column, absent for a flowing layout where order alone places the button. */
+  column?: number;
+  /** Zero-based grid row, absent for the same reason. */
+  row?: number;
+}
+
+/** A second grouping level under a category. */
+export interface LayoutSubcategory {
+  display_subcategory_id: string;
+  name: string;
+  buttons: LayoutButton[];
+}
+
+/** A display category: a tab or section on the till. */
+export interface LayoutCategory {
+  display_category_id: string;
+  name: string;
+  buttons: LayoutButton[];
+  subcategories: LayoutSubcategory[];
+}
+
+/**
+ * The store's presentation plan for this channel. An empty `categories` means the console has laid
+ * nothing out, and the till draws the flat price book instead.
+ */
+export interface LayoutResponse {
+  categories: LayoutCategory[];
+}
+
 export interface OpenShiftRequest {
   opening_float: Money;
 }

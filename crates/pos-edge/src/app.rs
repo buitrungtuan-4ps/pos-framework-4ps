@@ -37,6 +37,7 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::{PortError, TxContext};
 use pos_proto::devices::PublishedDevices;
+use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
@@ -221,6 +222,18 @@ pub struct EdgeSession {
     /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
     /// own fallback.
     pub stations: StationPlan,
+    /// How the till groups and orders its buttons, from the `layout` config node
+    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), resolved for this store's sales
+    /// channel.
+    ///
+    /// The layout half of the catalog, deliberately apart from the price half: `menu` is what the
+    /// domain reprices from and `layout` is what a screen draws, so a price change relays no buttons
+    /// and a button moving reprices nothing. `pos_core` never reads this.
+    ///
+    /// Empty in the bootstrap, and an empty plan means "the console has laid nothing out", not "show
+    /// nothing": the till falls back to the flat price book, which is what it drew before this
+    /// existed (production-readiness **C4**).
+    pub layout: DisplayPlan,
     /// The printers and kitchen displays this store may address, as published on the `devices`
     /// config node ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
     ///
@@ -349,6 +362,7 @@ impl EdgeSession {
             staff: StaffRoster::new(),
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
+            layout: DisplayPlan::new(),
             devices: PublishedDevices::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),

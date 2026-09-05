@@ -16,6 +16,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till draws the buttons the console arranged**
+  ([ADR-0066](docs/adr/0066-cloud-catalog.md), production-readiness **C4**). The `layout` node has
+  been authored in the console, validated by the cloud, versioned into the config tree and published
+  to every store — and read by nobody, so a till drew the flat price book whatever an operator laid
+  out. The edge now applies it beside `menu`, resolved for the store's sales channel, and serves it
+  at `GET /api/layout`; the order screen groups by the display categories and sub-categories in the
+  order they were authored, with each button's own caption.
+
+  Its own route because it is its own node: `menu` is what the domain reprices from and `layout` is
+  what a screen draws, so a price change relays no buttons and a button moving reprices nothing —
+  and folding the plan into `GET /api/menu` would re-entangle at the last hop what the design keeps
+  apart. A button carries no price for the same reason: the till already holds the price book keyed
+  by `menu_item_id`, and a second copy is a second price that can disagree.
+
+  An empty plan is not an empty screen. A store that has arranged nothing gets the flat price book,
+  which is what it had before; a category whose items have all been withdrawn is dropped rather than
+  drawn as a heading with nothing under it; and a button naming an item the price book no longer
+  carries draws nothing rather than an unpriceable tap. A layout published for another channel never
+  arranges this one — the same guard the price book keeps.
+
 - **Receipts and kitchen tickets actually print**
   ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), production-readiness **C2**, the last
   slice). `BillView::print_receipt` has been true on every settle since P5 and the till has rendered

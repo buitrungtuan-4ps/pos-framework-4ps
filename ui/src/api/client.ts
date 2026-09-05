@@ -16,6 +16,7 @@ import type {
   FloorResponse,
   LineRequest,
   LineResponse,
+  LayoutResponse,
   MenuResponse,
   OpenShiftRequest,
   PairAccepted,
@@ -145,6 +146,11 @@ export const api = {
   // The store's published price book (roadmap-v3 E5, ADR-0063). Empty until the cloud publishes a
   // menu — a store never guesses a price, and neither does the till.
   menu: () => request<MenuResponse>("GET", "/api/menu"),
+
+  // How the till groups and orders those items, from the `layout` node published beside the price
+  // book (ADR-0066, production-readiness C4). A separate node, so a separate read: a price change
+  // relays no buttons and a button moving reprices nothing.
+  layout: () => request<LayoutResponse>("GET", "/api/layout"),
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),

@@ -11,6 +11,7 @@ import type {
   BillResponse,
   CheckResponse,
   LineRequest,
+  LayoutCategory,
   MenuItemResponse,
   PaymentRequest,
 } from "../api/types";
@@ -57,6 +58,10 @@ interface StoreShape {
   // serves it — a store never guesses a price, so the till shows nothing to sell rather than a list
   // compiled into the app.
   menu: MenuItemResponse[];
+  // How the till groups and orders those items, from `GET /api/layout` (ADR-0066, C4). Empty means
+  // the console has laid nothing out — the till then draws the flat price book, which is what it drew
+  // before the `layout` node had a reader at all.
+  layout: LayoutCategory[];
   // The store's currency, from the same `GET /api/menu` read as the price book (roadmap-v3 E5). The
   // edge is the authority: it comes from the synced `locale` node (ADR-0074), which a store outside
   // Vietnam sets to its own. `null` until the price book loads — a screen that needs a currency
@@ -97,6 +102,7 @@ const [state, setState] = createStore<StoreShape>({
   lines: {},
   openBill: {},
   menu: [],
+  layout: [],
   currency: null,
   // Closed until the edge says otherwise: a till that offers a tip the store does not take is worse
   // than one that waits a moment for the price book.
@@ -463,6 +469,18 @@ export async function loadMenu(): Promise<void> {
     setState("acceptedTender", response.accepted_tender);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.
+  }
+}
+
+// Reads the store's published button plan (ADR-0066, C4). Forgiving in the same way `loadMenu` is: a
+// failed read leaves whatever is already arranged, and an empty plan is a real answer — the console
+// has laid nothing out, and the screen falls back to the flat price book.
+export async function loadLayout(): Promise<void> {
+  try {
+    const response = await api.layout();
+    setState("layout", response.categories);
+  } catch {
+    // Keep the last arrangement; the next boot or reload tries again.
   }
 }
 
