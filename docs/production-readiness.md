@@ -118,7 +118,7 @@ verified.)*
 | id | Item | Decision |
 | --- | --- | --- |
 | X1 | `shipping-ahamove`, `shipping-grabexpress` and `erp-sap` are complete, contract-tested and in no binary's dependency graph, while the roadmap records that surface as shipped | **Declare them reference adapters and correct the roadmap.** Wiring them into a binary is v1.2 (A·P5 plug-and-play), not a v1.0 correction |
-| X2 | `DeviceRegistry::device_for_token` has no caller, and its docstring attributes it to a boot check that does not exist | reported |
+| X2 | `DeviceRegistry::device_for_token` has no caller, and its docstring attributes it to a boot check that does not exist. **Verified and fixed.** The claim was in `pos-edge`'s `DurableAuth` mirror, and no such check exists: `Pairing::load` reads the *whole* device table once at boot and the request gate then answers from the in-memory digest map — which is the reason the map is held at all. So the mirror was the dead code, and the module's own rule already said so ("only the methods the edge actually calls are mirrored"); it is **removed**, along with its two forwarding impls. The **port keeps the method**: it is a real capability of a registry, the contract suite proves the digest→device binding and its revocation through it, and an edge that resolved against storage instead of caching the table would need it. Both surviving docs now say what is true rather than naming a caller — the port's, and the suite case that opened "the gate's whole job" | **done** |
 | X3 | Neither step budget can see a tap nobody declared — needs a browser harness (gate register §8 **A4**) | verified |
 
 ## Wave 8 — The roadmap's remaining feature work

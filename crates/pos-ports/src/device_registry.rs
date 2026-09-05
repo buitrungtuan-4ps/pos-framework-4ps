@@ -213,6 +213,15 @@ pub trait DeviceRegistry: Send + Sync {
 
     /// The device a token digest was issued to, or `None` if it was never issued or was revoked.
     ///
+    /// **The shipped edge does not call this on the request path, or anywhere else.** It reads
+    /// [`Self::paired_devices`] once at boot, holds the digest map in memory, and answers every
+    /// later request from it — which is what makes the gate cost nothing per request. The method
+    /// stays because it is a genuine capability of a registry, because the contract suite asserts
+    /// the digest→device binding and its revocation through it, and because an edge that chose to
+    /// resolve against storage rather than cache the table would need exactly this. It is not a
+    /// consistency check the boot path runs; an earlier doc in `pos-edge` said it was, and no such
+    /// check existed (production-readiness **X2**).
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the store cannot be read.

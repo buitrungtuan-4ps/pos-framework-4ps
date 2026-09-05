@@ -14,6 +14,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Removed
+
+- **The edge's `DurableAuth` mirror drops `device_for_token`, which nothing called**
+  (production-readiness **X2**). Its doc said it was "used by the boot path's consistency check";
+  there is no such check. The boot path reads the *whole* device table once
+  (`Pairing::load`) and the request gate answers every later token from the in-memory digest map —
+  which is the entire reason the map exists. The mirror's own module rule already said only the
+  methods the edge calls are mirrored, so this was surface an adapter author could read as a
+  requirement while no code depended on it.
+
+  The **port keeps `DeviceRegistry::device_for_token`**, now documented for what it is: a genuine
+  capability of a registry, the read the contract suite proves the digest→device binding and its
+  revocation through, and what an edge that resolved against storage instead of caching the table
+  would use. No adapter changes — the blanket implementation still derives from the port.
+
 ### Changed
 
 - **`Hello.product_version` stops claiming a path it does not have** (production-readiness **R2**).
