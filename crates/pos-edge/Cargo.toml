@@ -24,6 +24,15 @@ path = "src/main.rs"
 # read from disk, so a UI change is a browser refresh, not a Rust rebuild.
 default = []
 dev-ui  = []
+# Fixtures a demo store needs and a real one never does: the PIN hasher and the
+# configuration document `examples/minimal-edge` publishes to itself (`src/demo.rs`).
+# Enabled by the example and by nothing else — a shipped edge only ever *verifies* a
+# PIN, because the hashes are authored in the cloud and synced down (ADR-0004,
+# ADR-0030). Off by default, and the release build is `-p pos-edge`
+# (`.github/workflows/release.yml`), so a store's binary compiles none of it; a
+# `--workspace` build does turn it on, because the example in the same workspace asks
+# for it, exactly as `country-zz` behaves.
+demo-fixtures = []
 # Country modules are selected per binary as a Cargo feature (ADR-0027): a cell
 # serves one country, so a fork enables one line and compiles nothing else.
 # `country-zz` is the reference module; the rest are real markets (ADR-0105).
@@ -93,8 +102,9 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 # Offline user authentication (ADR-0030): PIN verified against cloud-synced
-# Argon2id hashes. Default features only ("password-hash"); salt generation is
-# not needed at the edge, which only verifies.
+# Argon2id hashes. Default features, which is what makes the shipped verify path
+# work; salt generation comes from the same default set and is reached only by
+# `auth::hash_pin` behind `demo-fixtures`, never by a store.
 argon2 = "0.5"
 
 # The OS CSPRNG (ADR-0030), for the single-use pairing code and device tokens.

@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use pos_edge::config_client::session_from_config;
+use pos_edge::demo;
 use pos_edge::{
     Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryLease, InMemoryOtaState,
     InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity, serve, telemetry,
@@ -25,12 +27,31 @@ async fn main() -> Result<(), EdgeError> {
     // A fixed identifier so the example is reproducible; a real store is activated with its own.
     let store_id = StoreId::new(Ulid::from_u128(1));
     let identity = StoreIdentity::for_store(store_id);
+
+    // The store publishes its own configuration to itself
+    // ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md) Amendment 1). `bootstrap()` seeds an empty
+    // roster and an empty price book — correct for a till that has not synced, and the reason this
+    // example could not seat a table: no code signed in, so every domain route answered 403.
+    //
+    // The document goes through `session_from_config`, the same public seam a real store's synced
+    // config goes through, node for node. Nothing here reaches around it.
+    let session = match demo::config_document() {
+        Some(document) => session_from_config(&EdgeSession::bootstrap(), &document),
+        None => {
+            // The OS entropy source is the only thing that fails here, and it is the same source the
+            // pairing code needs — so this box cannot pair either. Come up anyway and say what is
+            // missing: a running edge with a plain "no roster" line beats a silent exit.
+            tracing::warn!("could not hash the demo PIN — the till will have no one to sign in");
+            EdgeSession::bootstrap()
+        }
+    };
+
     // The example numbers receipts in memory; a real store uses its SQLite writer thread (ADR-0025).
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
             identity,
-            EdgeSession::bootstrap(),
+            session,
             Arc::new(InMemoryReceipts::new()),
         )
         .expect("seed the id generator"),
@@ -55,6 +76,15 @@ async fn main() -> Result<(), EdgeError> {
         Err(_) => "127.0.0.1:8787".parse().expect("a valid loopback address"),
     };
     tracing::info!("minimal-edge is coming up — open http://{bind}/ (Ctrl-C to stop)");
+    // Printed, not left to be found. Pairing is the first gate and signing in is the second
+    // (ADR-0084): the pairing code is minted per boot and logged by the pairing module, and this is
+    // the badge the demo roster carries. Both are worthless off this loopback socket, which holds no
+    // data and forgets everything on exit.
+    tracing::info!(
+        "sign in with code {} and PIN {}",
+        demo::DEMO_STAFF_CODE,
+        demo::DEMO_STAFF_PIN
+    );
     // The queue-number authority the relay's intake would use; the example has no `cloud_url`, so no
     // relay runs and it is never allocated from — a real store passes its SQLite writer (ADR-0064).
     // The OTA self-test authority. In memory, like everything else here — and it is never read:

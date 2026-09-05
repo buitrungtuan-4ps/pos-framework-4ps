@@ -14,6 +14,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **`just run-edge` can now seat a table** ([ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)
+  Amendment 1).
+
+  The example store came up with an empty staff roster and an empty price book. Both are the right
+  default for a till that has not synced — inventing an employee or guessing a price is worse than
+  showing neither — but together they meant `POST /api/session/sign-in` had nothing to verify a PIN
+  against, so it refused every badge code. A refused sign-in never passes the second gate, and every
+  domain route behind it answered `403 "sign in to act on this device"`. The example that exists to
+  show a contributor the edge working showed a pairing screen and then a locked till.
+
+  The example now publishes a small configuration document to itself and runs it through
+  `config_client::session_from_config` — the same public seam a real store's synced config goes
+  through, node for node. It carries a `permissions` node with one employee and a `menu` node with
+  three priced items; every other node is absent, so the floor stays the front end's own fallback and
+  the tax table stays the bootstrap 10%, exactly as a store that has synced people and a menu would
+  look.
+
+  Nothing about the two gates is bypassed: the demo device still pairs with a minted six-digit code
+  and still signs in with a PIN verified against an Argon2id hash, wrong-PIN and lockout included.
+  The badge code and PIN are printed at start-up beside the pairing URL, because a demo whose
+  credential is a scavenger hunt is a demo nobody runs.
+
+  **Upgrade note.** The PIN hasher (`pos_edge::auth::hash_pin`) and the fixture (`pos_edge::demo`)
+  sit behind a new `demo-fixtures` Cargo feature that only `examples/minimal-edge` enables. A store's
+  binary is built `-p pos-edge` and compiles none of it — a shipped edge still only ever *verifies* a
+  PIN, because the hashes are authored in the cloud and synced down. A `--workspace` build does turn
+  the feature on, because the example in the same workspace asks for it, exactly as `country-zz`
+  already behaves.
+
 ### Added
 
 - **A Windows till gets the same one-command install a Linux one has, and every generated installer

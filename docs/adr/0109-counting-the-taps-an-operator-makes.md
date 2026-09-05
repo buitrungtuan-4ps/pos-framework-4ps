@@ -121,3 +121,46 @@ defend, and the console's harness waits for the ceiling rather than arriving bef
   number in `docs/ui-ux.md` §6.
 * `gate-register.md` **A4** stops being an open gap for `ui/` and narrows to the console, which is
   waiting on a decided ceiling rather than on a harness.
+
+**Amendment 1 (2026-09-05) — a demo store publishes its own configuration to itself, because a till
+with nobody on the roster is a wall, not a demo.**
+
+§4 lists two things `examples/minimal-edge` did not do yet, both found by running it. Running it
+again, further in, found a third and larger one: **the example could not seat a table.**
+
+`EdgeSession::bootstrap()` seeds an empty [`StaffRoster`] and an empty `MenuCatalog`. Both defaults
+are right — a till that has not synced must not invent an employee or guess a price — but together
+they mean `POST /api/session/sign-in` refuses every code (there is nothing to verify against), the
+device never passes the second gate ([ADR-0084](0084-device-authentication.md)), and every domain
+route answers `403 "sign in to act on this device"`. `just run-edge` therefore showed a contributor a
+pairing screen and then a locked till. The harness this record commissions cannot replay a single
+declared flow against that.
+
+**The decision: the example publishes a configuration document to itself, through the same seam a
+real store's synced config goes through.** `pos_edge::demo::config_document()` returns a `permissions`
+node with one employee and a `menu` node with three items; the example hands it to the public
+`config_client::session_from_config`, node for node, exactly as the config-pull loop does
+([ADR-0004](0004-cloud-owned-configuration.md), [ADR-0066](0066-cloud-catalog.md),
+[ADR-0070](0070-people-and-access.md)). Every other node is absent, so the never-blank contract leaves
+the floor as the front end's own fallback and the tax table as the bootstrap 10% — what a store that
+has synced people and a menu, and nothing else, would show.
+
+Three things this deliberately is not:
+
+* **Not a back door.** There is no second path into the roster, no test-only route, and no bypass of
+  either gate — the demo device still pairs with a minted code and still signs in with a PIN that is
+  verified by `Lockout::authenticate` against an Argon2id hash, wrong PIN and lockout included. A
+  fixture that took a shortcut would stop proving that the published-config path works, which is the
+  only reason §4 runs the harness against a real edge instead of a stub.
+* **Not in a shipped binary.** The hasher (`auth::hash_pin`) and the fixture (`demo.rs`) sit behind
+  the `demo-fixtures` Cargo feature, which only `examples/minimal-edge` enables. A store's binary is
+  built `-p pos-edge` (`.github/workflows/release.yml`) and compiles none of it; the shipped edge
+  still only ever *verifies* a PIN, because the hashes are authored in the cloud.
+* **Not a secret.** The badge code and PIN are constants, printed at start-up next to the pairing
+  URL. They authorise nothing beyond a loopback socket that holds no data and forgets everything on
+  exit, and a demo whose credential is a scavenger hunt is a demo nobody runs. The harness reads them
+  from the same public constants the example logs, so there is one declaration and not two.
+
+The consequence for this record is that §4's list is now three items, and the third was the one
+actually blocking: the replay can pair, sign in, seat a table, sell one of three priced items, and
+settle — which is the flow set the declaration names.

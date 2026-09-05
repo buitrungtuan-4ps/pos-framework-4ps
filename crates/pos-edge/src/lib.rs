@@ -40,6 +40,8 @@ pub mod cloud_http;
 pub mod config;
 pub mod config_client;
 pub mod countries;
+#[cfg(feature = "demo-fixtures")]
+pub mod demo;
 pub mod discovery;
 pub mod durable_auth;
 pub mod error;

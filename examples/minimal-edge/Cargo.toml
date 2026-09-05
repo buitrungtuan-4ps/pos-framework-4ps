@@ -14,7 +14,9 @@ path = "src/main.rs"
 [dependencies]
 # Selects the reference country (ADR-0027), so the example logs a real country
 # at start-up — the one edit a fork makes to serve its own market.
-pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz"] }
+# `demo-fixtures` carries the roster and price book this example publishes to itself
+# (ADR-0109 Amendment 1); no shipped binary enables it.
+pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz", "demo-fixtures"] }
 pos-proto = { path = "../../crates/pos-proto" }
 # The example composes the edge over the in-memory fakes — no database, no hardware.
 pos-fakes = { path = "../../crates/pos-fakes" }
