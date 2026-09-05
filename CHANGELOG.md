@@ -70,8 +70,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   tenant could trade on the pack's defaults and could not edit them.
 
   A rate row now carries `components` end to end — migration `0050_tax_rate_components` (additive,
-  defaulted to `[]`), the store seam, `PUT`/`GET /admin/catalog/tax-rates`, the `tax` config node,
-  and a per-cell field on the Tax rates screen typed as `CGST 2.5, SGST 2.5`. The parts must sum to
+  defaulted to `[]`, with a `store-postgres` round-trip test), the store seam, `PUT`/`GET
+  /admin/catalog/tax-rates`, the `tax` config node, and a per-cell field on the Tax rates screen
+  typed as `CGST 2.5, SGST 2.5`. The parts must sum to
   the cell's own rate: the screen says so beside the input and the server refuses the save, because a
   breakdown that does not add up is the one way this feature produces a document an auditor rejects.
 
