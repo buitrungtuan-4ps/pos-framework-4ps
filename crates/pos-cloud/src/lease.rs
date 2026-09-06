@@ -37,6 +37,7 @@ use pos_core::lease::LeaseGeneration;
 use pos_proto::enums::EdgePlacement;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
+use pos_proto::wire_enum::WireEnum as _;
 
 /// What one bump wrote: the generation it issued, and the edge placement the store now has
 /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
@@ -51,6 +52,69 @@ pub struct LeaseBump {
     pub generation: LeaseGeneration,
     /// Where the machine holding that generation runs.
     pub edge_placement: EdgePlacement,
+}
+
+/// What a *reader* can say about where a store's edge runs.
+///
+/// Three states, not two, and the third is the reason this is an enum rather than an
+/// `Option<EdgePlacement>`. A reader that collapses them makes a store sound safer than it is:
+///
+/// - [`Self::NeverIssued`] — the cloud has never bumped this store, so `store_lease` has no row for
+///   it and nothing has ever asserted a placement. Per
+///   [ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) every store in the
+///   fleet today *is* in-store, so a reader may treat this as in-store; it is an absence of a
+///   record, not an absence of knowledge.
+/// - [`Self::Known`] — the row exists and its token decoded.
+/// - [`Self::Unreadable`] — the row exists and its token did **not** decode. This binary is older
+///   than the database, a fork added a fourth mode, or the row is corrupt. It is an absence of
+///   *knowledge*, and the opposite of the first case: the store may well be hosted.
+///
+/// Folding `Unreadable` into `NeverIssued` is the specific bug this type exists to prevent. Both
+/// would become "in-store", and in-store is the mode where a quiet store is *probably still
+/// trading* — so a hosted store that has gone dark would page one severity too low, silently, with
+/// nothing in any log to say a token failed to decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorePlacement {
+    /// No lease row: the cloud has never issued this store a generation.
+    NeverIssued,
+    /// The stored token decoded to a mode this binary knows.
+    Known(EdgePlacement),
+    /// A lease row exists but its token is not one this binary recognises.
+    Unreadable,
+}
+
+impl StorePlacement {
+    /// Whether a quiet store in this state can still be trading.
+    ///
+    /// This is the whole reason the fleet read carries a placement, and it is deliberately
+    /// pessimistic in exactly one direction: [`Self::Unreadable`] answers `false`, the same as a
+    /// hosted store, because "we could not read where this store runs" must never be reported as
+    /// "and it is probably fine". [`Self::NeverIssued`] answers `true` — ADR-0110 records that
+    /// every store in the fleet today is in-store, so no-record means in-store, which is a fact
+    /// about the fleet rather than a guess.
+    #[must_use]
+    pub const fn may_trade_offline(self) -> bool {
+        match self {
+            Self::NeverIssued => true,
+            Self::Known(placement) => matches!(placement, EdgePlacement::InStore),
+            Self::Unreadable => false,
+        }
+    }
+
+    /// The wire token for this placement, or `None` when there is nothing to report.
+    ///
+    /// Both non-`Known` states answer `None` rather than inventing `EDGE_PLACEMENT_UNSPECIFIED`:
+    /// on the wire that token means *this message did not say*, and a reader that emitted it would
+    /// be saying something. A field that is simply absent is the honest shape for "no row" and for
+    /// "a row this binary cannot read" alike — the two are distinguished for the alert engine by
+    /// [`Self::may_trade_offline`], not by a token a console would have to render.
+    #[must_use]
+    pub fn as_wire(self) -> Option<&'static str> {
+        match self {
+            Self::Known(placement) => Some(placement.as_wire()),
+            Self::NeverIssued | Self::Unreadable => None,
+        }
+    }
 }
 
 /// Issues and reads a store's authoritative lease generation.

@@ -1558,6 +1558,70 @@ mod fleet_store {
     use super::{block_on, prepared};
     use pos_proto::{StoreId, TenantId, Ulid};
 
+    /// The placement the bump wrote comes back out of the fleet read
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Two tables and one join, and neither the unit tests nor the in-process suite can prove it:
+    /// upstream the placement lives on a `FakeConfigTrees` and the fleet rows on a `FakeFleet`, two
+    /// unrelated `Arc<Mutex<_>>`s with no join between them. Only a real database makes the bump
+    /// visible to `FLEET_SELECT`. This is also the assertion that catches the failure the adapter's
+    /// positional decode invites: `edge_placement` is column 17, and reading it at the wrong index
+    /// would return a neighbouring value or panic, with nothing at compile time to notice.
+    #[test]
+    fn a_bumped_placement_reaches_the_fleet_row() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+            let tenant = TenantId::new(Ulid::from_u128(0x0F1E));
+            let store_id = StoreId::new(Ulid::from_u128(0x0F1F));
+
+            registry
+                .insert_store(
+                    &store_id.to_string(),
+                    &tenant.to_string(),
+                    None,
+                    "Bến Thành",
+                )
+                .await
+                .expect("register the store");
+
+            // Before any bump there is no store_lease row, so the LEFT JOIN yields NULL — the state
+            // every store in the fleet is in today.
+            let rows = fleet.list(&tenant.to_string()).await.expect("list");
+            let row = rows.first().expect("one store");
+            assert_eq!(
+                row.edge_placement, None,
+                "a store with no lease row must report no placement, not a default"
+            );
+
+            trees
+                .bump_store_lease(
+                    tenant,
+                    store_id,
+                    1_777_000_000_000,
+                    Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
+                )
+                .await
+                .expect("bump with a placement");
+
+            let rows = fleet
+                .list(&tenant.to_string())
+                .await
+                .expect("list after the bump");
+            let row = rows.first().expect("one store");
+            assert_eq!(
+                row.edge_placement.as_deref(),
+                Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
+                "the placement the bump wrote must reach the fleet read"
+            );
+            // The neighbouring column, to catch an off-by-one in the positional decode: the bump
+            // above was this store's first, so its generation is 0 and not the placement's string.
+            assert_eq!(row.lease_generation_authoritative, Some(0));
+        });
+    }
+
     /// The fleet read joins registry identity, liveness, config drift, and relay backlog into one row
     /// per store, scoped to its tenant. A configured+seen store shows all four; a bare registered
     /// store shows identity only; a different tenant sees nothing ([ADR-0068] slice 3).

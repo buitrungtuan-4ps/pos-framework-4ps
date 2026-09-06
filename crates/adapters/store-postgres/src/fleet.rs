@@ -72,6 +72,14 @@ pub struct FleetStoreRow {
     /// issued this store one — which is every store until an operator does, and reads as "no lease
     /// in force" rather than as generation `0`.
     pub lease_generation_authoritative: Option<i64>,
+    /// Where the machine holding the authoritative generation runs, as the raw
+    /// `EDGE_PLACEMENT_*` token ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// `Option`, not `String`, even though migration 0052 makes the column `NOT NULL`: that default
+    /// protects rows that *exist*, and `store_lease` is `LEFT JOIN`ed. A store nobody has ever
+    /// bumped has no lease row at all, so the joined value is SQL `NULL` — which today is most of
+    /// the fleet. Typing it `String` would panic in `row.get` on the commonest store there is.
+    pub edge_placement: Option<String>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -96,7 +104,8 @@ const FLEET_SELECT: &str = "SELECT \
      l.outbox_reported_at, \
      l.lease_generation, \
      l.lease_reported_at, \
-     lease.generation AS lease_generation_authoritative \
+     lease.generation AS lease_generation_authoritative, \
+     lease.edge_placement \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -177,5 +186,6 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         lease_generation_held: row.get(14),
         lease_reported_at_ms: row.get(15),
         lease_generation_authoritative: row.get(16),
+        edge_placement: row.get(17),
     }
 }

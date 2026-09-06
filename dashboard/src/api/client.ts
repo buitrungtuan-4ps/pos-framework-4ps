@@ -1776,10 +1776,17 @@ export const api = {
       "GET",
       `/admin/config/lease?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
-  bumpStoreLease: (tenantId: string, storeId: string) =>
+  /** Issues a store's next lease generation (ADR-0108), optionally *moving* it (ADR-0110).
+   *
+   *  `edgePlacement` names where the new machine runs and is a **move**. Omitting it is ADR-0003's
+   *  swap of the machine in place and keeps whatever the store had — so a caller with nothing to say
+   *  must send nothing, never `EDGE_PLACEMENT_UNSPECIFIED`, which the server refuses precisely
+   *  because it would make a request that looks like a move quietly not be one. */
+  bumpStoreLease: (tenantId: string, storeId: string, edgePlacement?: string) =>
     requestJson<PublishedConfig>("POST", "/admin/config/lease/bump", {
       tenant_id: tenantId,
       store_id: storeId,
+      ...(edgePlacement ? { edge_placement: edgePlacement } : {}),
     }),
 
   // --- OTA rollout levers (ADR-0078, Track O3) ---
