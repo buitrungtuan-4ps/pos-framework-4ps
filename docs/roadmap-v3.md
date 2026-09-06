@@ -454,7 +454,7 @@ and `HOSTED_BY_PLATFORM`, which an admin stands up by choosing a region and pres
 Target shape: 500+ stores, 10+ brands, ~5 countries.
 
 **Phase 0 is done: five records.** Phase 1 has since built the placement column and its readers,
-the handover's conditional bump, the origin allow-list and the whole of the print queue; the container
+the handover's conditional bump, the whole of ADR-0111 and the whole of the print queue; the container
 image and the host agent are the remainder. Each item below carries its own state.
 
 - **C0.1** — [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md): `edge_placement` is an
@@ -544,9 +544,38 @@ end:
   the edge to every route a till uses. `/ws` carries its own `Origin` check rather than a CORS layer,
   because a browser applies no same-origin policy to a WebSocket handshake. A store that publishes
   nothing behaves exactly as it did: the origin that served the page is compared against the request's
-  own `Host`, not against the list. ADR-0111's remaining pieces — the base-URL default, the token in
-  the OS keychain, the second pairing-URL form, the version response header and the additive-route
-  snapshot — are not in it.
+  own `Host`, not against the list.
+
+- **The rest of [ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)**, four slices across
+  #219–#222, and with them that record is delivered in full.
+
+  A till now sends `base + path`, where the base is recorded when the device pairs and is **empty by
+  default** — so an in-store till sends the identical bytes it sent before, and a native shell or a
+  hosted placement sends an address. The base and the token are one record, with one deliberate
+  asymmetry: a `401` clears the token and keeps the base, because a device whose token went stale must
+  re-pair to the *same* edge rather than be sent looking for a QR code in another building. Token
+  storage became a three-method seam with the browser's own storage installed by default, so a shell
+  can reach the OS credential store ([ADR-0086](adr/0086-edge-keyvault-and-activation.md)) instead —
+  the native half waits on the unspiked shell, and the seam is what survives that spike failing.
+
+  Every `/api/*` answer carries `pos-edge-version`, **including the asset fallback's `200
+  text/html`**, which is the answer that most needs it: a path the edge no longer serves does not
+  `404`, so drift used to arrive at an older till as an unattributable `SyntaxError`. It is exposed
+  cross-origin so a second origin can read it, and a till that is ahead of its edge shows a banner
+  naming both versions — never a refused sale, on ADR-0024's reasoning one tier down.
+
+  `docs/snapshots/routes.txt` holds every published `/api/*` route, rendered from the router itself,
+  and the build fails when one is renamed or removed. That is what makes the version check's
+  one-sided comparison safe — only "the app is ahead" is checked, and without the snapshot "a newer
+  edge cannot take a route away from an older till" was a promise nothing kept.
+
+  A `public_origin` in `config.toml` makes the boot pairing URL `https://<host>/pair?code=NNNNNN` for
+  a store whose devices are not on the box's LAN; it is `https`-only and the edge refuses to start
+  otherwise, because a pairing code crossing a WAN in clear text is a bearer token given away. An
+  edge that does not set it prints the LAN URL exactly as before.
+
+  **Not in it:** a pairing-screen field for that address. The base is stored the moment one is passed
+  to `api.pair`, and no screen passes one — the shell that would is the unspiked one.
 
 - The **print queue** ([ADR-0112](adr/0112-print-agents.md)), five slices across #208–#217 and now
   complete. A printer plugged into a till is invisible to a box that is not in the shop, so a paired
