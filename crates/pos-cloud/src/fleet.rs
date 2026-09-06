@@ -106,6 +106,17 @@ pub struct FleetRow {
     /// machine owes anything, which covers a store that never had a handover as well as one whose
     /// handover finished.
     pub superseded_generation: Option<u64>,
+    /// When a person decided this handover's outgoing machine is no longer needed, or `None`
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Nothing transitions into this on its own and nothing ever will: it is a judgement about money
+    /// and risk that no fact in this system implies. It describes the *current* handover, because a
+    /// bump clears it alongside the `superseded_generation` it replaces.
+    pub retired_at: Option<Timestamp>,
+    /// The deciding admin's id, or `None`. An id rather than an email, deliberately — the audit
+    /// trail holds the address as it stood, and this row is read by anyone who can open the fleet
+    /// console.
+    pub retired_by: Option<String>,
 }
 
 /// Reads the fleet read model, per tenant.

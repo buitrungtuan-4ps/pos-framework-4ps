@@ -1392,5 +1392,19 @@
   "wizard.step2Hint": "Issue the API key the store's devices use to reach the cloud. It is shown once.",
   "wizard.step3": "Handoff",
   "wizard.storeLabel": "Store",
-  "wizard.title": "New store"
+  "wizard.title": "New store",
+  "fleet.handoverTakingOver": "Handover in progress",
+  "fleet.handoverSettled": "Handover settled",
+  "fleet.handoverRetired": "Old machine retired",
+  "fleet.handoverUndrained": "Generation still owing events",
+  "fleet.handoverRetiredAt": "Retired",
+  "fleet.handoverRetiredBy": "Retired by",
+  "fleet.handoverSettle": "Mark old machine drained",
+  "fleet.handoverSettleHint": "Only after you have read the old machine's outbox yourself — a box that is powered off will never report it. Your name goes on this.",
+  "fleet.handoverSettleConfirm": "Confirm that the machine holding generation {generation} has no unsent sales left on it. This is recorded against you.",
+  "fleet.handoverSettledOk": "Handover settled",
+  "fleet.handoverRetire": "Retire the old machine",
+  "fleet.handoverRetireHint": "Records that the previous machine, its database and its hosting are no longer needed. Nothing else decides this.",
+  "fleet.handoverRetireConfirm": "Record that this store's previous machine is no longer needed? Its hosting can then be shut down.",
+  "fleet.handoverRetiredOk": "Old machine retired"
 }

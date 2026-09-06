@@ -16,6 +16,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The fleet console says where a store is in a machine handover, and says nothing when it has never
+  had one** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  `GET /admin/fleet` and `/admin/fleet/{store_id}` gain `handover` — `taking-over`, `settled`,
+  `retired`, or **`null`** — plus `retired_at_ms` and `retired_by`. Derived at read time from facts
+  the row already carries, the same way `online` and `config_current` are, and by one function so the
+  console never re-implements the rule.
+
+  **`null` is a real answer and the commonest one.** A store on generation `0` has never been
+  replaced — `0` is its first-ever lease, which supersedes nobody — and a store with no lease row has
+  never been issued one. ADR-0110 defines `taking-over` as "a bump has landed and `settled` is not
+  yet true", which read literally would have caught every such store and put a mid-handover badge on
+  a fleet that has handed nothing over. Neither is a handover in any state, so the console renders no
+  badge rather than a reassuring one.
+
+  **`settled` requires both facts from the same heartbeat.** `store_liveness` COALESCEs
+  `outbox_depth` and `lease_generation` independently, each with its own instant, so the stored row
+  can hold generation `N + 1` recorded today beside a zero depth recorded last week under generation
+  `N`. Reading that pair as settled would declare a handover finished while the old machine still
+  held a night's trading — the exact failure `superseded_generation` was created to prevent. The
+  derivation compares the two instants; they are equal only when one message carried both.
+
+  The Fleet screen renders the state beside the presence badge, and offers each hand-made act only
+  from the state it is reachable from — **Mark old machine drained** on `taking-over`, **Retire the
+  old machine** on `settled` — so the console never presents a button the server is going to refuse.
+
+  Also fixed: the console's `FleetStore` type never carried `lease_superseded_generation`, which the
+  server has served since #203. The number a settle has to name was invisible to TypeScript.
+
+
+### Added
+
 - **A handover can be closed by hand, and a retired machine is recorded rather than only audited**
   ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
 

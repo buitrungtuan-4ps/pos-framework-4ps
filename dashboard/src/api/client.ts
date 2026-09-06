@@ -1812,6 +1812,42 @@ export const api = {
       },
     ),
 
+  /**
+   * Attests that a superseded machine holds no events, closing a handover that will never close
+   * itself — a box already powered off, or one whose disk an operator has read (ADR-0110).
+   *
+   * `supersededGeneration` is the generation whose machine was checked, and it is the whole
+   * precondition, which is why there is no `If-Match` here. Any bump necessarily changes the value
+   * this write tests, so a concurrent bump makes the server refuse on its own. Naming a generation
+   * the row does not hold is a 422, not a quiet success: this records a person asserting a fact
+   * about one specific machine.
+   */
+  settleHandover: (
+    tenantId: string,
+    storeId: string,
+    supersededGeneration: number,
+  ) =>
+    requestVoid("POST", "/admin/config/lease/settle", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      superseded_generation: supersededGeneration,
+    }),
+
+  /**
+   * Records that a settled handover's outgoing machine, its database and its hosting are no longer
+   * needed (ADR-0110).
+   *
+   * No generation, and the asymmetry with `settleHandover` is deliberate: settle is an attestation
+   * about one named machine's disk, retire is a decision about the handover the row currently
+   * describes. The server refuses (422) while a handover is still in flight, and refuses a second
+   * retirement rather than overwriting the first decision's who and when.
+   */
+  retireHandover: (tenantId: string, storeId: string) =>
+    requestVoid("POST", "/admin/config/lease/retire", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+
   // --- OTA rollout levers (ADR-0078, Track O3) ---
   // The published rollout is a store's `fleet_update` config node. Reading it is behind
   // console.data.read; publishing a rollout or flipping its kill switch is behind console.ota.publish

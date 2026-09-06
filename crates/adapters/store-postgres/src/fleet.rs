@@ -87,6 +87,16 @@ pub struct FleetStoreRow {
     /// settled — and that is fine here: none of the three has a machine owing events, which is the
     /// only question this column answers.
     pub superseded_generation: Option<i64>,
+    /// Unix ms of the decision that this handover's outgoing machine is no longer needed, or `None`
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md), migration
+    /// `0054`).
+    ///
+    /// Describes the *current* handover only: a bump clears it in the same statement that records
+    /// the new `superseded_generation`, so it can never describe a machine still in the shop.
+    pub retired_at: Option<i64>,
+    /// The deciding admin's id, or `None`. An id and never an email — the audit trail carries the
+    /// address, and this row is read by the fleet console.
+    pub retired_by: Option<String>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -113,7 +123,9 @@ const FLEET_SELECT: &str = "SELECT \
      l.lease_reported_at, \
      lease.generation AS lease_generation_authoritative, \
      lease.edge_placement, \
-     lease.superseded_generation \
+     lease.superseded_generation, \
+     lease.retired_at, \
+     lease.retired_by \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -196,5 +208,7 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         lease_generation_authoritative: row.get(16),
         edge_placement: row.get(17),
         superseded_generation: row.get(18),
+        retired_at: row.get(19),
+        retired_by: row.get(20),
     }
 }

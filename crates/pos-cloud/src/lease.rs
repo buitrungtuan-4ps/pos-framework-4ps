@@ -349,3 +349,221 @@ mod tests {
         assert_eq!(parsed.generation(), LeaseGeneration::new(4));
     }
 }
+
+/// The three states of a store's machine handover, and the fourth answer: *there isn't one*
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// Derived at read time from facts the fleet row already carries, exactly as `online` and
+/// `config_current` are. Deriving it in one place is what keeps the console from re-implementing the
+/// rule in TypeScript and getting the same-beat guard below wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoverState {
+    /// A bump has landed and `settled` is not yet true. The outgoing machine may still hold events
+    /// this cloud has never seen.
+    TakingOver,
+    /// The store's latest heartbeat reports the authoritative generation with an empty outbox, and
+    /// nothing is recorded as superseded. The move is done; the old machine is still *there*.
+    Settled,
+    /// A person has looked at a settled handover and decided the old machine, its database and its
+    /// hosting are no longer needed. Nothing transitions into this on its own.
+    Retired,
+}
+
+impl HandoverState {
+    /// The wire token, for a console that renders a badge.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::TakingOver => "taking-over",
+            Self::Settled => "settled",
+            Self::Retired => "retired",
+        }
+    }
+}
+
+/// Everything [`handover_state`] needs, named rather than passed as seven positional arguments.
+///
+/// A struct because the last three fields are only meaningful *together*, and a positional call
+/// would let two of them be swapped silently — which is exactly the bug the same-beat rule exists to
+/// prevent.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HandoverFacts {
+    /// The store's authoritative generation, or `None` if it has never been issued a lease.
+    pub authoritative: Option<LeaseGeneration>,
+    /// The generation the last bump displaced and nothing has proved drained, or `None`.
+    pub superseded: Option<LeaseGeneration>,
+    /// When a person retired this handover, or `None`.
+    pub retired_at: Option<Timestamp>,
+    /// The generation the box last reported holding, or `None` if it has never said.
+    pub held: Option<LeaseGeneration>,
+    /// The outbox depth that box reported, or `None`.
+    pub outbox_depth: Option<u64>,
+    /// When it reported that depth, or `None`.
+    pub outbox_reported_at: Option<Timestamp>,
+    /// When it reported that generation, or `None`.
+    pub lease_reported_at: Option<Timestamp>,
+}
+
+/// Which state a store's handover is in, or `None` when the store has never had one.
+///
+/// # Why `None` is a real answer and not a fourth state
+///
+/// A store on generation `0` has never been replaced: `0` is its first-ever lease, which supersedes
+/// nobody. ADR-0110 defines `taking-over` as "a bump has landed and `settled` is not yet true",
+/// which read literally would catch every such store and put a mid-handover badge on a fleet that
+/// has never handed anything over. A store with no lease row at all is the same answer for a simpler
+/// reason. Neither is a handover in any state; the honest report is that there is nothing to report,
+/// and a console renders no badge rather than a reassuring one.
+///
+/// # The same-beat guard
+///
+/// `settled` requires the store's latest heartbeat to report the authoritative generation **with**
+/// an empty outbox. Those two facts have to come from *one message*. `store_liveness` COALESCEs
+/// `outbox_depth` and `lease_generation` independently, each with its own instant, so the stored row
+/// can hold generation `N + 1` recorded today beside a zero depth recorded last week under
+/// generation `N`. Reading that pair as settled would declare a handover finished while the old
+/// machine still held a night's trading — the failure the column was created to prevent. Equal
+/// instants mean one beat carried both, because [`record_heartbeat`] stamps each only when its value
+/// is present and stamps both from the same clock reading.
+///
+/// [`record_heartbeat`]: https://docs.rs/store-postgres
+#[must_use]
+pub fn handover_state(facts: HandoverFacts) -> Option<HandoverState> {
+    // Retirement first, and it is checked before everything else deliberately. It is the terminal
+    // state and the only one a person authored, so a reader must not have it hidden by a derivation
+    // about machines. The two cannot both be set on a live row — retiring refuses while a handover
+    // is in flight, and a bump clears the retirement — but the order is fixed here so a row that
+    // somehow held both still reads as the human decision rather than silently as the machine one.
+    if facts.retired_at.is_some() {
+        return Some(HandoverState::Retired);
+    }
+    if facts.superseded.is_some() {
+        return Some(HandoverState::TakingOver);
+    }
+    // No lease, or a first-ever lease: nothing has been handed over. See the note above.
+    let authoritative = facts.authoritative?;
+    if authoritative.value() == 0 {
+        return None;
+    }
+    let same_beat =
+        facts.outbox_reported_at.is_some() && facts.outbox_reported_at == facts.lease_reported_at;
+    if same_beat && facts.held == Some(authoritative) && facts.outbox_depth == Some(0) {
+        return Some(HandoverState::Settled);
+    }
+    // A handover has happened and nothing proves it finished. That covers a box that has not
+    // reported since the bump, one still reporting the old generation, and one reporting a backlog
+    // — all of them mid-handover, and none of them a state a clock should be allowed to age out of.
+    Some(HandoverState::TakingOver)
+}
+
+#[cfg(test)]
+mod handover_tests {
+    use super::{HandoverFacts, HandoverState, handover_state};
+    use pos_core::lease::LeaseGeneration;
+    use pos_proto::time::Timestamp;
+
+    /// A store whose box is reporting the authoritative generation, empty, from one beat.
+    fn settled_facts(generation: u64) -> HandoverFacts {
+        let beat = Timestamp::from_milliseconds_since_epoch(1_777_000_000_000).expect("an instant");
+        HandoverFacts {
+            authoritative: Some(LeaseGeneration::new(generation)),
+            superseded: None,
+            retired_at: None,
+            held: Some(LeaseGeneration::new(generation)),
+            outbox_depth: Some(0),
+            outbox_reported_at: Some(beat),
+            lease_reported_at: Some(beat),
+        }
+    }
+
+    #[test]
+    fn a_store_that_has_never_been_handed_over_reports_nothing() {
+        // No lease row at all.
+        assert_eq!(handover_state(HandoverFacts::default()), None);
+
+        // Generation 0 is a store's *first* lease and supersedes nobody. ADR-0110's wording, read
+        // literally, would call this `taking-over` and badge a fleet that has handed over nothing.
+        assert_eq!(handover_state(settled_facts(0)), None);
+        assert_eq!(
+            handover_state(HandoverFacts {
+                authoritative: Some(LeaseGeneration::new(0)),
+                ..HandoverFacts::default()
+            }),
+            None,
+            "and a generation-0 store that has never reported is still not mid-handover"
+        );
+    }
+
+    #[test]
+    fn an_in_flight_handover_outranks_every_other_reading() {
+        // Everything about the *new* machine looks perfect, and a generation still owes events.
+        let facts = HandoverFacts {
+            superseded: Some(LeaseGeneration::new(0)),
+            ..settled_facts(1)
+        };
+        assert_eq!(handover_state(facts), Some(HandoverState::TakingOver));
+    }
+
+    #[test]
+    fn a_retirement_is_reported_ahead_of_any_machine_derivation() {
+        let retired = Timestamp::from_milliseconds_since_epoch(1_777_000_009_000).expect("instant");
+        let facts = HandoverFacts {
+            retired_at: Some(retired),
+            ..settled_facts(1)
+        };
+        assert_eq!(handover_state(facts), Some(HandoverState::Retired));
+    }
+
+    #[test]
+    fn settled_needs_both_facts_from_the_same_beat() {
+        assert_eq!(
+            handover_state(settled_facts(1)),
+            Some(HandoverState::Settled)
+        );
+
+        // The stored row's two instants disagree, so the pair came from two different messages:
+        // generation 1 reported today beside a zero depth reported under generation 0 last week.
+        // Reading that as settled is exactly the failure `superseded_generation` exists to prevent.
+        let stale_depth = Timestamp::from_milliseconds_since_epoch(1_776_000_000_000).expect("ts");
+        assert_eq!(
+            handover_state(HandoverFacts {
+                outbox_reported_at: Some(stale_depth),
+                ..settled_facts(1)
+            }),
+            Some(HandoverState::TakingOver),
+            "two facts from two beats are not evidence about one machine"
+        );
+    }
+
+    #[test]
+    fn a_box_that_is_behind_or_backlogged_or_silent_is_still_taking_over() {
+        // Still holding the generation it was replaced from.
+        assert_eq!(
+            handover_state(HandoverFacts {
+                held: Some(LeaseGeneration::new(0)),
+                ..settled_facts(1)
+            }),
+            Some(HandoverState::TakingOver)
+        );
+        // Reporting the right generation with forty unsent sales.
+        assert_eq!(
+            handover_state(HandoverFacts {
+                outbox_depth: Some(40),
+                ..settled_facts(1)
+            }),
+            Some(HandoverState::TakingOver)
+        );
+        // Has not reported at all since the bump. `None` is not zero, and must not read as drained.
+        assert_eq!(
+            handover_state(HandoverFacts {
+                held: None,
+                outbox_depth: None,
+                outbox_reported_at: None,
+                lease_reported_at: None,
+                ..settled_facts(1)
+            }),
+            Some(HandoverState::TakingOver),
+            "a store that has said nothing has not proved anything"
+        );
+    }
+}
