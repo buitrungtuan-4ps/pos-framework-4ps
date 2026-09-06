@@ -240,9 +240,14 @@ where
     /// Runs the heartbeat loop until `shutdown` resolves: wait `interval`, ping, repeat. A transport
     /// error is logged and the loop continues — the next tick retries, and the store keeps trading on
     /// its last-known-good session while the cloud link is down.
-    pub async fn run<F>(self, shutdown: F)
+    ///
+    /// When `shutdown` resolves the loop stops ticking but the task does not end: it waits for
+    /// `drained` and then sends one last beat. See [`Self::farewell`] for why that beat is the whole
+    /// point of the parameter.
+    pub async fn run<F, D>(self, shutdown: F, drained: D)
     where
         F: Future<Output = ()> + Send,
+        D: Future<Output = ()> + Send,
     {
         tokio::pin!(shutdown);
         loop {
@@ -256,6 +261,55 @@ where
                 }
             }
         }
+        self.farewell(drained).await;
+    }
+
+    /// The one beat a stopping store sends *after* its last drain, released by `drained`.
+    ///
+    /// # Why a stop needs a beat of its own
+    ///
+    /// The loop above breaks the instant shutdown resolves, and the publish loop's last drain
+    /// (`event_publish::drain_before_stop`) runs *afterwards*. So without this, the tick that
+    /// reported a backlog was always the last thing a cleanly-stopping machine said, and the zero it
+    /// went on to achieve was never reported to anyone.
+    ///
+    /// That zero is not cosmetic. It is the signal the cloud waits for to release a handover: a
+    /// superseded generation clears only on a beat carrying **both** a drained outbox and the
+    /// generation being superseded
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). With no beat
+    /// after the drain the automatic clear could never fire at all, and every replaced machine would
+    /// need a human to confirm what the machine itself already knew.
+    ///
+    /// # It reports the outbox, not the drain's opinion of the outbox
+    ///
+    /// `drain_before_stop` returns `()`, and this does not ask it to change. The report is read from
+    /// the store the same way every other beat reads it, so a drain that ran out of budget reports
+    /// the events it is actually leaving behind rather than a claim about them — and the cloud's
+    /// clear, which is guarded on that depth being zero, refuses itself with no error path to plumb.
+    /// The durable outbox is the fact; a return value would only be a second, weaker account of it.
+    ///
+    /// A failure here is logged, never propagated: the beat is the courtesy a stop pays the console,
+    /// and a store that cannot pay it simply falls silent, which is what the console already knows
+    /// how to read.
+    async fn farewell<D>(&self, drained: D)
+    where
+        D: Future<Output = ()> + Send,
+    {
+        drained.await;
+        let report = self.source.report().await;
+        match self.transport.beat(report).await {
+            Ok(()) => tracing::info!(
+                outbox_depth = report.outbox_depth,
+                lease_generation = report.lease_generation,
+                "heartbeat: the stopping store reported its final state"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                "heartbeat: the stopping store could not report its final state; the console will \
+                 see it fall silent rather than stop cleanly, and a handover waiting on this beat \
+                 stays open for an operator to close"
+            ),
+        }
     }
 }
 
@@ -265,9 +319,10 @@ mod tests {
         HeartbeatClient, HeartbeatError, HeartbeatReport, HeartbeatSource, HeartbeatTransport,
     };
     use core::time::Duration;
+    use futures_util::poll;
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     /// A transport that counts pings and keeps the last report, optionally failing every one.
     #[derive(Default)]
@@ -285,6 +340,18 @@ mod tests {
             *self.last.lock().expect("lock") = Some(report);
             self.beats.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    /// A source whose depth a test can change between reads — the outbox as the drain sees it.
+    struct LiveDepth(Arc<AtomicU64>);
+
+    impl HeartbeatSource for LiveDepth {
+        async fn report(&self) -> HeartbeatReport {
+            HeartbeatReport {
+                outbox_depth: Some(self.0.load(Ordering::SeqCst)),
+                lease_generation: Some(4),
+            }
         }
     }
 
@@ -334,9 +401,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_honours_shutdown_before_the_first_tick() {
+    async fn a_stop_ends_the_loop_at_once_and_sends_exactly_one_last_beat() {
         // An already-resolved shutdown must end the loop at once, before the first interval elapses —
-        // so the test never waits on a real timer.
+        // so the test never waits on a real timer. The single beat that follows is the farewell, not
+        // a tick: an hour-long interval cannot have elapsed in a test that returns immediately.
         let beats = Arc::new(AtomicUsize::new(0));
         let client = HeartbeatClient::new(
             CountingBeat {
@@ -345,11 +413,67 @@ mod tests {
             },
             Duration::from_secs(3600),
         );
-        client.run(async {}).await;
+        client.run(async {}, async {}).await;
+        assert_eq!(
+            beats.load(Ordering::SeqCst),
+            1,
+            "shutdown wins over the first tick, and the only ping is the one a stop owes the console"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_last_beat_is_sent_after_the_drain_and_reports_what_the_drain_achieved() {
+        // The bug this guards, and the reason the drain gets its own signal: beating at the stop
+        // reports the backlog the drain is about to clear, and the cloud releases a handover only on
+        // a beat carrying a *zero* (ADR-0110). A beat one moment too early keeps every replaced
+        // machine's handover open forever.
+        let beats = Arc::new(AtomicUsize::new(0));
+        let last = Arc::new(Mutex::new(None));
+        let depth = Arc::new(AtomicU64::new(7));
+        let client = HeartbeatClient::reporting(
+            CountingBeat {
+                beats: Arc::clone(&beats),
+                last: Arc::clone(&last),
+                fail: false,
+            },
+            LiveDepth(Arc::clone(&depth)),
+            Duration::from_secs(3600),
+        );
+
+        let (drained_tx, drained_rx) = tokio::sync::oneshot::channel::<()>();
+        let run = client.run(async {}, async move {
+            let _ignored = drained_rx.await;
+        });
+        tokio::pin!(run);
+
+        // One poll takes the loop all the way to waiting on the drain. The stop has landed; the
+        // outbox still holds seven events; nothing may have been said yet.
+        assert!(
+            poll!(&mut run).is_pending(),
+            "the loop waits for the drain rather than ending at the stop"
+        );
         assert_eq!(
             beats.load(Ordering::SeqCst),
             0,
-            "shutdown wins over the first tick, so no ping is sent"
+            "no beat reported the backlog the drain was still working on"
+        );
+
+        // The drain empties the outbox and then releases the beat, in that order.
+        depth.store(0, Ordering::SeqCst);
+        drained_tx
+            .send(())
+            .expect("the loop still holds the receiver");
+        run.await;
+
+        assert_eq!(beats.load(Ordering::SeqCst), 1, "exactly one last beat");
+        assert_eq!(
+            *last.lock().expect("lock"),
+            Some(HeartbeatReport {
+                outbox_depth: Some(0),
+                lease_generation: Some(4),
+            }),
+            "the last beat carries the drained zero and the generation this box held — the two \
+             facts the cloud's clear is keyed on"
         );
     }
 

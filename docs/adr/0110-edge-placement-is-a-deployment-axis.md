@@ -478,6 +478,17 @@ it. It moves the machine; the lease still names which machine is the store.
   hold a pair that came from two different beats. That column is the whole of the handover
   machinery: `taking-over` and `settled` are read off it and the liveness row, with no timer and no
   new table.
+
+  *Amended 2026-09-06, after the implementation.* The clear above describes a heartbeat that, at the
+  time this was written, **no stopping store ever sent**. `HeartbeatClient::run` left its loop the
+  instant the shutdown watch flipped, and production-readiness **D8**'s last drain runs afterwards in
+  `serve_until` — so the final thing a cleanly-stopping machine said was the tick reporting the
+  backlog it was about to clear, and the zero it went on to achieve reached nobody. The automatic
+  clear could not fire, and every handover, however well it went, still needed a person. The edge now
+  holds that last beat back until the drain is done and then sends it
+  (`pos_edge::server::FarewellBeat`). It reports the outbox rather than the drain's opinion of the
+  outbox, so a drain that ran out of budget reports a truthful non-zero and this clause refuses
+  itself, with no error path to plumb.
 - `edge_placement` is read on `/admin/fleet` and `/admin/fleet/{store_id}`
   ([ADR-0068](0068-fleet-liveness.md)) and on `/admin/stores` and `/admin/stores/{store_id}`, and the
   fleet console renders it beside liveness rather than on a settings page nobody opens during an

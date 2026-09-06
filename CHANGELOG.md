@@ -14,6 +14,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **A stopping store now reports the outbox it drained, so a handover can close itself**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  The cloud releases a handover — clears `store_lease.superseded_generation` — on a heartbeat
+  carrying both the superseded generation and an empty outbox. **No store had ever sent that
+  heartbeat.** The heartbeat loop left its `select!` the instant the shutdown watch flipped, and the
+  last drain (production-readiness **D8**) runs afterwards, so the final thing a cleanly-stopping
+  machine said was the tick reporting the backlog it was about to clear. The zero it went on to
+  achieve reached nobody, the automatic clear could never fire, and every handover needed a person to
+  close it by hand.
+
+  The edge now holds that last beat back until the drain has finished, then sends it. Two details
+  carry the weight:
+
+  - **It reports the outbox, not the drain's opinion of the outbox.** The drain still returns
+    nothing. The beat reads the depth from the store the way every other beat does, so a drain that
+    ran out of budget reports the events it is actually leaving behind — and the cloud's clear, which
+    is guarded on that depth being zero, refuses itself with no error path to plumb. A truthful
+    non-zero is more use to an operator than silence.
+  - **The ordering lives in the composition, not in either loop.** The drain and the heartbeat are
+    independent tasks that hold no handle on each other; only the caller that owns both lifetimes can
+    say "drain, *then* beat" and have it be true.
+
+  A store whose HTTP surface fell over still sends it, which is the case where it matters most. The
+  beat is bounded and never fails a stop: a cloud that cannot be reached in five seconds is logged
+  and the machine goes, exactly as before.
+
 ### Changed
 
 - **The lease bump is conditional: it carries `If-Match`, and it refuses to move a store off a
