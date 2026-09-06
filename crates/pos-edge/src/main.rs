@@ -115,6 +115,10 @@ where
     // same restart for the same reason: a held generation rebuilt from config on every boot would be
     // re-adopted on every boot, and a machine a replacement superseded would promote itself back.
     let lease_state = store.clone();
+    // …and the durable record of which paired device answers for which terminal (ADR-0112). Same
+    // reason again: the binding is a managerial act performed once at the box, and re-doing it after
+    // every restart would mean a manager at the till in the middle of service.
+    let print_agents = store.clone();
     let edge = Arc::new(
         Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
             .map_err(EdgeError::Entropy)?,
@@ -124,7 +128,16 @@ where
     // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
     edge.rebuild().await.map_err(EdgeError::Rebuild)?;
 
-    serve_until(config, edge, queue, ota_state, lease_state, stop).await
+    serve_until(
+        config,
+        edge,
+        queue,
+        ota_state,
+        lease_state,
+        print_agents,
+        stop,
+    )
+    .await
 }
 
 /// The pre-commit smoke test the OTA installer runs against a *staged* binary: can these bytes run

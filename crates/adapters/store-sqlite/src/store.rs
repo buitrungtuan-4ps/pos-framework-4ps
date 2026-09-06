@@ -24,8 +24,9 @@ use pos_proto::ulid::Ulid;
 use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
-    self, ClaimedPrintJob, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, PrintEnqueue,
-    QueuedPrintJob, RegistryCommand, SelfTestRow, SubjectWrite,
+    self, ClaimedPrintJob, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow,
+    PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob, RegistryCommand,
+    SelfTestRow, SubjectWrite,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -312,6 +313,90 @@ impl SqliteStore {
     pub async fn expire_print_jobs(&self, now_ms: i64) -> Result<u64, PortError> {
         self.ask(PortName::PrinterDriver, move |reply| {
             Command::ExpirePrintJobs { now_ms, reply }
+        })
+        .await
+    }
+
+    /// Binds a terminal's agent identity to a paired device, exclusively
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// Written before the route answers, the ordering `pairing.rs` already uses: a crash between the
+    /// write and the reply leaves an operator claiming again rather than holding a standing the box
+    /// forgot.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn claim_print_agent(
+        &self,
+        agent_device_id: String,
+        paired_device_id: String,
+        now_ms: i64,
+    ) -> Result<PrintAgentClaim, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::ClaimPrintAgent {
+                agent_device_id,
+                paired_device_id,
+                now_ms,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Releases a binding this device holds, answering whether it held one
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn revoke_print_agent(
+        &self,
+        agent_device_id: String,
+        paired_device_id: String,
+    ) -> Result<bool, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::RevokePrintAgent {
+                agent_device_id,
+                paired_device_id,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// The terminal identity a paired device answers for, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the read fails.
+    pub async fn print_agent_for_device(
+        &self,
+        paired_device_id: String,
+    ) -> Result<Option<String>, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::PrintAgentForDevice {
+                paired_device_id,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Who holds a terminal and when they last asked for work — the enqueue's first question.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the read fails.
+    pub async fn print_agent_standing(
+        &self,
+        agent_device_id: String,
+    ) -> Result<Option<PrintAgentStanding>, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::PrintAgentStandingFor {
+                agent_device_id,
+                reply,
+            }
         })
         .await
     }

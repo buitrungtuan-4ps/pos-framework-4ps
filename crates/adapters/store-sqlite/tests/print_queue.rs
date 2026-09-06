@@ -26,7 +26,9 @@
 use std::future::Future;
 use std::path::Path;
 
-use store_sqlite::{PrintEnqueue, QueuedPrintJob, SqliteStore};
+use store_sqlite::{
+    PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob, SqliteStore,
+};
 use tempfile::TempDir;
 
 /// Drives a future on a fresh current-thread runtime — the executor a real edge binary supplies.
@@ -325,5 +327,168 @@ fn the_queue_survives_a_restart() {
         let only = claimed.first().expect("one claimed job");
         assert_eq!(only.job_id, "durable");
         assert_eq!(only.printer_device_id, "printer-till");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The agent binding (migration 0010, ADR-0112): which paired device answers for
+// which terminal, and what stops two boxes answering for one.
+// ---------------------------------------------------------------------------
+
+/// A terminal is bound to one device, and the binding survives a reopen.
+///
+/// Durable is the whole point: the binding is a managerial act performed once at the box behind a
+/// manager's PIN, and an in-memory one would have to be re-done after every restart — in the middle
+/// of service, with a manager present.
+#[test]
+fn a_binding_is_exclusive_and_survives_a_restart() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("store.sqlite");
+    block_on(async {
+        let store = open(&path);
+        assert_eq!(
+            store
+                .claim_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 1_000)
+                .await
+                .expect("claim"),
+            PrintAgentClaim::Bound
+        );
+
+        // A second device is refused, not silently promoted. Take-over-by-latest would leave both
+        // boxes claiming from one queue: each ticket prints exactly once, on whichever grabbed it,
+        // and half the kitchen's tickets end up in an apron pocket.
+        assert_eq!(
+            store
+                .claim_print_agent("TILL1".to_owned(), "PAIR-B".to_owned(), 2_000)
+                .await
+                .expect("second claim"),
+            PrintAgentClaim::HeldByAnotherDevice
+        );
+
+        // And the holder may not accumulate a second identity: a terminal is a machine, and so is a
+        // paired device.
+        assert_eq!(
+            store
+                .claim_print_agent("TILL2".to_owned(), "PAIR-A".to_owned(), 3_000)
+                .await
+                .expect("second identity"),
+            PrintAgentClaim::DeviceHoldsAnotherAgent
+        );
+
+        // Re-claiming from the holder refreshes rather than conflicting: an agent that restarts must
+        // not need a manager at the box a second time for the identity it already has.
+        assert_eq!(
+            store
+                .claim_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 4_000)
+                .await
+                .expect("re-claim"),
+            PrintAgentClaim::Bound
+        );
+        assert_eq!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing"),
+            Some(PrintAgentStanding {
+                paired_device_id: "PAIR-A".to_owned(),
+                last_seen_at: 4_000,
+            }),
+            "the re-claim is what says the agent is still there"
+        );
+    });
+
+    // The restart. A fresh handle on the same file is what a rebooted edge holds.
+    block_on(async {
+        let store = open(&path);
+        assert_eq!(
+            store
+                .print_agent_for_device("PAIR-A".to_owned())
+                .await
+                .expect("resolve the device"),
+            Some("TILL1".to_owned()),
+            "the box knows which terminal this device answers for without asking a manager again"
+        );
+    });
+}
+
+/// A release frees the identity for a replacement machine, and only its holder may release it.
+///
+/// This is the whole answer to a dead terminal: the console does not reach into the store, and
+/// take-over-by-latest is refused, so a deliberate release at the box is how the next machine gets in.
+#[test]
+fn only_the_holder_releases_a_binding_and_a_release_frees_it_for_the_next_machine() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("store.sqlite");
+    block_on(async {
+        let store = open(&path);
+        store
+            .claim_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 1_000)
+            .await
+            .expect("claim");
+
+        assert!(
+            !store
+                .revoke_print_agent("TILL1".to_owned(), "PAIR-B".to_owned())
+                .await
+                .expect("foreign release"),
+            "a device cannot release an identity it does not hold"
+        );
+        assert!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing")
+                .is_some(),
+            "and the binding is untouched by the attempt"
+        );
+
+        assert!(
+            store
+                .revoke_print_agent("TILL1".to_owned(), "PAIR-A".to_owned())
+                .await
+                .expect("release"),
+            "the holder releases it"
+        );
+        assert!(
+            !store
+                .revoke_print_agent("TILL1".to_owned(), "PAIR-A".to_owned())
+                .await
+                .expect("second release"),
+            "a retried release is idempotent, not an error"
+        );
+
+        // The replacement machine claims the same identity, which is what makes a release the way a
+        // dead terminal is replaced.
+        assert_eq!(
+            store
+                .claim_print_agent("TILL1".to_owned(), "PAIR-B".to_owned(), 5_000)
+                .await
+                .expect("replacement claim"),
+            PrintAgentClaim::Bound
+        );
+    });
+}
+
+/// An unheld terminal has no standing, which is the enqueue's first refusal.
+#[test]
+fn a_terminal_nobody_holds_has_no_standing() {
+    let dir = TempDir::new().expect("temp dir");
+    block_on(async {
+        let store = open(&dir.path().join("store.sqlite"));
+        assert_eq!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing"),
+            None,
+            "a queue must not start building behind a box that is not there"
+        );
+        assert_eq!(
+            store
+                .print_agent_for_device("PAIR-A".to_owned())
+                .await
+                .expect("resolve"),
+            None
+        );
     });
 }
