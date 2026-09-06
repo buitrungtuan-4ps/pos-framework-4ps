@@ -591,6 +591,7 @@ impl LeaseStore for PostgresConfigTrees {
                     by,
                 }
             }
+            store_postgres::StoredRetire::NeverSuperseded => RetireOutcome::NeverSuperseded,
             store_postgres::StoredRetire::Raced => RetireOutcome::Raced,
             store_postgres::StoredRetire::NoLease => RetireOutcome::NoLease,
         })

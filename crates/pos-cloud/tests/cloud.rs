@@ -897,9 +897,10 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         Ok(pos_cloud::lease::SettleOutcome::Settled)
     }
 
-    /// The adapter's `UPDATE … WHERE superseded_generation IS NULL AND retired_at IS NULL`: both
-    /// preconditions checked before anything is written, in the statement's own order, so a person
-    /// looking at an in-flight handover is told *that* rather than being told it is already retired.
+    /// The adapter's `UPDATE … WHERE generation > 0 AND superseded_generation IS NULL AND
+    /// retired_at IS NULL`: every precondition checked before anything is written, in the
+    /// statement's own order, so a person looking at an in-flight handover is told *that* rather
+    /// than being told it is already retired.
     async fn retire(
         &self,
         tenant: TenantId,
@@ -910,9 +911,9 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         let leases = self.leases.lock().expect("lock");
         let in_flight = self.superseded.lock().expect("lock");
         let mut retired = self.retired.lock().expect("lock");
-        if !leases.contains_key(&(tenant, store)) {
+        let Some(generation) = leases.get(&(tenant, store)).copied() else {
             return Ok(pos_cloud::lease::RetireOutcome::NoLease);
-        }
+        };
         if let Some(superseded) = in_flight.get(&(tenant, store)).copied() {
             return Ok(pos_cloud::lease::RetireOutcome::Undrained {
                 superseded: pos_core::lease::LeaseGeneration::new(superseded),
@@ -923,6 +924,11 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
                 at: Timestamp::from_milliseconds_since_epoch(at).expect("a stored instant"),
                 by,
             });
+        }
+        // Generation 0 is the store's first lease and supersedes nobody, so there is no previous
+        // machine to call unnecessary — the same fact the fleet read reports as no handover state.
+        if generation == 0 {
+            return Ok(pos_cloud::lease::RetireOutcome::NeverSuperseded);
         }
         retired.insert(
             (tenant, store),
@@ -11109,6 +11115,75 @@ async fn a_handover_settles_then_retires_and_each_step_refuses_out_of_order() {
     }
 
     assert_both_decisions_are_in_the_trail(&audit).await;
+}
+
+/// A store on its first lease has nothing to retire, and says so rather than recording a decision
+/// ([ADR-0110](../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// Generation `0` is a store's first-ever lease: it supersedes nobody, so there is no previous
+/// machine and no handover. Before the `generation > 0` precondition the other two conditions both
+/// held on such a store, and a retire recorded that its *only* machine — the one selling in the shop
+/// — was no longer needed. The console never offered it (a gen-0 store derives no handover state, so
+/// there is no button), which is exactly why the route needed the guard: nothing an operator can see
+/// was stopping them.
+///
+/// `422` and not `404`: the store is there, and the act does not apply to it.
+#[tokio::test]
+async fn a_store_on_its_first_lease_has_no_previous_machine_to_retire() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(FakeAudit::default())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let store = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+
+    // One bump: the store now holds generation 0 and has never handed over.
+    let bumped = router
+        .clone()
+        .oneshot(bump_with_if_match(&store, &cookie, "*"))
+        .await
+        .expect("route the bump");
+    assert_eq!(bumped.status(), StatusCode::OK);
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/retire",
+            &store,
+            &cookie,
+        ))
+        .await
+        .expect("route the retire");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "generation",
+        "the refusal names the generation that makes the act inapplicable: {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["reason"], "0");
+
+    // And nothing was written: a second attempt gets the same refusal, not "already retired". That
+    // is the assertion that would have caught the original defect — a recorded decision would make
+    // this one `AlreadyRetired`.
+    let again = router
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/retire",
+            &store,
+            &cookie,
+        ))
+        .await
+        .expect("route the second retire");
+    assert_eq!(again.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(again).await["error"]["details"][0]["field"],
+        "generation",
+        "the first refusal recorded nothing, so the second is the same refusal"
+    );
 }
 
 /// Both hand-made decisions reached the trail, and the retirement names its decider **by id**.

@@ -100,6 +100,12 @@ pub enum StoredRetire {
     /// Reported rather than retried here, because a retry from inside the adapter would be a second
     /// attempt at a decision the caller made once, against a row that has changed underneath them.
     Raced,
+    /// The store is on generation `0`, its first-ever lease, so no machine has ever been replaced
+    /// and there is no handover to retire. Answers `422`.
+    ///
+    /// Distinct from [`Self::NoLease`], which is a store the cloud has never issued a lease at all:
+    /// this store has one, and it is the only one it has ever had.
+    NeverSuperseded,
     /// There is no lease row for this store, so no handover to retire. Answers `404`.
     NoLease,
 }
@@ -540,8 +546,18 @@ impl PostgresConfigTrees {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let retired = connection
             .query_opt(
+                // `generation > 0` is the third precondition, and it is not defensive: generation 0
+                // is a store's *first* lease, which supersedes nobody (the insert in
+                // `bump_store_lease` writes `superseded_generation = NULL` for exactly that reason).
+                // Without it the other two conditions both hold on a brand-new store, and an
+                // operator could record that its only machine — the one selling in the shop — was no
+                // longer needed. The console cannot reach that (a gen-0 store derives no handover
+                // state, so it offers no button), but the route is reachable directly, and a
+                // precondition an operator cannot see is exactly the kind that has to live in the
+                // `WHERE`.
                 "UPDATE store_lease SET retired_at = $3, retired_by = $4 \
                  WHERE tenant_id = $1 AND store_id = $2 \
+                   AND generation > 0 \
                    AND superseded_generation IS NULL \
                    AND retired_at IS NULL \
                  RETURNING generation",
@@ -559,8 +575,8 @@ impl PostgresConfigTrees {
         }
         let probe = connection
             .query_opt(
-                "SELECT superseded_generation, retired_at, retired_by FROM store_lease \
-                 WHERE tenant_id = $1 AND store_id = $2",
+                "SELECT superseded_generation, retired_at, retired_by, generation \
+                 FROM store_lease WHERE tenant_id = $1 AND store_id = $2",
                 &[&tenant.to_string(), &store_id.to_string()],
             )
             .await
@@ -573,13 +589,19 @@ impl PostgresConfigTrees {
         if let Some(superseded) = probe.get::<_, Option<i64>>(0) {
             return Ok(StoredRetire::Undrained { superseded });
         }
-        Ok(match (probe.get(1), probe.get::<_, Option<String>>(2)) {
-            (Some(at), Some(by)) => StoredRetire::AlreadyRetired { at, by },
-            // Both conditions hold now, so the refusal was a race another admin has since resolved
-            // — or resolved and then a bump reopened. Either way the caller re-reads, which is the
-            // right next move, and this reports the state honestly rather than inventing a decider.
-            _ => StoredRetire::Raced,
-        })
+        // Before the generation check, deliberately: a row retired under the behaviour that
+        // predates the `generation > 0` precondition holds a decision a real person made, and
+        // reporting who and when is more use than telling them the row should not exist.
+        if let (Some(at), Some(by)) = (probe.get(1), probe.get::<_, Option<String>>(2)) {
+            return Ok(StoredRetire::AlreadyRetired { at, by });
+        }
+        if probe.get::<_, i64>(3) == 0 {
+            return Ok(StoredRetire::NeverSuperseded);
+        }
+        // Every condition holds now, so the refusal was a race another admin has since resolved —
+        // or resolved and then a bump reopened. Either way the caller re-reads, which is the right
+        // next move, and this reports the state honestly rather than inventing a decider.
+        Ok(StoredRetire::Raced)
     }
 
     /// The store's authoritative lease generation, or `None` if it has never been issued one.

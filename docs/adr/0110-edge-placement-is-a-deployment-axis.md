@@ -355,6 +355,19 @@ hold the first. And **a bump clears both columns in the same statement that reco
 from the previous one stops describing the row. These columns are the *current* handover; the
 history of every retirement is the trail's, and it has it.
 
+*Added 2026-09-06, after the derivation shipped (#205).* A **fourth** rule, and the one the three
+above missed. Retiring refuses on generation `0`. The paragraph above got the *read* side of this
+right — a gen-0 store derives no handover state, because its first lease supersedes nobody — and then
+left the *write* side open: `superseded_generation IS NULL` and `retired_at IS NULL` are exactly the
+conditions a brand-new store satisfies, so the retire succeeded on one, recording that the only
+machine the shop has was no longer needed. Nothing an operator could see was stopping them: the
+console offers no button precisely because there is no state to offer it from, which made the route
+the only way in and made a precondition they could not see the only thing that could close it. So
+`generation > 0` joins the other two in the `WHERE`, and the refusal is its own outcome
+(`NeverSuperseded`, a `422`) rather than a race the caller is told to retry — it is not a race, and
+retrying would never succeed. **The derivation and the guard are the same fact stated twice**, once
+on the read and once on the write, which is what it took to make the console's silence enforceable.
+
 The hand-made half of `settled` is the mirror image and ships with them: an audited `/admin` write
 in which a person names the generation whose machine they checked. It takes that number rather than
 an `If-Match`, because here the named value is the stronger precondition — any bump necessarily
