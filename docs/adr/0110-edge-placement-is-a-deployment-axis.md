@@ -324,6 +324,16 @@ deadline nobody set.
 **`retired`.** A person has looked at a settled handover and decided that the old machine, its
 database and its hosting are no longer needed. Nothing transitions into `retired` on its own.
 
+**And a fourth answer: there is no handover.** *Added 2026-09-06, with the derivation.* Read
+literally, `taking-over` above catches every store that has ever been issued a lease — including one
+on generation `0`, which is its **first**, and which supersedes nobody. That would put a
+mid-handover badge on a fleet that has handed nothing over, and the badge would never clear, because
+no machine was ever displaced for a heartbeat to report on. A store with no lease row at all is the
+same answer for a simpler reason. So the derivation is `Option<HandoverState>`, and both cases
+report `None`: the console renders nothing rather than a state, which is the honest shape for "this
+has not happened". The three states describe a *handover*, and a store that has never had one is not
+in the first of them.
+
 *Amended 2026-09-06.* This paragraph first said the decision *is* the state, observable only as an
 audited `/admin` write. That does not hold, and the audit module says why in its own contract:
 `AuditRecorder::record` is **best-effort** — *"a store failure is the recorder's to log and swallow,

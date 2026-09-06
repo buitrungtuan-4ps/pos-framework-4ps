@@ -811,6 +811,28 @@ export interface FleetStore {
    *  applied, and not for what a reader should display. Never `EDGE_PLACEMENT_UNSPECIFIED`: on the
    *  wire that token means "this message did not say". */
   readonly edge_placement: string | null;
+  /**
+   * The generation the last bump displaced and nothing has yet proved drained, or `null` (ADR-0110).
+   *
+   * The number a settle has to name: it says *which machine* the handover is about, where
+   * `handover` says what is happening to it.
+   */
+  readonly lease_superseded_generation: number | null;
+  /**
+   * Which state this store's machine handover is in — `"taking-over"`, `"settled"`, `"retired"` —
+   * or `null` when it has never had one (ADR-0110).
+   *
+   * `null` is a real answer and the commonest one: a store on generation 0 has never been replaced,
+   * and a store with no lease row has never been issued one. Neither is a handover in any state, so
+   * the console renders no badge rather than a reassuring one. The server derives this, including
+   * the rule that an outbox depth and a lease generation only count together when one heartbeat
+   * carried both — which is why the console must not recompute it from the fields beside it.
+   */
+  readonly handover: "taking-over" | "settled" | "retired" | null;
+  /** Unix ms of the decision that this handover's old machine is no longer needed, or `null`. */
+  readonly retired_at_ms: number | null;
+  /** The deciding admin's id, or `null`. An id, not an email — the address lives in the audit trail. */
+  readonly retired_by: string | null;
 }
 
 /**

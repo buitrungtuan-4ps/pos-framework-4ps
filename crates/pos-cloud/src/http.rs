@@ -173,12 +173,14 @@ use crate::images::{self, ImagePipelineError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
-    LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome, SettleOutcome, lease_node,
+    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome,
+    SettleOutcome, handover_state, lease_node,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
 use base64::Engine as _;
+use pos_core::lease::LeaseGeneration;
 
 use crate::ota::{
     ArtifactKind, RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple,
@@ -6507,13 +6509,29 @@ struct FleetStoreView {
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
-    /// Raw on purpose, and not yet a state. ADR-0110's `taking-over`/`settled` derivation needs a
-    /// second fact this view cannot yet trust — that the heartbeat's outbox depth and lease
-    /// generation came from the *same* message — and inventing the state before that check exists
-    /// would let a store whose depth was reported weeks ago under an older generation read as
-    /// settled. Until then the console shows the number, which is true, rather than a word that
-    /// might not be.
+    /// Shown beside [`handover`](Self::handover) rather than in place of it: the state says *what*
+    /// is happening and this says *which machine* it is about, which is the number an operator needs
+    /// to type into a settle.
     lease_superseded_generation: Option<u64>,
+    /// Which state this store's handover is in — `taking-over`, `settled`, `retired` — or `null`
+    /// when it has never had one
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Derived here, not stored, exactly as `online` and `config_current` are, and by
+    /// [`handover_state`] so the console never re-implements the rule — in particular the same-beat
+    /// guard, which is the half that is easy to get wrong and expensive to get wrong.
+    ///
+    /// `null` is a real answer and the commonest one: a store on generation `0` has never been
+    /// replaced, and a store with no lease row has never been issued one. Neither is a handover in
+    /// any state, so the console renders no badge rather than a reassuring one.
+    handover: Option<&'static str>,
+    /// When a person decided this handover's outgoing machine is no longer needed, or `null`.
+    retired_at_ms: Option<i64>,
+    /// The deciding admin's id, or `null`.
+    ///
+    /// An id, and the console resolves it to a name through the admin roster if it wants one. The
+    /// email lives in the audit trail, which is read under a permission this view is not behind.
+    retired_by: Option<String>,
 }
 
 impl FleetStoreView {
@@ -6571,6 +6589,20 @@ impl FleetStoreView {
             lease_superseded,
             edge_placement: row.edge_placement.as_wire(),
             lease_superseded_generation: row.superseded_generation,
+            handover: handover_state(HandoverFacts {
+                authoritative: row.lease_generation_authoritative.map(LeaseGeneration::new),
+                superseded: row.superseded_generation.map(LeaseGeneration::new),
+                retired_at: row.retired_at,
+                held: row.lease_generation_held.map(LeaseGeneration::new),
+                outbox_depth: row.outbox_depth,
+                outbox_reported_at: row.outbox_reported_at,
+                lease_reported_at: row.lease_reported_at,
+            })
+            .map(HandoverState::as_wire),
+            retired_at_ms: row
+                .retired_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            retired_by: row.retired_by,
         }
     }
 }
@@ -10431,9 +10463,7 @@ where
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
 )]
-fn if_match_lease(
-    headers: &HeaderMap,
-) -> Result<Option<pos_core::lease::LeaseGeneration>, Response> {
+fn if_match_lease(headers: &HeaderMap) -> Result<Option<LeaseGeneration>, Response> {
     let Some(raw) = headers.get(IF_MATCH) else {
         return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -10451,7 +10481,7 @@ fn if_match_lease(
     };
     match parse_entity_tag(raw.trim()) {
         Ok(tag) => match tag.as_str().parse::<u64>() {
-            Ok(generation) => Ok(Some(pos_core::lease::LeaseGeneration::new(generation))),
+            Ok(generation) => Ok(Some(LeaseGeneration::new(generation))),
             Err(_) => Err(api_error_with_details(
                 ErrorStatus::InvalidArgument,
                 "a lease If-Match names a generation, which is a whole number",
@@ -11501,9 +11531,7 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    let acknowledged = request
-        .acknowledge_undrained
-        .map(pos_core::lease::LeaseGeneration::new);
+    let acknowledged = request.acknowledge_undrained.map(LeaseGeneration::new);
     let bump = match state
         .config_trees
         .bump(
@@ -11567,7 +11595,7 @@ where
                 // `superseded_generation`, it rolls it forward to the machine it is displacing now.
                 // The trail is the only record that an earlier machine's sales were written off,
                 // and by whom.
-                "abandoned_generation": acknowledged.map(pos_core::lease::LeaseGeneration::value),
+                "abandoned_generation": acknowledged.map(LeaseGeneration::value),
             }),
         },
     )
@@ -11638,7 +11666,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let superseded = pos_core::lease::LeaseGeneration::new(request.superseded_generation);
+    let superseded = LeaseGeneration::new(request.superseded_generation);
     match state
         .config_trees
         .settle_handover(tenant_id, store_id, superseded)
@@ -11819,7 +11847,7 @@ where
         Ok(current) => (
             StatusCode::OK,
             Json(serde_json::json!({
-                "generation": current.map(pos_core::lease::LeaseGeneration::value),
+                "generation": current.map(LeaseGeneration::value),
             })),
         )
             .into_response(),

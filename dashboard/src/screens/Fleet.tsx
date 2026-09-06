@@ -71,6 +71,12 @@ export function Fleet() {
   // store's name typed out, the same guard the other irreversible actions use.
   const [bumping, setBumping] = createSignal<FleetStore | null>(null);
   const [bumpBusy, setBumpBusy] = createSignal(false);
+  // Closing a handover by hand (ADR-0110). Settling is an *attestation* — a person saying they read
+  // a powered-off machine's outbox — and retiring is a decision to stop paying for it. Both are
+  // audited with the acting admin's name against them, so both ask before they run.
+  const [settling, setSettling] = createSignal<FleetStore | null>(null);
+  const [retiring, setRetiring] = createSignal<FleetStore | null>(null);
+  const [handoverBusy, setHandoverBusy] = createSignal(false);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -148,6 +154,65 @@ export function Fleet() {
       <StatusBadge tone="danger" label={t("fleet.leaseSuperseded")} />
     </Show>
   );
+
+  // Where a store is in a machine handover, when it is in one at all. `null` is the commonest
+  // answer and gets no badge: a store on generation 0 has never been replaced, and one with no
+  // lease has never been issued one — neither is a handover, and marking them would put a
+  // mid-move badge on a fleet that has moved nothing. The server derives the word, including the
+  // rule that an outbox depth and a lease generation only count together when one heartbeat
+  // carried both; the console must not recompute it from the fields beside it.
+  const handoverBadge = (row: FleetStore) => (
+    <Show when={row.handover}>
+      {(state) => (
+        <StatusBadge
+          tone={
+            state() === "taking-over" ? "danger" : state() === "settled" ? "active" : "neutral"
+          }
+          label={t(
+            state() === "taking-over"
+              ? "fleet.handoverTakingOver"
+              : state() === "settled"
+                ? "fleet.handoverSettled"
+                : "fleet.handoverRetired",
+          )}
+        />
+      )}
+    </Show>
+  );
+
+  const settleHandover = async (row: FleetStore) => {
+    const superseded = row.lease_superseded_generation;
+    if (superseded === null) {
+      return;
+    }
+    setHandoverBusy(true);
+    try {
+      // The generation whose machine was checked, named explicitly: the server refuses if the row
+      // is not on it, so a stale table cannot close a handover nobody looked at.
+      await api.settleHandover(tenantId(), row.store_id, superseded);
+      toast.ok(t("fleet.handoverSettledOk"));
+      setSettling(null);
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setHandoverBusy(false);
+    }
+  };
+
+  const retireHandover = async (row: FleetStore) => {
+    setHandoverBusy(true);
+    try {
+      await api.retireHandover(tenantId(), row.store_id);
+      toast.ok(t("fleet.handoverRetiredOk"));
+      setRetiring(null);
+      await load();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setHandoverBusy(false);
+    }
+  };
 
   const bumpLease = async (row: FleetStore) => {
     setBumpBusy(true);
@@ -363,6 +428,7 @@ export function Fleet() {
                   {placementBadge(store())}
                   {configBadge(store())}
                   {leaseBadge(store())}
+                  {handoverBadge(store())}
                 </div>
                 <div>
                   {detailRow(t("fleet.lastSeen"), lastSeen(store()))}
@@ -413,8 +479,35 @@ export function Fleet() {
                       ? t("fleet.notReported")
                       : formatCount(store().lease_generation_held ?? 0),
                   )}
+                  <Show when={store().lease_superseded_generation !== null}>
+                    {detailRow(
+                      t("fleet.handoverUndrained"),
+                      formatCount(store().lease_superseded_generation ?? 0),
+                    )}
+                  </Show>
+                  <Show when={store().retired_at_ms !== null}>
+                    {detailRow(
+                      t("fleet.handoverRetiredAt"),
+                      formatRelativeAge(ageSeconds(store().retired_at_ms ?? Date.now())),
+                    )}
+                    {detailRow(t("fleet.handoverRetiredBy"), store().retired_by ?? t("fleet.none"))}
+                  </Show>
                 </div>
                 <div class="flex flex-col gap-2">
+                  {/* Each act is offered only from the state it is reachable from, so the console
+                      never presents a button the server is going to refuse. */}
+                  <Show when={store().handover === "taking-over"}>
+                    <Button variant="secondary" onClick={() => setSettling(store())}>
+                      {t("fleet.handoverSettle")}
+                    </Button>
+                    <p class="text-xs text-ink-muted">{t("fleet.handoverSettleHint")}</p>
+                  </Show>
+                  <Show when={store().handover === "settled"}>
+                    <Button variant="secondary" onClick={() => setRetiring(store())}>
+                      {t("fleet.handoverRetire")}
+                    </Button>
+                    <p class="text-xs text-ink-muted">{t("fleet.handoverRetireHint")}</p>
+                  </Show>
                   <Button variant="danger" onClick={() => setBumping(store())}>
                     {t("fleet.leaseBump")}
                   </Button>
@@ -450,6 +543,45 @@ export function Fleet() {
             }
           }}
           onCancel={() => setBumping(null)}
+        />
+
+        {/* Settling asks, but does not ask for the store's name typed out: it is reversible in the
+            sense that matters — a bump reopens a handover — and a person who mis-settles has still
+            put their name on the attestation, which the trail keeps. */}
+        <ConfirmDialog
+          open={settling() !== null}
+          busy={handoverBusy()}
+          title={t("fleet.handoverSettle")}
+          message={t("fleet.handoverSettleConfirm", {
+            generation: formatCount(settling()?.lease_superseded_generation ?? 0),
+          })}
+          confirmLabel={t("fleet.handoverSettle")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          onConfirm={() => {
+            const target = settling();
+            if (target) {
+              void settleHandover(target);
+            }
+          }}
+          onCancel={() => setSettling(null)}
+        />
+
+        <ConfirmDialog
+          open={retiring() !== null}
+          busy={handoverBusy()}
+          title={t("fleet.handoverRetire")}
+          message={t("fleet.handoverRetireConfirm")}
+          confirmLabel={t("fleet.handoverRetire")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          onConfirm={() => {
+            const target = retiring();
+            if (target) {
+              void retireHandover(target);
+            }
+          }}
+          onCancel={() => setRetiring(null)}
         />
       </RequireContext>
     </div>

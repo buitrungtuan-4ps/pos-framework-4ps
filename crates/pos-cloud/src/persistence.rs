@@ -1821,6 +1821,9 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let lease_reported_at = row
         .lease_reported_at_ms
         .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
+    let retired_at = row
+        .retired_at
+        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
@@ -1865,6 +1868,11 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         superseded_generation: row
             .superseded_generation
             .and_then(|value| u64::try_from(value).ok()),
+        // An unreadable instant drops the retirement rather than inventing one, and that direction
+        // is deliberate too: a handover reported as *not* retired is the reading that leaves an
+        // operator looking at the machine, which is the safer mistake.
+        retired_at,
+        retired_by: row.retired_by,
     })
 }
 

@@ -1392,5 +1392,19 @@
   "wizard.step2Hint": "Phát khoá API để thiết bị của cửa hàng kết nối cloud. Khoá chỉ hiện một lần.",
   "wizard.step3": "Bàn giao",
   "wizard.storeLabel": "Cửa hàng",
-  "wizard.title": "Tạo cửa hàng"
+  "wizard.title": "Tạo cửa hàng",
+  "fleet.handoverTakingOver": "Đang chuyển máy",
+  "fleet.handoverSettled": "Đã chuyển xong",
+  "fleet.handoverRetired": "Đã cho máy cũ nghỉ",
+  "fleet.handoverUndrained": "Thế hệ còn dữ liệu chưa gửi",
+  "fleet.handoverRetiredAt": "Cho nghỉ lúc",
+  "fleet.handoverRetiredBy": "Người quyết định",
+  "fleet.handoverSettle": "Xác nhận máy cũ đã gửi hết",
+  "fleet.handoverSettleHint": "Chỉ làm sau khi bạn đã tự kiểm tra hộp thư gửi của máy cũ — máy đã tắt sẽ không bao giờ tự báo. Tên bạn sẽ được ghi lại.",
+  "fleet.handoverSettleConfirm": "Xác nhận máy giữ thế hệ {generation} không còn giao dịch nào chưa gửi. Việc này được ghi lại kèm tên bạn.",
+  "fleet.handoverSettledOk": "Đã kết thúc chuyển máy",
+  "fleet.handoverRetire": "Cho máy cũ nghỉ",
+  "fleet.handoverRetireHint": "Ghi nhận rằng máy trước, cơ sở dữ liệu và hạ tầng của nó không còn cần nữa. Không có gì khác quyết định điều này.",
+  "fleet.handoverRetireConfirm": "Ghi nhận máy trước của cửa hàng này không còn cần nữa? Sau đó có thể tắt hạ tầng của nó.",
+  "fleet.handoverRetiredOk": "Đã cho máy cũ nghỉ"
 }

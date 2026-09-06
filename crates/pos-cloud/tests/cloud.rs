@@ -6458,6 +6458,8 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
             superseded_generation: None,
+            retired_at: None,
+            retired_by: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -6532,6 +6534,8 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
             superseded_generation: None,
+            retired_at: None,
+            retired_by: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -6590,6 +6594,8 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
                 superseded_generation: None,
+                retired_at: None,
+                retired_by: None,
             },
         )
         .with_row(
@@ -6616,8 +6622,122 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
                 superseded_generation: None,
+                retired_at: None,
+                retired_by: None,
             },
         )
+}
+
+/// One fleet row in a chosen handover state, so the four wire answers can be asserted side by side.
+fn store_in_handover(
+    store_id: StoreId,
+    authoritative: Option<u64>,
+    superseded: Option<u64>,
+    retired_at: Option<Timestamp>,
+) -> FleetRow {
+    FleetRow {
+        store_id,
+        name: "Thảo Điền".to_owned(),
+        status: EntityStatus::Active,
+        last_seen_at: Some(seen_ago(1_000)),
+        last_config_pull_at: Some(seen_ago(1_000)),
+        config_version_held: Some("v-current".to_owned()),
+        config_version_published: Some("v-current".to_owned()),
+        relay_backlog: 0,
+        relay_oldest_pending_at: None,
+        installed_version: None,
+        self_test_ok: None,
+        reported_at: None,
+        // Reporting the authoritative generation, empty, from one beat — the shape that reads as
+        // settled once a handover has actually happened.
+        outbox_depth: Some(0),
+        outbox_reported_at: Some(seen_ago(1_000)),
+        lease_generation_held: authoritative,
+        lease_reported_at: Some(seen_ago(1_000)),
+        lease_generation_authoritative: authoritative,
+        edge_placement: StorePlacement::NeverIssued,
+        superseded_generation: superseded,
+        retired_at,
+        retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
+    }
+}
+
+/// The handover state reaches the console as a word, and `null` really is one of the answers
+/// ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// The `null` cases are the ones worth a route test rather than only a unit test: they are what the
+/// console renders for most of the fleet, and reading ADR-0110's `taking-over` definition literally
+/// would have put a mid-handover badge on every one of them.
+#[tokio::test]
+async fn the_fleet_read_reports_a_handover_state_and_nothing_for_a_store_that_never_had_one() {
+    let never = StoreId::new(Ulid::from_u128(0x00F1_EE81));
+    let first = StoreId::new(Ulid::from_u128(0x00F1_EE82));
+    let moving = StoreId::new(Ulid::from_u128(0x00F1_EE83));
+    let done = StoreId::new(Ulid::from_u128(0x00F1_EE84));
+    let gone = StoreId::new(Ulid::from_u128(0x00F1_EE85));
+    let retired_at = seen_ago(5_000);
+
+    let fleet = FakeFleet::default()
+        // No lease row at all — most of the fleet.
+        .with_row(tenant(), store_in_handover(never, None, None, None))
+        // Generation 0: a first-ever lease, which supersedes nobody.
+        .with_row(tenant(), store_in_handover(first, Some(0), None, None))
+        // A bump displaced generation 0 and nothing has proved it drained.
+        .with_row(tenant(), store_in_handover(moving, Some(1), Some(0), None))
+        // The same store once the outgoing machine reported empty at the right generation.
+        .with_row(tenant(), store_in_handover(done, Some(1), None, None))
+        // And once a person decided the old box is no longer needed.
+        .with_row(
+            tenant(),
+            store_in_handover(gone, Some(1), None, Some(retired_at)),
+        );
+
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let rows = body.as_array().expect("an array of stores");
+    let state = |wanted: StoreId| {
+        rows.iter()
+            .find(|row| row["store_id"] == wanted.to_string())
+            .expect("the store is in the listing")["handover"]
+            .clone()
+    };
+
+    assert_eq!(
+        state(never),
+        serde_json::Value::Null,
+        "a store with no lease has never handed anything over"
+    );
+    assert_eq!(
+        state(first),
+        serde_json::Value::Null,
+        "generation 0 is a first lease, not a handover — the console renders no badge"
+    );
+    assert_eq!(state(moving), "taking-over");
+    assert_eq!(state(done), "settled");
+    assert_eq!(state(gone), "retired");
+
+    // The retirement's two facts travel with the state, so a console can say who and when without a
+    // second read — and the id, never the address.
+    let row = rows
+        .iter()
+        .find(|row| row["store_id"] == gone.to_string())
+        .expect("the retired store");
+    assert_eq!(
+        row["retired_at_ms"],
+        retired_at.as_milliseconds_since_epoch()
+    );
+    assert_eq!(row["retired_by"], "01ADMINADMINADMINADMINADMI");
 }
 
 #[tokio::test]
@@ -6724,6 +6844,8 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
             superseded_generation: None,
+            retired_at: None,
+            retired_by: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -6778,6 +6900,8 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
             superseded_generation: None,
+            retired_at: None,
+            retired_by: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

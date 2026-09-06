@@ -321,6 +321,8 @@ mod tests {
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
             superseded_generation: None,
+            retired_at: None,
+            retired_by: None,
         }
     }
 
