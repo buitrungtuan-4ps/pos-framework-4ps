@@ -41,6 +41,21 @@ reads `ui/dist/` from disk instead of embedding it. CI type-checks and builds th
 request (the `ui` job); it does not embed the bundle, so the Rust build still uses the placeholder on
 a fresh checkout.
 
+**`pnpm replay` serves the *embedded* bundle, so rebuild the edge after a UI change.** The browser
+half of the step gate ([ADR-0109](../docs/adr/0109-counting-the-taps-an-operator-makes.md)) starts
+`examples/minimal-edge` and drives a real browser against it — and `rust-embed` is configured with
+`debug-embed`, which embeds in *every* profile so the tests exercise the shipped serving path. A
+`pnpm build` on its own therefore changes nothing the replay can see: it will happily pass, or fail,
+against the bundle that was compiled in last time. Run
+
+```sh
+pnpm build && cargo build -p minimal-edge && pnpm replay
+```
+
+or use `--features dev-ui`, which reads from disk and has no such step. If the machine already has a
+Chromium and the download is blocked, `POS_UI_CHROMIUM=/path/to/chrome pnpm replay` points the
+launcher at it.
+
 ## Layout
 
 - `src/styles/tokens.css` — the design tokens (spacing, type, touch, radius, motion, colour), the one

@@ -61,6 +61,52 @@ keychain, the second pairing-URL form, the `PROTOCOL_VERSION` response header, t
 [ADR-0112](0112-print-agents.md) builds). The allow-list is what those need to exist first; none of
 them is blocked on a decision.
 
+## Delivery — 2026-09-06, the base URL and the credential seam
+
+`request()` takes a base, and its default is the empty string — so an in-store till sends the
+identical root-relative bytes it sent yesterday. Not `window.location.origin`, which would produce an
+absolute URL where a root-relative one goes today: a different request string, a different set of
+things that can go wrong with it, and a change to the one path that is currently working in every
+shop. The in-store path is not "equivalent" after this change; it is unchanged.
+
+**All three `fetch` call sites take it.** `signIn` and `signOut` bypass `request()` on purpose — one
+reads a structured refusal rather than throwing, the other wants no body — and changing only
+`request()` would have shipped a shell that can read the floor and settle a bill but can never sign
+an employee in. The three session routes are on the covered list precisely so a second origin can
+sign in.
+
+`/ws` derives from the same base: empty gives today's expression from `window.location`, and a set
+base is resolved against with the scheme swapped, because a socket opened on `https:` rather than
+`wss:` is refused rather than downgraded. The device token still travels as the second subprotocol,
+for the two reasons the tree already gives.
+
+**The base and the token are one record**, written together by `pair(code, base)` and read together
+afterwards — with the asymmetry this record calls for: a `401` clears the token and **not** the base.
+A device whose token went stale must re-pair to *the same edge*; an app that forgot the address would
+send the operator looking for a QR code that may be in another building.
+
+`ui/src/api/credentials.ts` is the seam: `read`, `write`, `clear`, with the browser implementation
+installed by default and `installCredentials` for a shell that reaches the OS credential store
+through [ADR-0086](0086-edge-keyvault-and-activation.md)'s existing adapter. Two storage keys rather
+than one blob, so a till that paired before this existed keeps its token exactly where it left it —
+the read is the same read it always was, and no device is asked to re-pair for a refactor. **No shell
+has been spiked**; what survives that is the seam.
+
+**Verified red then green in a real browser**, against a real edge, by the replay harness: with the
+base defaulted to `""` all thirteen declared flows pass — pairing, sign-in, seating, firing,
+settling, bumping, the shift — and with it pointed at a dead origin twelve of the thirteen fail. That
+is the property this slice most needed proved, because it is a claim about *unchanged* behaviour and
+a green suite that never exercised the change would say nothing.
+
+Which is nearly what happened, and is worth recording. `rust-embed` is configured with
+`debug-embed`, so `ui/dist` is compiled into the binary in **every** profile — a `pnpm build` alone
+changes nothing the replay can see, and the first run of this experiment passed in both directions
+against a bundle from before the change. `examples/minimal-edge` has to be rebuilt between the two.
+[`ui/README.md`](../../ui/README.md) now says so where someone about to run the harness will read it.
+
+**Still open from this record.** The second pairing-URL form, and the pairing screen field that lets
+a shell operator supply the address this slice now stores.
+
 ## Delivery — 2026-09-06, the version handshake
 
 `pos-edge-version` ships, and — as this record requires — it ships with the client that reads it and
