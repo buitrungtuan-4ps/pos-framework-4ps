@@ -116,5 +116,10 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0107](0107-the-buyer-is-a-subject.md) | The buyer on a tax invoice is a subject, not a string — and a store gets the twentieth port to keep them in | Accepted |
 | [0108](0108-the-lease-generation-is-authority.md) | The lease generation is authority, not configuration, and a box takes it once | Accepted |
 | [0109](0109-counting-the-taps-an-operator-makes.md) | The step budget counts taps in a browser: a handler that exists is not a tap a thumb can reach | Accepted |
+| [0110](0110-edge-placement-is-a-deployment-axis.md) | Edge placement is a deployment axis, and the lease is what moves along it | Accepted |
+| [0111](0111-a-second-origin-may-address-the-edge.md) | A second origin may address the edge, from a list the cloud publishes | Accepted |
+| [0112](0112-print-agents.md) | A paired device may own a printer's transport, and the edge still renders every byte | Accepted |
+| [0113](0113-the-host-agent.md) | The host agent pulls jobs and starts one container per store, and it never holds a store's credential | Accepted |
+| [0114](0114-region-is-required-recorded-visible.md) | Region is a required, recorded, visible attribute of every hosted edge placement | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

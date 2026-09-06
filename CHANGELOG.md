@@ -46,6 +46,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store that stopped left its unsent events behind — and on a hosted edge, "behind" means gone**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+  [ADR-0087](docs/adr/0087-edge-relay-and-event-publish.md), production-readiness **D8**).
+
+  The graceful shutdown drained in-flight HTTP and nothing else. Everything the store committed since
+  the publish loop's last pass — up to a whole five-second idle interval of selling — stayed in the
+  outbox, because the loop returned on the stop signal without a final drain. On a box in a shop that
+  costs nothing: the SQLite file survives and the next boot publishes it. It stops being nothing the
+  moment a placement is torn down rather than restarted, because a hosted edge's container and its
+  volume go together.
+
+  A stop now runs one last drain, bounded to ten seconds — deliberately well under the service
+  manager's own `TimeoutStopSec=30`, so a drain that overran would be killed mid-batch rather than
+  allowed to finish. When it cannot finish, the log says so at `error` with the number of events
+  still waiting, instead of exiting quietly.
+
+  The second half was found while fixing the first: the publish loop was spawned and its
+  `JoinHandle` **dropped**, so even a loop that drained perfectly was abandoned the instant
+  `serve_until` returned and the runtime stopped polling it. The handle now travels up through
+  composition and is awaited before the process goes — including when serving itself failed, which is
+  precisely when a store's committed events most want pushing out.
+
 - **A till that paired and signed in for the first time drew an empty menu until somebody reloaded
   it** (found by the browser step gate above).
 
