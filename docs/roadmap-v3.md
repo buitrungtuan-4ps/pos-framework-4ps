@@ -475,10 +475,14 @@ Target shape: 500+ stores, 10+ brands, ~5 countries.
 against the real `ui/dist`, and Android as an ESC/POS print agent over Bluetooth or USB-host. Until
 the second passes, the print agent is the Windows terminal and ADR-0112 stays correct either way.
 
-**Not started:** the edge container image, drain-before-stop in `server.rs` (today's graceful
-shutdown drains in-flight HTTP and never flushes the outbox, so tearing down a hosted placement loses
-the last minutes of sales), the CORS layer, the print queue, the host agent, and the console surfaces
-for all of it.
+**Shipped ahead of Phase 1, because it needed no record to land and every hosted placement needs
+it:** drain-before-stop. `EventPublisher::run` returned on the stop signal without a last pass, and
+`server.rs` dropped the `JoinHandle` the loop was spawned on — so even a loop that drained was
+abandoned the moment `serve_until` returned. A stop now runs one bounded drain and something waits
+for it (`docs/production-readiness.md` **D8**).
+
+**Not started:** the edge container image, the CORS layer, the print queue, the host agent, and the
+console surfaces for all of it.
 
 ## Debates settled
 
