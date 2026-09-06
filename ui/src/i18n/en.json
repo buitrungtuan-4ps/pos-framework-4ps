@@ -128,5 +128,7 @@
   "today.no_shift": "none open",
   "today.open_bills": "Open bills",
   "today.shift": "Shift",
-  "today.title": "Today"
+  "today.title": "Today",
+  "version.behind_detail": "The app expects {required} or later; this store server is running {running}. Selling carries on as normal — tell whoever looks after the store servers.",
+  "version.behind_title": "This till is newer than the store server"
 }

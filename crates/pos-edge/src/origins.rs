@@ -162,6 +162,9 @@ fn permitted(origin: &HeaderValue, headers: &HeaderMap, allowed: &Origins) -> bo
 ///   layer: an intermediary caches a response holding one origin's `Allow-Origin` and serves it to
 ///   another. `tower_http` sets it for a predicate policy; the test pins it so a later simplification
 ///   to a static origin cannot quietly drop it.
+/// - **`pos-edge-version` is exposed.** A cross-origin response's headers are unreadable by the page
+///   unless the server names them, so without this the version handshake would be a header the one
+///   caller it exists for could never see.
 pub fn cors_layer(allowed: &Arc<Origins>) -> CorsLayer {
     let allowed = Arc::clone(allowed);
     CorsLayer::new()
@@ -171,6 +174,11 @@ pub fn cors_layer(allowed: &Arc<Origins>) -> CorsLayer {
         // The only header and method shapes the typed client sends.
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        // Without this a cross-origin response's headers are invisible to the page, and
+        // `pos-edge-version` silently does nothing for exactly the callers it exists to serve — the
+        // second origin. Same class of omission as a missing `Vary`, which is why ADR-0111 requires
+        // the header to land beside the CORS work rather than before it.
+        .expose_headers([crate::http::EDGE_VERSION_HEADER])
         .max_age(PREFLIGHT_MAX_AGE)
 }
 

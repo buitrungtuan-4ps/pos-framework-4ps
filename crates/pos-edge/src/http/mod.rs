@@ -37,7 +37,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::http::StatusCode;
+use axum::extract::Request;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
@@ -50,6 +52,38 @@ use crate::app::{AppError, Edge};
 use crate::auth::{Lockout, Sessions};
 use crate::pairing::Pairing;
 use crate::state::AppState;
+
+/// The header every `/api/*` response carries: the edge's release version
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// Named here rather than in [`crate::version`] because it is an HTTP concern; `crate::origins`
+/// reads it too, to expose it across an origin.
+pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-edge-version");
+
+/// Stamps [`EDGE_VERSION_HEADER`] on every `/api/*` response.
+///
+/// # Why a response header, and why on the whole application
+///
+/// Version drift between an app and the edge it talks to shows up *after* pairing — an OTA ring
+/// moves the edge on a Tuesday, or a shell updates itself overnight — so a value read once at
+/// pairing time is a value that was true once. A response header rides the answer the app already
+/// asked for, and arrives on the call that just failed rather than on a poll the app had to guess
+/// the timing of.
+///
+/// Applied to the merged application and gated on the path, rather than per sub-router the way the
+/// CORS layer is. The two are not the same kind of decision: CORS coverage is a *policy* about which
+/// routes another origin may address, so a route is covered because a constructor named it. This is
+/// a fact about the binary, true of every `/api` answer it gives — **including the `200 text/html`
+/// the asset fallback returns for a path one side moved**, which is precisely the failure the header
+/// exists to explain and which no `/api` sub-router would ever see.
+async fn stamp_edge_version(request: Request, next: Next) -> Response {
+    let is_api = request.uri().path().starts_with("/api/");
+    let mut response = next.run(request).await;
+    if is_api && let Ok(value) = HeaderValue::from_str(crate::version::VERSION) {
+        response.headers_mut().insert(EDGE_VERSION_HEADER, value);
+    }
+    response
+}
 
 /// Builds the router over the shared [`AppState`].
 ///
@@ -129,6 +163,9 @@ pub fn router(state: AppState) -> Router {
         // Records a span per request; it logs the method, path and status — never a request body,
         // which is where PII would be (see `crate::telemetry`).
         .layer(TraceLayer::new_for_http())
+        // The release this box is running, on every `/api/*` answer including the asset fallback's
+        // (ADR-0111). Outermost, so it also stamps a response a layer below refused.
+        .layer(axum::middleware::from_fn(stamp_edge_version))
         .with_state(state)
 }
 

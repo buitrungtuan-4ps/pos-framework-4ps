@@ -3,6 +3,7 @@
 // back as a non-2xx with a plain-text reason (the edge maps a domain refusal to 409); this surfaces
 // it as an `ApiError` the screens can show without guessing.
 
+import { observeEdgeVersion } from "./edgeVersion";
 import type {
   ActivateAccepted,
   ActivationStanding,
@@ -104,6 +105,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: authHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  // Which release answered (ADR-0111). Before the `ok` check on purpose: the call that just failed
+  // is exactly the one an operator is looking at when they ask which version this box is running.
+  observeEdgeVersion(response);
   if (!response.ok) {
     // A `401` means the device token is stale or missing — this device must pair again, so drop the
     // token and let the app route to pairing. A `403` means the token is fine but nobody is signed in
@@ -233,6 +237,7 @@ export const api = {
       headers: authHeaders(true),
       body: JSON.stringify({ code, pin }),
     });
+    observeEdgeVersion(response);
     if (response.ok) {
       const body = (await response.json()) as { employee_id: string };
       return { ok: true, employeeId: body.employee_id };
@@ -261,9 +266,13 @@ export const api = {
   // Sign the current employee out on this device (S0b). The device stays paired; the next command
   // needs a fresh sign-in.
   signOut: async (): Promise<void> => {
-    await fetch("/api/session/sign-out", {
+    const response = await fetch("/api/session/sign-out", {
       method: "POST",
       headers: authHeaders(false),
     });
+    // The two session calls bypass `request()` on purpose — one reads a structured refusal, the
+    // other wants no body at all — so each observes the header at its own call site. A client that
+    // only stamped `request()` would learn nothing from the three routes a second origin most needs.
+    observeEdgeVersion(response);
   },
 };

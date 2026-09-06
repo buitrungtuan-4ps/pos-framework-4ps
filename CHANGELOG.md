@@ -16,6 +16,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A till that is newer than its store server now says so, instead of failing to parse**
+  ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+
+  For a store whose app is not served by the box it talks to — a native shell, a hosted placement
+  reached by hostname — the two halves can drift: an OTA ring moves the edge on a Tuesday, or the app
+  updates itself overnight. Until now that arrived as an unattributable `SyntaxError`, because a path
+  the edge no longer serves does not `404`: the asset fallback answers `200 text/html` and the app
+  tries to parse the page as JSON.
+
+  Every edge `/api/*` response now carries `pos-edge-version`, the release that answered — including
+  the fallback's answer, which is the one that most needs it — exposed cross-origin so a second
+  origin can actually read it. The till records it on every call, and shows a banner naming both
+  versions when it is newer than the edge answering. It never blocks a sale: ADR-0024 settled that
+  principle one tier down, and a version string is not a reason to refuse a customer.
+
+  **Upgrade note** No migration, no permission change, and `PROTOCOL_VERSION` does not move —
+  `pos-edge-version` is the *product* release, not the edge↔cloud wire language. The release workflow
+  now also injects `VITE_MINIMUM_EDGE_VERSION` into the `ui/` build from the tag it is building; a
+  local build reads `0.0.0` and never warns.
+
 - **An edge route, once published, cannot be renamed away from a till that has not updated**
   ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 
