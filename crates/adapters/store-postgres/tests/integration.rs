@@ -28,8 +28,10 @@
 //!   cargo test -p store-postgres --features integration -- --test-threads=1
 //! ```
 
-// Gated so the pull-request build neither compiles nor runs it — the merge-to-`main` integration
-// job turns the feature on against a pinned `postgres:16` service.
+// Gated behind the `integration` feature so an ordinary `cargo test` neither compiles nor runs it:
+// it needs a live database. Both the pull-request `postgres` job and the merge-to-`main` integration
+// job turn the feature on against the same pinned `postgres:16` digest — deliberately the same one,
+// since two gates disagreeing on the version is worse than one gate.
 #![cfg(feature = "integration")]
 // The whole file is test scaffolding. `allow-expect-in-tests` in clippy.toml scopes to `#[test]`
 // and `#[cfg(test)]`, which does not reach an integration test's module-level helpers, so the
@@ -141,7 +143,8 @@ impl EventStoreHarness for StoreHarness {
                  catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
                  employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
                  inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-                 role_templates, rollups, scheduled_publishes, station_routing_rules, store_liveness, stores, \
+                 role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+             store_liveness, stores, \
                  subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
             .await
@@ -191,7 +194,8 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
              employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
              inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-             role_templates, rollups, scheduled_publishes, station_routing_rules, store_liveness, stores, \
+             role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+             store_liveness, stores, \
              subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
         .await
@@ -6510,6 +6514,98 @@ mod catalog_keyed_rows {
             assert_eq!(
                 relabel(&catalog, TENANT_A, "item-none", "Ghost", 0, &at_update).await,
                 RowUpdate::NotFound
+            );
+        });
+    }
+}
+
+/// The lease bump against the real column, real default and real `CHECK`
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md), migration 0052).
+///
+/// The unit tests upstream run against a fake that *mirrors* the `COALESCE` semantics, which proves
+/// the callers agree with the fake and nothing about whether the fake agrees with PostgreSQL. The
+/// two branches of the upsert behave differently and only one of them is exercised by a first bump,
+/// so the keep-what-you-had rule — the one whose failure would quietly readvertise a hosted store as
+/// offline-capable — lives entirely in SQL this file is the only thing that runs.
+mod edge_placement {
+    use pos_proto::{StoreId, TenantId, Ulid};
+
+    use super::{block_on, prepared};
+
+    /// A fixed pair, so the assertions read as one store's history rather than as arithmetic.
+    fn ids() -> (TenantId, StoreId) {
+        (
+            TenantId::new(Ulid::from_u128(0x0EDA)),
+            StoreId::new(Ulid::from_u128(0x0EDB)),
+        )
+    }
+
+    #[test]
+    fn a_bump_sets_the_placement_and_a_later_one_without_it_keeps_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let (tenant, store_id) = ids();
+
+            // First bump, no placement named: generation 0, and the column falls to its schema
+            // default rather than to the wire's UNSPECIFIED. This is the INSERT branch's COALESCE.
+            let first = trees
+                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
+                .await
+                .expect("the first bump");
+            assert_eq!(first.generation, 0);
+            assert_eq!(first.edge_placement, "EDGE_PLACEMENT_IN_STORE");
+
+            // Named: the store moves, and the generation advances in the same statement.
+            let moved = trees
+                .bump_store_lease(
+                    tenant,
+                    store_id,
+                    1_777_000_001_000,
+                    Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
+                )
+                .await
+                .expect("the move");
+            assert_eq!(moved.generation, 1);
+            assert_eq!(moved.edge_placement, "EDGE_PLACEMENT_HOSTED_BY_PLATFORM");
+
+            // Not named: ADR-0003's swap of the hosted machine. The ON CONFLICT branch's COALESCE
+            // keeps the stored value. Drop that COALESCE and this returns IN_STORE — a store
+            // silently re-promised offline trading it cannot do.
+            let swapped = trees
+                .bump_store_lease(tenant, store_id, 1_777_000_002_000, None)
+                .await
+                .expect("the swap");
+            assert_eq!(swapped.generation, 2);
+            assert_eq!(
+                swapped.edge_placement, "EDGE_PLACEMENT_HOSTED_BY_PLATFORM",
+                "a bump naming no placement must keep the one the store had"
+            );
+        });
+    }
+
+    #[test]
+    fn the_database_refuses_a_placement_the_framework_never_defined() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let (tenant, store_id) = ids();
+
+            // The route already refuses this, so the CHECK is the second line: it catches a token
+            // that reached the column some other way — a hand-run UPDATE during an incident, a
+            // fork's own writer. Without it the console would render UNSPECIFIED beside
+            // "Offline-capable" for a store that is in fact hosted.
+            let refused = trees
+                .bump_store_lease(
+                    tenant,
+                    store_id,
+                    1_777_000_000_000,
+                    Some("EDGE_PLACEMENT_ON_THE_MOON"),
+                )
+                .await;
+            assert!(
+                refused.is_err(),
+                "the CHECK constraint must reject a token outside the three modes"
             );
         });
     }
