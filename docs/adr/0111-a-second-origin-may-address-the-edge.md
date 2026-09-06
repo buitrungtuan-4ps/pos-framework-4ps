@@ -152,9 +152,9 @@ Merging them lets a capability edit change who may address the edge.
 Four rules make the node safe, and each closes a specific hole:
 
 - **The list is additional to same-origin, never a replacement.** A request whose `Origin` matches
-  the origin that served the page is allowed with no list at all. Without this rule, a store with no
-  `origins` node published would refuse its own UI, and the never-blank contract would turn a
-  malformed publish into a dark shop.
+  the serving origin — defined below, because the edge cannot simply read one off itself — is allowed
+  with no list at all. Without this rule, a store with no `origins` node published would refuse its
+  own UI, and the never-blank contract would turn a malformed publish into a dark shop.
 - **No wildcards.** `https://*.example.com` is refused. An exact origin is a string comparison; a
   wildcard makes it a parser, and a parser is where `https://evil.test#.example.com` gets in.
 - **`null` is refused.** A sandboxed iframe, a `file://` page and several redirect shapes all send
@@ -229,8 +229,8 @@ gates ([`http/auth.rs`](../../crates/pos-edge/src/http/auth.rs)):
 
 That distribution is the honest picture, and it matters: `POST /api/session/sign-in` takes a badge
 code and a PIN and is one of the five, so a cross-origin caller reaching it needs a device token and
-nothing else. The next section is about what the allow-list does and does not buy for exactly those
-six.
+nothing else. Seven of the twenty-six do not require a signed-in employee, and the wildcard argument
+below is about exactly those seven.
 
 **Covered — `GET /api/activation`, and this is a change from the obvious answer.** It reads as an
 activation route and belongs with `POST /api/activate`, but the shipped app disagrees:
@@ -287,13 +287,13 @@ at all; the best it could do is open a webview on the edge's own origin, redeem 
 inherit the token from *that* origin's storage. Which puts the credential back in web storage on the
 edge's origin, defeating the keychain decision three sub-headings down, and adds a second pairing
 path that only one kind of client uses. ADR-0110 is explicit that the moment a path forks on
-placement the framework has two systems and tests one; a second pairing path is that fork one level
+edge placement the framework has two systems and tests one; a second pairing path is that fork one
 lower.
 
 The alternative shape is cloud-brokered pairing, and [ADR-0030](0030-pairing-and-offline-auth.md)
 rejected it outright as option 2 — *"Pairing a new tablet during an internet outage is exactly when a
 store needs it to work."* That refusal is about `in-store`, where it still binds absolutely. It would
-be possible to argue that a hosted placement has no offline pairing to protect, so it may broker
+be possible to argue that a hosted edge placement has no offline pairing to protect, so it may broker
 through the cloud. It is possible and it is wrong, for the same reason: one pairing flow, tested by
 everybody, beats two flows of which the rarely-run one is the one you need during an incident.
 
@@ -308,7 +308,7 @@ And the widening people will worry about is not caused by this record. In-store,
 guessing pairing codes must be on the shop LAN. Hosted, the edge is on the internet and anyone can
 reach it. That change comes from ADR-0110 moving the process, and it is there whether or not `/api/pair`
 answers a cross-origin caller. What actually defends the endpoint is the S4 budget and, for a hosted
-placement, the proxy in front of it — settled at the end of this section.
+edge placement, the proxy in front of it — settled at the end of this section.
 
 ### The token is a bearer, so `Access-Control-Allow-Credentials` is never set
 
@@ -329,18 +329,35 @@ those origins, and so can a cross-site form post — the till is one CSRF away f
 A bearer token in a header has none of that: a cross-site form cannot set `Authorization`, so there
 is no CSRF surface to defend, and the code that sends the credential is the code that read it.
 
-`*` is refused for a narrower reason. Twenty-two of the twenty-five covered routes are protected by
-the two auth gates and would survive it. `/api/pair` is not — it is unauthenticated by design,
-because it is how a device obtains the credential. `Allow-Origin: *` hands every page on the internet
-a redemption attempt against every reachable edge, which means any page can spend a store's S4 budget
-from every browser that loads it and keep pairing shut for as long as it has visitors. An allow-list
-of one to eight strings costs nothing and removes that entirely.
+`*` is refused for a narrower reason, and the arithmetic is the argument. Nineteen of the twenty-six
+covered routes sit behind both auth gates and would survive a wildcard: a page that has neither a
+device token nor a signed-in employee gets a `401` or a `403` whatever its origin. **Seven would
+not**, and three of them are worth naming individually:
+
+- **`POST /api/pair`** is unauthenticated by design, because it is how a device obtains the
+  credential. `Allow-Origin: *` hands every page on the internet a redemption attempt against every
+  reachable edge, which means any page can spend a store's S4 budget from every browser that loads
+  it and keep pairing shut for as long as it has visitors.
+- **The three session routes** carry the paired gate and not the signed-in one, so under a wildcard
+  any page a paired device visits can drive `POST /api/session/sign-in` — badge code and PIN — with
+  that device's token. [`Lockout`](../../crates/pos-edge/src/auth.rs) rate-limits it, but its
+  `HashMap<EmployeeId, Record>` is keyed per employee, not per origin, so the same wildcard that
+  invites the attempts also lets a page lock a named member of staff out of their own till.
+- **`POST /api/pair/revoke`** with an absent `device_id` is the revoke-all break-glass —
+  `revoke_all()`, logged as *"revoking every paired device"*. It carries the paired gate only. A
+  wildcard makes "every page a paired till visits can un-pair the whole store" a true sentence.
+
+The remaining two are `GET /api/pair/devices`, which tells any page how many devices a store has
+paired, and `GET /api/activation`, which tells it whether the box is set up — small on their own,
+and exactly the reconnaissance a wildcard hands out for free.
+
+An allow-list of one to eight strings costs nothing and removes all seven entirely.
 
 ### The preflight is the real cost, and `Vary: Origin` is the real bug
 
 `Authorization` is not a CORS-safelisted request header, so **every cross-origin `/api/*` call is
-preceded by an `OPTIONS` preflight**. Three consequences, all of them things that break if they are
-got wrong:
+preceded by an `OPTIONS` preflight**. Four things have to be right, and each of them breaks
+something specific if it is not:
 
 **The CORS layer sits outside both auth middlewares.** A preflight carries no `Authorization` header,
 by specification. If the layer is applied inside `require_paired_device`, every preflight is answered
@@ -348,12 +365,42 @@ by specification. If the layer is applied inside `require_paired_device`, every 
 broken", which is the worst possible mislabelling of a routing mistake. The layer short-circuits
 `OPTIONS` before the gates run.
 
+**There is exactly one layer value, built in `compose` and handed to the three router
+constructors.**
+This has to be said precisely, because the obvious place to put it does not exist.
+[`http/mod.rs`](../../crates/pos-edge/src/http/mod.rs) builds two routers and merges neither:
+[`server.rs`](../../crates/pos-edge/src/server.rs) does the merge —
+`crate::http::router(state).merge(crate::http::domain_router(edge, …))` — and `compose_cloud_surface`
+merges the activation router onto the result afterwards. Layering CORS on that merged application is
+the only single point that reaches all twenty-six covered routes, and it is wrong: it would also
+cover `/healthz`, `/ws`, the asset fallback and `POST /api/activate`, every one of which this record
+declares not covered.
+
+So the layer is a value, not a location. `compose` builds one `CorsLayer` from the shared
+`Arc<Origins>` and passes it to each constructor, which applies it to its own covered subset:
+
+- `domain_router` applies it last, after `guarded.merge(session).merge(counter)` and after
+  `require_paired_device`, so it is outermost over all twenty-two domain routes.
+- `router` applies it to `/api/pair` and to the `/api/pair/devices` + `/api/pair/revoke`
+  sub-router, and to neither `/healthz`, nor the `live` sub-router that carries `/ws`, nor the
+  `.fallback(assets::serve)`.
+- `activation_router` applies it to `GET /api/activation` and not to `POST /api/activate`.
+
+One value shared by three call sites means one policy, one origin list and one place to change the
+allowed methods — and a route is covered because a constructor named it, never because it happened
+to be under a layer somebody put at the top.
+
 **The preflight response allows `authorization` and `content-type`, methods `GET`, `POST` and
-`OPTIONS`, and is cached.** Those are the only header and method shapes the client sends. Caching it
-matters more than it looks: without `Access-Control-Max-Age`, a hosted placement pays two WAN round
-trips per call instead of one, and the `/ws` fan-out's under-50 ms budget
-([ADR-0018](0018-http-websocket-stack.md)) was measured across a shop, not across a WAN, so the
-latency headroom is already gone.
+`OPTIONS`, and is cached for ten minutes: `Access-Control-Max-Age: 600`.** Those are the only header
+and method shapes the client sends. Caching matters more than it looks: without a max-age a hosted
+edge placement pays two WAN round trips per call instead of one, and the `/ws` fan-out's under-50 ms
+budget ([ADR-0018](0018-http-websocket-stack.md)) was measured across a shop, not across a WAN, so
+the latency headroom is already gone.
+
+**600 is chosen against the cap that binds, not against the cap that flatters.** Browsers clamp this
+value: Chromium honours at most 600 seconds and Firefox at most 86400, so any larger number is a
+number that is only ever true on one engine. Ten minutes is the whole of what the estate's browsers
+will actually give, and a number the record states rather than leaving to whoever writes the layer.
 
 **Every response that varies on the request's origin carries `Vary: Origin`.** This is the classic
 defect in a hand-rolled CORS layer: an intermediary caches a response containing
@@ -373,10 +420,46 @@ without a preflight and without asking anyone, which is why "we added CORS" is n
 
 So `/ws` checks the `Origin` header on the upgrade against the same list, plus the serving origin:
 
-- **`Origin` present and not on the list** — refused before the upgrade.
+- **`Origin` present, and neither the serving origin nor on the list** — refused before the upgrade.
+- **`Origin` present and equal to the serving origin** — allowed, with or without a published list.
 - **`Origin` absent** — allowed. A native client or a non-browser consumer sends none, and
   [`ws.rs`](../../crates/pos-edge/src/http/ws.rs) already documents that case: the endpoint accepts
   a client that offers no subprotocol and authenticates with the `Authorization` header instead.
+
+### The serving origin is the request's own `Host`, and the scheme is not compared
+
+This is the one place the record makes the edge refuse a request server-side, so getting it wrong
+takes a store's own live link down. It is decided here rather than assumed.
+
+**The edge cannot read its own origin off itself.** `EdgeConfig` carries `bind` and `advertised_ip`
+([`config.rs`](../../crates/pos-edge/src/config.rs)) — a socket address and a LAN IP. Neither is a
+scheme, and neither is the name a browser used. Worse, a hosted edge placement sits behind the
+TLS-terminating reverse proxy this record requires for the `https` pairing URL, so the browser sends
+`Origin: https://store.example.com` while the process sees a plain `http` listener on a private
+address. Any rule that compares a scheme the edge has to guess refuses the store's own tills.
+
+**So the serving origin is derived per request from that request's `Host` header, and the comparison
+is on host and port only.** `Origin: https://store.example.com` against `Host: store.example.com`
+matches; `Origin: http://192.168.1.10:8080` against `Host: 192.168.1.10:8080` matches. Both are the
+app the edge served, in the two edge placements that exist, with nothing configured and nothing
+published. A store with no `origins` node can never be refused its own socket, which is the whole
+point of rule 1 above.
+
+**Dropping the scheme from the comparison is a real concession and it is the right one.** It means
+`http://store.example.com` would be treated as same-origin for a page served over `https` on that
+name. That combination needs a browser to have loaded the app over plain HTTP on the proxy's own
+hostname — which a proxy that terminates TLS either redirects or does not serve — and a page that did
+load that way would be blocked from calling the `https` edge as mixed content anyway. The alternative
+is an edge that guesses its scheme from a listener it does not terminate TLS on, and a wrong guess
+there is a dark shop. A comparison that is slightly wide beats one that is confidently wrong.
+
+The optional public-origin `EdgeConfig` field, added three sub-headings below for the pairing URL, is
+**also** accepted as a serving origin when it is set. That covers the case where a proxy rewrites
+`Host` to an internal name: the operator has already told the box what it is publicly called, and
+there is no reason to make them say it a second time in the `origins` node.
+
+The same derivation is what the `/api/*` CORS layer uses for its same-origin case, so there is one
+definition of "same origin" in the edge and not two.
 
 Be honest about what this buys. `require_paired_device_ws` is still the authority, and a page on an
 unlisted origin cannot read the token out of another origin's storage, so it cannot offer the
@@ -388,6 +471,16 @@ in front of it. It is defence in depth, and it is described as that rather than 
 ### The base URL defaults to the empty string, so the browser path is byte-identical
 
 `request()` gains a base: `fetch(base() + path)`, where the default value of `base()` is `""`.
+
+**All three `fetch` call sites take it, not just `request()`.**
+[`client.ts`](../../ui/src/api/client.ts) has three, and two of them bypass `request()` on purpose:
+`signIn` calls `fetch("/api/session/sign-in", …)` directly so it can read a structured refusal body —
+a wrong code, or a lockout with the instant it lifts — instead of throwing, and `signOut` calls
+`fetch("/api/session/sign-out", …)` directly. Changing only `request()` would ship a shell that can
+read the floor and settle a bill but can never sign an employee in, which is a worse failure than not
+shipping one: the three session routes are in the covered list precisely because a second origin has
+to be able to sign in. Either both take `base()` at their own call site or both move onto
+`request()`; the record requires the first and permits the second.
 
 **Not `window.location.origin`.** That would produce an absolute URL where a root-relative one is
 sent today — a different request string, a different set of things that can go wrong with it, and a
@@ -412,9 +505,14 @@ may be in another building, or on a screen nobody can reach.
   `window.location.protocol`, unchanged.
 - base set — resolve `/ws` against it and swap the scheme: `https:` → `wss:`, `http:` → `ws:`.
 
-The device token still travels as the second entry in the subprotocol list, for the reason `ws.rs`
-gives and this record does not revisit: a query parameter would put a credential in the request path,
-and the edge logs the request path.
+The device token still travels as the second entry in the subprotocol list, for the two reasons the
+tree already gives and this record does not revisit.
+[`ws.rs`](../../crates/pos-edge/src/http/ws.rs) gives the first: the browser `WebSocket` API cannot
+set an `Authorization` header, so the token has to reach the gate somehow, and the server selects
+only the protocol *name*, so the credential does not travel back in the handshake response.
+[`live.ts`](../../ui/src/api/live.ts)'s `#connect` gives the second, against the obvious alternative:
+*"A query parameter was the alternative and is worse: the edge logs the request path, so the token
+would end up in a log."*
 
 ### The token goes where the operating system will keep it
 
@@ -437,10 +535,13 @@ adapter, with one additive `SecretName` variant for the device token. A shell ho
 credential is the exact case the port's own module documentation describes; writing a second
 credential store beside it would be inventing a parallel answer to a question that has one.
 
-Two honest limits. First, `SecretName`'s existing variants are all secrets a *store server* holds,
-and a device token is a secret a *device* holds — the variant is additive and the discipline
-transfers, but this is the first entry that is not about the box. Second, and larger: **no shell has
-been spiked.** Tauri v2 against the real `ui/dist` on Android is unproven, and this record does not
+Two honest limits. First, `SecretName`'s five existing variants are secrets held by a *store server*
+or by a *cloud deployment* — `WebhookSigningKey` is *"the key that signs webhook deliveries from this
+deployment"* and `VendorApiKey` is *"the per-tenant API key a cloud deployment uses against a
+vendor"*, neither of which is a box in a shop. A device token would be the first held by a selling
+*device*. The variant is additive and the discipline transfers, but the enum's inventory would then
+span three kinds of machine rather than two, and nothing in the port says which kind a variant
+belongs to. Second, and larger: **no shell has been spiked.** Tauri v2 against the real `ui/dist` on Android is unproven, and this record does not
 pretend otherwise. What survives the spike failing is the seam: whatever shell ships implements the
 same two methods, and a plain browser keeps `localStorage`, which is what every till in the estate
 uses today.
@@ -450,10 +551,10 @@ uses today.
 `pairing_url` stays exactly as it is, and so does `EdgeConfig::advertised_ip` and its
 `advertised_host()` fallback to the bind IP. ADR-0030's field constraints have not changed: Chrome on
 Android still does not resolve mDNS, a DHCP reservation still pins the address, and an operator in a
-shop still needs a URL that depends on no name resolution at all. An `in-store` placement mints the
-same string it mints today.
+shop still needs a URL that depends on no name resolution at all. An `EDGE_PLACEMENT_IN_STORE` store
+mints the same string it mints today.
 
-A placement whose devices are not on its LAN mints `https://<host>/pair?code=NNNNNN` instead, from a
+A store whose devices are not on its edge's LAN mints `https://<host>/pair?code=NNNNNN` instead, from a
 new optional `EdgeConfig` field naming the edge's own public origin. When that field is set it wins,
 because a box that has been given a public origin is a box whose devices are not on its LAN.
 
@@ -467,7 +568,8 @@ and that is not an inconsistency with the node three sub-headings above. ADR-000
 line and named this exact exception: *"Anything a store genuinely must set alone (network address for
 pairing) is an explicit, narrow exception."* The allow-list says **who may address the edge** — a
 fleet decision about shells, which the cloud owns. The public origin says **where this box is** — a
-fact about one machine's network, which the machine's operator or (in mode 3) the platform that
+fact about one machine's network, which the machine's operator or (under
+`EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) the platform that
 started it knows and the cloud does not.
 
 ### The version handshake is a response header, because drift shows up on a response
@@ -484,9 +586,10 @@ when it matters, because the moment of interest is a call that just failed; and 
 whose purpose is a service manager's liveness probe onto the origin allow-list to serve a caller it
 was not built for.
 
-A response header has none of those problems. It rides the response the app already made, including
-the `404` for the route one side moved — so the app fails and learns *why it failed* in the same
-message.
+A response header has none of those problems. It rides the response the app already made — including
+the `200 text/html` the asset fallback returns for a route one side moved, which is the failure that
+otherwise arrives as an unattributable `SyntaxError`. The app fails and learns *why it failed* in the
+same message, and the header is on the response whether or not the body parses.
 
 The details that make it correct:
 
@@ -495,21 +598,35 @@ The details that make it correct:
   omission as a missing `Vary`, and it is the reason the header cannot be added without the CORS
   work landing beside it.
 - **It carries the release version and nothing else.** `PROTOCOL_VERSION` is the edge↔cloud wire
-  language ([ADR-0024](0024-protocol-version-negotiation.md)); the app is not on that wire, and
-  [`docs/naming-and-api.md`](../naming-and-api.md) §4 is firm that the three existing version axes
-  are never mixed. This introduces no fourth axis — it publishes, on a second rail, the value
+  language ([ADR-0024](0024-protocol-version-negotiation.md)); the app is not on that wire.
+  [ADR-0024](0024-protocol-version-negotiation.md) is the document that states the rule — *"`schema_version` stays separate … The public
+  API's optional `pos-api-version` header is a third, unrelated thing … Three axes, three names, never
+  mixed"* — and `pos-edge-version` introduces no fourth. It publishes, on a second rail, the value
   `version.rs` already stamps from the release tag and `/healthz` already reports.
-- **The comparison is one-sided, and the additive rule is why.** `AGENTS.md` §2 forbids removing or
-  renaming a published field, event or permission, so a *newer* edge never takes away a route an
-  older app calls. Only "the app is ahead of its edge" can break, so only that direction is checked:
-  the app carries the minimum edge release it was built against and compares.
+  ([`docs/naming-and-api.md`](../naming-and-api.md) §11 is the versioning section and names two of
+  those axes, product version and `PROTOCOL_VERSION`; §4 is the HTTP API section, and it owns the
+  header table this record adds a row to.)
+- **The comparison is one-sided, and this record is what makes that safe.** The design assumes a
+  *newer* edge never takes away a route an older app calls, so only "the app is ahead of its edge"
+  needs checking. `AGENTS.md` §2's additive rule does not currently give that guarantee: it forbids
+  removing or renaming a published **field, event, or permission** and says nothing about routes, and
+  `docs/snapshots/` holds `capabilities.txt`, `events.txt` and `permissions.txt` — there is no route
+  list to break. **So this record extends the rule: an edge `/api/*` route, once published, is not
+  removed or renamed either; it is deprecated in place.** That is enforced the same way the other
+  three are, by a snapshot — `docs/snapshots/routes.txt`, method and path per line, regenerated from
+  the composed router and diff-checked in CI. Without it the one-sided comparison rests on a promise
+  nothing keeps; with it, the app carries the minimum edge release it was built against and compares
+  in that direction only.
 - **`0.0.0` never warns.** [`version.rs`](../../crates/pos-edge/src/version.rs) makes `0.0.0` the
   honest answer for a hand-built binary, and it sorts below every real release. A developer running
   `just run-edge` against a shipped app should not see a banner on every call.
 - **A behind-edge does not stop the till selling.** It shows a banner naming both versions and
   carries on. ADR-0024 already settled the principle for the tier below: *"a protocol mismatch
   degrades to 'not syncing', never to 'not selling'."* A version string is not a reason to refuse a
-  customer.
+  customer. The banner is a user-visible string, so it ships as translation keys in every locale
+  bundle like every other string in the app — `AGENTS.md` §2 forbids hardcoding one, and
+  `ui/package.json`'s build runs `pnpm i18n:lint && pnpm i18n:parity` before `vite build`, so a
+  hardcoded banner fails the build rather than the review.
 
 There is a lesson in the same document this header must not repeat. `pos-api-version` was removed
 because *"Every route ignored it, so an integrator who sent it believed they had pinned something and
@@ -532,12 +649,13 @@ Sixty-nine days against a five-minute code is the same number whether the attack
 switch or in another country. **Guessing is still closed.**
 
 What changes is not confidentiality, it is availability. In-store, spending a store's budget required
-being on its LAN. For a hosted placement it requires a script, and ten wrong codes from anywhere shut
+being on its LAN. For a hosted edge placement it requires a script, and ten wrong codes from anywhere
+shut
 pairing for a minute — including for the operator standing at the counter holding a real code. That
 is a denial-of-service lever the in-store deployment did not hand out.
 
 **The budget is not re-keyed to fix it, and per-IP keying in particular is refused.** A hosted
-placement sits behind a proxy, so the peer address is the proxy's unless a hop count is configured
+edge placement sits behind a proxy, so the peer address is the proxy's unless a hop count is configured
 correctly — `pos_cloud` already carries `trusted_proxy_hops` for exactly this and
 `crates/pos-cloud/src/main.rs` warns that *"a wrong `trusted_proxy_hops` is a wrong rate-limit key"*.
 And an attacker with an IPv6 allocation has a /64 to rotate through. A budget keyed on a value the
@@ -548,7 +666,7 @@ single address does.
 tunable rate limit is a rate limit somebody widens at 19:30 on a Friday because "pairing is broken",
 and never narrows again.
 
-**The proxy carries the new load.** A hosted placement is fronted by a reverse proxy — it needs one
+**The proxy carries the new load.** A hosted edge placement is fronted by a reverse proxy — it needs one
 anyway, for the TLS the `https` pairing URL requires — and that proxy rate-limits `POST /api/pair` by
 source address before the request reaches the edge. Two layers with a clean division: the proxy has
 the addresses and the capacity to absorb a flood, and the box-wide budget is the last line that works
@@ -576,8 +694,10 @@ the whole answer, and the S4 budget was never designed to be one for an internet
   write buffer outright; this record does not smuggle half of one in as "just the pricing".
 - **It does not weaken the in-store path anywhere.** The default base is the empty string. A store
   with no `origins` node gets no CORS layer behaviour it did not have, because same-origin is allowed
-  unconditionally. `pairing_url` is untouched, `advertised_ip` is untouched, the two auth gates are
-  untouched, and `localStorage` remains the token store for every browser in every shop.
+  unconditionally, and the `/ws` `Origin` check cannot refuse a till that the edge itself served,
+  because the serving origin is derived from the request's own `Host` and needs nothing published.
+  `pairing_url` is untouched, `advertised_ip` is untouched, the two auth gates are untouched, and
+  `localStorage` remains the token store for every browser in every shop.
 - **It does not put CORS on `pos_cloud`.** The console is served by `pos_cloud` and talks to it
   same-origin, exactly as the till does to the edge. There is no CORS in `pos-cloud` today and none
   is added here. If a second console front-end ever wants one, it is a different record with a
@@ -585,9 +705,10 @@ the whole answer, and the S4 budget was never designed to be one for an internet
   record refuses for the edge.
 - **It does not give a hosted edge its TLS.** `https` in the pairing URL requires a certificate, and
   [ADR-0090](0090-tls-postures.md)'s four `TLS_MODE` values describe Caddy in front of `pos_cloud`,
-  not `pos_edge`, which terminates nothing today. A `hosted-by-operator` placement is the operator's
-  own proxy; `hosted-by-platform` is ADR-0113's, along with the hostname the public origin field
-  would be set to.
+  not `pos_edge`, which terminates nothing today. An `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` store sits
+  behind the operator's own proxy; an `EDGE_PLACEMENT_HOSTED_BY_PLATFORM` store sits behind
+  [ADR-0113](0113-the-host-agent.md)'s, along with the hostname the public origin field would be set
+  to.
 - **It does not report pairing refusals to the fleet console.** The edge logs a shut-out with its
   failure count, and that is where it stays. Putting a refused-redemption counter in the heartbeat's
   optional JSON body ([ADR-0068](0068-fleet-liveness.md)) so the alert engine
@@ -596,9 +717,10 @@ the whole answer, and the S4 budget was never designed to be one for an internet
   anything, and an alert with a guessed threshold trains people to ignore alerts.
 - **It does not build a shell, and it does not assume one works.** Tauri v2 against the real
   `ui/dist` on Android has not been spiked, and Android as an ESC/POS print agent has not been spiked
-  either — both belong to ADR-0112. Nothing above depends on either succeeding: if no native shell
-  ever ships, this record still delivers the base URL, the origin allow-list and the version header,
-  which is what a hosted placement and a second front-end need on their own.
+  either — both belong to [ADR-0112](0112-print-agents.md). Nothing above depends on either
+  succeeding: if no native shell ever ships, this record still delivers the base URL, the origin
+  allow-list and the version header, which is what a hosted edge placement and a second front-end
+  need on their own.
 - **It does not know the literal origin strings a native shell will use.** They depend on the shell
   and the platform, and the spike has not run. The node therefore validates the *shape* of an origin
   — an exact serialised origin, no path, not `null`, no wildcard — rather than an allow-list of
@@ -608,14 +730,22 @@ the whole answer, and the S4 budget was never designed to be one for an internet
 ## Consequences
 
 - `pos-edge` gains a CORS layer by enabling `tower-http`'s `cors` feature — a feature flag on a
-  dependency already in the graph, not a new crate. It is layered **outside** both auth middlewares
-  in [`http/mod.rs`](../../crates/pos-edge/src/http/mod.rs), so a preflight is answered before
-  `require_paired_device` refuses it.
-- `AppState` ([`state.rs`](../../crates/pos-edge/src/state.rs)) gains an `Arc`-held origin list that
-  the config-pull loop replaces wholesale, alongside `pairing` and `fanout`. It is read on the front
-  of every request and is bounded at eight entries.
-- The config tree gains an `origins` node on the Brand layer, `apply_document` gains a branch for it
-  under the never-blank rule, and the cloud gains a publish route behind
+  dependency already in the graph, not a new crate. One `CorsLayer` value is built in `compose`
+  ([`server.rs`](../../crates/pos-edge/src/server.rs)) and passed to `http::router`,
+  `http::domain_router` and `activation_router`, each of which applies it to its own covered subset
+  and **outside** both auth middlewares, so a preflight is answered before `require_paired_device`
+  refuses it. It is not applied to the merged application, because that would cover `/healthz`,
+  `/ws`, the asset fallback and `POST /api/activate`.
+- `AppState` ([`state.rs`](../../crates/pos-edge/src/state.rs)) gains an `Arc<Origins>` beside
+  `pairing` and `fanout` — one `Mutex<Vec<Origin>>`, bounded at eight entries, replaced wholesale by
+  the config-pull loop and read on the front of every request. `std::sync::Mutex`, the same as
+  `Pairing`; no new dependency.
+- The config tree gains an `origins` node on the Brand layer. The config-pull loop
+  ([`config_client.rs`](../../crates/pos-edge/src/config_client.rs)) gains an `origins` branch
+  **beside** `session_from_config` rather than inside it — `session_from_config` returns an
+  `EdgeSession` for the application layer and the router cannot read one — parsing and validating the
+  node under the never-blank rule and calling `Origins::replace`. The cloud gains a publish route
+  behind
   `ConsolePermission::ManageStores` ([ADR-0067](0067-multi-admin-console-rbac.md)) with `If-Match`
   ([ADR-0094](0094-console-optimistic-concurrency.md)) and an audit entry naming the acting admin
   ([ADR-0069](0069-audit-trail.md)) — the same three things every other `/admin` write carries.
@@ -624,28 +754,47 @@ the whole answer, and the S4 budget was never designed to be one for an internet
   under it is a future modeling step; today each store's tree holds its own four layers."* So
   shipping a new app shell to 500 stores is 500 publishes. This record does not fix that; it is the
   first node for which the missing fan-out is the dominant cost rather than a tidiness complaint.
-- Every covered route now answers `OPTIONS`. That is twenty-five new method/route pairs in the
-  router's surface, and the test that asserts the route list has to grow with them.
+- Every covered route now answers `OPTIONS`. That is twenty-six new method/route pairs in the
+  router's surface, and **there is no test that asserts the edge's route list today** —
+  `tests/http.rs` asserts `/healthz` and that the UI is served, `tests/acceptance.rs` drives the
+  composed surface for behaviour, and `docs/snapshots/` holds only `capabilities.txt`, `events.txt`
+  and `permissions.txt`. This change adds `docs/snapshots/routes.txt`, generated from the composed
+  router and diff-checked in CI like the other three, because the version handshake's one-sided
+  comparison depends on routes being additive and nothing enforces that today.
 - [`docs/naming-and-api.md`](../naming-and-api.md) §4's header table gains a `pos-edge-version` row in
   the same change as the client code that reads it. The table is described there as the contract and
   the code is checked against it; a header with no reader has been removed from that table once
   already.
 - [`ui/src/api/client.ts`](../../ui/src/api/client.ts)'s opening comment stops being true and is
   rewritten in the same pull request. The file gains a base-URL accessor defaulting to `""` and a
-  token-store seam; [`live.ts`](../../ui/src/api/live.ts) derives its socket URL from the base
-  instead of `window.location`.
+  token-store seam. **All three of its `fetch` call sites take the base**, not only `request()`:
+  `signIn` and `signOut` call `fetch` directly so they can read a structured refusal body, and a
+  shell that could settle a bill but never sign anyone in is not a shell.
+  [`live.ts`](../../ui/src/api/live.ts) derives its socket URL from the base instead of
+  `window.location`.
+- `request()` also gains the one thing the drift problem needs from it: a response whose status is
+  `ok` but whose content type is not JSON is a missing route, not a value, and it fails as a named
+  error carrying the `pos-edge-version` header rather than as a bare `SyntaxError`.
 - `EdgeConfig` gains an optional public-origin field beside `advertised_ip`, and `pairing.rs` gains a
   second URL constructor. `pairing_url` itself, its `IpAddr` parameter and its test
   (`the_pairing_url_carries_the_code_over_raw_ip`) are unchanged.
 - `SecretName` gains one variant for a device token — additive on a `#[non_exhaustive]` enum, and the
-  first entry in it that names a secret held by a device rather than by a store server. `SecretName::ALL`
-  is what the wipe-on-revocation routine iterates, so the new variant is covered by that sweep from
-  the day it lands.
-- **The test matrix gains a third axis.** ADR-0110 already doubled it by placement. Every covered
+  first entry in it that names a secret held by a selling device rather than by a store server or a
+  cloud deployment. `SecretName::ALL` is what a wipe-on-revocation routine *would* iterate, and the
+  port's own doc comment is careful to say "a" rather than "the": **`ALL` has no production caller
+  today.** Its only readers are the port's unit test in
+  [`key_vault.rs`](../../crates/pos-ports/src/key_vault.rs) and the shared contract suite in
+  [`pos-contract-tests`](../../crates/pos-contract-tests/src/key_vault.rs). So the new variant is
+  covered by the *contract* for a future sweep, not by a sweep that runs — and this record does not
+  build the sweep.
+- **The test matrix gains a third axis.** ADR-0110 already doubled it by `edge_placement`. Every covered
   route now also has a same-origin case, an allow-listed cross-origin case with its preflight, and a
   refused-origin case — and the refused case must assert that the *response* is refused by the
   browser rule, not that the handler ran differently, because the handler does not know.
+- **The additive rule now names routes.** `AGENTS.md` §2 covers published fields, events and
+  permissions; this record extends it to edge `/api/*` routes, enforced by `docs/snapshots/routes.txt`.
+  A route is deprecated in place, never removed or renamed.
 - Nothing is removed and nothing is renamed. `PROTOCOL_VERSION` does not move: the app is not a party
-  to the edge↔cloud protocol, and a response header, a config node, an optional config field and a
-  `SecretName` variant are all additions. An edge published no `origins` node behaves exactly as this
-  fleet's 500 stores behave today.
+  to the edge↔cloud protocol, and a response header, a config node, an optional config field, a route
+  snapshot and a `SecretName` variant are all additions. An edge published no `origins` node behaves
+  exactly as this fleet's 500 stores behave today.

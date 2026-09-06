@@ -116,5 +116,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0107](0107-the-buyer-is-a-subject.md) | The buyer on a tax invoice is a subject, not a string — and a store gets the twentieth port to keep them in | Accepted |
 | [0108](0108-the-lease-generation-is-authority.md) | The lease generation is authority, not configuration, and a box takes it once | Accepted |
 | [0109](0109-counting-the-taps-an-operator-makes.md) | The step budget counts taps in a browser: a handler that exists is not a tap a thumb can reach | Accepted |
+| [0110](0110-edge-placement-is-a-deployment-axis.md) | Edge placement is a deployment axis, and the lease is what moves along it | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
