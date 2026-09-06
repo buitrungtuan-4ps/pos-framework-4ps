@@ -683,6 +683,7 @@ where
             &config_edge,
             queue,
             lease_authority,
+            Arc::clone(&agents),
             nats.as_ref(),
             held_config_version,
             &origins,
@@ -726,17 +727,18 @@ struct CloudSurface {
 #[expect(
     clippy::too_many_arguments,
     reason = "the cloud surface needs everything the cloud loops need: the router to merge onto, \
-              where the cloud is, which store this is, the live session, the queue and lease \
-              authorities, the optional stream, the held config version, and the shutdown. Every \
-              one is passed straight through to a loop that needs exactly it"
+              where the cloud is, which store this is, the live session, the queue, lease and \
+              print-agent authorities, the optional stream, the held config version, and the \
+              shutdown. Every one is passed straight through to a loop that needs exactly it"
 )]
-async fn compose_cloud_surface<S, Q, L>(
+async fn compose_cloud_surface<S, Q, L, P>(
     app: axum::Router,
     cloud_url: &url::Url,
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
     lease: L,
+    agents: P,
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
@@ -746,6 +748,7 @@ where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
 {
     // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
     let vault = Arc::new(KeyringVault::new(OsKeyring::new()));
@@ -801,6 +804,7 @@ where
                 edge,
                 queue,
                 lease,
+                agents,
                 sync_key,
                 held_config_version,
                 origins,
@@ -909,17 +913,19 @@ struct CloudLoops {
 /// outbox as the final drain left it rather than as the stop found it ([`FarewellBeat`]).
 #[expect(
     clippy::too_many_arguments,
-    reason = "the ninth is the drain signal, and it is a parameter precisely because the heartbeat \
-              loop must not decide for itself when a stopping store has finished draining — the \
-              publish loop it has no handle on decides that; the tenth is the origin allow-list the \
-              config loop keeps current for the CORS layer the routers already hold (ADR-0111)"
+    reason = "the drain signal is a parameter precisely because the heartbeat loop must not decide \
+              for itself when a stopping store has finished draining — the publish loop it has no \
+              handle on decides that; the origin allow-list is one the config loop keeps current for \
+              the CORS layer the routers already hold (ADR-0111); and the print-agent record is what \
+              lets the same beat say whether a ticket is stuck behind a terminal (ADR-0112)"
 )]
-fn spawn_cloud_loops<S, Q, L>(
+fn spawn_cloud_loops<S, Q, L, P>(
     cloud_url: &url::Url,
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
     lease: L,
+    agents: P,
     sync_key: Option<String>,
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
@@ -930,6 +936,7 @@ where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
 {
     let Some(sync_key) = sync_key else {
         tracing::warn!(
@@ -961,12 +968,14 @@ where
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet
-    // console can see a box whose events are piling up behind a down link (ADR-0068) — and the lease
+    // console can see a box whose events are piling up behind a down link (ADR-0068) — the lease
     // generation it holds, so a box that has been *replaced* is distinguishable from one that is
-    // merely quiet (ADR-0108).
+    // merely quiet (ADR-0108) — and one standing per print agent, so a ticket stuck behind a terminal
+    // reaches an operator before the night ends rather than in a phone call the next morning
+    // (ADR-0112).
     let heartbeat_client = HeartbeatClient::reporting(
         HeartbeatHttpTransport::new(client.clone(), store_id),
-        StoreReport::new(Arc::clone(edge), lease),
+        StoreReport::new(Arc::clone(edge), lease, agents),
         HEARTBEAT_INTERVAL,
     );
     // A dropped sender resolves the receiver too, so a caller that never signals still gets the last

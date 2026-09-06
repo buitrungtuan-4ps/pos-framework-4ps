@@ -109,6 +109,27 @@ pub struct AgentStanding {
     pub last_seen_ms: i64,
 }
 
+/// One binding and the job that has waited longest behind it — what the heartbeat reports so an
+/// operator learns about a stalled terminal before the night ends
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Two opaque identifiers and an instant. No document, no line, no table, no name: a stalled agent
+/// is diagnosed from *which box*, *for which terminal*, and *how long*, and nothing a ticket says
+/// helps with any of those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentBacklog {
+    /// The terminal a console admin created and a manager bound.
+    pub agent: DeviceId,
+    /// The paired device answering for it.
+    pub paired_device: DeviceId,
+    /// Unix milliseconds at which the oldest still-unacknowledged job was queued, or `None` when
+    /// nothing is waiting.
+    ///
+    /// An acknowledgement deletes its row, so a row still here is a ticket that has not printed.
+    /// `None` is the healthy answer and is deliberately distinct from a zero age.
+    pub oldest_queued_ms: Option<i64>,
+}
+
 /// The durable record of which device answers for which terminal.
 pub trait PrintAgents: Send + Sync {
     /// Binds `agent` to `device`, exclusively.
@@ -177,6 +198,20 @@ pub trait PrintAgents: Send + Sync {
         &self,
         agent: DeviceId,
     ) -> impl Future<Output = Result<Option<AgentStanding>, PortError>> + Send;
+
+    /// Every binding in the store, each with the instant its oldest unacknowledged job was queued.
+    ///
+    /// The heartbeat's read, once a tick, and the only one that spans agents. `now_ms` excludes jobs
+    /// the TTL has already given up on, so an expired ticket cannot keep an alert alive after the
+    /// thing it was about stopped mattering.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the record cannot be read.
+    fn backlogs(
+        &self,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<Vec<AgentBacklog>, PortError>> + Send;
 }
 
 /// Shared by delegation, so one record can be held in two places.
@@ -224,6 +259,13 @@ impl<T: PrintAgents + ?Sized> PrintAgents for std::sync::Arc<T> {
         agent: DeviceId,
     ) -> impl Future<Output = Result<Option<AgentStanding>, PortError>> + Send {
         (**self).standing(agent)
+    }
+
+    fn backlogs(
+        &self,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<Vec<AgentBacklog>, PortError>> + Send {
+        (**self).backlogs(now_ms)
     }
 }
 
@@ -287,12 +329,37 @@ impl PrintAgents for SqliteStore {
                 })
             }))
     }
+
+    async fn backlogs(&self, now_ms: i64) -> Result<Vec<AgentBacklog>, PortError> {
+        Ok(SqliteStore::print_agent_backlogs(self, now_ms)
+            .await?
+            .into_iter()
+            // A row whose ids will not parse is dropped rather than reported, the same rule
+            // `agent_for` and `standing` already follow: this adapter cannot write such a row, so one
+            // means the file was tampered with, and a heartbeat is not where that is diagnosed.
+            .filter_map(|row| {
+                Some(AgentBacklog {
+                    agent: parse_device(&row.agent_device_id)?,
+                    paired_device: parse_device(&row.paired_device_id)?,
+                    oldest_queued_ms: row.oldest_queued_at,
+                })
+            })
+            .collect())
+    }
 }
 
 /// The same rules without a database, for the fakes-backed example and the route tests.
+///
+/// It holds **bindings only**: the queue lives in [`crate::print_queue::InMemoryPrintQueue`], a
+/// separate value, so this twin cannot compute the join the shipped adapter does in one statement.
+/// It therefore holds the *answer* instead of deriving it — see [`Self::stage_oldest_queued`] — and
+/// the join itself is proven against a real database in store-sqlite's own `print_queue` tests. A
+/// twin that silently reported "nothing is ever waiting" would be worse than one that says plainly
+/// it is being told.
 #[derive(Debug, Default)]
 pub struct InMemoryPrintAgents {
     bindings: Mutex<HashMap<DeviceId, AgentStanding>>,
+    staged: Mutex<HashMap<DeviceId, i64>>,
 }
 
 impl InMemoryPrintAgents {
@@ -300,6 +367,17 @@ impl InMemoryPrintAgents {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Stages the instant [`PrintAgents::backlogs`] should report for `agent`'s oldest waiting job.
+    ///
+    /// The twin holds no queue, so a caller that wants to exercise the reporting above it says what
+    /// the answer is. Unstaged agents report `None`, which is the healthy state.
+    pub fn stage_oldest_queued(&self, agent: DeviceId, queued_ms: i64) {
+        self.staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(agent, queued_ms);
     }
 
     fn locked(&self) -> std::sync::MutexGuard<'_, HashMap<DeviceId, AgentStanding>> {
@@ -379,5 +457,25 @@ impl PrintAgents for InMemoryPrintAgents {
 
     async fn standing(&self, agent: DeviceId) -> Result<Option<AgentStanding>, PortError> {
         Ok(self.locked().get(&agent).copied())
+    }
+
+    async fn backlogs(&self, _now_ms: i64) -> Result<Vec<AgentBacklog>, PortError> {
+        let staged = self
+            .staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut backlogs: Vec<AgentBacklog> = self
+            .locked()
+            .iter()
+            .map(|(agent, standing)| AgentBacklog {
+                agent: *agent,
+                paired_device: standing.paired_device,
+                oldest_queued_ms: staged.get(agent).copied(),
+            })
+            .collect();
+        // The adapter orders by agent id; a caller comparing the two must not have to care which it
+        // is talking to.
+        backlogs.sort_by_key(|backlog| backlog.agent);
+        Ok(backlogs)
     }
 }

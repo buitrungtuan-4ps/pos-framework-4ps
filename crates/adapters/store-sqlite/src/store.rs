@@ -25,8 +25,8 @@ use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
     self, ClaimedPrintJob, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow,
-    PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob, RegistryCommand,
-    SelfTestRow, SubjectWrite,
+    PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob,
+    RegistryCommand, SelfTestRow, SubjectWrite,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -436,6 +436,25 @@ impl SqliteStore {
                 agent_device_id,
                 reply,
             }
+        })
+        .await
+    }
+
+    /// Every binding in the store, each with the instant its oldest unacknowledged job was queued.
+    ///
+    /// Read once per heartbeat, not per request: this is what the store tells the cloud so silence
+    /// behind a terminal becomes visible to an operator before the night ends
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the read fails.
+    pub async fn print_agent_backlogs(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<PrintAgentBacklog>, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::PrintAgentBacklogs { now_ms, reply }
         })
         .await
     }

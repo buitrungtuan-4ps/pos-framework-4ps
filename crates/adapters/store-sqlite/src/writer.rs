@@ -122,6 +122,25 @@ pub struct PrintAgentStanding {
     pub last_seen_at: i64,
 }
 
+/// Every binding in the store, each with the queued job that has waited longest behind it
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// One row per *binding*, never per job: this answers "is anything stuck behind this terminal", and
+/// the oldest unacknowledged job is the only job that can answer it. A binding with an empty queue
+/// still appears, because "this agent exists and has nothing waiting" is the good answer and the
+/// console must be able to tell it from "no agent here at all".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrintAgentBacklog {
+    /// The terminal the console created and a manager bound.
+    pub agent_device_id: String,
+    /// The paired device answering for it.
+    pub paired_device_id: String,
+    /// Unix ms at which the oldest still-unacknowledged job was queued, or `None` if nothing is
+    /// waiting. An acknowledgement deletes its row, so a row that is still here is a ticket that has
+    /// not been printed.
+    pub oldest_queued_at: Option<i64>,
+}
+
 /// A subject row buffered for the settle's transaction
 /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
 /// to JSON by the store, so the writer thread stays free of `pos_ports` types — and so this file
@@ -325,6 +344,11 @@ pub(crate) enum Command {
     PrintAgentStandingFor {
         agent_device_id: String,
         reply: oneshot::Sender<Result<Option<PrintAgentStanding>, PortError>>,
+    },
+    /// Every binding with the age of its oldest unacknowledged job, for the heartbeat (ADR-0112).
+    PrintAgentBacklogs {
+        now_ms: i64,
+        reply: oneshot::Sender<Result<Vec<PrintAgentBacklog>, PortError>>,
     },
     ExpirePrintJobs {
         now_ms: i64,
@@ -599,6 +623,9 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(print_agent_standing(&conn, &agent_device_id));
+            }
+            Command::PrintAgentBacklogs { now_ms, reply } => {
+                let _ = reply.send(print_agent_backlogs(&conn, now_ms));
             }
             Command::HeldLease { store_id, reply } => {
                 let _ = reply.send(held_lease(&conn, store_id));
@@ -1423,6 +1450,43 @@ fn print_agent_standing(
     )
     .optional()
     .map_err(|error| db_error(port, error))
+}
+
+/// Every binding in the store, each with the instant its oldest unacknowledged job was queued.
+///
+/// A `LEFT JOIN`, deliberately: a bound agent with nothing waiting is a row carrying `NULL`, not a
+/// missing row. The console's question is *which terminals have an agent, and is anything stuck
+/// behind one* — an inner join would answer only the second half, and a healthy agent would look
+/// exactly like a terminal nobody ever bound.
+///
+/// Expired jobs are excluded on the same clock the claim uses, so a job the TTL has already given up
+/// on cannot keep an alert alive after the ticket it was about stopped mattering.
+fn print_agent_backlogs(
+    conn: &Connection,
+    now_ms: i64,
+) -> Result<Vec<PrintAgentBacklog>, PortError> {
+    let port = PortName::PrinterDriver;
+    let mut statement = conn
+        .prepare(
+            "SELECT a.agent_device_id, a.paired_device_id, MIN(j.queued_at) \
+             FROM print_agents a \
+             LEFT JOIN print_jobs j \
+               ON j.agent_device_id = a.agent_device_id AND j.expires_at > ?1 \
+             GROUP BY a.agent_device_id, a.paired_device_id \
+             ORDER BY a.agent_device_id",
+        )
+        .map_err(|error| db_error(port, error))?;
+    let rows = statement
+        .query_map(params![now_ms], |row| {
+            Ok(PrintAgentBacklog {
+                agent_device_id: row.get(0)?,
+                paired_device_id: row.get(1)?,
+                oldest_queued_at: row.get(2)?,
+            })
+        })
+        .map_err(|error| db_error(port, error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| db_error(port, error))
 }
 
 /// The lease generation the store holds, or `None` if it has never taken one — a box the cloud has
