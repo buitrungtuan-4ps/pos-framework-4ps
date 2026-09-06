@@ -101,6 +101,7 @@ async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Route
     let mut service = pos_edge::http::domain_router(
         edge,
         InMemoryQueueNumbers::new(),
+        pos_edge::print_agent::InMemoryPrintAgents::new(),
         pairing,
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),

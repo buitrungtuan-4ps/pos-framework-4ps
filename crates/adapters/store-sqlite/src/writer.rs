@@ -92,6 +92,36 @@ pub enum PrintEnqueue {
     AlreadyQueued,
 }
 
+/// What a claim on a terminal's print-agent identity did (ADR-0112).
+///
+/// The binding is exclusive in both directions, and the two refusals are kept apart because they
+/// send an operator to different places: one says *that terminal is already answered for*, the other
+/// says *this device already answers for something else*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrintAgentClaim {
+    /// The device now holds the agent identity. Also the answer when it already held it — claiming
+    /// twice from the same box is a refresh, not a conflict, so an agent that restarts and re-claims
+    /// does not need a manager a second time.
+    Bound,
+    /// Another paired device holds this terminal. Refused rather than promoted: two devices holding
+    /// one identity both claim from the same queue, so each ticket prints once — on whichever box
+    /// grabbed it — and half the kitchen's tickets end up somewhere nobody is looking.
+    HeldByAnotherDevice,
+    /// This device already holds a *different* terminal. A terminal is a machine and so is a paired
+    /// device; answering for two would invent a machine that is not in the shop. Release first.
+    DeviceHoldsAnotherAgent,
+}
+
+/// A terminal's binding as the enqueue needs to read it: who holds it, and when they last asked for
+/// work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrintAgentStanding {
+    /// The paired device answering for this terminal.
+    pub paired_device_id: String,
+    /// Unix ms of the agent's last claim. The enqueue compares it against the silence threshold.
+    pub last_seen_at: i64,
+}
+
 /// A subject row buffered for the settle's transaction
 /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
 /// to JSON by the store, so the writer thread stays free of `pos_ports` types — and so this file
@@ -269,6 +299,25 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<bool, PortError>>,
     },
     /// Deletes every job past its TTL, reporting how many (ADR-0112).
+    ClaimPrintAgent {
+        agent_device_id: String,
+        paired_device_id: String,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<PrintAgentClaim, PortError>>,
+    },
+    RevokePrintAgent {
+        agent_device_id: String,
+        paired_device_id: String,
+        reply: oneshot::Sender<Result<bool, PortError>>,
+    },
+    PrintAgentForDevice {
+        paired_device_id: String,
+        reply: oneshot::Sender<Result<Option<String>, PortError>>,
+    },
+    PrintAgentStandingFor {
+        agent_device_id: String,
+        reply: oneshot::Sender<Result<Option<PrintAgentStanding>, PortError>>,
+    },
     ExpirePrintJobs {
         now_ms: i64,
         reply: oneshot::Sender<Result<u64, PortError>>,
@@ -489,6 +538,42 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             }
             Command::ExpirePrintJobs { now_ms, reply } => {
                 let _ = reply.send(expire_print_jobs(&conn, now_ms));
+            }
+            Command::ClaimPrintAgent {
+                agent_device_id,
+                paired_device_id,
+                now_ms,
+                reply,
+            } => {
+                let _ = reply.send(claim_print_agent(
+                    &conn,
+                    &agent_device_id,
+                    &paired_device_id,
+                    now_ms,
+                ));
+            }
+            Command::RevokePrintAgent {
+                agent_device_id,
+                paired_device_id,
+                reply,
+            } => {
+                let _ = reply.send(revoke_print_agent(
+                    &conn,
+                    &agent_device_id,
+                    &paired_device_id,
+                ));
+            }
+            Command::PrintAgentForDevice {
+                paired_device_id,
+                reply,
+            } => {
+                let _ = reply.send(print_agent_for_device(&conn, &paired_device_id));
+            }
+            Command::PrintAgentStandingFor {
+                agent_device_id,
+                reply,
+            } => {
+                let _ = reply.send(print_agent_standing(&conn, &agent_device_id));
             }
             Command::HeldLease { store_id, reply } => {
                 let _ = reply.send(held_lease(&conn, store_id));
@@ -1164,6 +1249,125 @@ fn expire_print_jobs(conn: &Connection, now_ms: i64) -> Result<u64, PortError> {
         )
         .map_err(|error| db_error(port, error))?;
     Ok(deleted as u64)
+}
+
+/// Binds a terminal's agent identity to a paired device, or reports why it cannot (ADR-0112).
+///
+/// Re-claiming from the device that already holds it refreshes `last_seen_at` and answers `Bound`.
+/// That is not laxity: an agent that restarts and re-claims must not need a manager at the box a
+/// second time, and the identity it is asking for is the one it already has.
+///
+/// The two refusals are read off the table rather than guessed from a failed insert, because the
+/// caller has to tell an operator *which* thing is in the way — the terminal is answered for, or
+/// this box is. Both directions are also constraints in the schema, so a race that slipped past
+/// these reads still cannot write a second holder.
+fn claim_print_agent(
+    conn: &Connection,
+    agent_device_id: &str,
+    paired_device_id: &str,
+    now_ms: i64,
+) -> Result<PrintAgentClaim, PortError> {
+    let port = PortName::PrinterDriver;
+    let holder: Option<String> = conn
+        .query_row(
+            "SELECT paired_device_id FROM print_agents WHERE agent_device_id = ?1",
+            params![agent_device_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    if let Some(holder) = holder.as_deref()
+        && holder != paired_device_id
+    {
+        return Ok(PrintAgentClaim::HeldByAnotherDevice);
+    }
+    let held: Option<String> = conn
+        .query_row(
+            "SELECT agent_device_id FROM print_agents WHERE paired_device_id = ?1",
+            params![paired_device_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    if let Some(held) = held.as_deref()
+        && held != agent_device_id
+    {
+        return Ok(PrintAgentClaim::DeviceHoldsAnotherAgent);
+    }
+    conn.execute(
+        "INSERT INTO print_agents (agent_device_id, paired_device_id, bound_at, last_seen_at) \
+         VALUES (?1, ?2, ?3, ?3) \
+         ON CONFLICT(agent_device_id) DO UPDATE SET last_seen_at = ?3",
+        params![agent_device_id, paired_device_id, now_ms],
+    )
+    .map_err(|error| db_error(port, error))?;
+    Ok(PrintAgentClaim::Bound)
+}
+
+/// Releases a binding, returning whether this device actually held it.
+///
+/// Scoped to the holder: a device cannot release an identity it does not hold, which is the same
+/// rule the claim enforces read from the other end. A release that matched nothing answers `false`
+/// and changes nothing, so a retried revoke is idempotent rather than an error.
+///
+/// Jobs already queued for this agent are deliberately **not** deleted. They expire on their own TTL,
+/// and a replacement terminal claiming the same identity picks up what is still live — which is what
+/// makes "a release is how a dead terminal is replaced" work rather than costing a service's tickets.
+fn revoke_print_agent(
+    conn: &Connection,
+    agent_device_id: &str,
+    paired_device_id: &str,
+) -> Result<bool, PortError> {
+    let port = PortName::PrinterDriver;
+    let removed = conn
+        .execute(
+            "DELETE FROM print_agents WHERE agent_device_id = ?1 AND paired_device_id = ?2",
+            params![agent_device_id, paired_device_id],
+        )
+        .map_err(|error| db_error(port, error))?;
+    Ok(removed == 1)
+}
+
+/// The terminal identity a paired device answers for, if any.
+///
+/// The first thing every agent route does: a request arrives carrying a paired device, and the
+/// route has to turn that into the agent whose queue it may read.
+fn print_agent_for_device(
+    conn: &Connection,
+    paired_device_id: &str,
+) -> Result<Option<String>, PortError> {
+    let port = PortName::PrinterDriver;
+    conn.query_row(
+        "SELECT agent_device_id FROM print_agents WHERE paired_device_id = ?1",
+        params![paired_device_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|error| db_error(port, error))
+}
+
+/// Who holds a terminal and when they last asked for work, or `None` if nobody holds it.
+///
+/// The enqueue's first question (ADR-0112): an unclaimed agent, or one silent past the threshold,
+/// is refused before the queue is touched, because a queue must not start building behind a box that
+/// is not there.
+fn print_agent_standing(
+    conn: &Connection,
+    agent_device_id: &str,
+) -> Result<Option<PrintAgentStanding>, PortError> {
+    let port = PortName::PrinterDriver;
+    conn.query_row(
+        "SELECT paired_device_id, last_seen_at FROM print_agents WHERE agent_device_id = ?1",
+        params![agent_device_id],
+        |row| {
+            Ok(PrintAgentStanding {
+                paired_device_id: row.get(0)?,
+                last_seen_at: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| db_error(port, error))
 }
 
 /// The lease generation the store holds, or `None` if it has never taken one — a box the cloud has

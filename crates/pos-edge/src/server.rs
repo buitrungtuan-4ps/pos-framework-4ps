@@ -164,12 +164,13 @@ pub enum ServeOutcome {
 /// # Errors
 ///
 /// As [`serve_until`].
-pub async fn serve<S, Q, A, L>(
+pub async fn serve<S, Q, A, L, P>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
     lease_authority: L,
+    print_agents: P,
 ) -> Result<ServeOutcome, EdgeError>
 where
     S: EventStore
@@ -183,6 +184,7 @@ where
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
     L: LeaseAuthority + Clone + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
 {
     serve_until(
         config,
@@ -190,6 +192,7 @@ where
         queue,
         ota_authority,
         lease_authority,
+        print_agents,
         shutdown_signal(),
     )
     .await
@@ -219,12 +222,13 @@ where
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve_until<S, Q, A, L, F>(
+pub async fn serve_until<S, Q, A, L, P, F>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
     lease_authority: L,
+    print_agents: P,
     stop: F,
 ) -> Result<ServeOutcome, EdgeError>
 where
@@ -239,6 +243,7 @@ where
     Q: QueueNumberAuthority + 'static,
     A: OtaStateAuthority + 'static,
     L: LeaseAuthority + Clone + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
     // Read what binding and the startup banner need before `config` moves into the composition.
@@ -280,7 +285,15 @@ where
     });
 
     let ota_edge = Arc::clone(&edge);
-    let composed = compose(config, edge, queue, lease_authority.clone(), &shutdown_rx).await?;
+    let composed = compose(
+        config,
+        edge,
+        queue,
+        lease_authority.clone(),
+        print_agents,
+        &shutdown_rx,
+    )
+    .await?;
 
     // The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid out
     // to install one into. Either missing is an ordinary state, not a fault: a LAN-only store and a
@@ -505,11 +518,12 @@ impl FarewellBeat {
 /// [`EdgeError::Config`] if the configuration would misbehave, [`EdgeError::Country`] if the
 /// compiled-in country modules disagree, or [`EdgeError::DeviceRegistry`] if the pairing or sign-in
 /// table could not be read.
-pub async fn compose<S, Q, L>(
+pub async fn compose<S, Q, L, P>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     lease_authority: L,
+    print_agents: P,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Composed, EdgeError>
 where
@@ -523,6 +537,7 @@ where
         + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
 {
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
@@ -593,6 +608,10 @@ where
     // same value be held in two places — the trait returns `impl Future`, so it cannot be erased
     // behind `dyn`.
     let queue = Arc::new(queue);
+    // The durable record of which paired device answers for which terminal (ADR-0112). Shared the
+    // same way and for the same reason: the routes that bind it and the dispatch that reads it must
+    // agree, and `PrintAgents` returns `impl Future` so it cannot be erased behind `dyn`.
+    let agents = Arc::new(print_agents);
     // The printers the settle and fire paths dispatch to (ADR-0100, production-readiness C2). Layered
     // rather than threaded through `domain_router`'s signature because a printer is an *effect* the
     // routes run after a commit, not state a route reads: the application loop deliberately holds no
@@ -606,6 +625,7 @@ where
         .merge(crate::http::domain_router(
             edge,
             Arc::clone(&queue),
+            Arc::clone(&agents),
             Arc::clone(&pairing),
             Arc::clone(&sessions),
             &origins,

@@ -207,6 +207,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         Arc::clone(&edge),
         Arc::clone(&queue),
         Arc::new(pos_edge::InMemoryLease::new()),
+        Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new()),
         &shutdown_rx,
     )
     .await

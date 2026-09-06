@@ -98,6 +98,45 @@ the agent binary, the console screen and the silence alert. `dispatch` still ope
 directly, and no store's node carries an agent until an operator picks one — so every store prints
 exactly as it did.
 
+## Delivery — 2026-09-06, the two gates on binding a terminal
+
+**The slices swapped, and the reason is in the record.** This was written as the fourth slice and is
+shipped as the third, because the enqueue's *first* question is the agent binding — "unclaimed, or
+not heard from within `AGENT_SILENCE`, refuse before the table is touched" — and every agent route
+has to turn the paired device that called it into the agent it speaks for. Shipping the claim and
+acknowledge routes first would have shipped a surface that could only ever refuse. Nothing about
+either slice's content changed; the order did.
+
+`POST /api/print/agent` and `POST /api/print/agent/revoke`
+([`http/print_agent.rs`](../../crates/pos-edge/src/http/print_agent.rs)) sit behind the paired-device
+gate **and** an employee signed in holding `Permission::ManageDevices`, checked in the handler
+against the roster the cloud published. The binding is migration
+[`0010_print_agents.sql`](../../crates/adapters/store-sqlite/migrations/0010_print_agents.sql) and
+the [`PrintAgents`](../../crates/pos-edge/src/print_agent.rs) seam over it — the shape
+`QueueNumberAuthority` and `LeaseAuthority` already take, implemented for `SqliteStore` and again in
+memory for the example and the tests.
+
+Four things settled during the work:
+
+- **Exclusive in both directions, and both enforced in the schema.** A primary key on the terminal
+  and a unique index on the paired device. One terminal, one box, for the reason this record gives;
+  and one box, one terminal, because a terminal *is* a machine and so is a paired device, so a box
+  answering for two would invent a machine that is not in the shop.
+- **Re-claiming from the holder is a refresh, not a conflict.** An agent that restarts and re-claims
+  the identity it already holds must not need a manager at the box a second time. The refusals are
+  for a *different* device.
+- **The permission is checked at the route, not at a decide.** A binding produces no event: it is
+  durable edge-local state, like the pairing it records against, not a fact about the business. That
+  needed a by-employee-id lookup on the roster — sign-in is keyed by badge code, everything after it
+  carries an `EmployeeId` — so `StaffRoster` gained one.
+- **`last_seen_at` is written by the agent's own claims against the queue, not by a ping of its own.**
+  A separate liveness ping is a second thing that can be true while printing is broken. The act that
+  proves an agent is there is asking for work.
+
+**Not in this slice.** `PrintWake`, `GET /api/print/jobs`, the acknowledge route, and the `dispatch`
+branch that makes the queue live — the slice this one swapped with, now next. Nothing enqueues yet.
+A store that binds an agent today changes nothing about where its tickets print.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not

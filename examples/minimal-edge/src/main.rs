@@ -103,6 +103,10 @@ async fn main() -> Result<(), EdgeError> {
         // generation held), and `SqliteStore` is `Clone` where this is not. Never consulted here:
         // with no updater composed there is no tick, and no cloud to publish a `lease` node.
         std::sync::Arc::new(InMemoryLease::new()),
+        // The print-agent binding (ADR-0112), in memory too. Nothing claims one here — that takes a
+        // manager signed in on a paired device — so the two routes exist and refuse, which is the
+        // truth for this example rather than a silent no-op.
+        pos_edge::print_agent::InMemoryPrintAgents::new(),
     )
     .await
     .map(|_outcome| ())

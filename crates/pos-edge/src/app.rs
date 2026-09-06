@@ -168,6 +168,25 @@ impl StaffRoster {
         self.by_code.get(code)
     }
 
+    /// What a signed-in person may do, looked up by the identity their session carries.
+    ///
+    /// The roster is keyed by the badge *code* a person types, because that is what sign-in has in
+    /// hand. Everything after sign-in has an [`EmployeeId`] instead — it is what an
+    /// [`Actor`](pos_core::decision::Actor) carries — so a route that gates on a permission without
+    /// re-authorising needs this direction. A linear scan over a store's staff is the right cost: a
+    /// roster is tens of people, and the alternative is a second index to keep in step with the
+    /// published node.
+    ///
+    /// `None` for an id no published member holds, which is the safe answer: an identity the roster
+    /// does not know grants nothing.
+    #[must_use]
+    pub fn permissions_for(&self, employee_id: EmployeeId) -> Option<PermissionSet> {
+        self.by_code
+            .values()
+            .find(|auth| auth.employee_id == Some(employee_id))
+            .map(|auth| auth.permissions)
+    }
+
     /// How many staff the roster holds.
     #[must_use]
     pub fn len(&self) -> usize {

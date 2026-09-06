@@ -284,6 +284,7 @@ async fn the_domain_surface_is_covered_and_still_needs_a_paired_device() {
     let router = pos_edge::http::domain_router(
         edge,
         InMemoryQueueNumbers::new(),
+        pos_edge::print_agent::InMemoryPrintAgents::new(),
         Arc::new(Pairing::new()),
         Arc::new(Sessions::new()),
         &origins,

@@ -27,6 +27,7 @@ pub mod lines;
 pub mod locale;
 pub mod menu;
 pub mod pair;
+mod print_agent;
 pub mod shifts;
 pub mod tables;
 pub mod ws;
@@ -150,9 +151,10 @@ pub fn router(state: AppState) -> Router {
 /// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
 /// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
 /// successes).
-pub fn domain_router<S, Q>(
+pub fn domain_router<S, Q, A>(
     edge: Arc<Edge<S>>,
     queue: Q,
+    agents: A,
     pairing: Arc<Pairing>,
     sessions: Arc<Sessions>,
     origins: &Arc<crate::origins::Origins>,
@@ -160,11 +162,14 @@ pub fn domain_router<S, Q>(
 where
     S: EventStore + SubjectStore + Send + Sync + 'static,
     Q: crate::queue::QueueNumberAuthority + 'static,
+    A: crate::print_agent::PrintAgents + 'static,
 {
     let lockout = Arc::new(Lockout::new());
     // Cloned before `edge` and `sessions` move into the routers below.
     let counter_edge = Arc::clone(&edge);
+    let agent_edge = Arc::clone(&edge);
     let sessions_for_counter = Arc::clone(&sessions);
+    let sessions_for_agents = Arc::clone(&sessions);
 
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
     // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
@@ -234,10 +239,17 @@ where
         Arc::clone(&sessions_for_counter),
         auth::require_signed_in,
     ));
+    // Binding a terminal's print agent, in its own sub-router for the same reason and behind the
+    // same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
+    // behind a *manager* — the permission is checked in the handler, over the published roster.
+    let agents = print_agent::router(agent_edge, agents).layer(
+        axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
+    );
 
     guarded
         .merge(session)
         .merge(counter)
+        .merge(agents)
         .layer(axum::middleware::from_fn_with_state(
             pairing,
             auth::require_paired_device,

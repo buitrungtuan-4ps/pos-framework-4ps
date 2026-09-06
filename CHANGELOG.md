@@ -42,6 +42,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager at the box binds a terminal's print agent, exclusively**
+  ([ADR-0112](docs/adr/0112-print-agents.md), Program C Phase 1 — the third of five slices).
+
+  `POST /api/print/agent` claims the identity of a `TERMINAL` from the published `devices` node for
+  the paired device making the call; `POST /api/print/agent/revoke` releases it. Both need a paired
+  device **and** an employee signed in on it holding `admin.device.manage` — binding a terminal is a
+  managerial act performed in front of the machine, and a waiter's tap must not be able to move where
+  the kitchen's tickets print.
+
+  **The binding is exclusive and refuses rather than promotes.** A second device claiming a held
+  terminal is told so. Take-over-by-latest looks tidier and is wrong: two boxes holding one identity
+  both claim from the same queue, so each ticket prints exactly once — on whichever box grabbed it —
+  and if one of them is a phone in an apron, half the kitchen's tickets are in a pocket until someone
+  notices during service. A release is how a dead terminal is replaced.
+
+  It is durable, because the alternative is re-doing a manager's claim at the till after every
+  restart. Re-claiming from the device that already holds it is a refresh, not a conflict.
+
+  What the gates do **not** prove is which physical machine answers: the framework has no device
+  attestation, so a manager who signs in on a phone and claims a terminal gets a phone as the agent.
+  What they buy is that this cannot happen casually — it takes a console-created entry, a manager's
+  PIN at the box, and a deliberate exclusive claim.
+
+  **Nothing enqueues yet.** The edge still opens every printer's transport directly.
+
+  **Upgrade note** Migration `0010_print_agents.sql` adds one table to the store's SQLite, on the
+  next edge start. No `PROTOCOL_VERSION` change, no published field, and no behaviour change for a
+  store that binds nothing — which is every store until an operator does.
+
 - **A printer may name the terminal whose transport reaches it**
   ([ADR-0112](docs/adr/0112-print-agents.md), Program C Phase 1 — the second of five slices).
 
