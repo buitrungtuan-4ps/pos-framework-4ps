@@ -103,6 +103,7 @@ async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Route
         InMemoryQueueNumbers::new(),
         pairing,
         Arc::new(Sessions::new()),
+        &Arc::new(pos_edge::origins::Origins::new()),
     );
     if let Some((printers, _)) = printing {
         service = service.layer(axum::Extension(printers));

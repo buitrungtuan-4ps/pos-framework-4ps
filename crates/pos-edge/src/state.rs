@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::clock::SystemClock;
 use crate::config::EdgeConfig;
 use crate::fanout::Fanout;
+use crate::origins::Origins;
 use crate::pairing::Pairing;
 
 /// Identity the health probe reports: what this binary is and which protocol it speaks. All of it is
@@ -62,6 +63,14 @@ pub struct AppState {
     pub clock: SystemClock,
     /// Device pairing state — the live codes and issued device tokens (ADR-0030).
     pub pairing: Arc<Pairing>,
+    /// Which other origins may address this edge
+    /// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+    ///
+    /// Here rather than on `EdgeSession` because the CORS layer runs on the front of every request,
+    /// before any handler, and an `EdgeSession` is what the *application* layer decides against.
+    /// Shaped like `pairing` for the same reason: the config-pull loop writes it and the request
+    /// path reads it, so one `Arc` is shared and the mutability is interior.
+    pub origins: Arc<Origins>,
 }
 
 impl AppState {
@@ -96,6 +105,7 @@ impl AppState {
             fanout,
             clock: SystemClock,
             pairing: Arc::new(Pairing::new()),
+            origins: Arc::new(Origins::new()),
         }
     }
 }

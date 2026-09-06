@@ -78,6 +78,7 @@ async fn paired() -> (Router, String) {
             InMemoryQueueNumbers::new(),
             pairing,
             Arc::new(Sessions::new()),
+            &Arc::new(pos_edge::origins::Origins::new()),
         ),
         token,
     )

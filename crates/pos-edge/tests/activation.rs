@@ -79,6 +79,15 @@ fn valid_code() -> String {
 /// Builds an edge over the fakes, a stub cloud accepting `code`, and the activation router — handing
 /// back the vault and the edge so a test can inspect what the flow left behind.
 fn harness(code: &str) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
+    harness_with_origins(code, &[])
+}
+
+/// The same harness with a store that has published `origins`
+/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+fn harness_with_origins(
+    code: &str,
+    published: &[&str],
+) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
@@ -92,7 +101,11 @@ fn harness(code: &str) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
     let cloud = Arc::new(StubCloud {
         accepts: code.to_owned(),
     });
-    let router = activation_router(Arc::clone(&edge), cloud, Arc::clone(&vault));
+    let origins = Arc::new(pos_edge::origins::Origins::new());
+    origins
+        .replace(published)
+        .expect("the test's origins are valid");
+    let router = activation_router(Arc::clone(&edge), cloud, Arc::clone(&vault), &origins);
     (router, vault, edge)
 }
 
@@ -229,4 +242,52 @@ async fn a_malformed_code_is_rejected_locally() {
         .await
         .expect("vault readable");
     assert!(stored.is_none(), "a malformed code stores nothing");
+}
+
+/// The origin a store published for a second front-end.
+const PUBLISHED_ORIGIN: &str = "https://shell.example.com";
+
+/// A CORS preflight for `uri` from [`PUBLISHED_ORIGIN`], returning the `Allow-Origin` it was granted.
+async fn preflighted(router: Router, method: &str, uri: &str) -> Option<String> {
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri(uri)
+                .header(header::HOST, "till.local:8080")
+                .header(header::ORIGIN, PUBLISHED_ORIGIN)
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, method)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn the_standing_route_is_reachable_cross_origin_and_the_exchange_is_not() {
+    // `GET /api/activation` is the first call any front-end makes: `App.tsx`'s `onMount` runs it on
+    // every boot, ahead of pairing, and routes the operator to `/setup` when the box is not
+    // activated. Leaving it same-origin-only would make a second origin's very first request fail —
+    // and fail *softly*, because that call is wrapped in a `.catch`.
+    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN]);
+    assert_eq!(
+        preflighted(router, "GET", "/api/activation")
+            .await
+            .as_deref(),
+        Some(PUBLISHED_ORIGIN)
+    );
+
+    // `POST /api/activate` mints a machine credential into the box's OS keyring from a code on the
+    // store's setup sheet (ADR-0086). There is no cross-origin actor in that story: an operator
+    // activates at the `/setup` screen the box itself serves. Pinned because the two routes are
+    // layered separately, and `Router::layer` covering "everything added so far" would silently
+    // pull this one in if they were ever merged back together.
+    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN]);
+    assert_eq!(preflighted(router, "POST", "/api/activate").await, None);
 }

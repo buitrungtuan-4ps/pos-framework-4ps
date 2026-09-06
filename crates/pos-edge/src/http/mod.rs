@@ -70,15 +70,39 @@ pub fn router(state: AppState) -> Router {
             Arc::clone(&state.pairing),
             auth::require_paired_device_ws,
         ))
+        // Outermost, so a cross-origin upgrade is refused before the token is even looked at. `/ws`
+        // carries its own origin check rather than the CORS layer the `/api` routes carry, because a
+        // browser applies no same-origin policy to a WebSocket handshake at all — the layer would be
+        // decoration on this route (ADR-0111, and see `require_permitted_origin_ws`).
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.origins),
+            crate::origins::require_permitted_origin_ws,
+        ))
+        .with_state(state.clone());
+
+    // One policy value, applied to the covered subsets and to nothing else (ADR-0111). Layering it
+    // on the merged application would be the single point that reaches every covered route — and
+    // would also cover `/healthz`, `/ws`, the asset fallback and `POST /api/activate`, every one of
+    // which that record declares *not* covered. A route is covered because a constructor named it.
+    let cors = crate::origins::cors_layer(&state.origins);
+
+    // Redeem a pairing code for a device token (ADR-0030). The human-facing `/pair?code=` URL is a
+    // GET that falls through to the single-page app, which posts the code here.
+    //
+    // Its own sub-router, and not a `.route(…).layer(cors)` on the merged one, because
+    // `Router::layer` covers every route added *before* it — which would silently pull in `/healthz`
+    // and `/ws`, both of which ADR-0111 declares not covered. A sub-router makes the coverage the
+    // shape the record describes instead of an artefact of statement order.
+    let pair = Router::new()
+        .route("/api/pair", post(pair::pair))
+        .layer(cors.clone())
         .with_state(state.clone());
 
     let state_for_revoke = state.clone();
     Router::new()
         .route("/healthz", get(health::healthz))
         .merge(live)
-        // Redeem a pairing code for a device token (ADR-0030). The human-facing `/pair?code=` URL is
-        // a GET that falls through to the single-page app, which posts the code here.
-        .route("/api/pair", post(pair::pair))
+        .merge(pair)
         // Retiring a device, and reporting how many are paired (ADR-0091). Behind the
         // paired-device gate rather than open: a device that is itself paired can retire another,
         // which is as strong as pairing and no stronger — the edge has no operator identity offline.
@@ -90,6 +114,11 @@ pub fn router(state: AppState) -> Router {
                     Arc::clone(&state_for_revoke.pairing),
                     auth::require_paired_device,
                 ))
+                // Outside the paired gate: a preflight carries no `Authorization` by specification,
+                // so a layer applied inside would answer every preflight `401` — and that failure
+                // reads to an operator as "pairing is broken", the worst possible mislabelling of a
+                // routing mistake.
+                .layer(cors)
                 .with_state(state_for_revoke),
         )
         // Anything not matched is a UI asset; an unknown path falls back to index.html so a
@@ -126,6 +155,7 @@ pub fn domain_router<S, Q>(
     queue: Q,
     pairing: Arc<Pairing>,
     sessions: Arc<Sessions>,
+    origins: &Arc<crate::origins::Origins>,
 ) -> Router
 where
     S: EventStore + SubjectStore + Send + Sync + 'static,
@@ -212,6 +242,11 @@ where
             pairing,
             auth::require_paired_device,
         ))
+        // Applied last, so it is *outermost* over all twenty-two domain routes and over the paired
+        // gate. A preflight carries no `Authorization` by specification, so a CORS layer applied
+        // inside the gate would answer every preflight `401` and every cross-origin call would fail
+        // — reading to an operator as "pairing is broken" (ADR-0111).
+        .layer(crate::origins::cors_layer(origins))
 }
 
 /// Parses a ULID from a path segment. `None` if it is not a ULID, which every handler turns into a

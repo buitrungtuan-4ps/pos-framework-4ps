@@ -25,6 +25,42 @@ rule in full; this record follows it. The Rust type is `EdgePlacement` and the w
 `EDGE_PLACEMENT_UNSPECIFIED`, `EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` and
 `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`.
 
+## Delivery — 2026-09-06, the allow-list half
+
+The **origin allow-list** shipped: the node, the one rule that validates it, the cloud route that
+authors it, the console card that publishes it, the CORS layer on every covered route, and `/ws`'s own
+`Origin` check.
+
+- **The node.** [`pos_proto::origins`](../../crates/pos-proto/src/origins.rs) holds `PublishedOrigins`,
+  `MAX_ORIGINS = 8`, and `validate_origins` — the four refusals this record argues for. It lives in
+  `pos-proto` rather than on the edge because the cloud refuses a bad origin at authoring time and the
+  edge refuses one at apply time, and two copies of that rule would drift into an edge quietly dropping
+  what the console said it saved.
+- **The writer.** `GET`/`PUT /admin/config/origins`
+  ([`http.rs`](../../crates/pos-cloud/src/http.rs), on `config_channels_router`), behind
+  `ConsolePermission::PublishConfig` and audited as `config.origins.publish`. A refused entry is a
+  `400` naming the entry and the rule it broke.
+- **The console.** A fifth card on **Channels & payments**, beside `channels`, `tender`, `qr` and
+  `vendors` — the same publish-a-node-to-one-store shape, and the same store gate.
+- **The carrier.** [`pos_edge::origins`](../../crates/pos-edge/src/origins.rs)'s `Origins`, held as one
+  `Arc` on `AppState`, written by the config-pull loop's `apply_origins` and read by the request path
+  — shaped like `Pairing`, for the reason "The list needs a carrier the router can read" gives.
+- **Coverage.** Applied by each router constructor to its own named subset, never to a merged
+  application. Building it that way caught a live defect while this slice was being written: axum's
+  `Router::layer` covers every route added *before* it, so the first wiring silently covered
+  `/healthz` and `/ws` as well. `/api/pair` is now its own sub-router, and
+  [`tests/origins.rs`](../../crates/pos-edge/tests/origins.rs) pins that `/healthz` carries no CORS
+  header — so a later refactor that layers at the top fails rather than quietly widening the surface.
+- **`/ws`.** `require_permitted_origin_ws`, outermost over the device-token gate, refusing a
+  cross-origin upgrade `403`. A handshake with no `Origin` is allowed and reaches the token gate, as
+  this record's three-case table says.
+
+**Not in this slice, and each still open.** The base-URL default, the token in the operating system's
+keychain, the second pairing-URL form, the `PROTOCOL_VERSION` response header, the
+`docs/snapshots/routes.txt` additive-route gate, and the print agent's four routes (which
+[ADR-0112](0112-print-agents.md) builds). The allow-list is what those need to exist first; none of
+them is blocked on a decision.
+
 ## The problem
 
 ### The client's opening line is a design decision, and it has become a constraint

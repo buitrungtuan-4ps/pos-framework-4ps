@@ -92,16 +92,41 @@ struct StandingResponse {
 ///
 /// Finalised with its own state and merged into the app router by the composition layer, so the
 /// concrete `AppState` never learns the [`CloudSync`]/[`KeyVault`] types.
-pub fn activation_router<S, C, V>(edge: Arc<Edge<S>>, cloud: Arc<C>, vault: Arc<V>) -> Router
+pub fn activation_router<S, C, V>(
+    edge: Arc<Edge<S>>,
+    cloud: Arc<C>,
+    vault: Arc<V>,
+    origins: &Arc<crate::origins::Origins>,
+) -> Router
 where
     S: EventStore + Send + Sync + 'static,
     C: CloudSync + Send + Sync + 'static,
     V: KeyVault + Send + Sync + 'static,
 {
+    // `GET /api/activation` is covered and `POST /api/activate` is not, so they are layered
+    // separately rather than as one router (ADR-0111).
+    //
+    // The standing route reads as an activation route and belongs with its sibling, but the shipped
+    // app disagrees: `App.tsx`'s `onMount` calls it on **every boot**, ahead of pairing and ahead of
+    // sign-in, and routes the operator to `/setup` when the box is not activated. It is the first
+    // call any front-end makes, and it is wrapped in `.catch(() => routeDevice())` — so leaving it
+    // same-origin-only would make a second origin's first request fail *softly*, and an unactivated
+    // hosted box would silently never route anyone to `/setup`. It returns a standing boolean.
+    //
+    // `POST /api/activate` exchanges a code from the store's setup sheet for a long-lived machine
+    // credential that lands in the box's OS keyring (ADR-0086). A route that mints a machine
+    // credential is not reachable from a page on another origin, and there is no cross-origin actor
+    // in that story: an operator activates at the `/setup` screen the box itself serves.
+    let state = ActivationState { edge, cloud, vault };
     Router::new()
         .route("/api/activate", post(activate::<S, C, V>))
-        .route("/api/activation", get(standing::<S, C, V>))
-        .with_state(ActivationState { edge, cloud, vault })
+        .merge(
+            Router::new()
+                .route("/api/activation", get(standing::<S, C, V>))
+                .layer(crate::origins::cors_layer(origins))
+                .with_state(state.clone()),
+        )
+        .with_state(state)
 }
 
 /// This box's activation standing: [`ActivationStanding::Activated`] once a device credential is in

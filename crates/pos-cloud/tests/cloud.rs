@@ -18132,3 +18132,120 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
         "no hash anywhere in the document"
     );
 }
+
+/// A store's `origins` node is authored here and refused here, by the very rule the edge applies
+/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// The node is the only writer for a list the edge reads on the front of every request. Two things
+/// have to hold for that to be worth anything: what the console saves is the shape the edge parses,
+/// and what the edge would refuse the console refuses first. The second is the one that bites — a
+/// cloud that stored `https://*.example.com` would leave an operator looking at a saved allow-list
+/// their edge had silently thrown away whole.
+#[tokio::test]
+async fn a_store_publishes_the_origins_its_edge_will_answer() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let scope = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+
+    // A store that has never published one reads `null` — distinct from an empty list, which is a
+    // person deliberately withdrawing every second origin.
+    let before = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/origins?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                store_id().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(before.status(), StatusCode::OK);
+    assert!(json_body(before).await.is_null());
+
+    // A valid publish stores the `{ "allowed": [...] }` shape the edge's `apply_origins` reads.
+    let mut body = scope.clone();
+    body["allowed"] = serde_json::json!(["https://shell.example.com", "http://localhost:1420"]);
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie("/admin/config/origins", &body, &cookie))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/origins?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                store_id().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        json_body(read).await,
+        serde_json::json!({
+            "allowed": ["https://shell.example.com", "http://localhost:1420"]
+        })
+    );
+
+    // A wildcard is refused at authoring time, naming the entry and the rule — not stored for an
+    // edge to throw away in a log line nobody reads.
+    let mut wildcard = scope.clone();
+    wildcard["allowed"] = serde_json::json!(["https://*.example.com"]);
+    let refused = router
+        .clone()
+        .oneshot(put_with_cookie("/admin/config/origins", &wildcard, &cookie))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        message.contains("https://*.example.com"),
+        "the refusal must name the entry the operator typed: {message}"
+    );
+
+    // And the refusal changed nothing: the previously published list still stands.
+    let after = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/origins?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                store_id().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        json_body(after).await,
+        serde_json::json!({
+            "allowed": ["https://shell.example.com", "http://localhost:1420"]
+        })
+    );
+}

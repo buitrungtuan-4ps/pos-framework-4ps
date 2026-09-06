@@ -106,6 +106,7 @@ use pos_proto::inventory::{
 };
 use pos_proto::locale::{CountryCode, TaxComponent, TaxRate};
 use pos_proto::money::CurrencyCode;
+use pos_proto::origins::PublishedOrigins;
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -4290,6 +4291,20 @@ struct PublishTenderRequest {
     accepted: Vec<String>,
 }
 
+/// A `PUT /admin/config/origins` body: the `(tenant, store)` and the origins that store's edge
+/// answers beside the one that served the request
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// The serving origin is never listed here and never needs to be: the edge compares it against the
+/// request's own `Host`, so a store that publishes nothing keeps serving its own UI.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishOriginsRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    allowed: Vec<String>,
+}
+
 /// Parses each `UPPER_SNAKE_CASE` token to a known wire-enum value, refusing an unrecognised or
 /// unspecified one — authoring rejects a typo up front rather than storing a token the edge would drop.
 #[expect(
@@ -4438,6 +4453,10 @@ where
         .route(
             "/admin/config/vendors",
             get(admin_read_vendors::<Cfg, A, C>).put(admin_publish_vendors::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/config/origins",
+            get(admin_read_origins::<Cfg, A, C>).put(admin_publish_origins::<Cfg, A, C>),
         )
         .with_state(ConfigChannelsState {
             config_trees,
@@ -4606,6 +4625,102 @@ where
         store_id,
         "tender",
         "config.tender.publish",
+        value,
+    )
+    .await
+}
+
+/// A super-admin reads a store's current `origins` node (the origins its edge answers), or `null`.
+async fn admin_read_origins<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "origins").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes the origins a store's edge answers as its `origins` node
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// Every entry is validated here, against the very rule the edge applies
+/// ([`pos_proto::origins::validate_origins`]), so a typo is a `400` the operator sees rather than a
+/// node the edge refuses whole and silently keeps the previous list for. That refusal is deliberately
+/// symmetric: authoring rejects what applying would reject.
+///
+/// An **empty** `allowed` is accepted and is not the same as never publishing: it is a person
+/// deliberately withdrawing every second origin. A store's own UI is unaffected either way — the edge
+/// decides same-origin against the request's `Host` and never against this list.
+async fn admin_publish_origins<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishOriginsRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let node = match PublishedOrigins::new(&request.allowed) {
+        Ok(node) => node,
+        // The message names the entry and the rule it broke: the operator is fixing a value they
+        // typed, and a published origin is a configuration value, never a secret.
+        Err(refused) => {
+            return api_error(ErrorStatus::InvalidArgument, refused.to_string());
+        }
+    };
+    let Ok(value) = serde_json::to_value(node) else {
+        return channels_serialize_unavailable();
+    };
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "origins",
+        "config.origins.publish",
         value,
     )
     .await

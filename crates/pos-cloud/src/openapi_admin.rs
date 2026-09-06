@@ -220,6 +220,9 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
+    // Which other origins a store's edge answers (ADR-0111). Enumerated here rather than annotated,
+    // at the fidelity B5 chose: the auth surface is documented, the console surface is enumerated.
+    "/admin/config/origins",
     "/admin/config/store-profile",
     // --- release hosting (R2, ADR-0088) ---
     // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
