@@ -159,7 +159,7 @@ use crate::dashboard::{
 };
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
-    PersistedDeviceProposal,
+    PersistedDeviceProposal, SetAgentOutcome,
 };
 use crate::export;
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
@@ -1930,6 +1930,14 @@ where
             "/admin/devices/proposals/{id}/reject",
             post(reject_device::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/terminals",
+            post(create_terminal::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/agent",
+            post(set_print_agent::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -2255,6 +2263,213 @@ where
             }
             StatusCode::NO_CONTENT.into_response()
         }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// An operator names a POS terminal that exists because somebody carried it into the shop.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateTerminalRequest {
+    /// The tenant the store belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The store the terminal stands in (a ULID).
+    store_id: String,
+    /// What to call it on screen when it is the machine that went quiet.
+    name: String,
+}
+
+/// The id a freshly created terminal was given.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CreateTerminalResponse {
+    /// The terminal's device id (a ULID) — what a printer names to make it its agent.
+    id: String,
+    /// `approved`, always: a terminal is created resolved, because the console write *is* the
+    /// decision.
+    status: String,
+}
+
+/// A super-admin creates an approved `terminal` device
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Behind `ManageDevices` rather than `PublishConfig`, and audited, because this is the human gate:
+/// nothing on a LAN announces itself as a till, so there is no proposal for an operator to approve
+/// and the named admin creating the entry is the decision ADR-0041 protects. It carries no
+/// `connection` and no address — the agent connects outbound to the edge, and nothing dials a
+/// terminal.
+async fn create_terminal<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTerminalRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    if request.name.trim().is_empty() {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required: an operator has to recognise this machine when it goes quiet",
+            &[("name", "REQUIRED")],
+        );
+    }
+    let Some(id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(DeviceProposalId::new)
+    else {
+        tracing::error!("could not read OS entropy to mint a terminal's device id");
+        return service_unavailable("device");
+    };
+    let terminal = PersistedDeviceProposal {
+        id,
+        tenant_id,
+        store_id,
+        kind: DeviceKind::Terminal,
+        name: request.name,
+        // Nothing dials a terminal: the agent opens a connection to the edge, never the reverse.
+        address: String::new(),
+    };
+    match state.devices.create_terminal(&terminal).await {
+        Ok(()) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device_terminal.create",
+                "device_proposal",
+                &id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "store_id": store_id.to_string(),
+                    "kind": DeviceKind::Terminal.as_wire(),
+                })),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(CreateTerminalResponse {
+                    id: id.to_string(),
+                    status: DeviceProposalStatus::Approved.as_wire().to_owned(),
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// An operator points an approved device at the terminal that holds its transport, or clears it.
+#[derive(Debug, Clone, Deserialize)]
+struct SetPrintAgentRequest {
+    /// The tenant the device belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The terminal whose agent will write this printer's bytes (a ULID), or `null` to go back to
+    /// the edge opening the address itself.
+    #[serde(default)]
+    agent_device_id: Option<String>,
+}
+
+/// A super-admin picks (or clears) the print agent for an approved device
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Behind `ManageDevices` with an `If-Match`
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)) and an audit entry: two
+/// managers picking different agents for one printer is the ordinary race, and last-write-wins would
+/// leave the loser believing a decision that is not in the database.
+///
+/// It deliberately does **not** check that the id names a terminal. Resolvability is a property of
+/// the set being published — the terminal may be created after this pick — so the check lives in
+/// [`admin_publish_devices`], which sees the whole node at once and is the last gate before a store
+/// hears about any of it.
+async fn set_print_agent<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetPrintAgentRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let agent = match request.agent_device_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("agent_device_id", raw)]) {
+            Ok([agent]) => Some(DeviceProposalId::new(agent)),
+            Err(refusal) => return refusal,
+        },
+    };
+    if agent == Some(id) {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a device cannot be its own print agent",
+            &[("agent_device_id", "SELF_REFERENCE")],
+        );
+    }
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .devices
+        .set_agent(tenant_id, id, agent, expected.as_str())
+        .await
+    {
+        Ok(SetAgentOutcome::Updated) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device_proposal.set_agent",
+                "device_proposal",
+                &id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "agent_device_id": agent.map(|agent| agent.to_string()),
+                })),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(SetAgentOutcome::VersionMismatch) => version_mismatch(),
+        Ok(SetAgentOutcome::NotFound) => not_found("device"),
         Err(error) => device_error_response(&error),
     }
 }
@@ -6181,6 +6396,16 @@ where
     };
     let considered = approved.len();
     let node = compile_devices(&approved);
+    if let Some((printer, agent)) = unresolvable_agent(&node) {
+        return api_error_with_details(
+            ErrorStatus::Unprocessable,
+            "a device names a print agent that is not a terminal in this store's approved devices:              create the terminal, or clear the agent, then publish again",
+            &[
+                ("agent_device_id", &agent.to_string()),
+                ("device_id", &printer.to_string()),
+            ],
+        );
+    }
     let published_count = node.devices().len();
 
     let Ok(devices_value) = serde_json::to_value(&node) else {
@@ -6235,13 +6460,24 @@ where
 /// addresses are the same thing, rather than two ids an operator has to correlate by hand.
 ///
 /// A row with no connection is dropped rather than guessed at; see [`admin_publish_devices`].
+/// A `terminal` is the one exception, and the exception does not widen the rule: that rule exists to
+/// stop a USB printer's cash drawer being silently published as a network device's, and a terminal
+/// has neither a drawer nor an address to guess. Nothing dials it — the agent connects outbound to
+/// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
+/// is not a guess here, it is the accurate answer.
 fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
     PublishedDevices::new(
         approved
             .iter()
             .filter_map(|row| {
                 let device_id = row.id.parse::<Ulid>().ok().map(DeviceId::new)?;
-                let connection = row.connection.as_deref()?;
+                let connection = match row.connection.as_deref() {
+                    Some(connection) => Open::parse(&device_connection_token(connection)),
+                    None if row.kind == DeviceKind::Terminal.as_wire() => {
+                        Open::from_known(DeviceConnection::Unspecified)
+                    }
+                    None => return None,
+                };
                 let station_id = match row.station_id.as_deref() {
                     None => None,
                     // A station id that will not parse drops the *station*, not the device: the
@@ -6249,17 +6485,55 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                     // station until the approval is corrected.
                     Some(raw) => raw.parse::<Ulid>().ok().map(StationId::new),
                 };
+                let agent_device_id = match row.agent_device_id.as_deref() {
+                    None => None,
+                    // Same rule as the station, and the same safe direction: an agent id that will
+                    // not parse drops the *agent*, so the edge opens the address itself — which is
+                    // what it did before this field existed. In-store that is unchanged behaviour;
+                    // on a hosted edge it is a named `PRINTER_UNAVAILABLE` rather than silence.
+                    Some(raw) => raw.parse::<Ulid>().ok().map(DeviceId::new),
+                };
                 Some(PublishedDevice {
                     device_id,
                     kind: Open::parse(&device_kind_token(&row.kind)),
-                    connection: Open::parse(&device_connection_token(connection)),
+                    connection,
+                    // Verbatim, including a terminal's — `create_terminal` is the only writer of a
+                    // terminal row and writes an empty one, and there is no route that can set an
+                    // address on it. Blanking it here would make this function invent a value
+                    // instead of translating one.
                     address: row.address.clone(),
                     name: DisplayName::new(row.name.as_str()),
                     station_id,
+                    agent_device_id,
                 })
             })
             .collect(),
     )
+}
+
+/// The first device in `node` that names an agent the node cannot resolve to a `TERMINAL`.
+///
+/// The console's half of ADR-0112's two gates. It is checked here, over the compiled node, rather
+/// than at the moment an operator picks an agent, because *resolvable* is a property of the set
+/// being published and not of either row alone: the terminal may be approved after the pick, or
+/// archived before the publish, and only the compile sees both at once.
+///
+/// The two identity spaces this record spans make the precision matter. A paired device — a phone a
+/// waiter signed in on — is a pairing, not an approved device, so it has no entry here and no
+/// printer can name it. Refusing the *publish* is what makes that true at the store: an
+/// unresolvable reference never leaves the cloud, so the edge never has to decide what to do with
+/// one.
+fn unresolvable_agent(node: &PublishedDevices) -> Option<(DeviceId, DeviceId)> {
+    let terminals: BTreeSet<DeviceId> = node
+        .devices()
+        .iter()
+        .filter(|device| device.kind.known() == pos_proto::devices::DeviceKind::Terminal)
+        .map(|device| device.device_id)
+        .collect();
+    node.devices().iter().find_map(|device| {
+        let agent = device.agent_device_id?;
+        (!terminals.contains(&agent)).then_some((device.device_id, agent))
+    })
 }
 
 /// The node's prefixed token for a stored short kind name (`printer` → `DEVICE_KIND_PRINTER`).

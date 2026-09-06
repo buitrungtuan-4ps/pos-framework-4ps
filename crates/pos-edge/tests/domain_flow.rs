@@ -309,6 +309,8 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
         name: DisplayName::new("Counter"),
         // No station: this is the receipt printer.
         station_id: None,
+        // No agent: the edge opens the address itself, which is what this test drives.
+        agent_device_id: None,
     };
     let (app, token) = app_with(Some((
         printers,

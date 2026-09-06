@@ -39,6 +39,15 @@ wire_enum! {
     Printer = "PRINTER",
     /// A kitchen-display station.
     Kds = "KDS",
+    /// A fixed, mains-powered POS terminal that may hold a printer's transport on the edge's behalf
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// Nothing dials a terminal, so its [`PublishedDevice::address`] is empty and its
+    /// [`PublishedDevice::connection`] is `DEVICE_CONNECTION_UNSPECIFIED` — the agent opens a
+    /// connection to the edge, never the other way round. It is also the one kind no store can
+    /// *discover*: nothing on a LAN announces itself as a till, so an operator creates the entry in
+    /// the console and the named admin who created it is the human gate ADR-0041 was protecting.
+    Terminal = "TERMINAL",
 }
 
 wire_enum! {
@@ -112,6 +121,25 @@ pub struct PublishedDevice {
     /// ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub station_id: Option<StationId>,
+    /// The device whose transport reaches this printer
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// **Absent means the edge is the agent**, which is what the edge has always done and what every
+    /// in-store placement keeps doing: the box opens the address itself. Present, it names a
+    /// [`DeviceKind::Terminal`] in this same node, and the edge renders the document and hands the
+    /// bytes to that terminal's agent instead of opening a transport.
+    ///
+    /// It lives on the printer because a printer's agent is a fact about that printer, in the same
+    /// category as its connection and its address — both of which are already here. A separate node
+    /// would be two records that can disagree about one device, and the config tree's never-blank
+    /// rule ([ADR-0033](../../../docs/adr/0033-config-tree.md)) makes disagreement durable: one node
+    /// updates, the other keeps its previous value, and the store prints somewhere nobody chose.
+    ///
+    /// An older edge that does not know this field ignores it and opens the address, which is the
+    /// safe direction: in-store that is the behaviour it already had, and on a hosted edge it opens
+    /// a device path that is not there and reports a named refusal rather than failing silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_device_id: Option<DeviceId>,
 }
 
 /// The `devices` config node: the store's approved, addressable devices.
@@ -158,6 +186,7 @@ mod tests {
             address: "192.0.2.10:9100".to_owned(),
             name: DisplayName::new("Counter"),
             station_id: station,
+            agent_device_id: None,
         }
     }
 
@@ -221,6 +250,55 @@ mod tests {
             serde_json::to_value(&unknown.kind).expect("re-serialize"),
             serde_json::json!("DEVICE_KIND_LABEL"),
             "the original token survives a round trip through a build that predates it"
+        );
+    }
+
+    #[test]
+    fn a_printer_that_names_no_agent_says_so_by_omission_and_the_edge_opens_the_address() {
+        // The whole compatibility claim of ADR-0112 in one assertion: a fleet takes this release and
+        // prints tomorrow as it printed today, because for every store that configures nothing the
+        // field is not on the wire at all. A node full of explicit nulls would also work, and would
+        // make every publish diff carry a change nobody made.
+        let json = serde_json::to_string(&PublishedDevices::new(vec![device(None)])).expect("json");
+        assert!(
+            !json.contains("agent_device_id"),
+            "a printer the edge opens itself names no agent: {json}"
+        );
+        let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(
+            back.devices().first().expect("one device").agent_device_id,
+            None
+        );
+    }
+
+    #[test]
+    fn a_printer_may_name_the_terminal_whose_transport_reaches_it() {
+        let terminal = DeviceId::new(Ulid::from_u128(7));
+        let raw = r#"{"devices":[
+            {"device_id":"00000000000000000000000007","kind":"DEVICE_KIND_TERMINAL",
+             "connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Till 1"},
+            {"device_id":"00000000000000000000000001","kind":"DEVICE_KIND_PRINTER",
+             "connection":"DEVICE_CONNECTION_USB","address":"/dev/usb/lp0","name":"Counter",
+             "agent_device_id":"00000000000000000000000007"}
+        ]}"#;
+        let node: PublishedDevices = serde_json::from_str(raw).expect("the node parses");
+        let mut listed = node.devices().iter();
+        let till = listed.next().expect("the terminal");
+        let printer = listed.next().expect("the printer");
+        assert_eq!(till.kind.known(), DeviceKind::Terminal);
+        assert!(
+            till.address.is_empty(),
+            "nothing dials a terminal, so it publishes no address"
+        );
+        assert_eq!(
+            till.connection.known(),
+            DeviceConnection::Unspecified,
+            "a terminal is not attached to the edge at all: the agent connects outbound"
+        );
+        assert_eq!(
+            printer.agent_device_id,
+            Some(terminal),
+            "the printer names the terminal that holds its transport"
         );
     }
 

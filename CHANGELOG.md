@@ -42,6 +42,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A printer may name the terminal whose transport reaches it**
+  ([ADR-0112](docs/adr/0112-print-agents.md), Program C Phase 1 — the second of five slices).
+
+  The published `devices` node gains `agent_device_id` on a device and `TERMINAL` on the kind, and
+  the console gains the two writes that fill them: `POST /admin/devices/terminals` creates the
+  approved terminal row, `POST /admin/devices/proposals/{id}/agent` points a printer at it (both
+  behind `console.device.manage`, audited, the picker with an `If-Match`).
+
+  **Absent means the edge is the agent.** That is the whole compatibility story: the field is omitted
+  from the wire entirely for a store that configures nothing, so a fleet takes this release and
+  prints tomorrow the way it printed today. An older edge that does not know the field ignores it.
+
+  A terminal is created in the console rather than proposed by a store, because nothing on a LAN
+  announces itself as a till — the named admin who creates the entry *is* the human gate that
+  approval exists to be. It publishes with an empty address and `DEVICE_CONNECTION_UNSPECIFIED`:
+  nothing dials a terminal, the agent connects outbound to the edge.
+
+  `POST /admin/devices/publish` refuses a node whose `agent_device_id` does not resolve to a
+  `TERMINAL` in that same node, naming both the reference and the device that made it. That refusal
+  is what makes "a paired phone can never be a print agent" true at the store — a phone that paired
+  is a pairing and nothing else, has no approved entry, and so an unresolvable reference never leaves
+  the cloud.
+
+  **Nothing enqueues yet.** The edge still opens every printer's transport directly. The branch that
+  hands bytes to an agent lands with the claim and acknowledge routes.
+
+  **Upgrade note** Migration `0056_device_agent.sql` adds one nullable column and a partial index, on
+  the next cloud start. No `PROTOCOL_VERSION` change: the node field and the kind are both additive,
+  and `Open<DeviceKind>` already retains a token an older edge does not know.
+
 - **The store's edge holds a durable, bounded, time-limited print queue**
   ([ADR-0112](docs/adr/0112-print-agents.md), Program C Phase 1 — the first of five slices).
 

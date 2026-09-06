@@ -33,8 +33,13 @@ pub struct DeviceProposalRow {
     /// The kitchen station this device serves — recorded at approval, `None` for the counter's
     /// receipt printer and while pending.
     pub station_id: Option<String>,
+    /// The `terminal` row whose transport reaches this printer (ADR-0112). `None` — the ordinary
+    /// case — means the edge opens the address itself.
+    pub agent_device_id: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
+    /// The row's `xmin`, as a string: the version a conditional write must match (ADR-0094).
+    pub version: String,
 }
 
 /// The device-proposal store over a shared pool. Built by
@@ -90,7 +95,8 @@ impl PostgresDeviceProposals {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT id, store_id, kind, name, address, connection, station_id, status \
+                "SELECT id, store_id, kind, name, address, connection, station_id, \
+                        agent_device_id, status, xmin::text \
                  FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
@@ -108,9 +114,94 @@ impl PostgresDeviceProposals {
                 address: row.get(4),
                 connection: row.get(5),
                 station_id: row.get(6),
-                status: row.get(7),
+                agent_device_id: row.get(7),
+                status: row.get(8),
+                version: row.get(9),
             })
             .collect())
+    }
+
+    /// Inserts an **already-approved** `terminal` row (ADR-0112).
+    ///
+    /// The one device kind that skips propose→approve, because nothing on a LAN announces itself as
+    /// a till: the console write by a named admin *is* the human decision ADR-0041's approval step
+    /// exists to be. `connection` and `station_id` stay null and `address` is empty — nothing dials
+    /// a terminal, the agent connects outbound to the edge — and `resolved_at` is stamped because
+    /// this row is resolved the moment it exists.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    pub async fn create_terminal(
+        &self,
+        id: &str,
+        tenant_id: &str,
+        store_id: &str,
+        name: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO device_proposals \
+                   (id, tenant_id, store_id, kind, name, address, status, resolved_at) \
+                 VALUES ($1, $2, $3, 'terminal', $4, '', 'approved', now())",
+                &[&id, &tenant_id, &store_id, &name],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Points an **approved** row at `agent_device_id`, or clears it with `None`, only if the row is
+    /// still at `expected` (ADR-0094's conditional write, ADR-0112's agent picker).
+    ///
+    /// Returns `Some(version)` for the row's new version, or `None` when nothing was changed — which
+    /// covers both "no such approved row in this tenant" and "the row moved on". The caller
+    /// separates those two with [`Self::version_of`], because they are different answers to a
+    /// console: one says the device is gone, the other says re-read and try again.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_agent(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        agent_device_id: Option<&str>,
+        expected: &str,
+    ) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "UPDATE device_proposals SET agent_device_id = $3 \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $4 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &id, &agent_device_id, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// The version an **approved** row currently holds, or `None` if this tenant has no such row.
+    ///
+    /// Only ever asked after a conditional write changed nothing, to tell a stale caller apart from
+    /// one naming a device that is not there.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn version_of(&self, tenant_id: &str, id: &str) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT xmin::text FROM device_proposals \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved'",
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
     }
 
     /// Moves a **pending** proposal to `status` (`approved`/`rejected`) within `tenant_id`, stamping

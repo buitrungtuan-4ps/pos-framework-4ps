@@ -58,6 +58,46 @@ routes; the two gates on binding a terminal; the agent binary, the console entry
 alert. Nothing enqueues yet — `dispatch` still opens every transport directly, so every store prints
 exactly as it did.
 
+## Delivery — 2026-09-06, a printer names its agent
+
+The **binding** shipped, cloud-side and on the wire. `PublishedDevice` gained
+`agent_device_id: Option<DeviceId>` and `DeviceKind` gained `TERMINAL`
+([`devices.rs`](../../crates/pos-proto/src/devices.rs)); `pos_cloud::devices::DeviceKind` learned
+`Terminal` / `"terminal"`; migration
+[`0056_device_agent.sql`](../../crates/adapters/store-postgres/migrations/0056_device_agent.sql)
+added the nullable column; `compile_devices` carries the pointer and publishes a terminal with an
+empty address and `DEVICE_CONNECTION_UNSPECIFIED`; and `POST /admin/devices/publish` refuses a node
+whose `agent_device_id` does not resolve to a `TERMINAL` in that node.
+
+**Both console writes shipped with it, because the field has no other author.** `POST
+/admin/devices/terminals` writes the approved `TERMINAL` row directly, and `POST
+/admin/devices/proposals/{id}/agent` is the picker — both behind `ConsolePermission::ManageDevices`
+with an audit entry, and the picker with an `If-Match` ([ADR-0094](0094-console-optimistic-concurrency.md))
+as this record specified. Landing the node field without them would have shipped a wire field nobody
+could fill.
+
+Three things are worth recording because scoping settled them:
+
+- **The picker does not check that its target is a terminal, and that is not a gap.** *Resolvable* is
+  a property of the set being published, not of either row: the terminal may be created after the
+  pick, or archived before the publish. Only the compile sees the whole node at once, so that is
+  where the check lives — and refusing the *publish* is what makes "a paired phone can never be a
+  print agent" true at the store, because an unresolvable reference never leaves the cloud.
+- **The version comes from `xmin`, so the `If-Match` cost no schema.** The registry's conditional
+  writes already read `xmin::text` as an opaque token; `device_proposals` needed only to select it.
+  `resolve` (approve/reject) stays unconditional — it acts on `pending` rows and the picker on
+  `approved` ones, so the two cannot race for the same row, and making an existing route conditional
+  would be a behaviour change to the console this slice did not ask for.
+- **The connectionless-row skip gained one exception and kept its scope.** That rule exists to stop a
+  USB printer's cash drawer being published as a network device's; a terminal has neither a drawer
+  nor an address, and `DEVICE_CONNECTION_UNSPECIFIED` is the accurate answer rather than a guess. If
+  the skip had taken terminals, no `agent_device_id` could ever have resolved.
+
+**Not in this slice.** `PrintWake` and the two claim routes; `POST /api/print/agent` and its revoke;
+the agent binary, the console screen and the silence alert. `dispatch` still opens every transport
+directly, and no store's node carries an agent until an operator picks one — so every store prints
+exactly as it did.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not

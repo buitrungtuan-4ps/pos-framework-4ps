@@ -48,7 +48,7 @@ use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore}
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
-    DeviceProposalSummary, PersistedDeviceProposal,
+    DeviceProposalSummary, PersistedDeviceProposal, SetAgentOutcome,
 };
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
 use pos_cloud::floorplan::{
@@ -3687,13 +3687,28 @@ struct DeviceRow {
     /// Recorded at approval, not at discovery (ADR-0100).
     connection: Option<DeviceConnection>,
     station_id: Option<StationId>,
+    /// Picked in the console, never discovered (ADR-0112). `None` — the ordinary case — means the
+    /// edge opens the address itself.
+    agent_device_id: Option<DeviceProposalId>,
     status: DeviceProposalStatus,
+    /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
+    /// reason about. Bumped by every write that changes the row.
+    version: Version,
 }
 
 /// The device-proposal store as a flat list, exactly as the real table reads.
 #[derive(Clone, Default)]
 struct FakeDevices {
     rows: Arc<Mutex<Vec<DeviceRow>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeDevices {
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
 }
 
 impl DeviceProposalStore for FakeDevices {
@@ -3709,7 +3724,9 @@ impl DeviceProposalStore for FakeDevices {
             // or which station it serves (ADR-0100). Approval fills them in.
             connection: None,
             station_id: None,
+            agent_device_id: None,
             status: DeviceProposalStatus::Pending,
+            version: self.mint(),
         });
         Ok(())
     }
@@ -3738,7 +3755,9 @@ impl DeviceProposalStore for FakeDevices {
                 address: row.address.clone(),
                 connection: row.connection.map(|kind| kind.short_name().to_owned()),
                 station_id: row.station_id.map(|id| id.to_string()),
+                agent_device_id: row.agent_device_id.map(|id| id.to_string()),
                 status: row.status.as_wire().to_owned(),
+                version: row.version.to_string(),
             })
             .collect())
     }
@@ -3761,10 +3780,56 @@ impl DeviceProposalStore for FakeDevices {
                 };
                 row.connection = connection;
                 row.station_id = station;
+                row.version = self.mint();
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    async fn create_terminal(
+        &self,
+        proposal: &PersistedDeviceProposal,
+    ) -> Result<(), DeviceProposalError> {
+        self.rows.lock().expect("lock").push(DeviceRow {
+            id: proposal.id,
+            tenant: proposal.tenant_id,
+            store: proposal.store_id,
+            kind: proposal.kind,
+            name: proposal.name.clone(),
+            address: proposal.address.clone(),
+            // A terminal has neither: nothing dials it, and it serves no station — it is the thing
+            // that *writes* to a printer, not a thing a fired line routes to.
+            connection: None,
+            station_id: None,
+            agent_device_id: None,
+            // Created resolved. The console write by a named admin *is* the decision, because
+            // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
+            status: DeviceProposalStatus::Approved,
+            version: self.mint(),
+        });
+        Ok(())
+    }
+
+    async fn set_agent(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        agent: Option<DeviceProposalId>,
+        expected: &str,
+    ) -> Result<SetAgentOutcome, DeviceProposalError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
+        }) else {
+            return Ok(SetAgentOutcome::NotFound);
+        };
+        if row.version.as_str() != expected {
+            return Ok(SetAgentOutcome::VersionMismatch);
+        }
+        row.agent_device_id = agent;
+        row.version = self.mint();
+        Ok(SetAgentOutcome::Updated)
     }
 }
 
@@ -4003,6 +4068,383 @@ async fn approved_devices_compile_into_the_published_config_node() {
         device["device_id"], oven,
         "the unapproved one is not published"
     );
+}
+
+/// Creates a terminal in the console and returns its device id.
+async fn create_terminal(
+    router: &axum::Router,
+    cookie: &str,
+    tenant_ulid: &str,
+    store_ulid: &str,
+    name: &str,
+) -> String {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/terminals",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "name": name,
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route the terminal create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert_eq!(
+        body["status"], "approved",
+        "a terminal is created resolved: the console write is the decision"
+    );
+    body["id"].as_str().expect("an id").to_owned()
+}
+
+/// The version an approved device is currently at, read the way the console reads it.
+async fn approved_device_version(
+    router: &axum::Router,
+    token: &str,
+    store_ulid: &str,
+    id: &str,
+) -> String {
+    let listed = router
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{store_ulid}/devices"),
+            Some(token),
+        ))
+        .await
+        .expect("route the approved list");
+    let rows = json_body(listed).await;
+    rows.as_array()
+        .expect("an array")
+        .iter()
+        .find(|row| row["id"] == id)
+        .and_then(|row| row["version"].as_str())
+        .expect("the device carries the version a conditional write needs")
+        .to_owned()
+}
+
+/// A terminal is created in the console, and the publish carries it rather than skipping it
+/// (**ADR-0112**).
+///
+/// Two claims in one path, because they only matter together. The connectionless-row skip exists to
+/// stop a USB printer's cash drawer being published as a network device's; a terminal has neither a
+/// drawer nor an address, so the skip must not take it — and if it did, no printer could ever name
+/// an agent, because the reference would never resolve.
+#[tokio::test]
+async fn a_terminal_is_published_with_no_address_and_an_unspecified_connection() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let till = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Till 1").await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "store_id": store_ulid.clone() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let summary = json_body(published).await;
+    assert_eq!(
+        summary["device_count"], 1,
+        "the terminal is published, not skipped for having no connection"
+    );
+    assert_eq!(summary["skipped_count"], 0);
+
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the config read");
+    let document = json_body(effective).await;
+    let listed = document["devices"]["devices"]
+        .as_array()
+        .expect("the devices node is an array");
+    let device = listed.first().expect("the terminal");
+    assert_eq!(device["device_id"], till);
+    assert_eq!(device["kind"], "DEVICE_KIND_TERMINAL");
+    assert_eq!(
+        device["address"], "",
+        "nothing dials a terminal: the agent connects outbound to the edge"
+    );
+    assert_eq!(
+        device["connection"], "DEVICE_CONNECTION_UNSPECIFIED",
+        "not a guess — a terminal is not attached to the edge at all"
+    );
+}
+
+/// A printer names the terminal whose transport reaches it, and the node carries the pointer
+/// (**ADR-0112**).
+///
+/// Asserted end to end — create the terminal, approve the printer, pick the agent, publish, read the
+/// tree — because the value of this slice is that the four sit on one path. The pick alone proves
+/// nothing about what a store receives.
+#[tokio::test]
+async fn a_printer_names_its_agent_and_the_published_node_carries_it() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let till = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Till 1").await;
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "/dev/usb/lp0").await;
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=usb"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let picked = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "agent_device_id": till.clone() }),
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the agent pick");
+    assert_eq!(picked.status(), StatusCode::NO_CONTENT);
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "store_id": store_ulid.clone() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the config read");
+    let document = json_body(effective).await;
+    let listed = document["devices"]["devices"]
+        .as_array()
+        .expect("the devices node is an array");
+    let printer = listed
+        .iter()
+        .find(|device| device["device_id"] == counter)
+        .expect("the printer is published");
+    assert_eq!(
+        printer["agent_device_id"], till,
+        "the printer names the terminal that holds its transport"
+    );
+    let terminal = listed
+        .iter()
+        .find(|device| device["device_id"] == till)
+        .expect("the terminal is published beside it");
+    assert!(
+        terminal["agent_device_id"].is_null(),
+        "a terminal has no agent of its own"
+    );
+}
+
+/// A publish refuses a node whose agent does not resolve to a terminal **in that node**
+/// (**ADR-0112**, the console's half of the two gates).
+///
+/// The pick itself cannot decide this: the terminal may be created after it, or archived before the
+/// publish. Only the compile sees the whole set at once, which is why the check lives there — and
+/// refusing there is what makes "a paired phone can never be a print agent" true at the store, since
+/// an unresolvable reference never leaves the cloud.
+#[tokio::test]
+async fn a_publish_refuses_an_agent_that_is_not_a_terminal_in_the_node() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // Two printers, and one is pointed at the other. Both are real, approved devices — which is the
+    // point: existing is not the same as being a terminal.
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "/dev/usb/lp0").await;
+    let oven = propose_printer(&router, &token, &store_ulid, "Oven", "192.168.1.52:9100").await;
+    for id in [&counter, &oven] {
+        let approved = router
+            .clone()
+            .oneshot(post_with_cookie(
+                &format!(
+                    "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=usb"
+                ),
+                &serde_json::json!({}) as &serde_json::Value,
+                &cookie,
+            ))
+            .await
+            .expect("route the approve");
+        assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+    }
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let picked = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "agent_device_id": oven.clone() }),
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the agent pick");
+    assert_eq!(
+        picked.status(),
+        StatusCode::NO_CONTENT,
+        "the pick is stored; resolvability is the publish's question, not this route's"
+    );
+
+    let published = router
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "store_id": store_ulid.clone() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(published).await;
+    assert_eq!(body["error"]["status"], "UNPROCESSABLE");
+    let details = body["error"]["details"]
+        .as_array()
+        .expect("the refusal names what to fix");
+    assert_eq!(details[0]["field"], "agent_device_id");
+    assert_eq!(
+        details[0]["reason"], oven,
+        "which reference did not resolve"
+    );
+    assert_eq!(details[1]["field"], "device_id");
+    assert_eq!(details[1]["reason"], counter, "and which device names it");
+}
+
+/// Picking an agent is a conditional write (**ADR-0094**, **ADR-0112**).
+///
+/// Two managers picking different agents for one printer is the ordinary race here, and
+/// last-write-wins would leave the loser believing a decision that is not in the database.
+#[tokio::test]
+async fn picking_an_agent_needs_the_version_the_device_was_read_at() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let till = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Till 1").await;
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "/dev/usb/lp0").await;
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=usb"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid.clone(),
+        "agent_device_id": till.clone(),
+    });
+
+    // No `If-Match` at all is an ordinary missing-field refusal, not a silent last-write-wins.
+    let unconditional = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &body,
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional pick");
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+    let refusal = json_body(unconditional).await;
+    assert_eq!(refusal["error"]["details"][0]["field"], "if-match");
+
+    // The first pick succeeds and moves the row on; the same token replayed is now stale.
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let first = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &body,
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the first pick");
+    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    let replayed = router
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "agent_device_id": null }),
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the stale pick");
+    assert_eq!(
+        replayed.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "the second manager is told to re-read rather than silently overwriting the first"
+    );
+}
+
+/// A device cannot be its own print agent (**ADR-0112**).
+///
+/// The publish would refuse it anyway — a printer is not a terminal — but the refusal is worth
+/// making at the pick, where an operator is looking at the screen that caused it.
+#[tokio::test]
+async fn a_device_cannot_be_its_own_print_agent() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "/dev/usb/lp0").await;
+    let refused = router
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/agent"),
+            &serde_json::json!({
+                "tenant_id": tenant_ulid.clone(),
+                "agent_device_id": counter.clone(),
+            }),
+            &cookie,
+            "1",
+        ))
+        .await
+        .expect("route the self-reference");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "agent_device_id");
+    assert_eq!(body["error"]["details"][0]["reason"], "SELF_REFERENCE");
 }
 
 /// Approving without saying how the device is attached is refused, not guessed at (**ADR-0100**).

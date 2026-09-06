@@ -5710,6 +5710,177 @@ mod device_proposals {
         });
     }
 
+    /// A terminal is written approved, and an approved device points at it conditionally
+    /// (ADR-0112).
+    ///
+    /// Three claims the fake cannot settle, because they are the database's: a terminal row is
+    /// created already `approved` (there is no proposal for anyone to resolve), the agent pointer
+    /// round-trips through the column the publish reads, and the conditional write is decided by
+    /// `xmin` — a real version the adapter does not mint itself.
+    #[test]
+    fn a_terminal_is_created_approved_and_an_agent_pick_is_conditional() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Till 1")
+                .await
+                .expect("create the terminal");
+            devices
+                .create(
+                    "PRN1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Counter",
+                    "/dev/usb/lp0",
+                )
+                .await
+                .expect("propose the printer");
+            devices
+                .mark(
+                    TENANT_A,
+                    "PRN1",
+                    "approved",
+                    Some(DeviceConnection::Usb),
+                    None,
+                )
+                .await
+                .expect("approve the printer");
+
+            let approved = devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices");
+            assert_eq!(
+                approved.len(),
+                2,
+                "the terminal is approved on creation, with no resolve step of its own"
+            );
+            let terminal = approved
+                .iter()
+                .find(|row| row.id == "TILL1")
+                .expect("the terminal");
+            assert_eq!(terminal.kind, "terminal");
+            assert_eq!(terminal.address, "", "nothing dials a terminal");
+            assert_eq!(
+                terminal.connection, None,
+                "a terminal is not attached to the edge at all"
+            );
+            let printer = approved
+                .iter()
+                .find(|row| row.id == "PRN1")
+                .expect("the printer");
+            assert_eq!(
+                printer.agent_device_id, None,
+                "absent means the edge opens the address itself"
+            );
+
+            // A pick against the version the row is at succeeds and moves it on.
+            let moved = devices
+                .set_agent(TENANT_A, "PRN1", Some("TILL1"), &printer.version)
+                .await
+                .expect("the conditional pick")
+                .expect("a matching version writes");
+            assert_ne!(
+                moved, printer.version,
+                "the write moves the row to a new version"
+            );
+
+            // The same token replayed is stale, and the row is unchanged.
+            assert!(
+                devices
+                    .set_agent(TENANT_A, "PRN1", None, &printer.version)
+                    .await
+                    .expect("the stale pick")
+                    .is_none(),
+                "a caller holding the old version does not silently overwrite the new one"
+            );
+            assert_eq!(
+                devices
+                    .version_of(TENANT_A, "PRN1")
+                    .await
+                    .expect("the current version"),
+                Some(moved.clone()),
+                "and the row still holds what the first pick left"
+            );
+            let after = devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("re-read");
+            assert_eq!(
+                after
+                    .iter()
+                    .find(|row| row.id == "PRN1")
+                    .and_then(|row| row.agent_device_id.clone()),
+                Some("TILL1".to_owned()),
+                "the agent pointer round-trips through the column the publish reads"
+            );
+        });
+    }
+
+    /// Only an **approved** device in **this** tenant can be pointed at an agent (ADR-0112).
+    ///
+    /// Two scopes on one statement, split out from the round trip above so each failure names
+    /// itself: a pending proposal has no place to print from yet, and one tenant must not reach
+    /// another's devices — the isolation every statement in this table carries.
+    #[test]
+    fn an_agent_pick_reaches_only_this_tenant_s_approved_devices() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Till 1")
+                .await
+                .expect("create the terminal");
+            devices
+                .create(
+                    "PRN1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Counter",
+                    "/dev/usb/lp0",
+                )
+                .await
+                .expect("propose the printer");
+            assert!(
+                devices
+                    .version_of(TENANT_A, "PRN1")
+                    .await
+                    .expect("a pending row's version")
+                    .is_none(),
+                "a pending proposal is not addressable yet: it has no version to write against"
+            );
+
+            devices
+                .mark(
+                    TENANT_A,
+                    "PRN1",
+                    "approved",
+                    Some(DeviceConnection::Usb),
+                    None,
+                )
+                .await
+                .expect("approve the printer");
+            let version = devices
+                .version_of(TENANT_A, "PRN1")
+                .await
+                .expect("the approved row's version")
+                .expect("an approved row has one");
+            assert!(
+                devices
+                    .set_agent("tenant-b", "PRN1", Some("TILL1"), &version)
+                    .await
+                    .expect("cross-tenant pick")
+                    .is_none(),
+                "the tenant scope stops one tenant picking another's print agent"
+            );
+        });
+    }
+
     /// Migration 0055 repairs the rows a two-spelling seam already wrote.
     ///
     /// Typing the argument stops the mistake being made again; it does nothing for the approvals
