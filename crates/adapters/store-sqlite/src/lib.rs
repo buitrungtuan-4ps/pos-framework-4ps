@@ -28,4 +28,4 @@ mod writer;
 
 pub use store::SqliteStore;
 pub use tx::SqliteTx;
-pub use writer::OUTBOX_CAPACITY;
+pub use writer::{ClaimedPrintJob, OUTBOX_CAPACITY, PrintEnqueue, QueuedPrintJob};

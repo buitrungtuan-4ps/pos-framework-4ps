@@ -24,8 +24,8 @@ use pos_proto::ulid::Ulid;
 use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
-    self, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, RegistryCommand, SelfTestRow,
-    SubjectWrite,
+    self, ClaimedPrintJob, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow, PrintEnqueue,
+    QueuedPrintJob, RegistryCommand, SelfTestRow, SubjectWrite,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -233,6 +233,87 @@ impl SqliteStore {
             })
             .await?;
         stored_generation(held)
+    }
+
+    /// Puts a rendered job on an agent's queue, unless that printer is at `cap`
+    /// (migration 0009, [ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// The instants and the cap are the caller's, deliberately: the TTL and the allowance are
+    /// constants in one edge module, so changing one is a release rather than a schema change, and
+    /// this adapter holds no clock and no policy.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn enqueue_print_job(
+        &self,
+        job: QueuedPrintJob,
+        queued_at_ms: i64,
+        expires_at_ms: i64,
+        cap: u32,
+    ) -> Result<PrintEnqueue, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::EnqueuePrintJob {
+                job,
+                queued_at_ms,
+                expires_at_ms,
+                cap,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Leases the oldest claimable job for each printer this agent owns
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the lease fails.
+    pub async fn claim_print_jobs(
+        &self,
+        agent_device_id: String,
+        now_ms: i64,
+        claim_expires_at_ms: i64,
+    ) -> Result<Vec<ClaimedPrintJob>, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::ClaimPrintJobs {
+                agent_device_id,
+                now_ms,
+                claim_expires_at_ms,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Deletes an acknowledged job, reporting whether it was still queued
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// `false` is not a failure: an acknowledgement can legitimately arrive after the job expired,
+    /// or a second time after a lost reply.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the delete fails.
+    pub async fn acknowledge_print_job(&self, job_id: String) -> Result<bool, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::AcknowledgePrintJob { job_id, reply }
+        })
+        .await
+    }
+
+    /// Deletes every job past its TTL, reporting how many
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the delete fails.
+    pub async fn expire_print_jobs(&self, now_ms: i64) -> Result<u64, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::ExpirePrintJobs { now_ms, reply }
+        })
+        .await
     }
 
     /// The lease generation this store holds, or `None` if it has never taken one.

@@ -14,6 +14,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **The store's edge holds a durable, bounded, time-limited print queue**
+  ([ADR-0112](docs/adr/0112-print-agents.md), Program C Phase 1 — the first of five slices).
+
+  Migration `0009_print_jobs.sql` adds `print_jobs` to the store's own SQLite: one row per job, keyed
+  on `job_id`, holding the target printer, the owning agent, the rendered document and three instants
+  (queued, expires, claim expiry). It is a **side record, not an event** — the document is a rendered
+  receipt that may carry a buyer's name and tax code, so it is the `intake_ledger` category: never
+  logged, never published, deleted on acknowledgement or expiry.
+
+  Durable because all three ways it fails are ordinary — a tablet sleeps, a terminal reboots
+  mid-service, a USB cable is knocked out — and a queue in either process's memory loses jobs to all
+  of them.
+
+  The bounds are the point. The cap is counted **per printer** and over unexpired rows only, so one
+  jammed kitchen printer cannot consume the receipt printer's budget on the same terminal. A claim
+  leases **one job per printer at a time**, because ESC/POS is a byte stream and two writers to one
+  print head interleave garbage — while a jammed device still does not stall its neighbours. A claim
+  that is not acknowledged lapses, so an agent that dies holding a job does not hold it forever. And a
+  job past its TTL is deleted rather than delivered: a ticket printed an hour late is cooked against a
+  bill that settled and walks out to a table that left.
+
+  **Nothing enqueues yet.** The dispatch site still opens every printer's transport directly, exactly
+  as it does today; the branch that chooses an agent lands with the claim and acknowledge routes.
+
+  **Upgrade note** A new additive migration, applied on the next edge start. No `PROTOCOL_VERSION`
+  change, no published field, no behaviour change for any store.
+
 ### Fixed
 
 - **A store on its first lease can no longer have its "previous machine" retired**

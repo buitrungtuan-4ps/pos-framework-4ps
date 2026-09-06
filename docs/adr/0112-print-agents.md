@@ -23,6 +23,41 @@ Third of the five records on the **Edge Anywhere** programme, after
 [ADR-0114](0114-region-is-required-recorded-visible.md). All five are on disk, so all five are
 linked.
 
+## Delivery — 2026-09-06, the queue
+
+The **durable queue** shipped: migration
+[`0009_print_jobs.sql`](../../crates/adapters/store-sqlite/migrations/0009_print_jobs.sql) and the
+four operations over it in
+[`store-sqlite`](../../crates/adapters/store-sqlite/src/writer.rs) — enqueue, claim, acknowledge,
+expire — proven against real SQLite in
+[`tests/print_queue.rs`](../../crates/adapters/store-sqlite/tests/print_queue.rs).
+
+Two things this record specified turned out to be load-bearing in a way worth recording, because the
+first wiring got one of them wrong:
+
+- **"One job per printer at a time" is not "exclude the claimed row."** Filtering only the leased row
+  leaves the printer's *next* job claimable, so an agent holding one job is handed a second — two
+  writers to one print head, which is the interleaved-bytes failure this record cites as the reason
+  for the rule in the first place. The claim skips any printer holding an unexpired live claim,
+  whole. A test asserting that a second claim returns nothing is what caught it.
+- **The cap must ignore expired rows.** Counting them would leave a printer that jammed for longer
+  than the TTL permanently refusing work, on the strength of tickets nobody will ever collect.
+
+**The five constants are not here.** The TTL, the claim lease and the allowance are the caller's:
+this adapter holds no clock and no policy, and takes computed instants and a cap. That is what keeps
+them in one edge module, where changing one is a release rather than a schema change — and it is why
+the tests exercise the boundary with a cap of two rather than writing two hundred rows.
+
+**`AgentUnavailable` is deliberately not an outcome of the enqueue.** It is decided *before* the
+table is touched, from the agent binding and when it was last heard from — facts the queue does not
+hold — and the ordering is part of the decision: a queue must not start building behind a box that is
+not there.
+
+**Not in this slice.** `agent_device_id` and `DeviceKind::Terminal`; `PrintWake` and the two claim
+routes; the two gates on binding a terminal; the agent binary, the console entry and the silence
+alert. Nothing enqueues yet — `dispatch` still opens every transport directly, so every store prints
+exactly as it did.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not
