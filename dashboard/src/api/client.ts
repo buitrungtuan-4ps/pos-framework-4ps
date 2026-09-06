@@ -1778,16 +1778,39 @@ export const api = {
     ),
   /** Issues a store's next lease generation (ADR-0108), optionally *moving* it (ADR-0110).
    *
+   *  `heldGeneration` is the authoritative generation the caller read, and it is **required** — the
+   *  route is a conditional write (ADR-0094). Pass `null` for a store that has never been issued a
+   *  lease, which sends `If-Match: *`. Two admins bumping one store at once would otherwise both be
+   *  told they succeeded while only one placement stuck.
+   *
    *  `edgePlacement` names where the new machine runs and is a **move**. Omitting it is ADR-0003's
    *  swap of the machine in place and keeps whatever the store had — so a caller with nothing to say
    *  must send nothing, never `EDGE_PLACEMENT_UNSPECIFIED`, which the server refuses precisely
-   *  because it would make a request that looks like a move quietly not be one. */
-  bumpStoreLease: (tenantId: string, storeId: string, edgePlacement?: string) =>
-    requestJson<PublishedConfig>("POST", "/admin/config/lease/bump", {
-      tenant_id: tenantId,
-      store_id: storeId,
-      ...(edgePlacement ? { edge_placement: edgePlacement } : {}),
-    }),
+   *  because it would make a request that looks like a move quietly not be one.
+   *
+   *  `acknowledgeUndrained` names a generation whose machine still holds events this cloud has never
+   *  seen. Without it the route refuses such a bump (`422`), because moving a store off that machine
+   *  abandons a night's trading; with it, the abandonment is a recorded decision with a name on it. */
+  bumpStoreLease: (
+    tenantId: string,
+    storeId: string,
+    heldGeneration: number | null,
+    edgePlacement?: string,
+    acknowledgeUndrained?: number,
+  ) =>
+    requestJsonIfMatchRaw<PublishedConfig>(
+      "POST",
+      "/admin/config/lease/bump",
+      heldGeneration === null ? "*" : `"${heldGeneration}"`,
+      {
+        tenant_id: tenantId,
+        store_id: storeId,
+        ...(edgePlacement ? { edge_placement: edgePlacement } : {}),
+        ...(acknowledgeUndrained === undefined
+          ? {}
+          : { acknowledge_undrained: acknowledgeUndrained }),
+      },
+    ),
 
   // --- OTA rollout levers (ADR-0078, Track O3) ---
   // The published rollout is a store's `fleet_update` config node. Reading it is behind

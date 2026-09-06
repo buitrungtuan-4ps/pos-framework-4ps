@@ -22,7 +22,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   **Upgrade note.** `POST /admin/config/lease/bump` now **requires** an `If-Match` header naming the
   generation the caller read — or `*` for a store that has never been issued a lease. A request
-  without one is refused. Any caller outside the console must be updated.
+  without one is refused. The console sends it (the Fleet screen already reads that generation for
+  its superseded badge); **any caller outside the console must be updated.**
 
   Two refusals, and they answer different questions:
 
