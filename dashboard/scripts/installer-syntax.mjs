@@ -34,12 +34,33 @@ import {
   configToml,
   envFile,
   linuxInstaller,
+  printAgentInstallerTemplate,
   windowsInstaller,
   windowsInstallerTemplate,
 } from "../src/installers.mjs";
 
-/** The checked-in template, relative to this script. */
-const TEMPLATE = new URL("../../deploy/edge/install-pos-edge.ps1", import.meta.url);
+/**
+ * The checked-in templates, relative to this script, each with the generator it must match.
+ *
+ * Two entries rather than one variable, because the print agent's installer (ADR-0112) is a second
+ * script that runs elevated on a machine in a shop: it earns the same gate, for the same reason.
+ */
+const TEMPLATES = [
+  {
+    path: new URL("../../deploy/edge/install-pos-edge.ps1", import.meta.url),
+    name: "deploy/edge/install-pos-edge.ps1",
+    emit: "install-template.ps1",
+    generate: windowsInstallerTemplate,
+    generator: "windowsInstallerTemplate",
+  },
+  {
+    path: new URL("../../deploy/edge/install-pos-print-agent.ps1", import.meta.url),
+    name: "deploy/edge/install-pos-print-agent.ps1",
+    emit: "install-print-agent-template.ps1",
+    generate: printAgentInstallerTemplate,
+    generator: "printAgentInstallerTemplate",
+  },
+];
 
 /**
  * The stand-in for a store's scoped key.
@@ -147,31 +168,35 @@ mkdirSync(outDir, { recursive: true });
 
 let failures = 0;
 
-// The checked-in `deploy/edge/install-pos-edge.ps1` is emitted from the same generator, so this is
-// the check that keeps it from drifting: two definitions of a service registration is one that
-// nobody runs until a store will not come up.
-const onDisk = readFileSync(TEMPLATE, "utf8");
-// Compare content, not line-ending policy. A Windows checkout hands this back with CRLF — git's
-// `autocrlf` is on by default on the runner — while the generator emits LF, and without normalising
-// the gate fails on a file that has not drifted by a single character. `.gitattributes` pins the
-// checked-in file to LF so this should not arise; this is the belt to that pair of braces.
+// The checked-in templates are emitted from the same generators, so this is the check that keeps
+// them from drifting: two definitions of a service registration is one that nobody runs until a
+// store will not come up.
+//
+// Compare content, not line-ending policy. A Windows checkout hands these back with CRLF — git's
+// `autocrlf` is on by default on the runner — while the generators emit LF, and without normalising
+// the gate fails on a file that has not drifted by a single character. `.gitattributes` pins both
+// checked-in files to LF so this should not arise; this is the belt to that pair of braces.
 const lf = (text) => text.replace(/\r\n/gu, "\n");
-if (lf(onDisk) !== lf(windowsInstallerTemplate())) {
-  console.error(
-    "✗ deploy/edge/install-pos-edge.ps1 no longer matches windowsInstallerTemplate().\n" +
-      "  Regenerate it:  node -e 'import(\"./dashboard/src/installers.mjs\").then(m => " +
-      "require(\"fs\").writeFileSync(\"deploy/edge/install-pos-edge.ps1\", m.windowsInstallerTemplate()))'",
-  );
-  failures += 1;
-} else {
-  console.log("✓ deploy/edge/install-pos-edge.ps1 matches its generator");
-}
+for (const template of TEMPLATES) {
+  const onDisk = readFileSync(template.path, "utf8");
+  if (lf(onDisk) !== lf(template.generate())) {
+    console.error(
+      `✗ ${template.name} no longer matches ${template.generator}().\n` +
+        "  Regenerate it:  node -e 'import(\"./dashboard/src/installers.mjs\").then(m => " +
+        `require("fs").writeFileSync("${template.name}", m.${template.generator}()))'`,
+    );
+    failures += 1;
+  } else {
+    console.log(`✓ ${template.name} matches its generator`);
+  }
 
-// Written before any failure can exit: a drift failure must not also rob the Windows job of the one
-// file it most needs to parse. The first run of this gate did exactly that — the emission sat at the
-// end of the script, so the checked-in template was never parsed on the run that reported drift.
-if (emitFlag !== -1) {
-  writeFileSync(join(outDir, "install-template.ps1"), onDisk, "utf8");
+  // Written before any failure can exit: a drift failure must not also rob the Windows job of the
+  // files it most needs to parse. The first run of this gate did exactly that — the emission sat at
+  // the end of the script, so the checked-in template was never parsed on the run that reported
+  // drift.
+  if (emitFlag !== -1) {
+    writeFileSync(join(outDir, template.emit), onDisk, "utf8");
+  }
 }
 
 for (const testCase of CASES) {

@@ -16,6 +16,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A generated installer for the print agent, on Windows and Linux**
+  ([ADR-0112](docs/adr/0112-print-agents.md)).
+
+  `deploy/edge/install-pos-print-agent.ps1` and `deploy/edge/pos-print-agent.service` bring a
+  terminal up as a service: state directory, binary, config, service registration, the device token
+  in the service's own environment, the failure actions that decide whether it comes back after a
+  crash. The PowerShell half is emitted from `dashboard/src/installers.mjs` and checked for drift
+  and for parse errors by the same CI gates that already cover the edge's installer — a second
+  elevated script running on a machine in a shop earns the same gate.
+
+  **The device token moved out of the configuration file.** It is a credential, and the config sits
+  beside the state where whoever is diagnosing a printer will read it. `POS_PRINT_AGENT_TOKEN` is
+  now where it belongs — a registry key readable only by accounts that can read the service on
+  Windows, a root-owned `EnvironmentFile` on Linux — the same split the edge makes for
+  `POS_EDGE_SYNC_KEY`. A token in `print-agent.toml` is still honoured, because a technician
+  bringing one terminal up by hand should not need a second mechanism; the environment wins where
+  both are set.
+
+  `deploy/edge/README.md` gains the four things that have to be true before an agent prints
+  anything — a console `TERMINAL` entry, a printer naming it, a paired device, and a manager's
+  binding at the till — because skipping any one of them leaves an agent that runs and claims
+  nothing.
+
+  **Upgrade note** No migration and no `PROTOCOL_VERSION` change. A store whose edge runs in the shop
+  installs none of this and is unaffected. An agent already configured with `device_token` in its
+  file keeps working.
+
+### Added
+
 - **`pos_print_agent`: the binary that claims a store's tickets and writes them to a printer this
   machine owns** ([ADR-0112](docs/adr/0112-print-agents.md)).
 

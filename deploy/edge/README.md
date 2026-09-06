@@ -286,3 +286,74 @@ Two Linux details:
 open over USB, because port 9100 has no authentication (`docs/architecture.md` §5) — but nothing in
 the published device says a drawer is *wired* to a given printer, so none is kicked. ADR-0103 names
 the console field that closes it.
+
+## The print agent — for a store whose edge is not in the shop
+
+A printer's last hop is a cable, and a cable is in a building. When the edge runs somewhere other
+than that building ([ADR-0110](../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)), a
+printer that is plugged into a terminal cannot be dialled from it — so the terminal claims the
+rendered job instead and writes the bytes itself
+([ADR-0112](../../docs/adr/0112-print-agents.md)).
+
+**A store whose edge is in the shop needs none of this**, and should install none of it. That is not
+a recommendation; it is what the design is for. A published printer that names no agent is opened by
+the edge exactly as it always was.
+
+### What has to be true before it prints
+
+Four things, in this order, and skipping any one of them leaves an agent that runs and claims
+nothing:
+
+1. **A `TERMINAL` entry exists in the console** for this machine. Nothing discovers one — a terminal
+   is not a printer announcing itself on the LAN — so an admin creates it.
+2. **The printer's device entry names that terminal** as its agent, and the config is published.
+3. **This machine is paired with the store's edge**, which is what mints the device token below.
+4. **A manager binds this device to the terminal entry**, at the till, signed in. The binding is
+   exclusive: one terminal, one machine, refused rather than promoted, because two machines holding
+   one identity split a kitchen's tickets between them and nobody notices until service.
+
+Until (4) the agent runs and is told, on every claim, that it answers for no print agent. That is the
+honest state rather than a fault, and the log line says exactly that.
+
+### Linux
+
+```sh
+sudo install -d -o pos-agent -g pos-agent /var/lib/pos-print-agent
+sudo install -m 0755 pos_print_agent /usr/local/bin/pos_print_agent
+sudo tee /var/lib/pos-print-agent/print-agent.toml >/dev/null <<'TOML'
+edge_url   = "https://store-01.example.com"     # or http://192.0.2.10:8787 on a shop LAN
+state_path = "/var/lib/pos-print-agent/state.json"
+TOML
+sudo install -d -m 0750 /etc/pos-print-agent
+printf 'POS_PRINT_AGENT_TOKEN=%s\n' "$TOKEN" | sudo tee /etc/pos-print-agent/env >/dev/null
+sudo chmod 0600 /etc/pos-print-agent/env
+sudo cp pos-print-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now pos-print-agent
+```
+
+The token is **not** in the config file, deliberately: it is a credential, and the config sits beside
+the state where whoever is diagnosing a printer will read it. Same split the edge makes for
+`POS_EDGE_SYNC_KEY`.
+
+The unit puts the agent in the `lp` group and allows the three character-device classes a printer
+uses. A network printer needs none of that; a `/dev/usb/lp0` one needs all of it.
+
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-pos-print-agent.ps1 `
+    -Binary .\pos_print_agent.exe -EdgeUrl https://store-01.example.com -DeviceToken <token>
+```
+
+`install-pos-print-agent.ps1` is generated from `dashboard/src/installers.mjs` and checked for drift
+and for parse errors by CI, exactly as the edge's is. It sets the service's failure actions, which is
+the half that is easiest to skip and the half that decides whether the terminal comes back after a
+crash — and a crashed agent means a kitchen printing nothing while the till keeps reporting
+`QUEUED_TO_AGENT`, because the queue is doing its job.
+
+### What it does not do
+
+**No over-the-air updates.** The agent holds nothing that matters — one id per printer, so a
+reinstall costs at most one duplicated ticket — so it has no update slots and no rollback. Upgrading
+is replacing the binary and restarting. The edge's layout exists because a store's data does not
+survive being reinstalled; this one's does not need to.

@@ -253,6 +253,33 @@ reported to the console before the night ends, and the console's `TERMINAL` entr
 Until the installer lands, an agent is installed the way any small service is: put the binary
 somewhere, write `print-agent.toml`, and register it.
 
+### Correction — 2026-09-06, the installer landed and moved the token
+
+The installer above is now on the rail this record named: `printAgentInstallerTemplate()` in
+[`installers.mjs`](../../dashboard/src/installers.mjs), the generated
+[`install-pos-print-agent.ps1`](../../deploy/edge/install-pos-print-agent.ps1), and
+[`pos-print-agent.service`](../../deploy/edge/pos-print-agent.service) for Linux. The drift check and
+the PowerShell parse gate that already covered the edge's installer now cover this one too — a second
+elevated script running on a machine in a shop earns the same gate for the same reason.
+
+**Writing it moved the device token out of the configuration file**, which is the kind of correction
+an installer forces. The agent's `Config` required `device_token` in `print-agent.toml`; the
+installers put credentials in the service's own environment, and the two would not have worked
+together. The token now comes from `POS_PRINT_AGENT_TOKEN` — a registry key readable only by accounts
+that can read the service on Windows, a root-owned `EnvironmentFile` on Linux — and the file remains
+a fallback so a technician bringing one terminal up by hand needs no second mechanism. That is the
+split the edge already makes for `POS_EDGE_SYNC_KEY` under
+[ADR-0086](0086-edge-keyvault-and-activation.md); the config file beside the state is read by whoever is diagnosing
+a printer, and a credential does not belong in it.
+
+The unit is not a copy of the edge's, and the differences are all the same difference: **no update
+slots**, because the agent holds nothing that a reinstall would lose beyond one duplicated ticket;
+**no store key and no database**; a short `TimeoutStopSec`, because a stop mid-job leaves that job
+unacknowledged and the queue hands it back at the lease, so there is nothing to drain. The one thing
+copied unchanged is the restart posture, on both platforms, because a crashed agent is a kitchen
+printing nothing while the till keeps reporting `QUEUED_TO_AGENT` — the queue doing exactly its job,
+which is what makes the failure quiet.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not
