@@ -1281,7 +1281,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             &tenant.to_string(),
             &id.to_string(),
             status.as_wire(),
-            connection.map(DeviceConnection::as_wire),
+            connection,
             station.as_deref(),
         )
         .await

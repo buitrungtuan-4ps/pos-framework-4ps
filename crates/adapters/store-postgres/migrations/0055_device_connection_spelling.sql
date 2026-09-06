@@ -1,0 +1,33 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0055 — repair the `connection` values a two-spelling seam wrote into `device_proposals`.
+--
+-- `DeviceConnection` has two spellings, and ADR-0100's `devices.rs` says which belongs where: the
+-- short `usb` for this column and the console's `<select>`, the prefixed `DEVICE_CONNECTION_USB` for
+-- the config node. The seam that resolves an approval wrote the *node's* spelling into this column.
+-- Everything downstream then read a value it could not interpret:
+--
+--   * `compile_devices` builds the node's token by prefixing what it finds here, so a stored
+--     `DEVICE_CONNECTION_USB` was published as `DEVICE_CONNECTION_DEVICE_CONNECTION_USB`;
+--   * the edge retains a token it does not know and degrades it to `Network` — the posture that
+--     authorises least — so an approved **USB** printer reached its store as a network device: its
+--     cash drawer never opened (`may_open_a_drawer` is false off USB, docs/architecture.md §5) and
+--     its device path was dialled as a TCP address;
+--   * the console's device list showed the raw column, so the wrong word was on screen too.
+--
+-- A network printer kept working throughout, by coincidence: the safe degradation happened to be the
+-- posture it wanted. That is why this went unseen.
+--
+-- The code fix types the argument, so the spelling is now chosen once inside the adapter beside the
+-- column. This file repairs the rows already written under the old behaviour. It is a *data* repair,
+-- not a schema change: nothing is dropped, renamed, or made narrower, so the forward-only additive
+-- rule (ADR-0017) holds. It is idempotent by its own `WHERE`, which is what lets it run on every
+-- boot like every other file here — a row already carrying the short spelling is not matched.
+--
+-- Values are lower-cased on the way out because that is what `DeviceConnection::from_short_name`
+-- parses. A value that is neither spelling is left exactly as it is: this repairs a known mistake,
+-- and guessing at an unfamiliar one is how the original bug got its foothold.
+UPDATE device_proposals
+   SET connection = lower(substring(connection FROM length('DEVICE_CONNECTION_') + 1))
+ WHERE connection LIKE 'DEVICE\_CONNECTION\_%';

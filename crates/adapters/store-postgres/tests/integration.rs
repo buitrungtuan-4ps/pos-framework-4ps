@@ -5590,7 +5590,9 @@ mod reconcile_query {
 // ---------------------------------------------------------------------------
 
 mod device_proposals {
-    use super::{TENANT_A, block_on, prepared};
+    use pos_proto::devices::DeviceConnection;
+
+    use super::{TENANT_A, block_on, port_err, prepared};
 
     #[test]
     fn propose_list_and_resolve_round_trip() {
@@ -5642,7 +5644,13 @@ mod device_proposals {
             // facts approval adds (ADR-0100).
             assert!(
                 devices
-                    .mark(TENANT_A, "DEV1", "approved", Some("usb"), None)
+                    .mark(
+                        TENANT_A,
+                        "DEV1",
+                        "approved",
+                        Some(DeviceConnection::Usb),
+                        None
+                    )
                     .await
                     .expect("approve"),
                 "a pending proposal is resolved"
@@ -5654,10 +5662,14 @@ mod device_proposals {
             assert_eq!(approved.len(), 1);
             let row = approved.first().expect("one row");
             assert_eq!(row.id, "DEV1");
+            // Stored, and stored in the *short* spelling — asserted here rather than left to prose.
+            // This is the check that was missing: the seam wrote the config node's prefixed
+            // `DEVICE_CONNECTION_USB` into this column instead, `compile_devices` prefixed that a
+            // second time, and the store received a token no build can read.
             assert_eq!(
                 row.connection.as_deref(),
-                Some("usb"),
-                "approval's connection is stored, not discarded"
+                Some(DeviceConnection::Usb.short_name()),
+                "approval's connection is stored, in the spelling every reader parses"
             );
             assert_eq!(
                 row.station_id, None,
@@ -5684,12 +5696,74 @@ mod device_proposals {
             // And another tenant cannot resolve this tenant's proposal.
             assert!(
                 !devices
-                    .mark("tenant-b", "DEV2", "approved", Some("network"), None)
+                    .mark(
+                        "tenant-b",
+                        "DEV2",
+                        "approved",
+                        Some(DeviceConnection::Network),
+                        None
+                    )
                     .await
                     .expect("cross-tenant"),
                 "the tenant scope stops one tenant resolving another's proposal"
             );
         });
+    }
+
+    /// Migration 0055 repairs the rows a two-spelling seam already wrote.
+    ///
+    /// Typing the argument stops the mistake being made again; it does nothing for the approvals
+    /// already in a production database. Those rows carry the config node's `DEVICE_CONNECTION_USB`
+    /// where the column's contract is `usb`, and until they are repaired every one of them still
+    /// publishes a token no build can read — a USB printer arriving at its store as a network
+    /// device, cash drawer disabled. So the repair runs at boot with the rest of the schema, and
+    /// this proves it on a row written the old way.
+    #[test]
+    fn the_migration_repairs_a_connection_written_in_the_node_s_spelling() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+
+            // A row exactly as the old seam left it, alongside one already spelled correctly and one
+            // carrying a value that is neither — the last is the case the repair must not touch.
+            admin
+                .batch_execute(
+                    "INSERT INTO device_proposals                        (id, tenant_id, store_id, kind, name, address, status, connection) VALUES                        ('OLD1', 'tenant-a', 'store-1', 'printer', 'Counter', '/dev/usb/lp0',                         'approved', 'DEVICE_CONNECTION_USB'),                        ('OK1', 'tenant-a', 'store-1', 'printer', 'Bar', '10.0.0.9:9100',                         'approved', 'network'),                        ('ODD1', 'tenant-a', 'store-1', 'printer', 'Label', '10.0.0.8:9100',                         'approved', 'infrared')",
+                )
+                .await
+                .expect("seed rows written under the old behaviour");
+
+            // Re-running the schema is what a boot does; the repair is idempotent by its own WHERE.
+            store.migrate().await.map_err(port_err)?;
+            store.migrate().await.map_err(port_err)?;
+
+            let devices = store.device_proposals();
+            let rows = devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the repaired rows");
+            let spelling = |id: &str| {
+                rows.iter()
+                    .find(|row| row.id == id)
+                    .and_then(|row| row.connection.clone())
+            };
+            assert_eq!(
+                spelling("OLD1").as_deref(),
+                Some("usb"),
+                "the node's spelling is repaired to the column's"
+            );
+            assert_eq!(
+                spelling("OK1").as_deref(),
+                Some("network"),
+                "a row already correct is left alone"
+            );
+            assert_eq!(
+                spelling("ODD1").as_deref(),
+                Some("infrared"),
+                "a value that is neither spelling is left exactly as it is, not guessed at"
+            );
+            Ok::<(), pos_contract_tests::harness::HarnessError>(())
+        })
+        .expect("the repair runs");
     }
 }
 

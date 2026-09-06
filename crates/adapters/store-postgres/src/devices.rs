@@ -10,6 +10,7 @@
 use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
+use pos_proto::devices::DeviceConnection;
 
 use crate::store::{pool_unavailable, unavailable};
 
@@ -120,6 +121,14 @@ impl PostgresDeviceProposals {
     /// A rejection passes `None` for both, and they stay null: they describe a device the store will
     /// address, and a rejected one never will.
     ///
+    /// `connection_kind` is **typed**, and the column's spelling is chosen here, once, beside the
+    /// column it is written to. A [`DeviceConnection`] has two spellings — the short `usb` this
+    /// column and the console's `<select>` carry, and the prefixed `DEVICE_CONNECTION_USB` the
+    /// config node carries — and a caller holding the enum has no way to know which this table
+    /// wants. Taking `&str` here left that choice at the call site, where it was made wrongly: the
+    /// prefixed token went into the column, the publisher prefixed it a second time, and every
+    /// approved USB printer reached its store as a network device with its cash drawer disabled.
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
@@ -128,9 +137,10 @@ impl PostgresDeviceProposals {
         tenant_id: &str,
         id: &str,
         status: &str,
-        connection_kind: Option<&str>,
+        connection_kind: Option<DeviceConnection>,
         station_id: Option<&str>,
     ) -> Result<bool, PortError> {
+        let connection_kind = connection_kind.map(DeviceConnection::short_name);
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let changed = connection
             .execute(
