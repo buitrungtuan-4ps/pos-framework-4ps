@@ -18,14 +18,40 @@
 //! backwards is not monotonic — which is the whole mechanism. The `lease` config node the edge reads
 //! is **derived** from this row by the bump that wrote it; no admin route accepts one in a body.
 //!
+//! # Why the edge placement rides along
+//!
+//! [ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) gives a store one new
+//! attribute — *where* its edge runs — and makes the bump the only thing that writes it. That is not
+//! a convenience: order the two writes and there is an interval in which the store record and the
+//! lease disagree, and every reader inside it is reading a lie. Write the column first and the
+//! console says "Offline-capable: no" about a box that is still selling; write it when the move
+//! settles, hours later, and the console promises offline trading about a store that has been hosted
+//! since Tuesday. So [`LeaseStore::bump`] takes the placement and returns it, one act.
+//!
 //! A trait, so it runs against an in-memory fake in tests and a `store-postgres` upsert in the
 //! cloud (the impl lives in [`crate::persistence`], the SQL in `store-postgres`).
 
 use core::future::Future;
 
 use pos_core::lease::LeaseGeneration;
+use pos_proto::enums::EdgePlacement;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
+
+/// What one bump wrote: the generation it issued, and the edge placement the store now has
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// The pair is the point. `edge_placement` is written by the bump and by nothing else, so returning
+/// it here is the only way a caller learns the store's placement without a second read — and a
+/// second read is precisely the window ADR-0110 closed by making the two one write. A bump that
+/// named no placement still gets one back: whatever the store already had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseBump {
+    /// The generation just issued. `0` for a store's first-ever lease.
+    pub generation: LeaseGeneration,
+    /// Where the machine holding that generation runs.
+    pub edge_placement: EdgePlacement,
+}
 
 /// Issues and reads a store's authoritative lease generation.
 pub trait LeaseStore {
@@ -37,6 +63,11 @@ pub trait LeaseStore {
     /// establishes the counter that later bumps move. Every bump after that supersedes whatever box
     /// holds the previous number.
     ///
+    /// `edge_placement` is `Some` when the bump is **moving** the store to a machine in a different
+    /// place, and `None` when it is replacing the machine where it already is — ADR-0003's swap. A
+    /// `None` keeps whatever the store had; there is no route that writes the placement on its own,
+    /// which is what makes the column and the generation impossible to disagree.
+    ///
     /// # Errors
     ///
     /// [`LeaseStoreError`] if the row could not be written.
@@ -45,7 +76,8 @@ pub trait LeaseStore {
         tenant: TenantId,
         store: StoreId,
         issued_at: Timestamp,
-    ) -> impl Future<Output = Result<LeaseGeneration, LeaseStoreError>> + Send;
+        edge_placement: Option<EdgePlacement>,
+    ) -> impl Future<Output = Result<LeaseBump, LeaseStoreError>> + Send;
 
     /// The store's authoritative generation, or `None` if it has never been issued a lease.
     ///

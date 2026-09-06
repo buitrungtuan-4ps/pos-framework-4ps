@@ -99,7 +99,7 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
-use pos_proto::enums::SalesChannel;
+use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
@@ -760,6 +760,10 @@ struct FakeConfigTrees {
     /// The authoritative lease generation per store, mirroring `store_lease` (ADR-0108). Absent
     /// until the first bump, which is what "no lease in force" means.
     leases: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
+    /// The edge placement per store, mirroring the `store_lease.edge_placement` column added by
+    /// migration 0052 (ADR-0110). Keyed and written only by [`LeaseStore::bump`], exactly as the
+    /// column is, so a test cannot set it by a route that does not exist.
+    placements: Arc<Mutex<HashMap<(TenantId, StoreId), EdgePlacement>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -770,18 +774,36 @@ struct FakeConfigTrees {
 impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
     /// Bumps in memory exactly as the adapter's one statement does: absent starts at generation 0,
     /// present moves to `generation + 1`, and there is no way to set an arbitrary value.
+    ///
+    /// The placement follows the same `COALESCE` the SQL does — a bump that names one sets it, a
+    /// bump that names none keeps what is there, and a store's first bump with none falls to the
+    /// column's `IN_STORE` default. Both maps are written under the same call, which is the property
+    /// ADR-0110 is about; a fake that updated them separately would pass tests the real column
+    /// could not.
     async fn bump(
         &self,
         tenant: TenantId,
         store: StoreId,
         _issued_at: Timestamp,
-    ) -> Result<pos_core::lease::LeaseGeneration, pos_cloud::lease::LeaseStoreError> {
+        edge_placement: Option<EdgePlacement>,
+    ) -> Result<pos_cloud::lease::LeaseBump, pos_cloud::lease::LeaseStoreError> {
         let mut leases = self.leases.lock().expect("lock");
+        let mut placements = self.placements.lock().expect("lock");
         let next = leases
             .get(&(tenant, store))
             .map_or(0, |held: &u64| held.saturating_add(1));
         leases.insert((tenant, store), next);
-        Ok(pos_core::lease::LeaseGeneration::new(next))
+        let placement = edge_placement.unwrap_or_else(|| {
+            placements
+                .get(&(tenant, store))
+                .copied()
+                .unwrap_or(EdgePlacement::InStore)
+        });
+        placements.insert((tenant, store), placement);
+        Ok(pos_cloud::lease::LeaseBump {
+            generation: pos_core::lease::LeaseGeneration::new(next),
+            edge_placement: placement,
+        })
     }
 
     async fn current(
@@ -10326,6 +10348,30 @@ fn ota_app_hosting(
     ))
 }
 
+/// The OTA levers with a real trail behind them, for the tests that assert what a bump *recorded*
+/// rather than what it wrote. `ota_app` uses a no-op recorder, which is fine for the routes whose
+/// evidence is the config tree and useless for the ones whose evidence is the audit entry.
+fn ota_app_with_audit(
+    admin: FakeAdmin,
+    config_trees: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_full(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+    );
+    http::router(app).merge(http::ota_config_router(
+        config_trees,
+        admin,
+        clock(),
+        audit,
+        FakeReleases::default(),
+    ))
+}
+
 #[tokio::test]
 async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
     let config_trees = FakeConfigTrees::default();
@@ -10514,6 +10560,180 @@ async fn a_lease_bump_advances_the_authority_and_publishes_the_node_the_store_re
     assert_eq!(
         parsed.generation(),
         pos_core::lease::LeaseGeneration::new(1)
+    );
+}
+
+/// The `edge_placement` recorded by the most recent `config.lease.bump`, and whether that bump chose
+/// it. Read from the trail rather than from the fake's own map, because the trail is what an
+/// operator answering "when did this store become hosted, and who moved it?" actually has.
+async fn last_bump_placement(audit: &FakeAudit) -> (String, bool) {
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let after = recorded
+        .iter()
+        .find(|entry| entry.action == "config.lease.bump")
+        .expect("a bump was audited")
+        .after
+        .clone()
+        .expect("a bump records what it wrote");
+    (
+        after["edge_placement"]
+            .as_str()
+            .expect("the trail names the placement")
+            .to_owned(),
+        after["edge_placement_moved"]
+            .as_bool()
+            .expect("the trail says whether this bump moved the store"),
+    )
+}
+
+#[tokio::test]
+async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
+    let audit = FakeAudit::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // A first bump that names nothing puts the store under the lease where every store in the fleet
+    // already is. `IN_STORE` is the column's default rather than something the route invents, so a
+    // console that never learned the field keeps working and keeps telling the truth.
+    let first = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/bump",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route the first bump");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        last_bump_placement(&audit).await,
+        ("EDGE_PLACEMENT_IN_STORE".to_owned(), false),
+        "a bump that named no placement did not move the store"
+    );
+
+    // Naming one is a move, and it is the same act as issuing the generation — one request, one
+    // write. The trail records both halves, so "who moved this store off the shop LAN, and when"
+    // has an answer that does not require reading a second table at a second time (ADR-0110).
+    let moved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/bump",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "edge_placement": "EDGE_PLACEMENT_HOSTED_BY_PLATFORM",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the move");
+    assert_eq!(moved.status(), StatusCode::OK);
+    assert_eq!(
+        last_bump_placement(&audit).await,
+        ("EDGE_PLACEMENT_HOSTED_BY_PLATFORM".to_owned(), true),
+        "naming a placement moves the store, and the trail says so"
+    );
+
+    // ADR-0003's swap: the hosted box is replaced by another hosted box. The generation moves and
+    // the placement does not, because the request named none. This is the case that would break if
+    // a bump silently reset the column — a store quietly readvertised as offline-capable when it is
+    // not, which is the one direction ADR-0110 calls dangerous.
+    let swapped = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/bump",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("route the swap");
+    assert_eq!(swapped.status(), StatusCode::OK);
+    assert_eq!(
+        last_bump_placement(&audit).await,
+        ("EDGE_PLACEMENT_HOSTED_BY_PLATFORM".to_owned(), false),
+        "a swap in place keeps the placement it had"
+    );
+
+    // The generation kept moving throughout: 0, 1, 2. The placement rode along inside those writes
+    // rather than beside them.
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert_eq!(json_body(read).await["generation"], 2);
+}
+
+#[tokio::test]
+async fn a_placement_the_framework_does_not_define_is_refused_by_name() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    // Three refusals that all have to be refusals, and would each be a different silent bug:
+    //
+    //   * a token from nowhere — a typo, or a console built against a fork that added a mode;
+    //   * the empty string — a form field the operator opened and left blank, which must not read
+    //     as "keep what you had", because that hides the mistake;
+    //   * an explicit UNSPECIFIED — the wire's "this message did not say", which looks like an
+    //     answer and is not. Omitting the field is how you mean that.
+    for token in [
+        "EDGE_PLACEMENT_ON_THE_MOON",
+        "",
+        "EDGE_PLACEMENT_UNSPECIFIED",
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/config/lease/bump",
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "store_id": store_ulid,
+                    "edge_placement": token,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the bump");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{token} is not a placement this framework defines"
+        );
+        let body = json_body(refused).await;
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("EDGE_PLACEMENT_HOSTED_BY_OPERATOR"),
+            "the refusal names what it accepts, not only what it rejected: {message}"
+        );
+        assert_eq!(body["error"]["details"][0]["field"], "edge_placement");
+    }
+
+    // And nothing moved. A refused bump must not have issued a generation on the way to refusing:
+    // the store is still one nobody has leased.
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert!(
+        json_body(read).await["generation"].is_null(),
+        "a refusal that had already bumped the counter would supersede a box for a typo"
     );
 }
 

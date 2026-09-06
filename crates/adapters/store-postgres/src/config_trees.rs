@@ -25,6 +25,22 @@ pub struct PostgresConfigTrees {
     pool: Pool,
 }
 
+/// What one lease bump wrote: the generation it issued and the edge placement the store now has
+/// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md),
+/// [ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// The two travel together because one statement wrote them, and a caller that took only the
+/// generation would have to read the placement back in a second query — reopening exactly the
+/// window ADR-0110 closed by making them one write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredBump {
+    /// The generation just issued. `0` for a store's first-ever lease.
+    pub generation: i64,
+    /// The store's edge placement as an `EDGE_PLACEMENT_*` token, whether this bump set it or kept
+    /// the one already there. Read from `RETURNING`, never echoed from the request.
+    pub edge_placement: String,
+}
+
 impl PostgresConfigTrees {
     pub(crate) fn new(pool: Pool) -> Self {
         Self { pool }
@@ -214,13 +230,20 @@ impl PostgresConfigTrees {
         Ok(())
     }
 
-    /// Issues this store's next lease generation and returns it — a **bump**, and the only write
-    /// this adapter offers ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+    /// Issues this store's next lease generation and returns it, together with the edge placement
+    /// the store now has — a **bump**, and the only write this adapter offers
+    /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md),
+    /// [ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
     /// A store with no row starts at generation `0`, which ADR-0049 names as "the first lease a
     /// store ever issues"; an existing row moves to `generation + 1`. There is deliberately no
     /// set-to-a-value and no decrement: an authority that takes a number from its caller is not one,
     /// and a generation that can move backwards is not monotonic, which is the entire mechanism.
+    ///
+    /// `edge_placement` is `Some` when the bump is moving the store to a different machine and
+    /// `None` when it is replacing the machine in place — ADR-0003's swap — in which case the store
+    /// keeps the placement it had. It is written **in this same statement**, which is why the row
+    /// and the generation beside it can never disagree: there is no window between them to read.
     ///
     /// One statement, so two admins bumping at once serialise on the row rather than racing to the
     /// same number.
@@ -233,21 +256,37 @@ impl PostgresConfigTrees {
         tenant: TenantId,
         store_id: StoreId,
         issued_at_ms: i64,
-    ) -> Result<i64, PortError> {
+        edge_placement: Option<&str>,
+    ) -> Result<StoredBump, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        // `$4` is NULL for a bump that names no placement. On insert the column falls to its schema
+        // default (`IN_STORE`, what every store in the fleet already is); on conflict `COALESCE`
+        // keeps the stored value. Reading the placement back out of `RETURNING` rather than echoing
+        // the argument is deliberate: the caller audits what the store *now is*, which for a
+        // no-placement bump is a value it never sent.
+        let requested = edge_placement.map(ToOwned::to_owned);
         let row = connection
             .query_one(
-                "INSERT INTO store_lease (tenant_id, store_id, generation, issued_at) \
-                 VALUES ($1, $2, 0, $3) \
+                "INSERT INTO store_lease (tenant_id, store_id, generation, issued_at, edge_placement) \
+                 VALUES ($1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE')) \
                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                  generation = store_lease.generation + 1, \
-                 issued_at = EXCLUDED.issued_at \
-                 RETURNING generation",
-                &[&tenant.to_string(), &store_id.to_string(), &issued_at_ms],
+                 issued_at = EXCLUDED.issued_at, \
+                 edge_placement = COALESCE($4, store_lease.edge_placement) \
+                 RETURNING generation, edge_placement",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &issued_at_ms,
+                    &requested,
+                ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(row.get(0))
+        Ok(StoredBump {
+            generation: row.get(0),
+            edge_placement: row.get(1),
+        })
     }
 
     /// The store's authoritative lease generation, or `None` if it has never been issued one.

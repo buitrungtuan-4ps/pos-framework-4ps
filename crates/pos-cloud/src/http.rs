@@ -94,7 +94,7 @@ use pos_proto::channels::{
 use pos_proto::determinism::ClockSource;
 use pos_proto::devices::{DeviceConnection, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
-use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
+use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
@@ -10828,6 +10828,22 @@ struct OtaRolloutQuery {
     store_id: String,
 }
 
+/// A `POST /admin/config/lease/bump` body: the `(tenant, store)` whose next generation to issue, and
+/// optionally where the machine taking it runs
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// `edge_placement` absent means "replace the machine where the store already is" — ADR-0003's swap,
+/// and every bump this route served before the field existed, which is why it defaults rather than
+/// being required. Present, it means the store is **moving**, and this is the only route in the tree
+/// that writes the value.
+#[derive(Debug, Clone, Deserialize)]
+struct BumpLeaseRequest {
+    tenant_id: String,
+    store_id: String,
+    #[serde(default)]
+    edge_placement: Option<String>,
+}
+
 /// A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —
 /// its ring, and the stable canary bucket that fixes its place in the fleet ramp.
 #[derive(Debug, Clone, Deserialize)]
@@ -11318,10 +11334,24 @@ where
 /// *is* a store is store management, and the person who does it is the person who provisions
 /// hardware, not the person who runs an upgrade campaign. The audit entry names the generation
 /// issued, so "who replaced this box, and when" has an answer.
+///
+/// # The third thing that must not drift apart
+///
+/// [ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) makes *where* the store
+/// runs an attribute of the store, and this route the only writer of it. A body naming
+/// `edge_placement` is a **move**; a body omitting it is a swap in place, and keeps whatever the
+/// store had. Either way the value is written inside the bump's own statement, so a reader can never
+/// catch the two disagreeing — which is not fussiness but the difference between a console that says
+/// "Offline-capable: yes" about a hosted store and one that does not.
+///
+/// An explicit `EDGE_PLACEMENT_UNSPECIFIED` is refused rather than accepted as "no change". On the
+/// wire that token means *this message did not say*, so a caller that sends it has said nothing in a
+/// field that looks like it said something; omitting the field is how you mean that, and a refusal
+/// that says so beats a request that appears to move a store and does not.
 async fn admin_bump_lease<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
-    Json(request): Json<OtaRolloutQuery>,
+    Json(request): Json<BumpLeaseRequest>,
 ) -> Response
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
@@ -11347,19 +11377,37 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
+    let requested_placement = match request.edge_placement.as_deref() {
+        None => None,
+        Some(token) => match EdgePlacement::from_wire(token) {
+            Some(EdgePlacement::Unspecified) | None => {
+                return api_error_with_details(
+                    ErrorStatus::InvalidArgument,
+                    "edge_placement must be one of EDGE_PLACEMENT_IN_STORE, \
+                     EDGE_PLACEMENT_HOSTED_BY_OPERATOR, EDGE_PLACEMENT_HOSTED_BY_PLATFORM — \
+                     omit the field to keep the store where it is",
+                    &[("edge_placement", "UNKNOWN_VALUE")],
+                );
+            }
+            Some(placement) => Some(placement),
+        },
+    };
     // The counter moves first. If the publish then fails the store is on a generation no till has
     // been told about, which is the safe half of the split: every box keeps the generation it holds
     // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
     // publish a generation the authority never issued.
-    let generation = match state
+    //
+    // The placement rides inside that same write rather than following it, so there is no interval
+    // in which the store record and the lease disagree (ADR-0110).
+    let bump = match state
         .config_trees
-        .bump(tenant_id, store_id, state.clock.now())
+        .bump(tenant_id, store_id, state.clock.now(), requested_placement)
         .await
     {
-        Ok(generation) => generation,
+        Ok(bump) => bump,
         Err(error) => return lease_store_error_response(&error),
     };
-    let node = lease_node(generation);
+    let node = lease_node(bump.generation);
     publish_ota_node(
         &state,
         &context,
@@ -11370,7 +11418,15 @@ where
             key: "lease",
             node,
             action: "config.lease.bump",
-            detail: serde_json::json!({ "generation": generation.value() }),
+            // `edge_placement` is what the store now is; `edge_placement_moved` says whether this
+            // bump chose it. Without the second flag the trail cannot tell a store that was moved
+            // to a hosted machine from one whose already-hosted box was swapped — the same row
+            // either way, and only one of them is a change of what the store can promise.
+            detail: serde_json::json!({
+                "generation": bump.generation.value(),
+                "edge_placement": bump.edge_placement.as_wire(),
+                "edge_placement_moved": requested_placement.is_some(),
+            }),
         },
     )
     .await

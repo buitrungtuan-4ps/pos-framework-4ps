@@ -248,12 +248,48 @@ wire_enum! {
     Cancelled = "CANCELLED",
 }
 
+wire_enum! {
+    /// Where a store's edge runs
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// One binary, one SQLite database, one lease, one API key — this says only *where
+    /// the machine sits*, and no line of domain code reads it. What it does decide is
+    /// what a store can promise and what a signal means. [ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)'s
+    /// offline guarantee belongs to `IN_STORE` alone: a hosted store whose WAN is down
+    /// cannot sell, because the till is a browser on the counter and the edge is
+    /// somewhere else. And a missed heartbeat means "the store may well be selling and
+    /// we cannot see it" for one mode and "the store is dark" for the other two — same
+    /// absence, opposite urgency.
+    ///
+    /// Never a bare `placement`: that word already names an item's place in a menu
+    /// (`MenuPlacement`) and a store's place in an OTA rollout
+    /// (`/admin/config/ota/placement`).
+    ///
+    /// The value is written **only** by a lease bump, inside the bump's own statement,
+    /// and it always means the placement of the machine holding the authoritative
+    /// generation — not the machine that happens to be running.
+    EdgePlacement, prefix = "EDGE_PLACEMENT";
+    /// On a machine on the shop's own LAN, reached by the tills over that LAN. Sells
+    /// with the cable to the internet unplugged. Every store today, and the default.
+    InStore = "IN_STORE",
+    /// On a machine the operator owns and is accountable for — a VPS, a rack in their
+    /// office, a box in a regional hub. The platform does not provision it and has no
+    /// shell on it; it learns about the store the same way it learns about any other.
+    HostedByOperator = "HOSTED_BY_OPERATOR",
+    /// On a machine the platform stands up when an admin picks a region and presses
+    /// Start ([ADR-0113](../../../docs/adr/0113-the-host-agent.md)).
+    ///
+    /// Identical software over identical connections to `HOSTED_BY_OPERATOR`; the line
+    /// between the two is who owns the machine and who is accountable when it stops.
+    HostedByPlatform = "HOSTED_BY_PLATFORM",
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
-        SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState, UnitOfMeasure,
-        VendorAvailability,
+        BillState, EdgePlacement, OrderLineState, OrderState, PaymentMethod, PaymentOutcome,
+        ReductionKind, SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
+        UnitOfMeasure, VendorAvailability,
     };
     use crate::wire_enum::{Open, WireEnum};
 
@@ -310,6 +346,7 @@ mod tests {
         check::<ShipmentStatus>("SHIPMENT_STATUS");
         check::<UnitOfMeasure>("UNIT_OF_MEASURE");
         check::<VendorAvailability>("VENDOR_AVAILABILITY");
+        check::<EdgePlacement>("EDGE_PLACEMENT");
     }
 
     #[test]
@@ -342,6 +379,37 @@ mod tests {
         let absent = Open::<PaymentOutcome>::default();
         assert!(absent.is_unspecified());
         assert!(absent.require().is_err());
+    }
+
+    #[test]
+    fn an_edge_placement_never_collides_with_the_two_placements_that_came_first() {
+        // The prefix is the whole point of the name. `MenuPlacement` and the OTA
+        // rollout placement own the bare word; a token that dropped the prefix would
+        // reintroduce the collision ADR-0110 spent a section avoiding.
+        for placement in EdgePlacement::ALL {
+            let token = placement.as_wire();
+            assert!(
+                token.starts_with("EDGE_PLACEMENT_"),
+                "{token} would be ambiguous against MenuPlacement and the OTA placement"
+            );
+        }
+        assert_eq!(
+            EdgePlacement::ALL.len(),
+            4,
+            "three modes plus UNSPECIFIED — a fourth mode is an ADR, not a patch"
+        );
+    }
+
+    #[test]
+    fn a_bump_that_names_nothing_is_unspecified_rather_than_in_store() {
+        // The wire's zero value means "the request did not say", and the *store* keeps
+        // whatever it had. Collapsing the two — reading absence as IN_STORE at the wire
+        // — would turn every bump that forgot the field into a silent move back to the
+        // shop LAN, which is the one direction ADR-0110 calls dangerous: a promise of
+        // offline trading, restored by accident, in front of a queue.
+        let absent = Open::<EdgePlacement>::default();
+        assert!(absent.is_unspecified());
+        assert_ne!(absent.known(), EdgePlacement::InStore);
     }
 
     #[test]

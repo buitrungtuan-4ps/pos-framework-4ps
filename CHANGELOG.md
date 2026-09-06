@@ -16,6 +16,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store records where its edge runs, and the lease bump is the only thing that can write it**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  `pos_edge` gains one degree of freedom — *where* it runs — as a store attribute with three modes:
+  `EDGE_PLACEMENT_IN_STORE` (a box on the shop LAN, what every store is today and the default),
+  `EDGE_PLACEMENT_HOSTED_BY_OPERATOR`, and `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`. No line of domain
+  code reads it. What it decides is what a store can *promise*: ADR-0001's offline guarantee belongs
+  to the in-store mode alone, because a hosted store whose WAN is down has a till on the counter and
+  an edge somewhere else.
+
+  `POST /admin/config/lease/bump` takes an optional `edge_placement`. Naming one is a **move**;
+  omitting it is a swap of the machine in place, and keeps whatever the store had — so every console
+  that never learned the field keeps working and keeps telling the truth. The value is written inside
+  the bump's own statement, never beside it: order the two and there is an interval where the store
+  record and the lease disagree, and a console reading it says "Offline-capable: yes" about a store
+  that has been hosted since Tuesday.
+
+  There is deliberately **no** route that writes the placement alone. The column lives on
+  `store_lease`, whose only write is the bump, rather than on `stores`, which already has an update
+  path — so "nothing else can write it" is a property of the schema instead of a rule somebody has to
+  remember. The audit entry records the placement and whether that bump chose it, which is what
+  separates "this store was moved off the shop LAN" from "this already-hosted box was replaced".
+
+  An unknown token, an empty string and an explicit `EDGE_PLACEMENT_UNSPECIFIED` are all refused,
+  naming what the field accepts. The last is the interesting one: on the wire that token means *this
+  message did not say*, so accepting it as "no change" would let a request that looks like a move
+  quietly not be one.
+
+- **A migration file nothing runs now fails the build** (found while adding the one above).
+
+  `store-postgres` applies its migrations from a hand-maintained list, and a file added without the
+  two lines beside it is invisible until a *fresh* database is missing a table at runtime. That has
+  already happened once, to five files at once. Two tests now read the runner's own source: every
+  `.sql` in the directory must be both declared and executed, and the executions must be in numeric
+  order, since a migration that alters what a later one creates would only fail on a new database.
+
 - **A browser now walks every selling flow the step budget declares, so a tap nobody declared fails a
   pull request** ([ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md), gate register
   **A4**).

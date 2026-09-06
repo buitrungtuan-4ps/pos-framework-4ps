@@ -44,7 +44,7 @@ use pos_ports::dynamic::BoxFuture;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
-use pos_proto::enums::SalesChannel;
+use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, StationId, StoreId, SubjectId,
@@ -97,7 +97,7 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
-use crate::lease::{LeaseStore, LeaseStoreError};
+use crate::lease::{LeaseBump, LeaseStore, LeaseStoreError};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -471,18 +471,29 @@ impl ConfigTreeStore for PostgresConfigTrees {
 
 impl LeaseStore for PostgresConfigTrees {
     /// Forwards to the adapter's single-statement bump, so two admins replacing a machine at once
-    /// serialise on the row rather than racing to the same generation.
+    /// serialise on the row rather than racing to the same generation — and so the generation and
+    /// the edge placement beside it are written by the same statement
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     async fn bump(
         &self,
         tenant: TenantId,
         store: StoreId,
         issued_at: Timestamp,
-    ) -> Result<LeaseGeneration, LeaseStoreError> {
-        let generation = self
-            .bump_store_lease(tenant, store, issued_at.as_milliseconds_since_epoch())
+        edge_placement: Option<EdgePlacement>,
+    ) -> Result<LeaseBump, LeaseStoreError> {
+        let stored = self
+            .bump_store_lease(
+                tenant,
+                store,
+                issued_at.as_milliseconds_since_epoch(),
+                edge_placement.map(EdgePlacement::as_wire),
+            )
             .await
             .map_err(|error| LeaseStoreError::new(error.to_string()))?;
-        stored_lease_generation(generation)
+        Ok(LeaseBump {
+            generation: stored_lease_generation(stored.generation)?,
+            edge_placement: stored_edge_placement(&stored.edge_placement)?,
+        })
     }
 
     async fn current(
@@ -511,6 +522,25 @@ fn stored_lease_generation(value: i64) -> Result<LeaseGeneration, LeaseStoreErro
                 "the stored lease generation is negative, which this cloud never writes: {error}"
             ))
         })
+}
+
+/// Reads a stored `EDGE_PLACEMENT_*` token back into the domain's enum
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// Refusing an unrecognised token rather than degrading it to `UNSPECIFIED` inverts the usual wire
+/// rule on purpose, and the reason is which direction the value came from. Tolerating the unknown is
+/// how a *receiver* stays compatible with a newer sender; this is a reader of its own database,
+/// whose only writer is the statement two functions up, behind a `CHECK` naming the three tokens.
+/// A value outside that set is a corrupt or tampered row, and the harm from carrying on is specific:
+/// `UNSPECIFIED` renders as "we do not know where this store runs", which the console would show
+/// beside "Offline-capable" for a store that is in fact hosted. Saying nothing beats saying the
+/// wrong thing about whether a shop can trade with the line down.
+fn stored_edge_placement(token: &str) -> Result<EdgePlacement, LeaseStoreError> {
+    EdgePlacement::from_wire(token).ok_or_else(|| {
+        LeaseStoreError::new(format!(
+            "the stored edge placement is not one this build knows: {token}"
+        ))
+    })
 }
 
 impl OtaReportStore for PostgresConfigTrees {
