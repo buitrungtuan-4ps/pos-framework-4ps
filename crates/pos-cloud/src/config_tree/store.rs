@@ -16,6 +16,7 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 
 use super::ConfigTreeState;
+use crate::fleet::PrintAgentStanding;
 use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// Persists and loads a store's config-tree state, keyed by `(tenant, store)`.
@@ -103,6 +104,7 @@ pub trait ConfigTreeStore {
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
         lease_generation: Option<u64>,
+        print_agents: Option<Vec<PrintAgentStanding>>,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
 }
 

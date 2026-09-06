@@ -464,6 +464,33 @@ export function Fleet() {
                       ? t("fleet.never")
                       : formatRelativeAge(ageSeconds(store().outbox_reported_at_ms ?? Date.now())),
                   )}
+                  {/* The print agents this store reported (ADR-0112). Three states, and the screen
+                      must not collapse them: a store that never said (an in-shop edge, or one on an
+                      older binary) is not a store with no agent, and a store with no agent is not a
+                      store whose agents are all keeping up. Each row names the terminal, the box
+                      answering for it, and how long its oldest unprinted ticket has waited — which
+                      is the whole of what somebody walking to the shop needs. */}
+                  {detailRow(
+                    t("fleet.printAgents"),
+                    store().print_agents === null
+                      ? t("fleet.notReported")
+                      : (store().print_agents ?? []).length === 0
+                        ? t("fleet.printAgentsNone")
+                        : (store().print_agents ?? [])
+                            .map((agent) =>
+                              agent.oldest_unacknowledged_secs === undefined
+                                ? t("fleet.printAgentIdle", {
+                                    agent: agent.agent_device_id,
+                                    device: agent.paired_device_id,
+                                  })
+                                : t("fleet.printAgentWaiting", {
+                                    agent: agent.agent_device_id,
+                                    device: agent.paired_device_id,
+                                    age: formatRelativeAge(agent.oldest_unacknowledged_secs),
+                                  }),
+                            )
+                            .join(" · "),
+                  )}
                   {/* Both generations, side by side, because either alone is unreadable: the
                       authority says which machine *should* be the store, the held one says which
                       machine this is. They differ exactly when a box has been replaced. */}

@@ -760,6 +760,24 @@ export interface RecoveryCodesStatus {
  * liveness, config drift, and relay backlog. `online` and `config_current` are the server's read-time
  * verdicts; the raw instants are Unix ms (or `null` for a store never seen / never configured).
  */
+/**
+ * One bound print agent on a store, as the fleet console sees it (ADR-0112).
+ *
+ * Two opaque identifiers and a duration — no document, no line, no name. Nothing a ticket *says*
+ * helps diagnose a stalled agent, so nothing a ticket says crosses this wire.
+ */
+export interface FleetPrintAgent {
+  /** The terminal a console admin created and a manager bound at the till. */
+  readonly agent_device_id: string;
+  /** The paired device answering for it — the box somebody has to walk to. */
+  readonly paired_device_id: string;
+  /**
+   * How long the oldest still-unacknowledged job has waited, or absent when nothing is waiting.
+   * Absent is the healthy answer and is deliberately not zero.
+   */
+  readonly oldest_unacknowledged_secs?: number;
+}
+
 export interface FleetStore {
   readonly store_id: string;
   readonly name: string;
@@ -787,6 +805,16 @@ export interface FleetStore {
   readonly outbox_depth: number | null;
   /** Unix ms of the heartbeat that reported `outbox_depth`, or `null`. */
   readonly outbox_reported_at_ms: number | null;
+  /**
+   * The print agents the store last reported (ADR-0112), or `null` if it never has.
+   *
+   * `null` and `[]` are different answers and the screen renders them differently: `null` is a store
+   * that has said nothing about agents — every store whose edge runs in the shop — while `[]` is a
+   * store that looked and has none.
+   */
+  readonly print_agents: readonly FleetPrintAgent[] | null;
+  /** Unix ms of the heartbeat that reported them, or `null`. */
+  readonly print_agents_reported_at_ms: number | null;
   /**
    * The lease generation the box last reported holding (ADR-0108), or `null` if it never said.
    * Read together with `lease_generation_authoritative`: the pair is what tells a **replaced** box
@@ -1155,7 +1183,8 @@ export type AlertSeverity = "info" | "warning" | "critical";
 /**
  * One operational alert from `GET /admin/alerts` (ADR-0073, Track O2). `tenant_id` is null for a
  * server-wide condition; timestamps are Unix ms; `kind` is the stable wire token the console localizes
- * (`store_offline`, `relay_backlog`, `webhook_disabled`, `projector_unhealthy`, `jetstream_capacity`);
+ * (`store_offline`, `relay_backlog`, `webhook_disabled`, `projector_unhealthy`, `jetstream_capacity`,
+ * `print_agent_stalled`);
  * `detail` is a small JSON object of the numbers behind the alert. `resolved_at_ms` is null while the
  * alert is active; `acknowledged_at_ms` is null until an operator acknowledges it.
  */

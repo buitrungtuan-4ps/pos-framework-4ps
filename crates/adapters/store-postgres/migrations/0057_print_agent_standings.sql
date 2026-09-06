@@ -1,0 +1,36 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+
+-- What the store's print agents are doing, on the fleet read model
+-- ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+--
+-- For a store whose edge is not in the shop, printing goes through an agent on a terminal, and that
+-- agent is the one moving part with no rail to the cloud of its own: it speaks to the edge over the
+-- shop LAN and to nothing else. Silence behind it reaches the till at once — a settle answers
+-- `PRINT_AGENT_UNAVAILABLE` while the guest is still standing there — but until this column existed
+-- an operator watching the fleet learned about it from a phone call the next morning.
+--
+--   * `print_agents`             — a JSON array, one object per binding, each carrying the terminal's
+--                                 `agent_device_id`, the `paired_device_id` answering for it, and
+--                                 `oldest_unacknowledged_secs` when a ticket is waiting. Two opaque
+--                                 identifiers and a duration: no document, no line, no name. NULL
+--                                 means the store never said, `[]` means it said it has none — and
+--                                 the difference matters, because `[]` is what a manager releasing
+--                                 the last terminal produces and a console must stop showing an
+--                                 agent that is no longer bound.
+--   * `print_agents_reported_at` — Unix ms of that report, so a stale list is visibly stale. A store
+--                                 can be reachable while its last standing is an hour old, and the
+--                                 two facts must not be conflated — the same pairing `outbox_depth`
+--                                 and `lease_generation` already have beside them.
+--
+-- A JSON column rather than a `store_print_agents` table, deliberately. The list is a snapshot the
+-- store replaces wholesale on every beat; nothing joins to it, nothing queries by agent id, and the
+-- console renders the whole list at once. A table would buy an index nothing reads and cost a
+-- transactional delete-then-insert and a second RLS policy on every heartbeat — machinery in the way
+-- of the one thing the column is for.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017). Both columns are
+-- nullable, so this is a no-op for every store that has never reported one and the row keeps whatever
+-- liveness it already had.
+ALTER TABLE store_liveness ADD COLUMN IF NOT EXISTS print_agents jsonb;
+ALTER TABLE store_liveness ADD COLUMN IF NOT EXISTS print_agents_reported_at bigint;

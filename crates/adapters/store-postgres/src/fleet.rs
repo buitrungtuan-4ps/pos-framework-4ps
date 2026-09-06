@@ -97,6 +97,16 @@ pub struct FleetStoreRow {
     /// The deciding admin's id, or `None`. An id and never an email — the audit trail carries the
     /// address, and this row is read by the fleet console.
     pub retired_by: Option<String>,
+    /// The print-agent standings the store last reported, as the raw JSON array text
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), or `None` if it never has.
+    ///
+    /// Read out as `text` rather than decoded here, for the reason every other JSON column in this
+    /// crate is: the adapter moves the document and `pos-cloud` decides what it means. `NULL` is
+    /// "never said" and `'[]'` is "said it has none" — a distinction the console depends on.
+    pub print_agents: Option<String>,
+    /// Unix ms of the heartbeat that reported them, or `None`. Carried so a stale list reads as
+    /// stale rather than as current, exactly as `outbox_reported_at_ms` is.
+    pub print_agents_reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -125,7 +135,9 @@ const FLEET_SELECT: &str = "SELECT \
      lease.edge_placement, \
      lease.superseded_generation, \
      lease.retired_at, \
-     lease.retired_by \
+     lease.retired_by, \
+     l.print_agents::text, \
+     l.print_agents_reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -210,5 +222,7 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         superseded_generation: row.get(18),
         retired_at: row.get(19),
         retired_by: row.get(20),
+        print_agents: row.get(21),
+        print_agents_reported_at_ms: row.get(22),
     }
 }

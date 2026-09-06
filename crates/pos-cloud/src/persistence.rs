@@ -89,7 +89,7 @@ use crate::devices::{
 };
 use pos_core::lease::LeaseGeneration;
 
-use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
     RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
@@ -453,6 +453,7 @@ impl ConfigTreeStore for PostgresConfigTrees {
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
         lease_generation: Option<u64>,
+        print_agents: Option<Vec<PrintAgentStanding>>,
     ) -> Result<(), ConfigStoreError> {
         // A depth past `i64::MAX` is not reachable from a store's log, but saturating beats a panic
         // and beats dropping the heartbeat: the column is `bigint`, so this is the widest it holds.
@@ -460,12 +461,22 @@ impl ConfigTreeStore for PostgresConfigTrees {
         // Same rule for the generation, and just as unreachable: a store issues a handful of leases
         // in its life, and `LeaseGeneration::next` saturates rather than wrapping (ADR-0049).
         let generation = lease_generation.map(|value| i64::try_from(value).unwrap_or(i64::MAX));
+        // Encoded here rather than in the adapter, so `store-postgres` keeps knowing nothing about
+        // what the JSON it moves means. An encode that fails cannot happen for two strings and a
+        // number, but it is reported rather than silently dropping the standings: a beat that
+        // silently omitted them would read as "did not look" and leave a stale list on the console.
+        let print_agents = print_agents
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| ConfigStoreError::new(error.to_string()))?;
         self.record_heartbeat(
             tenant,
             store,
             seen_at.as_milliseconds_since_epoch(),
             depth,
             generation,
+            print_agents,
         )
         .await
         .map_err(|error| ConfigStoreError::new(error.to_string()))
@@ -1922,6 +1933,26 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // operator looking at the machine, which is the safer mistake.
         retired_at,
         retired_by: row.retired_by,
+        // A list this binary cannot parse is dropped rather than failing the fleet read, the same
+        // posture `edge_placement` takes one field up: one corrupt row must not 503 a console an
+        // operator is holding open during an incident. It degrades to "did not say", which shows
+        // *less* confidence rather than more.
+        print_agents: row
+            .print_agents
+            .as_deref()
+            .and_then(|json| match serde_json::from_str::<Vec<PrintAgentStanding>>(json) {
+                Ok(agents) => Some(agents),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "a stored print-agent standing could not be decoded; the fleet row reports none"
+                    );
+                    None
+                }
+            }),
+        print_agents_reported_at: row
+            .print_agents_reported_at_ms
+            .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok()),
     })
 }
 

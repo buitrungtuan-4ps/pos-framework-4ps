@@ -223,6 +223,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         relay_oldest_secs: config.alert_relay_oldest_secs,
         jetstream_capacity_percent: config.alert_jetstream_capacity_percent,
         projector_stale_slack_secs: config.alert_projector_stale_slack_secs,
+        print_agent_stalled_secs: config.alert_print_agent_stalled_secs,
     };
     tracing::info!(
         interval_secs = config.alert_eval_interval_secs,

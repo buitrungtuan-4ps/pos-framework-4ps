@@ -190,6 +190,9 @@ const MIGRATION_0054: &str = include_str!("../migrations/0054_lease_retired.sql"
 const MIGRATION_0055: &str = include_str!("../migrations/0055_device_connection_spelling.sql");
 const MIGRATION_0056: &str = include_str!("../migrations/0056_device_agent.sql");
 
+/// Print-agent standings on the liveness read model ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+const MIGRATION_0057: &str = include_str!("../migrations/0057_print_agent_standings.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -472,6 +475,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0056)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0057)
             .await
             .map_err(unavailable)
     }

@@ -50,7 +50,7 @@ use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, PersistedDeviceProposal, SetAgentOutcome,
 };
-use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
+use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use pos_cloud::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
     RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
@@ -755,6 +755,9 @@ type ConfigRows = HashMap<(TenantId, StoreId), Versioned<ConfigTreeState>>;
 /// that.
 type Retirements = HashMap<(TenantId, StoreId), (i64, String)>;
 
+/// The print-agent standings a store last reported, keyed as `store_liveness` is (ADR-0112).
+type RecordedAgents = HashMap<(TenantId, StoreId), Vec<PrintAgentStanding>>;
+
 /// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
 /// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
@@ -764,6 +767,12 @@ struct FakeConfigTrees {
     /// The publish backlog a heartbeat last reported, mirroring `store_liveness.outbox_depth`. A
     /// heartbeat that reported none leaves the entry alone, as the adapter's `COALESCE` does.
     outbox: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
+    /// The print-agent standings a heartbeat last reported, mirroring `store_liveness.print_agents`
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Same `COALESCE` rule as the depth, and
+    /// the case that matters is the one it does *not* share: an empty list is a report, so it
+    /// replaces the entry rather than leaving it — a manager releasing the last terminal must not
+    /// leave a stale agent on the console.
+    print_agents: Arc<Mutex<RecordedAgents>>,
     /// The authoritative lease generation per store, mirroring `store_lease` (ADR-0108). Absent
     /// until the first bump, which is what "no lease in force" means.
     leases: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
@@ -959,6 +968,19 @@ impl FakeConfigTrees {
             .get(&(tenant, store))
             .copied()
     }
+
+    /// The print-agent standings a heartbeat last reported, or `None` if none ever did.
+    fn recorded_print_agents(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Option<Vec<PrintAgentStanding>> {
+        self.print_agents
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .cloned()
+    }
 }
 
 impl FakeConfigTrees {
@@ -1062,6 +1084,7 @@ impl ConfigTreeStore for FakeConfigTrees {
         seen_at: Timestamp,
         outbox_depth: Option<u64>,
         _lease_generation: Option<u64>,
+        print_agents: Option<Vec<PrintAgentStanding>>,
     ) -> Result<(), ConfigStoreError> {
         // A heartbeat advances last_seen only, keeping any held version a prior pull recorded.
         self.seen
@@ -1077,6 +1100,12 @@ impl ConfigTreeStore for FakeConfigTrees {
                 .lock()
                 .expect("lock")
                 .insert((tenant, store), depth);
+        }
+        if let Some(agents) = print_agents {
+            self.print_agents
+                .lock()
+                .expect("lock")
+                .insert((tenant, store), agents);
         }
         Ok(())
     }
@@ -6020,6 +6049,7 @@ impl ConfigTreeStore for EmptyConfigTrees {
         _seen_at: Timestamp,
         _outbox_depth: Option<u64>,
         _lease_generation: Option<u64>,
+        _print_agents: Option<Vec<PrintAgentStanding>>,
     ) -> Result<(), ConfigStoreError> {
         Ok(())
     }
@@ -6908,6 +6938,8 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
+            print_agents: None,
+            print_agents_reported_at: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -6984,6 +7016,8 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
+            print_agents: None,
+            print_agents_reported_at: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -7044,6 +7078,8 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 superseded_generation: None,
                 retired_at: None,
                 retired_by: None,
+                print_agents: None,
+                print_agents_reported_at: None,
             },
         )
         .with_row(
@@ -7072,6 +7108,8 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 superseded_generation: None,
                 retired_at: None,
                 retired_by: None,
+                print_agents: None,
+                print_agents_reported_at: None,
             },
         )
 }
@@ -7107,6 +7145,8 @@ fn store_in_handover(
         superseded_generation: superseded,
         retired_at,
         retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
+        print_agents: None,
+        print_agents_reported_at: None,
     }
 }
 
@@ -7294,6 +7334,8 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
+            print_agents: None,
+            print_agents_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -7350,6 +7392,8 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
+            print_agents: None,
+            print_agents_reported_at: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -18764,5 +18808,87 @@ async fn a_store_publishes_the_origins_its_edge_will_answer() {
         serde_json::json!({
             "allowed": ["https://shell.example.com", "http://localhost:1420"]
         })
+    );
+}
+
+#[tokio::test]
+async fn a_heartbeat_reports_its_print_agents_and_an_empty_list_clears_them() {
+    // ADR-0112: for a store whose edge is not in the shop, the print agent is the one moving part
+    // with no rail to the cloud of its own. The heartbeat is where its standing arrives, and the
+    // three cases below are the three answers a store can give — each of which the console renders
+    // differently, and two of which look identical if the wire cannot tell them apart.
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/heartbeat");
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+
+    // One agent, holding a ticket. Two opaque ids and a duration — no document, no line, no name.
+    let beat = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({
+                "print_agents": [{
+                    "agent_device_id": "TILL-KITCHEN",
+                    "paired_device_id": "PAIR-A",
+                    "oldest_unacknowledged_secs": 420,
+                }],
+            }),
+            &token,
+        ))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(beat.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_print_agents(tenant(), store_id()),
+        Some(vec![PrintAgentStanding {
+            agent_device_id: "TILL-KITCHEN".to_owned(),
+            paired_device_id: "PAIR-A".to_owned(),
+            oldest_unacknowledged_secs: Some(420),
+        }]),
+        "the standing the store reported is the standing the cloud recorded"
+    );
+
+    // A beat that says nothing about agents leaves the recorded standing alone — an older edge must
+    // not silently erase what a newer one reported.
+    let quiet = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &serde_json::json!({}), &token))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(quiet.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees
+            .recorded_print_agents(tenant(), store_id())
+            .map(|agents| agents.len()),
+        Some(1),
+        "an absent key is \"did not say\", not \"has none\""
+    );
+
+    // An *empty* list is a report, and it replaces. This is the manager-released-the-terminal case:
+    // a console still showing an agent nobody is bound to is the stale answer the field exists to
+    // prevent, and it is the one an absent-vs-empty conflation would produce.
+    let released = router
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({ "print_agents": [] }),
+            &token,
+        ))
+        .await
+        .expect("route the heartbeat");
+    assert_eq!(released.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        config_trees.recorded_print_agents(tenant(), store_id()),
+        Some(Vec::new()),
+        "a store that says it has no agent is recorded as having none, not left as it was"
     );
 }

@@ -560,6 +560,7 @@ mod tests {
             _seen_at: pos_proto::time::Timestamp,
             _outbox_depth: Option<u64>,
             _lease_generation: Option<u64>,
+            _print_agents: Option<Vec<crate::fleet::PrintAgentStanding>>,
         ) -> Result<(), crate::config_tree::ConfigStoreError> {
             Ok(())
         }
