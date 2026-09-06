@@ -14,6 +14,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **An approved USB printer reached its store as a network device, so its cash drawer never opened**
+  ([ADR-0100](docs/adr/0100-receipt-and-ticket-printing.md), correction).
+
+  `DeviceConnection` has two spellings — the short `usb` the `device_proposals` column and the
+  console's `<select>` carry, and the prefixed `DEVICE_CONNECTION_USB` the config node carries. The
+  seam that persists an approval wrote the *node's* spelling into the column, and the publisher,
+  which builds the node's token by prefixing what it finds there, prefixed it a second time. Every
+  device approved through the console was therefore published with a token no build can read.
+
+  The edge degrades an unknown connection to `Network` — the posture that authorises least — so a
+  network printer kept working throughout, which is why this went unseen. A USB printer did not: it
+  arrived as a network device, so its cash drawer was refused (a drawer opens only over USB,
+  `docs/architecture.md` §5) and its device path was dialled as a TCP address.
+
+  `PostgresDeviceProposals::mark` now takes a typed `Option<DeviceConnection>` and chooses the
+  column's spelling itself, next to the column, so a caller holding the enum cannot pick the wrong
+  one. A Postgres test pins the stored spelling, and a second pins the repair.
+
+  **Upgrade note** Migration `0055_device_connection_spelling.sql` repairs the rows already written,
+  on the next cloud start. It is a data repair, not a schema change — nothing is dropped, renamed or
+  narrowed — and it is idempotent by its own `WHERE`; a value that is neither spelling is left as it
+  is rather than guessed at. No `PROTOCOL_VERSION` change. Any store whose device node was published
+  before this release should have it **published again** so the corrected connection reaches it.
+
 ### Added
 
 - **The store's edge holds a durable, bounded, time-limited print queue**

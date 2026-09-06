@@ -114,6 +114,31 @@ now written down as such (`docs/gate-register.md` §6, P8 and P9):
   page — and was not foreseen here. Receipts are unaffected; kitchen *tickets* in Vietnamese wait on
   P9. The KDS is unaffected throughout: it is a screen, and it has always had the order.
 
+### Correction — 2026-09-06, the two spellings crossed
+
+Slice 2a's claim above — *"approval captures a device's connection"* — held at the route and broke one
+layer below it. `DeviceConnection` has two spellings, stated in
+[`devices.rs`](../../crates/pos-proto/src/devices.rs): the short `usb` for the `device_proposals`
+column and the console's `<select>`, the prefixed `DEVICE_CONNECTION_USB` for the config node. The
+seam that persists a resolution wrote the *node's* spelling into the column, and
+`compile_devices` — which builds the node's token by prefixing what it finds there — prefixed it a
+second time.
+
+So every device approved through the console reached its store as `DEVICE_CONNECTION_DEVICE_CONNECTION_…`,
+a token no build can read. `connection_of` degrades an unknown connection to `Network`, which is the
+right rule and is why this was survivable: a network printer kept working, which is why nobody saw
+it. A **USB** printer did not. It arrived as a network device, so `may_open_a_drawer` was false and
+its cash drawer never opened, and its device path was dialled as a TCP address. The gate above
+already said a drawer stays unreachable in this build for want of a USB transport; this is a second,
+unrelated reason it would have stayed unreachable after that gate lifted.
+
+The fix is one line and a shape. `PostgresDeviceProposals::mark` now takes a typed
+`Option<DeviceConnection>` and chooses the column's spelling itself, beside the column, so a caller
+holding the enum cannot pick the wrong one; migration `0055_device_connection_spelling.sql` repairs
+the rows already written. The lesson is the one this record made for `connection` in the first place:
+a fact that decides whether a cash drawer opens should not be carried as an unvalidated string
+between two layers that spell it differently.
+
 ## Consequences
 
 - No new port: `pos-ports`'s `Printer` is the seam, and `printer-escpos` implements it over its own
