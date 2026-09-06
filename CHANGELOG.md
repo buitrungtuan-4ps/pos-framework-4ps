@@ -16,6 +16,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Silence behind a print agent reaches the console before the night ends**
+  ([ADR-0112](docs/adr/0112-print-agents.md)).
+
+  For a store whose edge is not in the shop, printing goes through an agent on a terminal, and that
+  agent is the one moving part with no rail to the cloud of its own — it talks to the edge over the
+  shop LAN and to nothing else. A stalled agent already reaches the till at once (a settle answers
+  `PRINT_AGENT_UNAVAILABLE` while the guest is still standing there); until now an operator watching
+  the fleet learned about it from a phone call the next morning.
+
+  The heartbeat gains one optional field carrying a standing per bound agent: the terminal, the
+  paired device answering for it, and how long its oldest unacknowledged job has waited. Two opaque
+  identifiers and a duration — no document, no line, no name, because nothing a ticket *says* helps
+  diagnose a stalled agent. The Fleet screen renders them, and O2's evaluator gains a
+  `print_agent_stalled` kind firing **Critical at five minutes** — half the edge's `JOB_TTL`, so the
+  alert arrives while the tickets it is about can still be saved. It is Critical in every edge
+  placement, unlike `store_offline`: ADR-0110 established that a quiet in-store box is very likely
+  still taking money, but a stalled print agent admits no such reading.
+
+  The field is an **`Option` around a list**, and the middle state is why. Absent is *this box did
+  not look* — an older edge, or one whose record could not be read — and leaves what the cloud knew
+  alone. An empty list is *this store has no bound agent*, which a manager releasing the last
+  terminal produces and which must replace the stored list; a console still showing an agent nobody
+  is bound to is exactly the stale answer the field exists to prevent. The same distinction
+  `outbox_depth` already draws between "did not say" and zero.
+
+  **Upgrade note** Additive migration `0057_print_agent_standings` (two nullable columns on
+  `store_liveness`), no `PROTOCOL_VERSION` change, rollback safe. A store whose edge runs in the shop
+  reports nothing here and is unaffected; an edge on an older binary omits the field and keeps its
+  recorded liveness. The new `alert_print_agent_stalled_secs` setting defaults to 300.
+
 - **A generated installer for the print agent, on Windows and Linux**
   ([ADR-0112](docs/adr/0112-print-agents.md)).
 

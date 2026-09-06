@@ -171,6 +171,14 @@ const fn default_alert_projector_stale_slack_secs() -> u64 {
     60
 }
 
+/// How long a print agent's oldest unacknowledged job may wait before it alerts, when the config
+/// does not say — five minutes, half the edge's `JOB_TTL`
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), so the alert arrives while the tickets it is
+/// about can still be saved.
+const fn default_alert_print_agent_stalled_secs() -> u64 {
+    5 * 60
+}
+
 /// Percent-of-capacity at or above which the store→cloud stream alerts, when the config does not say —
 /// eighty (`docs/capacity-and-reliability.md`).
 const fn default_alert_jetstream_capacity_percent() -> u32 {
@@ -335,6 +343,10 @@ pub struct CloudConfig {
     /// Extra seconds past a loop's interval before its silence alerts as stale (ADR-0073).
     #[serde(default = "default_alert_projector_stale_slack_secs")]
     pub alert_projector_stale_slack_secs: u64,
+    /// How long a print agent's oldest unacknowledged job may wait before it alerts, in seconds
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    #[serde(default = "default_alert_print_agent_stalled_secs")]
+    pub alert_print_agent_stalled_secs: u64,
     /// Percent-of-capacity at or above which the store→cloud stream alerts (ADR-0073). The evaluator
     /// applies it the day a cloud-side JetStream capacity probe is wired (a flagged follow-up).
     #[serde(default = "default_alert_jetstream_capacity_percent")]

@@ -282,6 +282,55 @@ which is what makes the failure quiet.
 
 ## The problem
 
+### Delivery note — 2026-09-06, silence reaches the console
+
+The second half of *"silence is reported twice"* is built. The heartbeat carries one standing per
+bound agent — the terminal, the paired device answering for it, and the age of its oldest
+unacknowledged job — and O2's evaluator gains `print_agent_stalled`, firing `Critical` at five
+minutes exactly as this record specified.
+
+Three decisions the section above did not settle, each because writing it raised the question:
+
+- **The field is an `Option` around a list, not a list.** *Absent* and *empty* are different claims
+  and only one of them is safe to treat as "nothing to do". Absent is a box that did not look — an
+  older edge, or one whose record would not read — and leaves what the cloud knew alone. Empty is a
+  box that looked and has no bound agent, which is what a manager releasing the last terminal
+  produces, and it has to **replace** the stored list: a console still showing an agent nobody is
+  bound to is precisely the stale answer this field exists to prevent. The same distinction
+  `outbox_depth` draws between `None` and `0` ([ADR-0068](0068-fleet-liveness.md)), one level down.
+- **The alert is judged on the age the store reported, not on the cloud's `now`.** That age was
+  measured against the store's own clock at the moment of the beat; re-ageing it here would add the
+  heartbeat interval and the cloud's skew to a number an operator reads as *how long the kitchen has
+  been waiting*, and would keep growing after the store stopped reporting at all — turning a lost
+  link into a fictional print backlog. A store that has gone silent is `store_offline`'s to raise,
+  and [ADR-0110](0110-edge-placement-is-a-deployment-axis.md) already decides how loudly.
+- **One alert per agent, keyed on the agent.** A shop with a jammed kitchen printer and a healthy
+  counter has one problem. Rolling the standings up to the store would either hide the jam or
+  condemn the counter with it.
+
+The standings are a **JSON column on `store_liveness`**, not a table. The list is a snapshot the
+store replaces wholesale on every beat; nothing joins to it, nothing queries by agent id, and the
+console renders the whole list at once. A table would buy an index nothing reads and cost a
+transactional delete-then-insert and a second RLS policy on every heartbeat.
+
+The edge's read is one `LEFT JOIN`, so a bound agent with an empty queue is a row carrying nothing
+rather than a missing row — *this terminal has an agent and it is keeping up* and *nobody ever bound
+this terminal* are answers a console must be able to tell apart. Expired jobs are excluded on the
+same clock the claim uses: a ticket the TTL has already given up on must not keep an alert alive
+after the thing it was about stopped mattering.
+
+Four properties are pinned by tests verified red first: the ms→seconds arithmetic and its
+empty-queue case; the `LEFT JOIN` and the TTL exclusion, against a real database; the five-minute
+threshold and the `Critical` severity; and the absent-versus-empty rule, which fails the moment the
+route collapses the two.
+
+**Not in this slice.** The console's `TERMINAL` entry and agent picker, over the `create_terminal`
+and `set_print_agent` routes that shipped in slice 2 and still have no console surface — which is
+why [`deploy/edge/README.md`](../../deploy/edge/README.md)'s first precondition is still met by hand.
+The drawer following the printer also remains where the section above left it: this record settles
+which machine the kick lands on, and ADR-0103's missing console field still means no drawer opens
+anywhere.
+
 ### The last hop assumes one building, and everything above it does not
 
 [ADR-0103](0103-directly-attached-printers.md) decided that a USB or serial printer is reached by

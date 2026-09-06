@@ -653,8 +653,16 @@ impl PostgresConfigTrees {
         seen_at_ms: i64,
         outbox_depth: Option<i64>,
         lease_generation: Option<i64>,
+        print_agents: Option<String>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        // `print_agents` is a JSON array bound as text and cast, the same shape `order_queue` uses,
+        // so no serde ToSql mapping is pulled into this crate. It COALESCEs like its neighbours, and
+        // the distinction that makes that correct is between `NULL` and `'[]'`: a beat that omitted
+        // the key leaves the stored list alone, and a beat carrying an *empty* list replaces it —
+        // which is what a manager releasing the last terminal produces, and a console must stop
+        // showing an agent nobody is bound to any more (ADR-0112).
+        //
         // Two tables, one statement, one transaction. The liveness upsert is a data-modifying CTE
         // and the lease clear is the outer statement, so a heartbeat cannot record a drained store
         // and fail to release its handover, or the reverse.
@@ -678,10 +686,12 @@ impl PostgresConfigTrees {
                 "WITH liveness AS ( \
                      INSERT INTO store_liveness \
                      (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at, \
-                      lease_generation, lease_reported_at) \
+                      lease_generation, lease_reported_at, print_agents, print_agents_reported_at) \
                      VALUES ($1, $2, $3, $4, \
                              CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3::bigint END, \
-                             $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3::bigint END) \
+                             $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3::bigint END, \
+                             $6::text::jsonb, \
+                             CASE WHEN $6::text IS NULL THEN NULL ELSE $3::bigint END) \
                      ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                      last_seen_at = EXCLUDED.last_seen_at, \
                      outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
@@ -690,7 +700,11 @@ impl PostgresConfigTrees {
                      lease_generation = \
                          COALESCE(EXCLUDED.lease_generation, store_liveness.lease_generation), \
                      lease_reported_at = \
-                         COALESCE(EXCLUDED.lease_reported_at, store_liveness.lease_reported_at) \
+                         COALESCE(EXCLUDED.lease_reported_at, store_liveness.lease_reported_at), \
+                     print_agents = \
+                         COALESCE(EXCLUDED.print_agents, store_liveness.print_agents), \
+                     print_agents_reported_at = COALESCE( \
+                         EXCLUDED.print_agents_reported_at, store_liveness.print_agents_reported_at) \
                  ) \
                  UPDATE store_lease SET superseded_generation = NULL \
                  WHERE tenant_id = $1 AND store_id = $2 \
@@ -703,6 +717,7 @@ impl PostgresConfigTrees {
                     &seen_at_ms,
                     &outbox_depth,
                     &lease_generation,
+                    &print_agents,
                 ],
             )
             .await

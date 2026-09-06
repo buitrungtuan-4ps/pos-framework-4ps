@@ -27,7 +27,8 @@ use std::future::Future;
 use std::path::Path;
 
 use store_sqlite::{
-    PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob, SqliteStore,
+    PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob,
+    SqliteStore,
 };
 use tempfile::TempDir;
 
@@ -573,6 +574,98 @@ fn being_heard_from_stamps_a_binding_and_never_resurrects_a_revoked_one() {
                 .expect("standing"),
             None,
             "and the binding stays released"
+        );
+    });
+}
+
+/// What the heartbeat reports to the cloud, joined across the two tables
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+///
+/// Three properties, and each is a way a console would otherwise show an operator the wrong thing:
+///
+///  * **A bound agent with nothing waiting is a row, not a gap.** "This terminal has an agent and it
+///    is keeping up" and "nobody ever bound this terminal" are different answers, and an inner join
+///    would collapse them.
+///  * **The instant reported is the oldest one still waiting.** A queue is judged by the ticket that
+///    has waited longest, not by the newest arrival — the newest is always young.
+///  * **An expired job is not reported.** The TTL has already given up on it, so keeping an alert
+///    alive on its behalf would page somebody about a ticket nobody can save.
+#[test]
+fn the_heartbeat_reads_every_binding_with_the_oldest_job_still_waiting_behind_it() {
+    let dir = TempDir::new().expect("a temp dir");
+    let store = open(&dir.path().join("edge.sqlite3"));
+    block_on(async {
+        let now = 100 * MINUTE;
+        for (agent, device) in [("TILL1", "PAIR-A"), ("TILL2", "PAIR-B")] {
+            assert_eq!(
+                store
+                    .claim_print_agent(agent.to_owned(), device.to_owned(), now)
+                    .await
+                    .expect("claim"),
+                PrintAgentClaim::Bound,
+            );
+        }
+
+        // Both bound, neither holding anything.
+        assert_eq!(
+            store.print_agent_backlogs(now).await.expect("backlogs"),
+            vec![
+                PrintAgentBacklog {
+                    agent_device_id: "TILL1".to_owned(),
+                    paired_device_id: "PAIR-A".to_owned(),
+                    oldest_queued_at: None,
+                },
+                PrintAgentBacklog {
+                    agent_device_id: "TILL2".to_owned(),
+                    paired_device_id: "PAIR-B".to_owned(),
+                    oldest_queued_at: None,
+                },
+            ],
+            "a bound agent with an empty queue is a row carrying nothing, never a missing row"
+        );
+
+        // Two tickets behind TILL1 on different printers, queued eight and three minutes ago.
+        for (id, printer, queued) in [
+            ("old", "printer-kitchen", now - 8 * MINUTE),
+            ("new", "printer-counter", now - 3 * MINUTE),
+        ] {
+            assert_eq!(
+                store
+                    .enqueue_print_job(job(id, printer, "TILL1"), queued, queued + 10 * MINUTE, 20)
+                    .await
+                    .expect("enqueue"),
+                PrintEnqueue::Queued,
+            );
+        }
+        assert_eq!(
+            store
+                .print_agent_backlogs(now)
+                .await
+                .expect("backlogs")
+                .iter()
+                .map(|row| (row.agent_device_id.clone(), row.oldest_queued_at))
+                .collect::<Vec<_>>(),
+            vec![
+                ("TILL1".to_owned(), Some(now - 8 * MINUTE)),
+                ("TILL2".to_owned(), None),
+            ],
+            "the queue is judged by the ticket that has waited longest, not the newest arrival — \
+             and the other terminal is unaffected by its neighbour's backlog"
+        );
+
+        // Wind the clock past the older ticket's TTL. It is no longer deliverable, so it must stop
+        // being reported: an alert about a ticket the queue has given up on wakes somebody for
+        // nothing.
+        let later = now + 5 * MINUTE;
+        assert_eq!(
+            store
+                .print_agent_backlogs(later)
+                .await
+                .expect("backlogs")
+                .first()
+                .and_then(|row| row.oldest_queued_at),
+            Some(now - 3 * MINUTE),
+            "an expired job drops out and the next-oldest becomes the answer"
         );
     });
 }

@@ -486,6 +486,32 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
         if let Some(generation) = report.lease_generation {
             fields.insert("lease_generation".to_owned(), generation.into());
         }
+        // The same rule one level down (ADR-0112): the key is absent when the box did not look, and
+        // present-and-empty when it looked and the store has no bound agent — which a manager
+        // releasing the last terminal produces, and which the cloud has to record rather than ignore.
+        if let Some(agents) = report.print_agents {
+            let agents: Vec<serde_json::Value> = agents
+                .into_iter()
+                .map(|agent| {
+                    let mut standing = serde_json::Map::new();
+                    standing.insert(
+                        "agent_device_id".to_owned(),
+                        agent.agent_device_id.to_string().into(),
+                    );
+                    standing.insert(
+                        "paired_device_id".to_owned(),
+                        agent.paired_device_id.to_string().into(),
+                    );
+                    // Absent rather than zero when nothing is waiting, for the reason the field's own
+                    // doc gives: an empty queue and a ticket queued this instant are different states.
+                    if let Some(secs) = agent.oldest_unacknowledged_secs {
+                        standing.insert("oldest_unacknowledged_secs".to_owned(), secs.into());
+                    }
+                    serde_json::Value::Object(standing)
+                })
+                .collect();
+            fields.insert("print_agents".to_owned(), agents.into());
+        }
         let body = if fields.is_empty() {
             Vec::new()
         } else {

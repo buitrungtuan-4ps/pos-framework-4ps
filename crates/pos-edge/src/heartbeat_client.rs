@@ -32,6 +32,19 @@
 //! identical from the console. Reporting it is what turns "this box refuses to update" into
 //! "this box holds 3, the store is on 4", which is the difference between a mystery and a diagnosis.
 //! A generation is a counter, not a person, so it carries no personal data either.
+//!
+//! # …and which terminals have a print agent, and whether anything is stuck behind one
+//!
+//! For a store whose edge is not in the shop, printing goes through an agent on a terminal
+//! ([ADR-0112](../../../docs/adr/0112-print-agents.md)), and that agent is the one moving part with
+//! **no other rail to the cloud at all**: it talks to the edge over the shop LAN and to nothing else.
+//! Silence behind it is reported to the till immediately — the settle answers
+//! `PRINT_AGENT_UNAVAILABLE` while the guest is still standing there — but an operator watching a
+//! fleet would otherwise learn about it from a phone call the next morning.
+//!
+//! So the ping carries one standing per binding: which terminal, which paired device answers for it,
+//! and how long its oldest unacknowledged job has waited. Two opaque ids and a duration. Nothing a
+//! ticket *says* helps diagnose a stalled agent, so nothing a ticket says is sent.
 
 use core::future::Future;
 use core::time::Duration;
@@ -39,9 +52,13 @@ use std::sync::Arc;
 
 use pos_core::lease::LeaseGeneration;
 use pos_ports::event_store::EventStore;
+use pos_proto::ClockSource as _;
+use pos_proto::ids::DeviceId;
 
 use crate::app::Edge;
+use crate::clock::SystemClock;
 use crate::lease_state::LeaseAuthority;
+use crate::print_agent::{AgentBacklog, PrintAgents};
 
 /// A failure of the heartbeat transport itself — the cloud is unreachable or refused the ping.
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +78,7 @@ impl HeartbeatError {
 /// Every field is optional and the whole report may be empty, because the cloud's route is older
 /// than the report: a store that cannot answer a question says nothing about it rather than
 /// guessing, and the cloud leaves whatever it last recorded alone.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HeartbeatReport {
     /// How many events the store has committed and not yet published, or `None` if its log could not
     /// be read. Deliberately not "0 on failure": zero is the good answer, and reporting it for a
@@ -75,6 +92,36 @@ pub struct HeartbeatReport {
     /// `None` is also what an unreadable authority reports, for the same reason the depth does not
     /// report `0`: the cloud must not be told a generation the box did not actually say.
     pub lease_generation: Option<u64>,
+    /// One standing per bound print agent ([ADR-0112](../../../docs/adr/0112-print-agents.md)), or
+    /// `None` if this box did not look.
+    ///
+    /// Three states, and the middle one is the reason it is an `Option` around a list rather than a
+    /// bare list. `None` is *did not ask* — an older edge, or one whose record could not be read;
+    /// the cloud leaves whatever it last knew alone. `Some(empty)` is *asked, and there are none*,
+    /// which a manager revoking the last binding produces and which the cloud must record, because
+    /// leaving a revoked agent standing on the console is exactly the stale answer this field exists
+    /// to prevent. The same distinction `outbox_depth` draws between `None` and `0`.
+    pub print_agents: Option<Vec<PrintAgentStanding>>,
+}
+
+/// What one bound print agent's standing says: which terminal, who answers for it, and how long the
+/// oldest ticket nobody has printed has been waiting.
+///
+/// Whole seconds rather than milliseconds because the thresholds it feeds are minutes, and because a
+/// duration that crossed the wire in milliseconds would invite a reader to treat it as precise about
+/// an instant that travelled through a heartbeat interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrintAgentStanding {
+    /// The terminal a console admin created and a manager bound at the till.
+    pub agent_device_id: DeviceId,
+    /// The paired device answering for it.
+    pub paired_device_id: DeviceId,
+    /// How long the oldest still-unacknowledged job has waited, or `None` when nothing is waiting.
+    ///
+    /// `None` is the healthy answer and is deliberately not zero: an agent with an empty queue and
+    /// an agent whose ticket arrived this instant are different states, and only one of them is
+    /// about to become an alert.
+    pub oldest_unacknowledged_secs: Option<u64>,
 }
 
 /// The heartbeat ping the loop rides: POST the store's liveness to the cloud. A seam, so the loop is
@@ -127,6 +174,9 @@ where
         HeartbeatReport {
             outbox_depth: outbox_depth(self).await,
             lease_generation: None,
+            // An `Edge` alone holds no print-agent record, so this source does not claim a store has
+            // no agents — it says it did not look. `StoreReport` is the one that asks.
+            print_agents: None,
         }
     }
 }
@@ -138,22 +188,29 @@ where
 /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)). Pairing them here
 /// keeps the heartbeat one ping rather than two.
 #[derive(Debug, Clone)]
-pub struct StoreReport<S, L> {
+pub struct StoreReport<S, L, A> {
     edge: Arc<Edge<S>>,
     lease: L,
+    agents: A,
 }
 
-impl<S, L> StoreReport<S, L> {
-    /// Pairs the store's log with the authority that holds its lease.
-    pub const fn new(edge: Arc<Edge<S>>, lease: L) -> Self {
-        Self { edge, lease }
+impl<S, L, A> StoreReport<S, L, A> {
+    /// Pairs the store's log with the authority that holds its lease and the record of its print
+    /// agents.
+    pub const fn new(edge: Arc<Edge<S>>, lease: L, agents: A) -> Self {
+        Self {
+            edge,
+            lease,
+            agents,
+        }
     }
 }
 
-impl<S, L> HeartbeatSource for StoreReport<S, L>
+impl<S, L, A> HeartbeatSource for StoreReport<S, L, A>
 where
     S: EventStore + Send + Sync,
     L: LeaseAuthority,
+    A: PrintAgents,
 {
     async fn report(&self) -> HeartbeatReport {
         let lease_generation = match self.lease.held(self.edge.store_id()).await {
@@ -166,11 +223,51 @@ where
                 None
             }
         };
+        // One clock reading for the whole report, so two agents in one ping cannot be aged against
+        // two different instants and appear to have waited different lengths for the same ticket.
+        let now_ms = SystemClock.now().as_milliseconds_since_epoch();
+        let print_agents = match self.agents.backlogs(now_ms).await {
+            Ok(backlogs) => Some(standings(&backlogs, now_ms)),
+            // Deliberately `None`, not an empty list: a record that could not be read is not a store
+            // with no agents, and reporting it as one would clear a standing the console is using.
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "could not read the print-agent bindings; the heartbeat says nothing about them"
+                );
+                None
+            }
+        };
         HeartbeatReport {
             outbox_depth: outbox_depth(&self.edge).await,
             lease_generation,
+            print_agents,
         }
     }
+}
+
+/// Turns the store's instants into the ages the cloud reads, against one `now`.
+///
+/// Pure and separate from the read above so the arithmetic is testable without a database or a
+/// clock — the whole of what this function decides is how long is long, and that is the input to an
+/// alert somebody gets woken by.
+///
+/// A job queued in the *future* — a clock that stepped backwards, which
+/// [ADR-0016](../../../docs/adr/0016-time-and-clocks.md) says happens — reports zero rather than
+/// wrapping. Zero is "waiting, but not yet long", which is the honest reading of a ticket whose
+/// timestamp the store cannot make sense of.
+fn standings(backlogs: &[AgentBacklog], now_ms: i64) -> Vec<PrintAgentStanding> {
+    backlogs
+        .iter()
+        .map(|backlog| PrintAgentStanding {
+            agent_device_id: backlog.agent,
+            paired_device_id: backlog.paired_device,
+            oldest_unacknowledged_secs: backlog.oldest_queued_ms.map(|queued_ms| {
+                let waited_ms = now_ms.saturating_sub(queued_ms).max(0);
+                u64::try_from(waited_ms / 1000).unwrap_or(0)
+            }),
+        })
+        .collect()
 }
 
 /// How far behind the store's event publishing is, or `None` if its log could not be read.
@@ -297,10 +394,18 @@ where
     {
         drained.await;
         let report = self.source.report().await;
+        // Logged from a copy taken before the send, because a report now carries a list and is moved
+        // into the transport rather than copied into it.
+        let (outbox_depth, lease_generation, print_agents) = (
+            report.outbox_depth,
+            report.lease_generation,
+            report.print_agents.as_ref().map(Vec::len),
+        );
         match self.transport.beat(report).await {
             Ok(()) => tracing::info!(
-                outbox_depth = report.outbox_depth,
-                lease_generation = report.lease_generation,
+                outbox_depth,
+                lease_generation,
+                print_agents,
                 "heartbeat: the stopping store reported its final state"
             ),
             Err(error) => tracing::warn!(
@@ -317,9 +422,13 @@ where
 mod tests {
     use super::{
         HeartbeatClient, HeartbeatError, HeartbeatReport, HeartbeatSource, HeartbeatTransport,
+        standings,
     };
+    use crate::print_agent::AgentBacklog;
     use core::time::Duration;
     use futures_util::poll;
+    use pos_proto::ids::DeviceId;
+    use pos_proto::ulid::Ulid;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -351,6 +460,7 @@ mod tests {
             HeartbeatReport {
                 outbox_depth: Some(self.0.load(Ordering::SeqCst)),
                 lease_generation: Some(4),
+                print_agents: None,
             }
         }
     }
@@ -363,6 +473,7 @@ mod tests {
             HeartbeatReport {
                 outbox_depth: self.0,
                 lease_generation: None,
+                print_agents: None,
             }
         }
     }
@@ -471,6 +582,7 @@ mod tests {
             Some(HeartbeatReport {
                 outbox_depth: Some(0),
                 lease_generation: Some(4),
+                print_agents: None,
             }),
             "the last beat carries the drained zero and the generation this box held — the two \
              facts the cloud's clear is keyed on"
@@ -494,6 +606,7 @@ mod tests {
             Some(HeartbeatReport {
                 outbox_depth: Some(42),
                 lease_generation: None,
+                print_agents: None,
             }),
             "the depth the source read is the depth the transport sent"
         );
@@ -523,6 +636,7 @@ mod tests {
         assert_eq!(
             last.lock()
                 .expect("lock")
+                .as_ref()
                 .expect("a report was sent")
                 .outbox_depth,
             None,
@@ -546,5 +660,62 @@ mod tests {
             Some(HeartbeatReport::default()),
             "the bootstrap shape is a bare liveness ping"
         );
+    }
+
+    fn device(seed: u128) -> DeviceId {
+        DeviceId::new(Ulid::from_u128(seed))
+    }
+
+    /// A minute of milliseconds, so the instants below read as the service they model.
+    const MINUTE_MS: i64 = 60_000;
+
+    /// The arithmetic the alert is built on: an age in whole seconds, and nothing at all when the
+    /// queue behind an agent is empty.
+    #[test]
+    fn a_waiting_job_reports_its_age_and_an_empty_queue_reports_nothing() {
+        let now_ms = 10 * MINUTE_MS;
+        let reported = standings(
+            &[
+                AgentBacklog {
+                    agent: device(1),
+                    paired_device: device(11),
+                    oldest_queued_ms: Some(now_ms - 6 * MINUTE_MS),
+                },
+                AgentBacklog {
+                    agent: device(2),
+                    paired_device: device(12),
+                    oldest_queued_ms: None,
+                },
+            ],
+            now_ms,
+        );
+        assert_eq!(reported.len(), 2);
+        assert_eq!(reported[0].agent_device_id, device(1));
+        assert_eq!(reported[0].paired_device_id, device(11));
+        assert_eq!(
+            reported[0].oldest_unacknowledged_secs,
+            Some(360),
+            "six minutes of waiting is reported as 360 seconds"
+        );
+        assert_eq!(
+            reported[1].oldest_unacknowledged_secs, None,
+            "an agent with nothing waiting reports nothing, which is not the same as zero"
+        );
+    }
+
+    /// A clock that stepped backwards (ADR-0016 says it happens) must not report a ticket as having
+    /// waited for the rest of time.
+    #[test]
+    fn a_job_queued_in_the_future_reports_zero_rather_than_wrapping() {
+        let now_ms = 10 * MINUTE_MS;
+        let reported = standings(
+            &[AgentBacklog {
+                agent: device(1),
+                paired_device: device(11),
+                oldest_queued_ms: Some(now_ms + 5 * MINUTE_MS),
+            }],
+            now_ms,
+        );
+        assert_eq!(reported[0].oldest_unacknowledged_secs, Some(0));
     }
 }

@@ -60,6 +60,9 @@ pub enum AlertKind {
     ProjectorUnhealthy,
     /// The store→cloud JetStream is near its configured capacity.
     JetstreamCapacity,
+    /// A store's print agent is holding a ticket nobody has printed
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    PrintAgentStalled,
 }
 
 impl AlertKind {
@@ -70,6 +73,7 @@ impl AlertKind {
         Self::WebhookDisabled,
         Self::ProjectorUnhealthy,
         Self::JetstreamCapacity,
+        Self::PrintAgentStalled,
     ];
 
     /// The stable wire/storage token (matches the serde representation).
@@ -81,6 +85,7 @@ impl AlertKind {
             Self::WebhookDisabled => "webhook_disabled",
             Self::ProjectorUnhealthy => "projector_unhealthy",
             Self::JetstreamCapacity => "jetstream_capacity",
+            Self::PrintAgentStalled => "print_agent_stalled",
         }
     }
 
@@ -100,7 +105,14 @@ impl AlertKind {
             Self::StoreOffline | Self::RelayBacklog | Self::WebhookDisabled => {
                 AlertSeverity::Warning
             }
-            Self::ProjectorUnhealthy | Self::JetstreamCapacity => AlertSeverity::Critical,
+            // Critical, and unlike `StoreOffline` it does not vary with where the edge runs.
+            // ADR-0110 established that a stale heartbeat means different things in different
+            // placements — an in-store box gone quiet is very likely still taking money. A stalled
+            // print agent does not admit that reading: in every placement it means paper that was
+            // promised is not coming and the kitchen has not been told.
+            Self::ProjectorUnhealthy | Self::JetstreamCapacity | Self::PrintAgentStalled => {
+                AlertSeverity::Critical
+            }
         }
     }
 

@@ -25,6 +25,30 @@ use pos_proto::time::Timestamp;
 
 use crate::registry::EntityStatus;
 
+/// One bound print agent, as the store last reported it
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Ids are kept as raw strings for the reason the config versions below are: the cloud did not mint
+/// the paired device id — the store did — and one report the cloud cannot parse must not fail a
+/// whole fleet read. The console shows what the store said.
+///
+/// Carries no personal data by construction: two opaque identifiers and a duration. Nothing a ticket
+/// *says* helps diagnose a stalled agent, so nothing a ticket says is here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PrintAgentStanding {
+    /// The terminal a console admin created and a manager bound at the till.
+    pub agent_device_id: String,
+    /// The paired device answering for it.
+    pub paired_device_id: String,
+    /// How long the oldest still-unacknowledged job has waited, or `None` when nothing is waiting.
+    ///
+    /// `None` is the healthy answer and is deliberately not zero: an agent with an empty queue and
+    /// one whose ticket arrived this instant are different states, and only one is about to become
+    /// an alert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_unacknowledged_secs: Option<u64>,
+}
+
 /// One store's fleet row: identity and status, liveness, config drift, and relay backlog. Every
 /// liveness/backlog field is optional because a store may be registered but never yet seen,
 /// un-configured (nothing published), or have an empty queue.
@@ -98,6 +122,16 @@ pub struct FleetRow {
     /// [`StorePlacement`]. The alert engine reads this same row, and those two absences carry
     /// opposite severities.
     pub edge_placement: StorePlacement,
+    /// The print-agent standings the store last reported, or `None` if it never has — an older edge,
+    /// or one whose record could not be read ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// An empty list is *not* `None`: it is the store saying it has no bound agent, which a manager
+    /// releasing the last terminal produces and which the console must render as "none" rather than
+    /// as the stale list it held before.
+    pub print_agents: Option<Vec<PrintAgentStanding>>,
+    /// When the store reported them, or `None`. Travels with the list for the same reason the outbox
+    /// instant travels with the depth: a standing is only as current as the beat that carried it.
+    pub print_agents_reported_at: Option<Timestamp>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `None`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///

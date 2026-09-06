@@ -38,6 +38,7 @@ const KIND_LABEL: Record<string, MessageKey> = {
   webhook_disabled: "alerts.kind.webhookDisabled",
   projector_unhealthy: "alerts.kind.projectorUnhealthy",
   jetstream_capacity: "alerts.kind.jetstreamCapacity",
+  print_agent_stalled: "alerts.kind.printAgentStalled",
 };
 
 /** The three severities, least-to-most, mapped to their localized labels. */

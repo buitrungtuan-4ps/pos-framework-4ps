@@ -34,6 +34,13 @@ pub struct AlertThresholds {
     pub jetstream_capacity_percent: u32,
     /// Extra seconds past a loop's own interval before its silence counts as "stale".
     pub projector_stale_slack_secs: u64,
+    /// Seconds a print agent's oldest unacknowledged job may wait before the agent is "stalled"
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md) wants five minutes).
+    ///
+    /// Half the edge's `JOB_TTL`, deliberately: past the TTL the queue deletes the ticket unprinted,
+    /// so an alert at the TTL arrives to tell an operator about paper that is already gone. Half of
+    /// it leaves the other half to walk to the terminal.
+    pub print_agent_stalled_secs: u64,
 }
 
 impl Default for AlertThresholds {
@@ -44,6 +51,7 @@ impl Default for AlertThresholds {
             relay_oldest_secs: 900,
             jetstream_capacity_percent: 80,
             projector_stale_slack_secs: 60,
+            print_agent_stalled_secs: 300,
         }
     }
 }
@@ -86,6 +94,7 @@ pub fn evaluate(
             }
             firing.extend(store_offline(tenant.tenant_id, row, now_ms, thresholds));
             firing.extend(relay_backlog(tenant.tenant_id, row, now_ms, thresholds));
+            firing.extend(print_agent_stalled(tenant.tenant_id, row, thresholds));
         }
         for hook in &tenant.disabled_webhooks {
             firing.push(webhook_disabled(tenant.tenant_id, hook));
@@ -193,6 +202,49 @@ fn relay_backlog(
     ))
 }
 
+/// One alert per *agent*, not per store: a shop with a jammed kitchen printer and a healthy counter
+/// has one problem, and rolling them together would either hide the jam or condemn the counter.
+///
+/// Judged on the age the store reported rather than on `now`, because that age was measured against
+/// the store's own clock at the moment of the beat. Re-ageing it here would add the heartbeat
+/// interval and the cloud's clock skew to a number an operator reads as "how long the kitchen has
+/// been waiting" — and would keep growing after the store stopped reporting at all, turning a lost
+/// link into a fictional print backlog. A store that has gone silent is `store_offline`'s to raise.
+fn print_agent_stalled(
+    tenant: TenantId,
+    row: &FleetRow,
+    thresholds: &AlertThresholds,
+) -> Vec<FiringAlert> {
+    let Some(agents) = row.print_agents.as_ref() else {
+        return Vec::new();
+    };
+    agents
+        .iter()
+        .filter_map(|agent| {
+            let waited = agent.oldest_unacknowledged_secs?;
+            if waited < thresholds.print_agent_stalled_secs {
+                return None;
+            }
+            let minutes = waited / 60;
+            Some(FiringAlert::new(
+                AlertKind::PrintAgentStalled,
+                Some(tenant),
+                agent.agent_device_id.clone(),
+                format!(
+                    "A print agent at \u{201c}{}\u{201d} has held a ticket for {minutes} min",
+                    row.name
+                ),
+                json!({
+                    "store_id": row.store_id.to_string(),
+                    "agent_device_id": agent.agent_device_id,
+                    "paired_device_id": agent.paired_device_id,
+                    "oldest_unacknowledged_minutes": minutes,
+                }),
+            ))
+        })
+        .collect()
+}
+
 fn webhook_disabled(tenant: TenantId, hook: &WebhookRef) -> FiringAlert {
     FiringAlert::new(
         AlertKind::WebhookDisabled,
@@ -279,7 +331,7 @@ fn jetstream_capacity(
 mod tests {
     use super::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
     use crate::alerts::model::{AlertKind, AlertSeverity};
-    use crate::fleet::FleetRow;
+    use crate::fleet::{FleetRow, PrintAgentStanding};
     use crate::health::{ROLLUP_PROJECTOR, TaskHealth};
     use crate::lease::StorePlacement;
     use crate::registry::EntityStatus;
@@ -323,6 +375,8 @@ mod tests {
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
+            print_agents: None,
+            print_agents_reported_at: None,
         }
     }
 
@@ -535,5 +589,82 @@ mod tests {
             "90/100 crosses 80%"
         );
         assert!(evaluate(now, &thresholds, &[], &[], Some(&roomy)).is_empty());
+    }
+
+    fn agent(agent_id: &str, paired: &str, waited_secs: Option<u64>) -> PrintAgentStanding {
+        PrintAgentStanding {
+            agent_device_id: agent_id.to_owned(),
+            paired_device_id: paired.to_owned(),
+            oldest_unacknowledged_secs: waited_secs,
+        }
+    }
+
+    /// One alert per stalled *agent*, at the five-minute line, and `Critical` in every placement.
+    ///
+    /// The per-agent shape is the point: a shop whose kitchen printer is jammed and whose counter is
+    /// keeping up has one problem, and an alert rolled up to the store would either hide the jam or
+    /// condemn the counter.
+    #[test]
+    fn a_print_agent_holding_a_ticket_past_five_minutes_fires_critical_and_a_busy_one_does_not() {
+        let now = ts(10_000_000);
+        let thresholds = AlertThresholds::default(); // 300s
+        let mut row = store_row(10, "Quán Bến Thành", Some(10_000_000));
+        row.print_agents = Some(vec![
+            agent("TILL-KITCHEN", "PAIR-A", Some(360)), // six minutes → fires
+            agent("TILL-COUNTER", "PAIR-B", Some(120)), // two minutes → not yet
+            agent("TILL-BAR", "PAIR-C", None),          // nothing waiting → healthy
+        ]);
+        let firing = evaluate(now, &thresholds, &one_tenant(vec![row]), &[], None);
+        assert_eq!(
+            firing.len(),
+            1,
+            "only the agent past the threshold fires, and its neighbours are not condemned with it"
+        );
+        let alert = firing.first().expect("one alert");
+        assert_eq!(alert.kind, AlertKind::PrintAgentStalled);
+        assert_eq!(
+            alert.dedup_key, "TILL-KITCHEN",
+            "keyed on the agent, so a second stalled terminal in the same shop is a second alert"
+        );
+        assert_eq!(
+            alert.severity,
+            AlertSeverity::Critical,
+            "paper that was promised is not coming, and the kitchen has not been told"
+        );
+        assert_eq!(
+            alert.detail.get("paired_device_id"),
+            Some(&json!("PAIR-A")),
+            "the detail names the box to walk to"
+        );
+        assert_eq!(
+            alert.detail.get("oldest_unacknowledged_minutes"),
+            Some(&json!(6)),
+            "and how long it has been holding"
+        );
+    }
+
+    /// A store that never reported standings is silent about them, not healthy about them.
+    ///
+    /// The `None` case matters because it is every store whose edge runs in the shop and every edge
+    /// on an older binary: firing nothing is right, and so is firing nothing *for that reason*
+    /// rather than because an empty list was invented for them.
+    #[test]
+    fn a_store_that_reported_no_print_agents_raises_nothing() {
+        let now = ts(10_000_000);
+        let thresholds = AlertThresholds::default();
+        let never_said = store_row(10, "In-store edge", Some(10_000_000));
+        let mut said_none = store_row(11, "Hosted, no agent", Some(10_000_000));
+        said_none.print_agents = Some(Vec::new());
+        let firing = evaluate(
+            now,
+            &thresholds,
+            &one_tenant(vec![never_said, said_none]),
+            &[],
+            None,
+        );
+        assert!(
+            firing.is_empty(),
+            "neither a store that said nothing nor one that said it has none raises an alert: {firing:?}"
+        );
     }
 }

@@ -162,7 +162,7 @@ use crate::devices::{
     PersistedDeviceProposal, SetAgentOutcome,
 };
 use crate::export;
-use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore};
+use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, NewArea, NewRoutingRule, NewStation, NewTable, RoutingRule,
@@ -6833,6 +6833,24 @@ struct FleetState<F, A, C> {
     clock: C,
 }
 
+/// One bound print agent as the fleet console sees it
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Two opaque identifiers and a duration, carried verbatim from what the store reported. No document,
+/// no line, no name: nothing a ticket *says* helps diagnose a stalled agent, so nothing a ticket says
+/// crosses this wire either.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FleetPrintAgent {
+    /// The terminal a console admin created and a manager bound at the till.
+    agent_device_id: String,
+    /// The paired device answering for it — the box an operator has to walk to.
+    paired_device_id: String,
+    /// How long the oldest still-unacknowledged job has waited, or `null` when nothing is waiting.
+    /// `null` is the healthy answer and is deliberately not zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oldest_unacknowledged_secs: Option<u64>,
+}
+
 /// One store as the fleet console sees it: the seam's raw facts plus the two verdicts derived at read
 /// time — `online` (from `last_seen_at` against [`FLEET_ONLINE_THRESHOLD_MS`]) and `config_current`
 /// (the held version equals the published one). Timestamps are Unix milliseconds, the shape the
@@ -6864,6 +6882,16 @@ struct FleetStoreView {
     outbox_depth: Option<u64>,
     /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
     outbox_reported_at_ms: Option<i64>,
+    /// The print agents the store last reported, or `null` if it never has
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// `null` and `[]` are different answers and the console renders them differently: `null` is a
+    /// store that has said nothing about agents — every store whose edge runs in the shop, and every
+    /// edge on a binary older than this field — while `[]` is a store that looked and has none.
+    print_agents: Option<Vec<FleetPrintAgent>>,
+    /// Unix ms of the heartbeat that reported them, or `null`. A standing is only as current as the
+    /// beat that carried it, so the instant travels with the list.
+    print_agents_reported_at_ms: Option<i64>,
     /// The lease generation the box last reported holding
     /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
@@ -6969,6 +6997,19 @@ impl FleetStoreView {
             outbox_depth: row.outbox_depth,
             outbox_reported_at_ms: row
                 .outbox_reported_at
+                .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            print_agents: row.print_agents.clone().map(|agents| {
+                agents
+                    .into_iter()
+                    .map(|agent| FleetPrintAgent {
+                        agent_device_id: agent.agent_device_id,
+                        paired_device_id: agent.paired_device_id,
+                        oldest_unacknowledged_secs: agent.oldest_unacknowledged_secs,
+                    })
+                    .collect()
+            }),
+            print_agents_reported_at_ms: row
+                .print_agents_reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
             lease_generation_held: row.lease_generation_held,
             lease_reported_at_ms: row
@@ -17076,6 +17117,7 @@ where
                 &[
                     ("outbox_depth", "INVALID_VALUE"),
                     ("lease_generation", "INVALID_VALUE"),
+                    ("print_agents", "INVALID_VALUE"),
                 ],
             );
         }
@@ -17089,6 +17131,7 @@ where
             app.clock.now(),
             report.outbox_depth,
             report.lease_generation,
+            report.print_agents,
         )
         .await
     {
@@ -17116,6 +17159,17 @@ struct HeartbeatBody {
     /// recorded as `0`, because `0` is a store's real first generation.
     #[serde(default)]
     lease_generation: Option<u64>,
+    /// One standing per bound print agent ([ADR-0112](../../../docs/adr/0112-print-agents.md)), or
+    /// `None` when the store said nothing about them — an older edge, or one whose record could not
+    /// be read.
+    ///
+    /// The distinction between absent and empty is load-bearing and is why this is not a bare
+    /// `Vec`. Absent leaves whatever the cloud last knew alone. Empty says *this store has no bound
+    /// agent*, which a manager releasing the last terminal produces and which must replace the
+    /// stored list — a console still showing an agent nobody is bound to is the stale answer this
+    /// field exists to prevent.
+    #[serde(default)]
+    print_agents: Option<Vec<PrintAgentStanding>>,
 }
 
 /// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —

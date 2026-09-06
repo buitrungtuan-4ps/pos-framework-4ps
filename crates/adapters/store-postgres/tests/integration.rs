@@ -1406,7 +1406,7 @@ mod config_tree_store {
                 .await
                 .expect("record seen");
             trees
-                .record_heartbeat(tenant, store_id, 5000, None, None)
+                .record_heartbeat(tenant, store_id, 5000, None, None, None)
                 .await
                 .expect("record heartbeat");
             let row = admin
@@ -1436,7 +1436,7 @@ mod config_tree_store {
             // A heartbeat for a store that has never pulled creates the row with those two NULL.
             let fresh = StoreId::new(Ulid::from_u128(0x59));
             trees
-                .record_heartbeat(tenant, fresh, 2000, None, None)
+                .record_heartbeat(tenant, fresh, 2000, None, None, None)
                 .await
                 .expect("record heartbeat for a fresh store");
             let row = admin
@@ -1484,7 +1484,7 @@ mod config_tree_store {
             let store_id = StoreId::new(Ulid::from_u128(0x5A));
 
             trees
-                .record_heartbeat(tenant, store_id, 1000, Some(17), Some(4))
+                .record_heartbeat(tenant, store_id, 1000, Some(17), Some(4), None)
                 .await
                 .expect("record a heartbeat that reports a backlog");
             let row = read(&admin, tenant, store_id).await;
@@ -1507,7 +1507,7 @@ mod config_tree_store {
             // An older edge, or one whose log could not be read, reports nothing. Overwriting a real
             // backlog with a fabricated zero would read as a store that had caught up.
             trees
-                .record_heartbeat(tenant, store_id, 9000, None, None)
+                .record_heartbeat(tenant, store_id, 9000, None, None, None)
                 .await
                 .expect("record a heartbeat that reports nothing");
             let row = read(&admin, tenant, store_id).await;
@@ -1531,7 +1531,7 @@ mod config_tree_store {
             // A store that has only ever been silent has no depth at all — NULL, not zero.
             let silent = StoreId::new(Ulid::from_u128(0x5B));
             trees
-                .record_heartbeat(tenant, silent, 1000, None, None)
+                .record_heartbeat(tenant, silent, 1000, None, None, None)
                 .await
                 .expect("record heartbeat for a silent store");
             let row = read(&admin, tenant, silent).await;
@@ -1545,6 +1545,91 @@ mod config_tree_store {
                 row.get::<_, Option<i64>>(2),
                 None,
                 "nor a lease generation — 'did not say' is not 'holds generation 0'"
+            );
+        });
+    }
+
+    /// The print-agent standings follow the same `COALESCE`, and the case that separates them from
+    /// their neighbours is the one those columns cannot express: an **empty** report
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// `NULL` is a box that did not look, and leaves the stored list standing. `'[]'` is a box that
+    /// looked and has no bound agent — what a manager releasing the last terminal produces — and it
+    /// must *replace* the list, because a console still showing an agent nobody is bound to is the
+    /// stale answer the column exists to prevent. Only a real database tells the two apart, because
+    /// only here is the `COALESCE` actually evaluated.
+    #[test]
+    fn an_empty_print_agent_report_replaces_the_list_and_an_absent_one_leaves_it() {
+        block_on(async {
+            async fn agents(
+                admin: &Client,
+                tenant: TenantId,
+                store: StoreId,
+            ) -> (Option<String>, Option<i64>) {
+                let row = admin
+                    .query_one(
+                        "SELECT print_agents::text, print_agents_reported_at \
+                         FROM store_liveness \
+                         WHERE tenant_id = $1 AND store_id = $2",
+                        &[&tenant.to_string(), &store.to_string()],
+                    )
+                    .await
+                    .expect("row");
+                (row.get(0), row.get(1))
+            }
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let tenant = TenantId::new(Ulid::from_u128(0x0FEE4));
+            let store_id = StoreId::new(Ulid::from_u128(0x5C));
+
+            let bound = r#"[{"agent_device_id":"TILL1","paired_device_id":"PAIR-A","oldest_unacknowledged_secs":420}]"#;
+            trees
+                .record_heartbeat(tenant, store_id, 11_000, None, None, Some(bound.to_owned()))
+                .await
+                .expect("record a heartbeat carrying one bound agent");
+            let (stored, reported_at) = agents(&admin, tenant, store_id).await;
+            assert!(
+                stored
+                    .as_deref()
+                    .is_some_and(|json| json.contains("TILL1") && json.contains("PAIR-A")),
+                "the standing the store reported is the standing the column holds: {stored:?}"
+            );
+            assert_eq!(
+                reported_at,
+                Some(11_000),
+                "stamped with the beat that carried it, so a stale list reads as stale"
+            );
+
+            trees
+                .record_heartbeat(tenant, store_id, 12_000, None, None, None)
+                .await
+                .expect("record a heartbeat that says nothing about agents");
+            let (stored, reported_at) = agents(&admin, tenant, store_id).await;
+            assert!(
+                stored.as_deref().is_some_and(|json| json.contains("TILL1")),
+                "an absent report leaves the last standing alone — an older edge must not erase it"
+            );
+            assert_eq!(
+                reported_at,
+                Some(11_000),
+                "and leaves its instant alone too"
+            );
+
+            trees
+                .record_heartbeat(tenant, store_id, 13_000, None, None, Some("[]".to_owned()))
+                .await
+                .expect("record a heartbeat reporting no agents at all");
+            let (stored, reported_at) = agents(&admin, tenant, store_id).await;
+            assert_eq!(
+                stored.as_deref(),
+                Some("[]"),
+                "an empty report replaces: the manager released the last terminal, and the console \
+                 must stop showing an agent nobody is bound to"
+            );
+            assert_eq!(
+                reported_at,
+                Some(13_000),
+                "and the instant moves with it, because saying 'none' is saying something"
             );
         });
     }
@@ -1925,7 +2010,7 @@ mod fleet_store {
             // A heartbeat from the NEW machine, empty, does not clear: generation 1 says nothing
             // about whether generation 0's box drained.
             trees
-                .record_heartbeat(tenant, store_id, 1_777_000_002_000, Some(0), Some(1))
+                .record_heartbeat(tenant, store_id, 1_777_000_002_000, Some(0), Some(1), None)
                 .await
                 .expect("heartbeat from the new machine");
             let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
@@ -1937,7 +2022,7 @@ mod fleet_store {
 
             // The old machine reporting generation 0 but still holding events does not clear either.
             trees
-                .record_heartbeat(tenant, store_id, 1_777_000_003_000, Some(40), Some(0))
+                .record_heartbeat(tenant, store_id, 1_777_000_003_000, Some(40), Some(0), None)
                 .await
                 .expect("heartbeat with a backlog");
             let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
@@ -1949,7 +2034,7 @@ mod fleet_store {
 
             // Both facts, from one message: generation 0, empty. Now it clears.
             trees
-                .record_heartbeat(tenant, store_id, 1_777_000_004_000, Some(0), Some(0))
+                .record_heartbeat(tenant, store_id, 1_777_000_004_000, Some(0), Some(0), None)
                 .await
                 .expect("the drained heartbeat");
             let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
@@ -2023,7 +2108,7 @@ mod fleet_store {
                 ),
             ] {
                 trees
-                    .record_heartbeat(tenant, store_id, 1_777_000_002_000, depth, generation)
+                    .record_heartbeat(tenant, store_id, 1_777_000_002_000, depth, generation, None)
                     .await
                     .expect("heartbeat");
                 let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
