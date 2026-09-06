@@ -14,6 +14,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **A leased print job named a printer but never said where it was**
+  ([ADR-0112](docs/adr/0112-print-agents.md), gap in the slice that shipped the routes).
+
+  ADR-0112 states the agent's whole contract — *open this address, write these bytes, report this
+  id* — and `GET /api/print/jobs` handed over the id and the bytes but not the address. No agent
+  could have been written against it.
+
+  A leased job now carries the printer's `address`, its `connection`, and the `capabilities` the
+  **edge** assumed when it prepared the document. All three are resolved at claim time against the
+  live published `devices` node, so a printer re-addressed since the job was queued is dialled where
+  it is now; and the capabilities are the edge's own, so an agent cannot hold a second opinion about
+  a printer's column width or refuse a raster the edge had just drawn for it. A job whose printer
+  the store no longer publishes is skipped rather than handed over with an address invented on the
+  spot — it expires at its TTL, and the agent's other printers still get their work.
+
+  **Upgrade note** Additive fields on a response nothing consumes yet; no migration, no
+  `PROTOCOL_VERSION` change. `PrinterConnection`, `CodePage` and `PrinterCapabilities` gained
+  `serde` derives for the same reason `PrintJob` did — the contract crosses to another machine.
+
 ### Added
 
 - **A print agent claims its store's rendered tickets, and the edge queues them for it**

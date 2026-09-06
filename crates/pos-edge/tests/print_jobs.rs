@@ -30,7 +30,9 @@ use pos_edge::{
 use pos_fakes::FakeStore;
 use pos_ports::printer::{PrintBlock, PrintDocument, PrintJob, TextStyle};
 use pos_proto::ClockSource;
+use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::ids::{DeviceId, EventId, StoreId};
+use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
 
@@ -82,11 +84,26 @@ impl Harness {
     /// Mints two paired devices, binds the first to [`TERMINAL`], and composes the router over the
     /// same three seams the test holds.
     async fn new() -> Self {
+        // The store publishes one printer, and that printer names the terminal as its agent — the
+        // node the console publishes, which is where the address and the connection come from. A
+        // job whose printer is not in this node has nowhere to go and is never handed over.
+        let session = EdgeSession {
+            devices: PublishedDevices::new(vec![PublishedDevice {
+                device_id: id(PRINTER),
+                kind: DeviceKind::Printer.into(),
+                connection: DeviceConnection::Usb.into(),
+                address: "/dev/usb/lp0".to_owned(),
+                name: DisplayName::new("Counter"),
+                station_id: None,
+                agent_device_id: Some(id(TERMINAL)),
+            }]),
+            ..EdgeSession::bootstrap()
+        };
         let edge = Arc::new(
             Edge::new(
                 FakeStore::default(),
                 StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3))),
-                EdgeSession::bootstrap(),
+                session,
                 Arc::new(InMemoryReceipts::new()),
             )
             .expect("seed"),
@@ -142,11 +159,17 @@ impl Harness {
 
     /// Puts a job on the bound agent's queue, the way the dispatch does.
     async fn enqueue(&self, job_id: u128) {
+        self.enqueue_for(job_id, id(PRINTER)).await;
+    }
+
+    /// The same, for a printer of the caller's choosing — including one this store does not
+    /// publish.
+    async fn enqueue_for(&self, job_id: u128, printer: DeviceId) {
         let now = SystemClock.now().as_milliseconds_since_epoch();
         self.queue
             .enqueue(
                 id(TERMINAL),
-                id(PRINTER),
+                printer,
                 ticket(job_id),
                 now,
                 now + 600_000,
@@ -359,4 +382,54 @@ async fn a_second_request_on_one_binding_is_answered_rather_than_parked() {
     assert!(job_ids(&body).is_empty(), "and it answers empty: {body}");
 
     parked.abort();
+}
+
+#[tokio::test]
+async fn a_leased_job_carries_the_address_the_connection_and_the_edge_s_capabilities() {
+    // ADR-0112's contract for the agent is *open this address, write these bytes, report this id*,
+    // so all three travel with the job. The capabilities are the edge's own: an agent that computed
+    // its own would be a second opinion about a printer's column width, and one that disagreed
+    // about `prints_bitmaps` would refuse a raster the edge had just drawn for it.
+    let harness = Harness::new().await;
+    harness.enqueue(0x30E).await;
+    let (status, body) = harness
+        .send("GET", "/api/print/jobs", Some(&harness.agent_token.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let job = &parsed["jobs"][0];
+    assert_eq!(
+        job["address"], "/dev/usb/lp0",
+        "the published address: {body}"
+    );
+    assert_eq!(job["connection"], "Usb", "and how to open it: {body}");
+    assert_eq!(
+        job["capabilities"]["columns"], 42,
+        "the width the edge rendered against: {body}"
+    );
+    assert_eq!(
+        job["capabilities"]["kicks_drawer"], false,
+        "no drawer is opened from anywhere yet (ADR-0100, ADR-0112)"
+    );
+}
+
+#[tokio::test]
+async fn a_job_whose_printer_is_no_longer_published_is_not_handed_over() {
+    // Unpublished between the enqueue and the claim. There is nowhere to send it, and inventing an
+    // address here would dial something at random; it expires at its TTL instead. The agent's other
+    // printers still get their work, which is why this is a skip and not a failed claim.
+    let harness = Harness::new().await;
+    harness.enqueue_for(0x30F, id(0xDEAD)).await;
+    harness.enqueue(0x310).await;
+
+    let (status, body) = harness
+        .send("GET", "/api/print/jobs", Some(&harness.agent_token.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        job_ids(&body),
+        vec![EventId::new(Ulid::from_u128(0x310)).to_string()],
+        "only the job whose printer this store still publishes: {body}"
+    );
 }

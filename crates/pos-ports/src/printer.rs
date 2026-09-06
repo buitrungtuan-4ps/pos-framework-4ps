@@ -42,6 +42,12 @@
 //! An array spends three to four characters on every byte and a 576-dot line is 72 bytes a row, so
 //! a Vietnamese ticket's rasters would be the bulk of a queue row; hex is two characters flat, and
 //! it keeps a raster one field instead of a thousand.
+//!
+//! [`PrinterCapabilities`] is serialisable for the same reason and no other. The agent's contract is
+//! *open this address, write these bytes* — so the address, the connection and the capabilities the
+//! **edge** assumed all travel with the job. An agent that computed its own capabilities would be a
+//! second opinion about a printer's column width, and a store with two terminals would produce two
+//! shapes of receipt from one order.
 
 use core::fmt;
 use core::future::Future;
@@ -109,7 +115,7 @@ mod hex_bits {
 }
 
 /// How a printer is attached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum PrinterConnection {
     /// Directly attached. The only connection over which a cash drawer may be opened.
@@ -138,7 +144,7 @@ impl PrinterConnection {
 /// what the fleet actually contains; an unrecognised page is
 /// [`CodePage::Unsupported`], which forces bitmap rendering for everything and is therefore
 /// always safe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum CodePage {
     /// 7-bit ASCII only.
@@ -179,7 +185,7 @@ impl CodePage {
 }
 
 /// What a printer can do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrinterCapabilities {
     /// How it is attached.
     pub connection: PrinterConnection,
