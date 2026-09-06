@@ -320,6 +320,7 @@ mod tests {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            superseded_generation: None,
         }
     }
 

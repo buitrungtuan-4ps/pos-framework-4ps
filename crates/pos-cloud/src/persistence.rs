@@ -493,6 +493,13 @@ impl LeaseStore for PostgresConfigTrees {
         Ok(LeaseBump {
             generation: stored_lease_generation(stored.generation)?,
             edge_placement: stored_edge_placement(&stored.edge_placement)?,
+            // Same refusal posture as the generation beside it, and for the same reason: a negative
+            // number is not something this cloud ever wrote, so reporting a handover as settled
+            // because a corrupt value would not convert is the one answer that must not be given.
+            superseded_generation: stored
+                .superseded_generation
+                .map(stored_lease_generation)
+                .transpose()?,
         })
     }
 
@@ -1760,6 +1767,13 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // down", the same as hosted, so a token this binary cannot read pages at the higher
         // severity rather than the lower one.
         edge_placement: fleet_placement(row.edge_placement.as_deref()),
+        // Same narrowing rule as the generations above: a negative number cannot have been written
+        // by this cloud, and "did not say" is a truer answer for a reader than a wrapped-around one.
+        // Here it also fails in the safe direction — a store whose handover cannot be read reports
+        // no handover, which is the state that shows *less* confidence rather than more.
+        superseded_generation: row
+            .superseded_generation
+            .and_then(|value| u64::try_from(value).ok()),
     })
 }
 

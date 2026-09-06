@@ -14,6 +14,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A bump records the generation it displaced, and only a matching drain clears it**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1 slice 3, first
+  of two).
+
+  `store_lease` gains a nullable `superseded_generation` (migration 0053). The lease bump writes it in
+  the same statement that issues the new generation, and a heartbeat clears it — but only one that
+  reports *that* generation with an empty outbox.
+
+  **Why a column at all.** `store_liveness` holds one row per store, so the instant the incoming
+  machine sends its first heartbeat, the outgoing machine's final `outbox_depth` is overwritten and
+  gone. That number is the only evidence that a night's trading did or did not leave the old box. The
+  column is the cloud's durable memory of the question "has N drained?".
+
+  **The pre-update value is free.** In `ON CONFLICT DO UPDATE` the table name binds to the row as it
+  was, which is why `generation = store_lease.generation + 1` is correct today; `superseded_generation
+  = store_lease.generation` sits beside it and is exact by construction — no read before the write,
+  nothing to race.
+
+  **The clear reads the request, never the stored row**, and that is the whole correctness argument.
+  `store_liveness` COALESCEs depth and generation *independently*, each with its own instant, so the
+  pair it holds can come from two different beats: generation N+1 recorded today beside a zero depth
+  recorded last week under generation N. A clear keyed on the stored row would fire on that pair and
+  release a handover while the old machine still held a night's trading — the exact failure the
+  column exists to prevent. The request's two numbers came in one message from one machine.
+
+  A beat that omits either fact clears nothing, which is ADR-0110's "an older edge that sends neither
+  simply is not yet provably settled" falling out of SQL's three-valued logic rather than needing a
+  branch.
+
+  Not in this change, deliberately: the refusal of a bump while the column is set, the
+  `taking-over`/`settled`/`retired` states, and the audited admin clear. Shipping the refusal before
+  the clears exist would leave an operator who bumped twice with no working lease action and the
+  escape hatch unbuilt. Clears first is the safe direction.
+
 ### Fixed
 
 - **The additive-only migrations gate now reads the cloud tier's migrations too**

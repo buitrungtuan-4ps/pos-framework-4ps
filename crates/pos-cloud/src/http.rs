@@ -6502,6 +6502,16 @@ struct FleetStoreView {
     /// console does not decide it: the alert engine reads the same `FleetRow` and scores an
     /// undecodable token with the hosted case rather than the in-store one.
     edge_placement: Option<&'static str>,
+    /// The generation the last bump displaced and nothing has yet proved drained, or `null`
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Raw on purpose, and not yet a state. ADR-0110's `taking-over`/`settled` derivation needs a
+    /// second fact this view cannot yet trust — that the heartbeat's outbox depth and lease
+    /// generation came from the *same* message — and inventing the state before that check exists
+    /// would let a store whose depth was reported weeks ago under an older generation read as
+    /// settled. Until then the console shows the number, which is true, rather than a word that
+    /// might not be.
+    lease_superseded_generation: Option<u64>,
 }
 
 impl FleetStoreView {
@@ -6558,6 +6568,7 @@ impl FleetStoreView {
             lease_generation_authoritative: row.lease_generation_authoritative,
             lease_superseded,
             edge_placement: row.edge_placement.as_wire(),
+            lease_superseded_generation: row.superseded_generation,
         }
     }
 }

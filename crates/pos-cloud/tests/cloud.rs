@@ -765,6 +765,12 @@ struct FakeConfigTrees {
     /// migration 0052 (ADR-0110). Keyed and written only by [`LeaseStore::bump`], exactly as the
     /// column is, so a test cannot set it by a route that does not exist.
     placements: Arc<Mutex<HashMap<(TenantId, StoreId), EdgePlacement>>>,
+    /// The generation the last bump displaced and nothing has proved drained, mirroring the
+    /// `store_lease.superseded_generation` column added by migration 0053 (ADR-0110). Written by
+    /// the same `bump` call as the two maps above, under the same lock section, for the reason the
+    /// placement's own note gives: a fake that updated them separately would pass tests the real
+    /// column — one row, one statement — could not.
+    superseded: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -790,10 +796,17 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
     ) -> Result<pos_cloud::lease::LeaseBump, pos_cloud::lease::LeaseStoreError> {
         let mut leases = self.leases.lock().expect("lock");
         let mut placements = self.placements.lock().expect("lock");
-        let next = leases
-            .get(&(tenant, store))
-            .map_or(0, |held: &u64| held.saturating_add(1));
+        let mut superseded = self.superseded.lock().expect("lock");
+        let held = leases.get(&(tenant, store)).copied();
+        let next = held.map_or(0, |value| value.saturating_add(1));
         leases.insert((tenant, store), next);
+        // The generation just displaced, mirroring `superseded_generation = store_lease.generation`
+        // in the real upsert: the value *before* the increment, and absent for a first-ever lease,
+        // which supersedes nobody. Read from `held` rather than recomputed from `next`, so a change
+        // to how `next` is derived cannot silently make the two disagree.
+        if let Some(previous) = held {
+            superseded.insert((tenant, store), previous);
+        }
         let placement = edge_placement.unwrap_or_else(|| {
             placements
                 .get(&(tenant, store))
@@ -804,6 +817,10 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         Ok(pos_cloud::lease::LeaseBump {
             generation: pos_core::lease::LeaseGeneration::new(next),
             edge_placement: placement,
+            superseded_generation: superseded
+                .get(&(tenant, store))
+                .copied()
+                .map(pos_core::lease::LeaseGeneration::new),
         })
     }
 
@@ -6326,6 +6343,7 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            superseded_generation: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -6399,6 +6417,7 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            superseded_generation: None,
         },
     );
     let alerts = FakeAlerts::default();
@@ -6456,6 +6475,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_reported_at: Some(seen_ago(1_000)),
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
+                superseded_generation: None,
             },
         )
         .with_row(
@@ -6481,6 +6501,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_reported_at: Some(seen_ago(600_000)),
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
+                superseded_generation: None,
             },
         )
 }
@@ -6588,6 +6609,7 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            superseded_generation: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -6641,6 +6663,7 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            superseded_generation: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

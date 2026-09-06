@@ -39,6 +39,14 @@ pub struct StoredBump {
     /// The store's edge placement as an `EDGE_PLACEMENT_*` token, whether this bump set it or kept
     /// the one already there. Read from `RETURNING`, never echoed from the request.
     pub edge_placement: String,
+    /// The generation this bump displaced, or `None` for a store's first-ever lease — which
+    /// supersedes nobody ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// It stays set until something proves the old machine drained: a heartbeat reporting *that*
+    /// generation with an empty outbox, or an admin who read a powered-off machine's outbox and said
+    /// so. A store with no handover in flight carries `None`, and so does one that has never been
+    /// bumped — the two are the same to a reader, because neither has a machine owing events.
+    pub superseded_generation: Option<i64>,
 }
 
 impl PostgresConfigTrees {
@@ -264,16 +272,29 @@ impl PostgresConfigTrees {
         // keeps the stored value. Reading the placement back out of `RETURNING` rather than echoing
         // the argument is deliberate: the caller audits what the store *now is*, which for a
         // no-placement bump is a value it never sent.
+        //
+        // `superseded_generation = store_lease.generation` records the number this bump is
+        // displacing (ADR-0110). Inside `ON CONFLICT DO UPDATE` the table name is the *pre-update*
+        // row, which is the same fact the line above it already depends on — `generation =
+        // store_lease.generation + 1` is only correct for that reason — so the recorded value is
+        // exact by construction, with no read before the write and nothing to race. The insert
+        // branch writes NULL explicitly: a store's first lease (generation 0) supersedes nobody.
+        //
+        // Why the column is needed at all: `store_liveness` holds one row per store, so the instant
+        // the incoming machine heartbeats, the outgoing machine's final `outbox_depth` is gone. This
+        // is the cloud's only durable memory of the question \"has N drained?\".
         let requested = edge_placement.map(ToOwned::to_owned);
         let row = connection
             .query_one(
-                "INSERT INTO store_lease (tenant_id, store_id, generation, issued_at, edge_placement) \
-                 VALUES ($1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE')) \
+                "INSERT INTO store_lease \
+                 (tenant_id, store_id, generation, issued_at, edge_placement, superseded_generation) \
+                 VALUES ($1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL) \
                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                  generation = store_lease.generation + 1, \
+                 superseded_generation = store_lease.generation, \
                  issued_at = EXCLUDED.issued_at, \
                  edge_placement = COALESCE($4, store_lease.edge_placement) \
-                 RETURNING generation, edge_placement",
+                 RETURNING generation, edge_placement, superseded_generation",
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),
@@ -286,6 +307,7 @@ impl PostgresConfigTrees {
         Ok(StoredBump {
             generation: row.get(0),
             edge_placement: row.get(1),
+            superseded_generation: row.get(2),
         })
     }
 
@@ -340,23 +362,48 @@ impl PostgresConfigTrees {
         lease_generation: Option<i64>,
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        // Two tables, one statement, one transaction. The liveness upsert is a data-modifying CTE
+        // and the lease clear is the outer statement, so a heartbeat cannot record a drained store
+        // and fail to release its handover, or the reverse.
+        //
+        // **The clear reads `$4` and `$5` — this beat's numbers — and never `store_liveness`.**
+        // That is the whole correctness argument. The stored row COALESCEs depth and generation
+        // *independently*, each with its own instant, so the pair it holds can come from two
+        // different beats: generation N+1 recorded today beside a zero depth recorded last week
+        // under generation N. A clear keyed on the stored row would fire on that pair and declare a
+        // handover settled while the old machine still holds a night's trading — precisely the
+        // failure ADR-0110 created the column to prevent. The request's two numbers arrived in one
+        // message from one machine, so they are the only pair that means what the rule needs.
+        //
+        // Equality on the generation, not `>=`: the column names a specific machine's unsent
+        // events, and a *different* generation reporting empty says nothing about that one. A beat
+        // that omits either field leaves both `NULL`, the predicate is unknown, and nothing is
+        // cleared — which is ADR-0110's \"an older edge that sends neither simply is not yet
+        // provably settled\", falling out of SQL's three-valued logic rather than needing a branch.
         connection
             .execute(
-                "INSERT INTO store_liveness \
-                 (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at, \
-                  lease_generation, lease_reported_at) \
-                 VALUES ($1, $2, $3, $4, \
-                         CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3::bigint END, \
-                         $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3::bigint END) \
-                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
-                 last_seen_at = EXCLUDED.last_seen_at, \
-                 outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
-                 outbox_reported_at = \
-                     COALESCE(EXCLUDED.outbox_reported_at, store_liveness.outbox_reported_at), \
-                 lease_generation = \
-                     COALESCE(EXCLUDED.lease_generation, store_liveness.lease_generation), \
-                 lease_reported_at = \
-                     COALESCE(EXCLUDED.lease_reported_at, store_liveness.lease_reported_at)",
+                "WITH liveness AS ( \
+                     INSERT INTO store_liveness \
+                     (tenant_id, store_id, last_seen_at, outbox_depth, outbox_reported_at, \
+                      lease_generation, lease_reported_at) \
+                     VALUES ($1, $2, $3, $4, \
+                             CASE WHEN $4::bigint IS NULL THEN NULL ELSE $3::bigint END, \
+                             $5, CASE WHEN $5::bigint IS NULL THEN NULL ELSE $3::bigint END) \
+                     ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
+                     last_seen_at = EXCLUDED.last_seen_at, \
+                     outbox_depth = COALESCE(EXCLUDED.outbox_depth, store_liveness.outbox_depth), \
+                     outbox_reported_at = \
+                         COALESCE(EXCLUDED.outbox_reported_at, store_liveness.outbox_reported_at), \
+                     lease_generation = \
+                         COALESCE(EXCLUDED.lease_generation, store_liveness.lease_generation), \
+                     lease_reported_at = \
+                         COALESCE(EXCLUDED.lease_reported_at, store_liveness.lease_reported_at) \
+                 ) \
+                 UPDATE store_lease SET superseded_generation = NULL \
+                 WHERE tenant_id = $1 AND store_id = $2 \
+                   AND superseded_generation IS NOT NULL \
+                   AND superseded_generation = $5::bigint \
+                   AND $4::bigint = 0",
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),

@@ -98,6 +98,14 @@ pub struct FleetRow {
     /// [`StorePlacement`]. The alert engine reads this same row, and those two absences carry
     /// opposite severities.
     pub edge_placement: StorePlacement,
+    /// The generation the last bump displaced and nothing has yet proved drained, or `None`
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// While this is `Some`, a machine somewhere may still hold events this cloud has never seen —
+    /// so a handover is in flight no matter how healthy the *new* machine looks. `None` means no
+    /// machine owes anything, which covers a store that never had a handover as well as one whose
+    /// handover finished.
+    pub superseded_generation: Option<u64>,
 }
 
 /// Reads the fleet read model, per tenant.

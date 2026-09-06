@@ -52,6 +52,15 @@ pub struct LeaseBump {
     pub generation: LeaseGeneration,
     /// Where the machine holding that generation runs.
     pub edge_placement: EdgePlacement,
+    /// The generation this bump displaced and nothing has yet proved drained, or `None` for a
+    /// store's first-ever lease — which supersedes nobody.
+    ///
+    /// It is recorded by the same statement that issues the new generation, because the cloud's
+    /// only other memory of the old machine is `store_liveness`, and that row is overwritten the
+    /// instant the incoming machine says hello. Until something proves the old box drained — a
+    /// heartbeat reporting *that* generation with an empty outbox, or an admin who read a
+    /// powered-off machine directly — a handover is in flight.
+    pub superseded_generation: Option<LeaseGeneration>,
 }
 
 /// What a *reader* can say about where a store's edge runs.
