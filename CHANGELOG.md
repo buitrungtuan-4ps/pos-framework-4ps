@@ -14,6 +14,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **The additive-only migrations gate now reads the cloud tier's migrations too**
+  ([ADR-0017](docs/adr/0017-migrations.md)).
+
+  `MIGRATION_DIRS` named one directory, `store-sqlite`, under a comment that had said *"the cloud
+  tier (P7) adds its own directory here"* since the gate was written. The directory arrived; the line
+  did not. So `store-postgres` accumulated fifty-two migrations that nothing ever checked — not for
+  the immutability an offline edge depends on, and not for the `DROP`/`RENAME` statements ADR-0017
+  forbids.
+
+  Nothing was wrong in them, and that is the point rather than a reassurance: verified today, no
+  destructive statement and no edit to a shipped file, so the rule had been holding by habit rather
+  than by enforcement — and the next author would not have been told. Proven non-vacuous by appending
+  a `DROP COLUMN` to a merged migration: the gate reports both violations, the edit and the drop.
+
 ### Added
 
 - **The fleet console shows where each store's edge runs**, beside the presence badge rather than on
